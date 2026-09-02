@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <bit>
 #include <cstdio>
-#include <cstdlib>
+#include <string>
 #include <string_view>
+
+#include "context/metal_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -125,28 +127,9 @@ void StreamingProfilerOpsCsvConsumer::write_csv(const std::string& path) const {
 
 namespace {
 
-// TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>: register at load, write at exit. The atexit handler runs
-// after receiver shutdown has delivered every buffered batch, and unregisters first so no batch can race
-// the write. State is leaked on purpose: an exit-time destructor would be ordered against other
-// statics.
-struct OpsCsvState {
-    std::string path;
-    StreamingProfilerOpsCsvConsumer consumer;
-    StreamingProfilerConsumerHandle handle = 0;
-};
-OpsCsvState* g_ops_csv = nullptr;
-
-const bool g_ops_csv_registered = [] {
-    const char* p = std::getenv("TT_METAL_STREAMING_PROFILER_OPS_CSV");
-    if (p == nullptr || *p == '\0') {
-        return false;
-    }
-    g_ops_csv = new OpsCsvState{p, {}, 0};
-    g_ops_csv->handle =
-        register_consumer("ops-csv", [](const StreamingProfilerRecordBatch& b) { g_ops_csv->consumer(b); });
-    std::atexit([] {
-        unregister_consumer(g_ops_csv->handle);
-        g_ops_csv->consumer.write_csv(g_ops_csv->path);
+const bool g_ops_csv_declared = [] {
+    register_file_consumer<StreamingProfilerOpsCsvConsumer>("ops-csv", []() -> std::string {
+        return MetalContext::instance().rtoptions().get_streaming_profiler_ops_csv_path();
     });
     return true;
 }();

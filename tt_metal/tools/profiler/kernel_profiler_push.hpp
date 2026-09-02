@@ -212,10 +212,15 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 #if defined(ARCH_QUASAR)
 inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
 #if defined(COMPILE_FOR_TRISC)
+    // The wall clock counter is per-Neo. Empirically the four Neo wall clocks are synchronized and
+    // cycle-aligned, so a TRISC reading its own Neo's clock stays on the same timeline as the others.
+    // Guaranteeing that synchronization explicitly would be better, see the TODO below.
     constexpr uint32_t wall_clock_0_addr = LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_OFFSET;
     constexpr uint32_t wall_clock_1_at_addr =
         LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_OFFSET;
 #else
+    // DMs read NEO0's wall clock counter, so DM and TRISC timestamps share one timeline and can be compared directly.
+    // TODO: switch to read the DM's own wall clock and synchronize DM and TRISC clock domains.
     constexpr uint32_t wall_clock_0_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR;
     constexpr uint32_t wall_clock_1_at_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_ADDR;
 #endif

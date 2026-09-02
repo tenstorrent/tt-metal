@@ -25,7 +25,6 @@
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>

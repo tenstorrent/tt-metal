@@ -314,7 +314,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         // per DRAM channel (ll_api::configure_static_tlbs), so a DRAM (DRISC) sender may or may not be among
         // them. The address overload also proves the window spans the config buffer, which notify_sender()
         // writes on every read(). Only Blackhole takes the static path below, so a window recorded here on
-        // any other arch would make has_static_tlb() lie.
+        // any other arch would never be used.
         if (!cluster.is_mock_or_emulated() && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
             auto* tlb_manager = cluster.get_driver()->get_chip(sender_device_id)->get_tlb_manager();
             const tt_xy_pair tlb_core(sender_virtual_core.x, sender_virtual_core.y);

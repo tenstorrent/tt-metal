@@ -1035,9 +1035,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_->shutdown();
         realtime_profiler_.reset();
     }
-    if (streaming_profiler_) {
-        streaming_profiler_.reset();
-    }
+    streaming_profiler_.reset();
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
@@ -1593,8 +1591,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     }
     // The streaming profiler replaces this one: both drain the same per-RISC SPSC profiler rings, and two
     // consumers on one SPSC ring see each other's partial reads.
-    const char* pd = std::getenv("TT_METAL_STREAMING_PROFILER");
-    if (pd != nullptr && *pd != '\0' && *pd != '0') {
+    if (MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_enabled()) {
         log_info(tt::LogMetal, "[streaming profiler] enabled -- legacy realtime profiler is disabled for this run.");
         return;
     }
@@ -1605,9 +1602,8 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
     if (streaming_profiler_) {
         return;
     }
-    // Opt-in; the variable also implies TT_METAL_DEVICE_PROFILER (rtoptions), so it arms the producers too.
-    const char* s = std::getenv("TT_METAL_STREAMING_PROFILER");
-    if (s == nullptr || *s == '\0' || *s == '0') {
+    // Opt-in; the knob also implies TT_METAL_DEVICE_PROFILER, so it arms the producers too.
+    if (!MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_enabled()) {
         return;
     }
     streaming_profiler_ = std::make_unique<StreamingProfiler>(mesh_device);

@@ -128,6 +128,17 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device-zone profiler (implies the above)
+    TT_METAL_STREAMING_PROFILER_TRACY,             // Attach the streaming profiler's Tracy sink
+    TT_METAL_STREAMING_PROFILER_NRELAYS,           // Streaming profiler DRISC relay count (0 = auto)
+    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
+    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
+    TT_METAL_STREAMING_PROFILER_RING_MB,           // Streaming profiler host frame ring, MiB
+    TT_METAL_STREAMING_PROFILER_DECODE_THREADS,    // Streaming profiler decode threads per device
+    TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S,  // Streaming profiler receiver watchdog, seconds
+    TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT,      // Streaming profiler relay ship threshold, percent
+    TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
+    TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
+    TT_METAL_STREAMING_PROFILER_STALL_CSV,         // Streaming profiler stall CSV path
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -279,6 +290,18 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
 
 // Helper function to check if environment variable value is "1" (enabled)
 bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
+
+// Parses a whole-string unsigned decimal env var value; anything else is a configuration error.
+uint32_t parse_env_u32(const char* name, const char* value) {
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    TT_FATAL(
+        end != value && *end == '\0' && parsed <= std::numeric_limits<uint32_t>::max(),
+        "{} must be an unsigned integer, got '{}'",
+        name,
+        value);
+    return static_cast<uint32_t>(parsed);
+}
 
 std::string trim_copy(const std::string& input) {
     auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) { return std::isspace(ch); });
@@ -925,8 +948,121 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #else
             if (is_env_enabled(value)) {
                 this->profiler_enabled = true;
+                this->streaming_profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_TRACY
+        // Attaches the Tracy sink to the streaming profiler. Off by default: the primary consumers are the
+        // registered ones (register_consumer / the ops CSV), and Tracy is one more, expensive, consumer.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_TRACY=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:
+            this->streaming_profiler_tracy_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_NRELAYS
+        // Forces the number of DRISC relays, one per DRAM view. 0 leaves it to bring-up, which takes
+        // min(the profiler's relay cap, the part's DRAM views); a forced value above the view count is
+        // clamped there.
+        // Default: 0 (auto)
+        // Usage: export TT_METAL_STREAMING_PROFILER_NRELAYS=4
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_NRELAYS: {
+            const uint32_t n = parse_env_u32("TT_METAL_STREAMING_PROFILER_NRELAYS", value);
+            TT_FATAL(n >= 1 && n <= 8, "TT_METAL_STREAMING_PROFILER_NRELAYS='{}' is not an integer in [1, 8]", value);
+            this->streaming_profiler_num_relays = n;
+            break;
+        }
+
+        // TT_METAL_STREAMING_PROFILER_DRAM_MB
+        // Per-relay GDDR spool ring, in MiB. Non-zero makes each relay DMA frames into a ring in its own
+        // DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never
+        // touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep
+        // interval. 0 selects direct push. Capped at 4095: a larger ring overflows the relay kernel's
+        // 32-bit ring arithmetic (a bank is 4 GiB anyway).
+        // Default: 128
+        // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
+            this->streaming_profiler_spool_mb =
+                std::min<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_DRAM_MB", value), 4095);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_FIFO_MB
+        // Host FIFO per D2H socket, in MiB. It is the pipeline's only elasticity in a direct-push run, and
+        // it is plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address, so it costs no TLB
+        // window and has no channel cap. Capped at 3584 (3.5 GiB): the socket's byte size and the device's
+        // wrap-safe credit arithmetic (bytes_sent - bytes_acked) are 32-bit.
+        // Default: 64
+        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=128
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB:
+            this->streaming_profiler_fifo_mb =
+                std::clamp<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_FIFO_MB", value), 1, 3584);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_RING_MB
+        // Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, in MiB. It
+        // is the capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream.
+        // Default: 512
+        // Usage: export TT_METAL_STREAMING_PROFILER_RING_MB=1024
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_RING_MB:
+            this->streaming_profiler_ring_mb =
+                std::max<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_RING_MB", value), 1);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_DECODE_THREADS
+        // Decode threads per device, clamped by bring-up to the number of relay streams.
+        // Default: 2
+        // Usage: export TT_METAL_STREAMING_PROFILER_DECODE_THREADS=4
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_DECODE_THREADS:
+            this->streaming_profiler_decode_threads =
+                std::max<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", value), 1);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S
+        // How long the receiver waits for a stalled consumer before reporting it, in seconds.
+        // Default: 120
+        // Usage: export TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S=300
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S:
+            this->streaming_profiler_writer_timeout_s =
+                parse_env_u32("TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S", value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT
+        // A relay defers shipping a live core until its fullest lane holds at least this percent of its own
+        // ring, unless the core aged out. 0 ships every live core every sweep; values past 50 are capped by
+        // the kernel's half-ring lane trigger. Per-lane, not per-span: the producer that blocks is always a
+        // lane, and a span percent under-reads a concentrated core's binding ring. Default 25 -- the
+        // measured stall-free band ends between 30 and 35.
+        // Default: 25
+        // Usage: export TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT=0
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT:
+            this->streaming_profiler_ship_min_pct =
+                std::min<uint32_t>(parse_env_u32("TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT", value), 100);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_OPS_CSV
+        // Path for the per-op CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_OPS_CSV=/tmp/ops.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_OPS_CSV:
+            this->streaming_profiler_ops_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_ZONE_CSV
+        // Path for the per-zone CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_ZONE_CSV=/tmp/zones.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_ZONE_CSV:
+            this->streaming_profiler_zone_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_STALL_CSV
+        // Path for the producer-stall timeline CSV consumer; empty leaves it unregistered.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_STALL_CSV=/tmp/stalls.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_STALL_CSV:
+            this->streaming_profiler_stall_csv_path = std::string(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH

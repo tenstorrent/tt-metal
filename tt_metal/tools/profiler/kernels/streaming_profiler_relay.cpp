@@ -85,7 +85,7 @@ inline bool reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
             if (bytes_free >= num_bytes) {
                 break;
             }
-            if (*stop == 2u) {
+            if (*stop == kernel_profiler::kRelayStopRelease) {
                 return false;
             }
         }
@@ -705,7 +705,7 @@ void kernel_main() {
             // Full spool: pump until there is room. This wait, not a drop, is the spool's
             // back-pressure; it holds through quiesce and only the kill switch breaks it.
             while (!pump.has_room(bytes)) {
-                if (*stop == 2u) {
+                if (*stop == kernel_profiler::kRelayStopRelease) {
                     killed = true;
                     return;
                 }
@@ -1042,7 +1042,7 @@ void kernel_main() {
             // The host's teardown escalates stop to 2 after its own timeout: the close path's kill
             // switch for a drain whose consumer will never finish it.
             invalidate_l1_cache();
-            if (*stop == 2u) {
+            if (*stop == kernel_profiler::kRelayStopRelease) {
                 killed = true;
                 break;
             }
@@ -1070,13 +1070,13 @@ void kernel_main() {
 
     // Published last, after the socket barrier, so the host only sees `done` once every page is out.
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
-    *done = 0xD09E0000u;
+    *done = kernel_profiler::kRelayDoneWord;
 
     // NIU restore, on the host's word. NIU_CFG_0 persists until chip reset, so whoever set stream mode
     // owns putting it back, and it goes last because the flip to NOC2AXI takes this L1 (`done`, the
     // results, bytes_acked) out of the host's view.
     const uint64_t t_end = get_timestamp() + kNiuRestoreWaitCycles;
-    while (*stop != 2u && get_timestamp() < t_end) {
+    while (*stop != kernel_profiler::kRelayStopRelease && get_timestamp() < t_end) {
         invalidate_l1_cache();
     }
     experimental::drisc_set_noc2axi_mode_all();

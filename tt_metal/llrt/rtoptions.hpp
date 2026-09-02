@@ -239,6 +239,18 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool streaming_profiler_enabled = false;
+    bool streaming_profiler_tracy_enabled = false;
+    uint32_t streaming_profiler_num_relays = 0;
+    uint32_t streaming_profiler_spool_mb = 128;
+    uint32_t streaming_profiler_fifo_mb = 64;
+    uint32_t streaming_profiler_ring_mb = 512;
+    uint32_t streaming_profiler_decode_threads = 2;
+    uint32_t streaming_profiler_writer_timeout_s = 120;
+    uint32_t streaming_profiler_ship_min_pct = 25;
+    std::string streaming_profiler_ops_csv_path;
+    std::string streaming_profiler_zone_csv_path;
+    std::string streaming_profiler_stall_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
 
     bool checkpoint_enabled = false;
@@ -684,6 +696,18 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
+    bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
+    uint32_t get_streaming_profiler_num_relays() const { return streaming_profiler_num_relays; }
+    uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
+    uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
+    uint32_t get_streaming_profiler_ring_mb() const { return streaming_profiler_ring_mb; }
+    uint32_t get_streaming_profiler_decode_threads() const { return streaming_profiler_decode_threads; }
+    uint32_t get_streaming_profiler_writer_timeout_s() const { return streaming_profiler_writer_timeout_s; }
+    uint32_t get_streaming_profiler_ship_min_pct() const { return streaming_profiler_ship_min_pct; }
+    const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
+    const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
+    const std::string& get_streaming_profiler_stall_csv_path() const { return streaming_profiler_stall_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 

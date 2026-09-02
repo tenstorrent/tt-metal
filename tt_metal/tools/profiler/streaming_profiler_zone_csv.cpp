@@ -7,9 +7,10 @@
 #include <unistd.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include "context/metal_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -53,6 +54,8 @@ constexpr SyncName kSyncNames[] = {
     {"SYNC-CB-POP", 1010},
 };
 
+uint32_t lane_key(uint32_t dev, uint32_t lane) { return (dev << 16) | lane; }
+
 }  // namespace
 
 uint32_t StreamingProfilerZoneCsvConsumer::sync_legacy_id(uint32_t wire_id) {
@@ -73,8 +76,7 @@ uint32_t StreamingProfilerZoneCsvConsumer::sync_legacy_id(uint32_t wire_id) {
 
 void StreamingProfilerZoneCsvConsumer::flush_pending(
     uint32_t dev, uint32_t lane, const StreamingProfilerCaptureContext& ctx) {
-    const uint32_t key = (dev << 16) | lane;
-    auto it = pending_.find(key);
+    auto it = pending_.find(lane_key(dev, lane));
     if (it == pending_.end() || !it->second.active) {
         return;
     }
@@ -143,7 +145,7 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
                     break;
                 }
                 flush_pending(dev, lane, ctx);  // a new Data ends any unfinished one
-                Pending& p = pending_[(dev << 16) | lane];
+                Pending& p = pending_[lane_key(dev, lane)];
                 p = Pending{};
                 p.active = true;
                 p.legacy_id = legacy;
@@ -151,7 +153,7 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
                 break;
             }
             case StreamingProfilerRecType::Ext: {
-                Pending& p = pending_[(dev << 16) | lane];
+                Pending& p = pending_[lane_key(dev, lane)];
                 if (!p.active) {
                     break;
                 }
@@ -166,7 +168,7 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
                 break;
             }
             case StreamingProfilerRecType::Cont: {
-                Pending& p = pending_[(dev << 16) | lane];
+                Pending& p = pending_[lane_key(dev, lane)];
                 if (!p.active) {
                     break;  // continuation of a marker we are not collecting
                 }
@@ -231,28 +233,9 @@ void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const 
 
 namespace {
 
-// TT_METAL_STREAMING_PROFILER_ZONE_CSV=<path>: register at load, write at exit. The atexit handler runs
-// after receiver shutdown has delivered every buffered batch, and unregisters first so no batch races
-// the write. State is leaked deliberately: an exit-time destructor would be ordered against other
-// statics.
-struct ZoneCsvState {
-    std::string path;
-    StreamingProfilerZoneCsvConsumer consumer;
-    StreamingProfilerConsumerHandle handle = 0;
-};
-ZoneCsvState* g_zone_csv = nullptr;
-
-const bool g_zone_csv_registered = [] {
-    const char* p = std::getenv("TT_METAL_STREAMING_PROFILER_ZONE_CSV");
-    if (p == nullptr || *p == '\0') {
-        return false;
-    }
-    g_zone_csv = new ZoneCsvState{p, {}, 0};
-    g_zone_csv->handle =
-        register_consumer("zone-csv", [](const StreamingProfilerRecordBatch& b) { g_zone_csv->consumer(b); });
-    std::atexit([] {
-        unregister_consumer(g_zone_csv->handle);
-        g_zone_csv->consumer.write_csv(g_zone_csv->path);
+const bool g_zone_csv_declared = [] {
+    register_file_consumer<StreamingProfilerZoneCsvConsumer>("zone-csv", []() -> std::string {
+        return MetalContext::instance().rtoptions().get_streaming_profiler_zone_csv_path();
     });
     return true;
 }();

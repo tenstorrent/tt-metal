@@ -164,4 +164,28 @@ class StreamingProfilerReceiver;
 void attach_registered_consumers(StreamingProfilerReceiver& receiver);
 void detach_registered_consumers();
 
+void register_file_consumer_impl(
+    std::string name,
+    std::string (*path)(),
+    StreamingProfilerRecordCallback on_batch,
+    std::function<void(const std::string&)> write);
+
+// Declares a consumer that accumulates over the whole process and writes one file at exit, enabled by
+// `path` returning a non-empty string. `Consumer` needs operator()(const StreamingProfilerRecordBatch&)
+// and write_csv(const std::string&).
+//
+// Meant to be called from a static initializer, so `path` is not invoked here: it reads rtoptions, which
+// only exists once MetalContext is constructed. It runs when a capture attaches, and the consumer is
+// registered only then and only if the path is non-empty.
+template <typename Consumer>
+void register_file_consumer(std::string name, std::string (*path)()) {
+    // Leaked deliberately: an exit-time destructor would be ordered against other statics.
+    auto* c = new Consumer();
+    register_file_consumer_impl(
+        std::move(name),
+        path,
+        [c](const StreamingProfilerRecordBatch& b) { (*c)(b); },
+        [c](const std::string& p) { c->write_csv(p); });
+}
+
 }  // namespace tt::tt_metal::streaming_profiler

@@ -100,10 +100,36 @@ private:
     void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
     bool wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget);
     void disarm_producer_backpressure(DeviceCtx& ctx);
+    // State the boot_device() steps below hand each other.
+    struct BootPlan {
+        uint64_t prof_l1 = 0;  // Tensix profiler L1 base (control vector, then the per-RISC rings)
+        uint64_t num_cores = 0;
+        uint32_t slot_bytes = 0;   // staging slot size; mirrors the relay kernel's kSlotWords
+        uint32_t spool_bytes = 0;  // 0 = direct push
+        uint32_t spool_addr = 0;
+        std::vector<uint32_t> coords;        // core index -> packed (y<<16)|x, the relay's poll list
+        std::vector<uint8_t> zero_ctrl;      // a zeroed profiler control vector, reused for every write
+        std::vector<uint32_t> banks;         // DRAM view per relay
+        std::vector<CoreCoord> relay_cores;  // logical DRAM core per relay
+    };
+
     bool boot_device(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord);
+    void enumerate_worker_grid(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan);
+    bool choose_relay_banks(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan);
+    void reserve_spool(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan);
+    // Configures the relay's TLB window, builds its socket, launches it and confirms its heartbeat. False
+    // means capture must be abandoned for this device; the caller disarms the producers.
+    bool launch_relay(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        DeviceCtx& ctx,
+        const distributed::MeshCoordinate& coord,
+        const BootPlan& plan,
+        uint32_t d);
     // After the relays swept to empty and the receiver drained: compare every worker lane's own tail
     // against the receiver's consumed-words mirror.
     void verify_completeness(DeviceCtx& ctx, uint32_t device_index);

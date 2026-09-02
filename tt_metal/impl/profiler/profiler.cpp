@@ -1884,9 +1884,6 @@ void DeviceProfiler::readDeviceMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
-
-#if defined(TRACY_ENABLE)
-#endif
 }
 
 void DeviceProfiler::readTsData16BMarkerData(
@@ -1905,8 +1902,6 @@ void DeviceProfiler::readTsData16BMarkerData(
 
     nlohmann::json meta_data;
     [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
-#if defined(TRACY_ENABLE)
-#endif
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
@@ -2956,17 +2951,6 @@ void DeviceProfiler::pollDebugDumpResults(
 #endif
 }
 
-// True when the streaming profiler is draining the worker profiler rings itself. The DRAM profiler's
-// per-program control-buffer reset rewinds the ring tail, which duplicates zones for that consumer, so it
-// stands down whenever the relay is enabled.
-static bool external_ring_relay_active() {
-    static const bool active = [] {
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return active;
-}
-
 bool getDeviceProfilerState(ContextId context_id) {
     auto& ctx = MetalContext::instance(context_id);
 
@@ -2976,8 +2960,10 @@ bool getDeviceProfilerState(ContextId context_id) {
     }
 
     // Kernel marker emission keys off get_profiler_enabled() directly (build.cpp / build_env_manager.cpp
-    // set PROFILE_KERNEL from it), so a false here stands down only the DRAM readback and reset.
-    return ctx.rtoptions().get_profiler_enabled() && !external_ring_relay_active();
+    // set PROFILE_KERNEL from it), so a false here stands down only the DRAM readback and reset. The
+    // streaming profiler drains the same rings, and the DRAM profiler's per-program control-buffer reset
+    // rewinds the ring tail under it, so the two never run together.
+    return ctx.rtoptions().get_profiler_enabled() && !ctx.rtoptions().get_streaming_profiler_enabled();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {

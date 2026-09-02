@@ -24,8 +24,8 @@
 
 #include "tt_metal/common/broadcast_ring.hpp"
 #include "impl/threading/thread_pool.hpp"
+#include "context/metal_context.hpp"
 #include "llrt/zone_meta.hpp"
-#include "tools/profiler/streaming_profiler_env.hpp"
 #include "tools/profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -142,12 +142,10 @@ StreamingProfilerReceiver::StreamingProfilerReceiver(std::vector<ReceiverDeviceC
     TT_FATAL(
         std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
         "StreamingProfilerRawRecMeta bit-field layout does not match the vectorized packer");
-    watchdog_ = std::chrono::seconds(env_u32("TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S", 120));
-    // The ring is the capture's elastic buffer (the FIFO only lands frames), so its size bounds how far
-    // a capture can outrun its consumers before per-consumer drops start: at ~9.8 wire bytes per zone,
-    // the 512 MiB default holds ~55 M zones per stream. Rounded up to a power of two lines.
-    const uint64_t ring_mb = env_u64("TT_METAL_STREAMING_PROFILER_RING_MB", 512);
-    const uint64_t ring_lines = std::bit_ceil(std::max<uint64_t>(ring_mb, 1) << 14);
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    watchdog_ = std::chrono::seconds(rtoptions.get_streaming_profiler_writer_timeout_s());
+    const uint64_t ring_mb = rtoptions.get_streaming_profiler_ring_mb();
+    const uint64_t ring_lines = std::bit_ceil(ring_mb << 14);
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
         const uint32_t nl = dev.num_cores * profiler::kSpscNRiscDecode;
@@ -205,10 +203,9 @@ void StreamingProfilerReceiver::prefault_rings() {
 void StreamingProfilerReceiver::start() {
     TT_FATAL(!started_, "receiver already started");
     started_ = true;
-    // Two decode threads per device is the design point, one per relay; sockets round-robin across them
-    // via the strided partition below.
-    const uint32_t nthreads =
-        std::clamp<uint32_t>(env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", 2), 1, streams_.size());
+    // Sockets round-robin across the decode threads via the strided partition below.
+    const uint32_t nthreads = std::clamp<uint32_t>(
+        MetalContext::instance().rtoptions().get_streaming_profiler_decode_threads(), 1, streams_.size());
     nthreads_ = nthreads;
     // The audit attaches before ingest starts so its readers see the ring from line 0.
     {
@@ -430,19 +427,6 @@ StreamingProfilerConsumerHandle StreamingProfilerReceiver::add_consumer(
     auto c = std::make_unique<Consumer>();
     c->name = std::move(name);
     c->cb = std::move(cb);
-    c->handle = next_handle_++;
-    c->thread = std::thread(&StreamingProfilerReceiver::consumer_thread, this, std::ref(*c));
-    consumers_.push_back(std::move(c));
-    return consumers_.back()->handle;
-}
-
-StreamingProfilerConsumerHandle StreamingProfilerReceiver::add_raw_consumer(
-    std::string name, StreamingProfilerRawRecordCallback cb) {
-    TT_FATAL(!t_in_consumer, "add_raw_consumer must not be called from a consumer callback");
-    std::lock_guard<std::mutex> lk(consumers_mu_);
-    auto c = std::make_unique<Consumer>();
-    c->name = std::move(name);
-    c->raw_cb = std::move(cb);
     c->handle = next_handle_++;
     c->thread = std::thread(&StreamingProfilerReceiver::consumer_thread, this, std::ref(*c));
     consumers_.push_back(std::move(c));
@@ -779,7 +763,7 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
         uint32_t prog;
     };
     std::vector<std::vector<OpenZone>> stacks;
-    if (!audit && c.raw_cb == nullptr) {
+    if (!audit) {
         stacks.resize(ctx_.devices.size() * kStreamingProfilerMaxLanes);
     }
     std::vector<StreamingProfilerRec> out;
@@ -861,15 +845,10 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
             }
             const std::span<const StreamingProfilerRawRec> got(scratch.data(), nrec);
             try {
-                if (c.raw_cb != nullptr) {
-                    c.delivered += nrec;
-                    c.raw_cb(StreamingProfilerRawRecordBatch{got, dd, &ctx_, sd});
-                } else {
-                    pair_batch(got);
-                    if (!out.empty() || dd != 0 || sd != 0) {
-                        c.delivered += out.size();
-                        c.cb(StreamingProfilerRecordBatch{std::span<const StreamingProfilerRec>(out), dd, &ctx_, sd});
-                    }
+                pair_batch(got);
+                if (!out.empty() || dd != 0 || sd != 0) {
+                    c.delivered += out.size();
+                    c.cb(StreamingProfilerRecordBatch{std::span<const StreamingProfilerRec>(out), dd, &ctx_, sd});
                 }
             } catch (const std::exception& e) {
                 log_warning(tt::LogMetal, "[streaming profiler receiver] consumer \"{}\" threw: {}", c.name, e.what());

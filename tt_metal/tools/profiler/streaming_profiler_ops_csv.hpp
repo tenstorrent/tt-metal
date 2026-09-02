@@ -14,8 +14,8 @@
 // execution k -- exact, because a given program's lane participation is fixed, so counts align across
 // lanes.
 //
-// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>: registers itself through register_consumer() at
-// load and writes the CSV at process exit, after the capture has drained.
+// Enabled by TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>: attaches when a capture starts and writes the
+// CSV at process exit, after the capture has drained.
 #pragma once
 
 #include <array>

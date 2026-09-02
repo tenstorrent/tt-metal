@@ -22,10 +22,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
-#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -48,8 +46,7 @@ namespace streaming_profiler {
 // its scratch, holding the device's own unpaired start/end markers in 24 B. Its field and bit layout
 // (lane at 16, dev at 26, type at 29; ZoneStart=1 / ZoneEnd=2) is pinned by the vectorized packer --
 // widening or reordering it is a multi-x decode regression, which is why the public
-// StreamingProfilerRec is a separate type built on top. Reaches a consumer only through
-// add_raw_consumer below.
+// StreamingProfilerRec is a separate type built on top.
 enum class StreamingProfilerRawRecType : uint32_t {
     // A complete zone from the device's atomic-zone path (PP_ZONE_ATOMIC): ts is the END and `duration`
     // is set, so start = ts - duration and no pairing is required. Value 0 because the 3-bit type field
@@ -63,6 +60,10 @@ enum class StreamingProfilerRawRecType : uint32_t {
     Ext = 6,
     Cont = 7,
 };
+// The vectorized zone packer derives the type from ZoneStart plus the wire's END bit, by addition.
+static_assert(
+    static_cast<uint32_t>(StreamingProfilerRawRecType::ZoneEnd) ==
+    static_cast<uint32_t>(StreamingProfilerRawRecType::ZoneStart) + 1);
 
 struct StreamingProfilerRawRecMeta {
     uint32_t spare : 16;
@@ -90,17 +91,6 @@ struct alignas(64) StreamingProfilerRingLine {
     uint32_t w[16];
 };
 static_assert(sizeof(StreamingProfilerRingLine) == 64);
-
-struct StreamingProfilerRawRecordBatch {
-    std::span<const StreamingProfilerRawRec> records;  // oldest first; valid only for the duration of the call
-    uint64_t dropped_delta = 0;
-    const StreamingProfilerCaptureContext* context = nullptr;
-    // PRODUCER-STALL zone opens among the records delivered here (matched by ELF-resolved name): how
-    // many times a producer RISC blocked on a full ring. Same delivery lag as the records.
-    uint64_t stall_delta = 0;
-};
-
-using StreamingProfilerRawRecordCallback = std::function<void(const StreamingProfilerRawRecordBatch&)>;
 
 struct ReceiverDeviceConfig {
     uint32_t chip_id = 0;
@@ -154,10 +144,6 @@ public:
     void start();
 
     StreamingProfilerConsumerHandle add_consumer(std::string name, StreamingProfilerRecordCallback cb);
-    // Internal: subscribe to the raw ring stream (unpaired start/end markers), bypassing the pairing
-    // stage. Not part of the public consumer contract; everything else registers through
-    // register_consumer.
-    StreamingProfilerConsumerHandle add_raw_consumer(std::string name, StreamingProfilerRawRecordCallback cb);
     void remove_consumer(StreamingProfilerConsumerHandle handle);
 
     // Every relay owning (device, socket) has published done, which implies the device saw all its
@@ -201,8 +187,7 @@ private:
 
     struct Consumer {
         std::string name;
-        StreamingProfilerRecordCallback cb;         // paired (public) path; empty for raw consumers
-        StreamingProfilerRawRecordCallback raw_cb;  // raw path (Tracy sink only); empty for public consumers
+        StreamingProfilerRecordCallback cb;
         StreamingProfilerConsumerHandle handle = 0;
         // The internal wire auditor: decodes every stream (record composition compiled out) and owns
         // the per-stream decode-quality fields on Stream. No callback, not in the public consumer set.

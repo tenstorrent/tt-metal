@@ -229,25 +229,6 @@ public:
     uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
-     * @brief True when the flow-control counter lives in a hugepage mapping (read via clflush+lfence)
-     *        rather than the IOMMU-mapped host buffer (read via mfence).
-     */
-    bool is_using_hugepage() const { return using_hugepage_; }
-
-    /**
-     * @brief True when this socket got a static TLB window for its sender core, false when it fell back to
-     *        UMD's dynamic TLBs, which reconfigure the window per access. notify_sender()'s ack write takes
-     *        that path once per read().
-     */
-    bool has_static_tlb() const { return sender_core_tlb_ != nullptr; }
-
-    /**
-     * @brief Diagnostic: re-send the current bytes_acked to the sender core, the same device write read()
-     *        issues once per call, so timing it isolates the per-read device access cost. Idempotent.
-     */
-    void probe_ack_write() { notify_sender(); }
-
-    /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
      *
      * This address should be passed to the device kernel (typically as a compile-time

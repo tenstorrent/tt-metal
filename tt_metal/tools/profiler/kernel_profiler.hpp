@@ -90,8 +90,6 @@ constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
-enum class ZoneKind : uint32_t { Start = 0, End = 1 };
-
 // The producer's back-pressure zone. At namespace scope only because profileScopeStall needs it.
 TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 
@@ -123,10 +121,6 @@ struct ppfmt {
     static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
-    }
-    // Full 27-bit structural id; the kind travels as its own argument, never packed into the id.
-    static inline uint32_t zone_w0(uint32_t id, ZoneKind kind) {
-        return w0(kind == ZoneKind::End ? T_ZONE_END : T_ZONE_START, id & LOW27_MASK);
     }
     static inline uint32_t zone_atomic_w0(uint32_t id) { return w0(T_ZONE_ATOMIC, id & LOW27_MASK); }
     static inline uint32_t zone_s_w0(uint32_t id) { return w0(T_ZONE_S, id & LOW27_MASK); }

@@ -22,10 +22,6 @@
 
 namespace tt::tt_metal {
 
-#if defined(TRACY_ENABLE)
-namespace {}  // namespace
-#endif
-
 StreamingProfilerTracyHandler::StreamingProfilerTracyHandler() = default;
 
 StreamingProfilerTracyHandler::~StreamingProfilerTracyHandler() {

@@ -174,7 +174,16 @@ enum SpscControlBuffer {
     SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
 
-static constexpr std::uint32_t SPSC_RELAY_RESULT_WORDS = 224;
+// Host->relay stop word: quiesce drains everything with every wait still holding, release is the kill
+// switch that abandons the waits and hands the NIU back.
+static constexpr std::uint32_t kRelayStopQuiesce = 1;
+static constexpr std::uint32_t kRelayStopRelease = 2;
+// Relay->host completion word, published only after the socket barrier; the host matches the high half.
+static constexpr std::uint32_t kRelayDoneWord = 0xD09E0000u;
+static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
+// Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
+// the stop word, the heartbeat behind done) travel in one host write.
+static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 
 // STICKY_META (SPSC/relay backend): an 8 B context packet emitted once per RISC per launch at the main
 // zone scope. High word carries (core_x, core_y, risc) plus this type, low word a 32-bit host-side id;

@@ -77,7 +77,7 @@ private:
     ZoneNameMirror names_;
     // wire id -> legacy sync id (0 = not sync). Ids are 27-bit so a map, not an array.
     std::unordered_map<uint32_t, uint32_t> sync_id_cache_;
-    // key: (dev << 16) | lane
+    // key: lane_key(dev, lane)
     std::unordered_map<uint32_t, Pending> pending_;
     double freq_mhz_ = 0.0;
     uint64_t dropped_ = 0;

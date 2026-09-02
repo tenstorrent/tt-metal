@@ -5,6 +5,7 @@
 #include "tools/profiler/streaming_profiler_consumer.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 
 #include <fmt/format.h>
@@ -65,6 +66,51 @@ Registry& registry() {
     return r.get();
 }
 
+struct FileConsumer {
+    std::string name;
+    std::string (*path_getter)();
+    StreamingProfilerRecordCallback on_batch;
+    std::function<void(const std::string&)> write;
+    std::string path;
+    StreamingProfilerConsumerHandle handle = 0;
+    bool resolved = false;
+};
+
+std::vector<FileConsumer*>& file_consumers() {
+    static ttsl::Indestructible<std::vector<FileConsumer*>> v;
+    return v.get();
+}
+
+// Ask each declared file consumer for its path and register the enabled ones. Runs at capture attach,
+// not at declaration, because the paths come from rtoptions.
+void resolve_file_consumers() {
+    static bool exit_hooked = false;
+    for (FileConsumer* fc : file_consumers()) {
+        if (fc->resolved) {
+            continue;
+        }
+        fc->resolved = true;
+        fc->path = fc->path_getter();
+        if (fc->path.empty()) {
+            continue;
+        }
+        fc->handle = register_consumer(fc->name, fc->on_batch);
+        if (!exit_hooked) {
+            exit_hooked = true;
+            // Runs after receiver shutdown has delivered every buffered batch, and unregisters first so
+            // no batch can race the write.
+            std::atexit([] {
+                for (FileConsumer* c : file_consumers()) {
+                    if (c->handle != 0) {
+                        unregister_consumer(c->handle);
+                        c->write(c->path);
+                    }
+                }
+            });
+        }
+    }
+}
+
 }  // namespace
 
 StreamingProfilerConsumerHandle register_consumer(std::string name, StreamingProfilerRecordCallback cb) {
@@ -90,7 +136,16 @@ void unregister_consumer(StreamingProfilerConsumerHandle handle) {
     r.entries.erase(it);
 }
 
+void register_file_consumer_impl(
+    std::string name,
+    std::string (*path)(),
+    StreamingProfilerRecordCallback on_batch,
+    std::function<void(const std::string&)> write) {
+    file_consumers().push_back(new FileConsumer{std::move(name), path, std::move(on_batch), std::move(write)});
+}
+
 void attach_registered_consumers(StreamingProfilerReceiver& receiver) {
+    resolve_file_consumers();  // registers through register_consumer(), so it must run before the lock
     Registry& r = registry();
     std::lock_guard<std::mutex> lk(r.mu);
     r.receiver = &receiver;
