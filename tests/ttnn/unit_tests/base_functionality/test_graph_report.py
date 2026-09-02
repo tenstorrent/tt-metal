@@ -5051,6 +5051,56 @@ class TestTracerStateSurvivesFailure:
             assert not ttnn.tracer.ENABLE_TRACER, "a failed torch-side enable left tracing half-enabled"
 
 
+class TestMissingReportNameWarning:
+    """
+    The warning names enable_graph_report/enable_comparison_mode, so it must fire only when one of
+    them is on: the fixture is autouse and an unset report_name is the default for most runs.
+    """
+
+    class _Config:
+        def __init__(self, **overrides):
+            self.report_path = None
+            self.report_name = None
+            self.enable_graph_report = False
+            self.enable_comparison_mode = False
+            self.__dict__.update(overrides)
+
+    class _Recorder:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, message, *args, **kwargs):
+            self.warnings.append(message)
+
+    def _drive(self, monkeypatch, times=1, **overrides):
+        """Run the fixture body to its yield and back. Both paths here return before using request."""
+        recorder = self._Recorder()
+        monkeypatch.setattr(ttnn, "CONFIG", self._Config(**overrides))
+        monkeypatch.setattr(graph_report, "_warned_about_missing_report_name", False)
+        monkeypatch.setattr(graph_report, "logger", recorder)
+        for _ in range(times):
+            generator = graph_report.run_pytest_graph_report_fixture(None)
+            next(generator)
+            next(generator, None)
+        return recorder.warnings
+
+    def test_no_warning_when_no_report_was_requested(self, monkeypatch):
+        warnings = self._drive(monkeypatch)
+        assert warnings == [], f"warned with neither report flag set: {warnings}"
+
+    def test_warns_when_graph_report_is_on(self, monkeypatch):
+        warnings = self._drive(monkeypatch, enable_graph_report=True)
+        assert len(warnings) == 1, f"expected one warning for enable_graph_report without report_name, got {warnings}"
+
+    def test_warns_when_comparison_mode_is_on(self, monkeypatch):
+        warnings = self._drive(monkeypatch, enable_comparison_mode=True)
+        assert len(warnings) == 1, f"expected one warning for comparison mode without report_name, got {warnings}"
+
+    def test_warns_only_once_per_process(self, monkeypatch):
+        warnings = self._drive(monkeypatch, times=3, enable_graph_report=True)
+        assert len(warnings) == 1, f"autouse fixture warned {len(warnings)} times, expected once"
+
+
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
@@ -5076,7 +5126,27 @@ class TestLoggingDuringTraceCapture:
         with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
             ttnn.add(a, a)  # compile the program binaries before capturing
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            ttnn.add(a, a)
-            ttnn.end_trace_capture(device, trace_id, cq_id=0)
-        ttnn.release_trace(device, trace_id)
+            try:
+                ttnn.add(a, a)
+            finally:
+                # A failed op must not leave capture open, or every later test on this device fails.
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
+class TestTraceCaptureOnSecondCommandQueue:
+    """is_trace_capture_active polls every hw cq, so a capture on cq1 must register as well."""
+
+    def test_trace_capture_on_cq1_is_tracked(self, device):
+        assert not ttnn.is_trace_capture_active(device), "capture reported active before begin_trace_capture"
+        trace_id = ttnn.begin_trace_capture(device, cq_id=1)
+        try:
+            assert ttnn.is_trace_capture_active(device), "capture on cq1 not reported active"
+        finally:
+            ttnn.end_trace_capture(device, trace_id, cq_id=1)
+            ttnn.release_trace(device, trace_id)
+        assert not ttnn.is_trace_capture_active(device), "capture still reported active after end_trace_capture"

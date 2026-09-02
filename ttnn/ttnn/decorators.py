@@ -172,6 +172,13 @@ def get_devices(object_value):
     return devices
 
 
+def synchronize_devices_unless_capturing(devices):
+    # Host synchronization is illegal while a metal trace is being captured.
+    for device in devices:
+        if not ttnn.is_trace_capture_active(device):
+            ttnn.synchronize_device(device)
+
+
 def get_tensors(object_value, tensor_type):
     tensors = []
     if isinstance(object_value, tensor_type):
@@ -1009,10 +1016,7 @@ class Operation:
 
                 if ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
-                    for device in devices:
-                        # Host synchronization is illegal while a metal trace is being captured.
-                        if not ttnn.is_trace_capture_active(device):
-                            ttnn.synchronize_device(device)
+                    synchronize_devices_unless_capturing(devices)
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
@@ -1047,9 +1051,7 @@ class Operation:
                         ) = output
 
                     if ttnn.CONFIG.enable_logging:
-                        for device in devices:
-                            if not ttnn.is_trace_capture_active(device):
-                                ttnn.synchronize_device(device)
+                        synchronize_devices_unless_capturing(devices)
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
                     # Comparison mode: record Python-specific golden comparison data
