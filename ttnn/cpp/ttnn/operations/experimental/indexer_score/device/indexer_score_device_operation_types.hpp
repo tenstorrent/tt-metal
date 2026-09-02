@@ -119,19 +119,8 @@ struct tensor_args_t {
     const Tensor& weights;
     // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
     std::optional<Tensor> k_local{std::nullopt};
-    // TRACE-SAFE metadata path (fused only). A 1-element uint32 ROW_MAJOR DRAM tensor holding this
-    // chunk's chunk_start_idx, which the reader/writer kernels read on-device instead of taking it as a
-    // host runtime arg.
-    //
-    // Why it must exist: chunk_start_idx is hash-EXCLUDED, so one cached program serves every chunk and
-    // override_runtime_arguments() re-patches the derived causal fields (chunk_start_tiles, straddle_*,
-    // kv_len_tiles) on each dispatch. A ttnn trace replay never runs that host patch, so every chunk
-    // after the captured one would replay the captured chunk's causal offset -- silently wrong scores,
-    // not an error. Reading the value on-device is what makes the op replayable.
-    //
-    // kv_len is DERIVED from it on-device (chunk_start_idx + sp*chunk_local, clamped to T) rather than
-    // carried in a second tensor: that is exactly what the caller passes on the scalar path, and deriving
-    // it removes the possibility of an inconsistent (chunk_start_idx, kv_len) pair.
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe chunk positions. The kernel also
+    // derives kv_len from this value so the causal position and valid prefix remain consistent.
     std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
     bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
 };

@@ -46,7 +46,7 @@ constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 // from kv_actual_isl[0] (a 1-element uint32 DRAM tensor) so it stays matched to the reader's on-device
 // recompute (else they desync under a placeholder host logical_n). When false neither this nor the
 // metadata accessor is emitted.
-constexpr bool has_metadata = get_compile_time_arg_val(16);
+constexpr bool has_kv_extent_metadata = get_compile_time_arg_val(16);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
 constexpr uint32_t num_links = get_compile_time_arg_val(18);
 // Host-derived even-ring split-forwarding gate; see ring_attention_all_gather_reader.cpp for semantics.
@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
     // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
-    constexpr uint32_t kMetaArgsOffset = has_metadata
+    constexpr uint32_t kMetaArgsOffset = has_kv_extent_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (page_size_base_idx + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
@@ -114,7 +114,7 @@ void kernel_main() {
     // kv_actual_isl DRAM address and chunk_local_tiles are the next two runtime args (after the
     // output-buffer addrs, before the fabric args). Identical formula to the all-gather reader / host
     // compute_gather_valid_Ht.
-    if constexpr (has_metadata) {
+    if constexpr (has_kv_extent_metadata) {
         // kv_actual_isl is a 1-element uint32 DRAM tensor (was metadata[1]); read its page 0.
         const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);

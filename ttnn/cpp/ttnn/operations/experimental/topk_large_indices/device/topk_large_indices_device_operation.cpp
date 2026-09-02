@@ -87,12 +87,18 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "
             "fixed address)");
+        TT_FATAL(
+            m.memory_config().buffer_type() == BufferType::DRAM,
+            "topk_large_indices valid_length_tensor must be in DRAM");
         // The VALUE lives on device, so the <= n bound cannot be checked here; the offset alone can.
         TT_FATAL(
             attrs.valid_length_offset <= n,
             "topk_large_indices valid_length_offset {} must be <= the input last dimension {}",
             attrs.valid_length_offset,
             n);
+    } else {
+        TT_FATAL(
+            attrs.valid_length_offset == 0, "topk_large_indices: valid_length_offset requires valid_length_tensor");
     }
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();

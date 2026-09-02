@@ -18,9 +18,7 @@ namespace {
 
 struct RuntimeShapeArgs {
     uint32_t num_rows = 0;
-    uint32_t num_chunks = 0;
-    uint32_t tail_elements = 0;
-    uint32_t input_tail_chunk_bytes = 0;
+    uint32_t search_len = 0;
     uint32_t input_row_bytes = 0;
 };
 
@@ -42,22 +40,16 @@ LlkTargetK snap_to_llk_target_k(uint32_t k) {
     return LlkTargetK::K2048;
 }
 
-RuntimeShapeArgs get_runtime_shape_args(
-    const Tensor& input, LlkTargetK llk_target_k, std::optional<uint32_t> valid_length) {
-    const uint32_t llk_k = to_uint32(llk_target_k);
+RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, std::optional<uint32_t> valid_length) {
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
     // Number of columns to actually read and scan per row. Defaults to the full physical width n; a
     // valid_length bounds it to the real prefix so the stale tail is never read or ranked. The row STRIDE
     // (input_row_bytes) stays n so per-row addressing is unchanged — only how much we pull from each row shrinks.
     const uint32_t search_len = valid_length.value_or(n);
-    const uint32_t num_chunks = tt::div_up(search_len, llk_k);
-    const uint32_t tail_elements = search_len - ((num_chunks - 1) * llk_k);
     return RuntimeShapeArgs{
         .num_rows = flattened_rows_excluding_last_dim(shape),
-        .num_chunks = num_chunks,
-        .tail_elements = tail_elements,
-        .input_tail_chunk_bytes = tail_elements * input.element_size(),
+        .search_len = search_len,
         .input_row_bytes = n * input.element_size()};
 }
 
@@ -86,12 +78,11 @@ void set_runtime_args(
     const TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
     const Tensor& indices,
-    LlkTargetK llk_target_k,
     std::optional<uint32_t> valid_length,
     // 0 when the scalar path is in use. Re-applied on every dispatch (including cache hits), which is what
     // keeps a moved metadata buffer addressable.
     uint32_t meta_addr) {
-    const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
+    const auto runtime_args = get_runtime_shape_args(input, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
@@ -118,14 +109,10 @@ void set_runtime_args(
             {input.buffer()->address(),
              start_row,
              rows,
-             runtime_args.num_chunks,
-             runtime_args.input_tail_chunk_bytes,
+             runtime_args.search_len,
              runtime_args.input_row_bytes,
-             // Slot 6: metadata tensor address (0 when unused). On the metadata path num_chunks /
-             // tail_chunk_bytes above are inert placeholders -- the kernel recomputes both from this word.
              meta_addr});
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
+        tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows, runtime_args.search_len});
         tt::tt_metal::SetRuntimeArgs(
             program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
 
@@ -178,11 +165,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
-    // Reader -> compute mailbox for the on-device valid_length derivation. It is NOT optional politeness:
-    // the reader pushes exactly num_chunks * tiles_per_chunk CB pages and compute pops exactly num_chunks,
-    // so if the two derived num_chunks independently and ever disagreed the op would HANG rather than
-    // return wrong data. Deriving once and publishing makes that unrepresentable. It doubles as the NoC
-    // landing slot for the metadata read.
+    // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
@@ -225,15 +208,12 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
 
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
-    // Trace-safe metadata block, appended last (flag always present so the kernel can read it unconditionally).
+    // Keep this block fixed-width so the kernel can use direct compile-argument offsets. The scalar path's
+    // placeholders and duplicate input accessor are compiled out.
     reader_compile_args.push_back(has_meta ? 1u : 0u);
-    if (has_meta) {
-        reader_compile_args.push_back(cb_meta);
-        reader_compile_args.push_back(llk_k);
-        reader_compile_args.push_back(operation_attributes.valid_length_offset);
-        reader_compile_args.push_back(input.element_size());
-        interleaved_accessor_args(*tensor_args.valid_length_tensor).append_to(reader_compile_args);
-    }
+    reader_compile_args.push_back(has_meta ? cb_meta : 0u);
+    reader_compile_args.push_back(has_meta ? operation_attributes.valid_length_offset : 0u);
+    interleaved_accessor_args(has_meta ? *tensor_args.valid_length_tensor : input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -244,9 +224,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
-    if (has_meta) {
-        compute_compile_args.push_back(cb_meta);
-    }
+    compute_compile_args.push_back(has_meta ? cb_meta : 0u);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -280,7 +258,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .cores = cores};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
-    set_runtime_args(program, shared, input, indices, llk_target_k, operation_attributes.valid_length, meta_addr);
+    set_runtime_args(program, shared, input, indices, operation_attributes.valid_length, meta_addr);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -295,7 +273,6 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         cached_program.shared_variables,
         tensor_args.input_tensor,
         tensor_return_value,
-        snap_to_llk_target_k(operation_attributes.k),
         operation_attributes.valid_length,
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u);
 }

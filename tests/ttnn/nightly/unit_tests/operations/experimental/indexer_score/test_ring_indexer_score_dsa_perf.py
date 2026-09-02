@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
-
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
+    _global_inputs,
+    _to_slab,
+    glx_config,
+)
 
 # 55 Ki tokens is the GLM chunked-prefill width (50 Ki history + 5 Ki chunk).
 # 512 Ki is the long-context target; both are tile-aligned.
@@ -48,8 +52,11 @@ GLM52_K_CACHE_CAPACITY = GLM52Config.MAX_POSITION_EMBEDDINGS // GLM52_GLOBAL_CHU
 GLM52_INDEX_CACHE_SLOTS = sum(indexer_type == "full" for indexer_type in GLM52Config.indexer_types())
 GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
-RING_PERF_KV_LENS = (GLM52_KV_55K, GLM52_KV_512K)
-RING_PERF_KV_IDS = ("55k", "512k")
+RING_PERF_CASES = (
+    pytest.param(GLM52_KV_55K, "scalar", id="scalar-55k"),
+    pytest.param(GLM52_KV_512K, "scalar", id="scalar-512k"),
+    pytest.param(GLM52_KV_512K, "metadata", id="metadata-512k"),
+)
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
@@ -160,15 +167,113 @@ def _ring_perf_config():
     )
 
 
+@run_for_blackhole("ring_indexer_score_dsa requires Blackhole fabric")
+@pytest.mark.parametrize("mesh_device", RING_PERF_MESHES, ids=RING_PERF_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_DEVICE_PARAMS], indirect=True)
+def test_ring_indexer_score_dsa_metadata_trace_full_box(mesh_device, expect_error):
+    """Replay changing chunk starts on a complete QuietBox or LoudBox ring."""
+    sp, tp = mesh_device.shape
+    assert (sp, tp) in RING_PERF_MESHES
+    assert ttnn.get_num_devices() == sp * tp
+    chunk_local = 128
+    chunk = sp * chunk_local
+    # Divisible by both the 4-rank and 8-rank global slab widths.
+    cache_width = 32768
+    heads = 16
+    chunk_starts = (0, chunk_local // 2, chunk_local, chunk)
+    q_host, k_host, w_host = _global_inputs(heads, chunk, cache_width, seed=42)
+    slab_k_host = _to_slab(k_host, sp, chunk)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None))
+    q_dev = ttnn.from_torch(q_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = ttnn.from_torch(w_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    k_local = ttnn.from_torch(
+        slab_k_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard
+    )
+    k_gathered = ttnn.from_torch(
+        torch.zeros_like(k_host),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def make_metadata(value, *, on_device):
+        kwargs = {
+            "dtype": ttnn.uint32,
+            "layout": ttnn.ROW_MAJOR_LAYOUT,
+            "mesh_mapper": ttnn.ReplicateTensorToMesh(mesh_device),
+        }
+        if on_device:
+            kwargs.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.from_torch(torch.tensor([[[[value]]]], dtype=torch.int64), **kwargs)
+
+    semaphores, subdevice_id = _make_ccl_context(mesh_device)
+    trace_id = None
+    trace_capture_ended = False
+    try:
+
+        def run_once(*, chunk_start=None, metadata=None):
+            return ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                semaphores,
+                cluster_axis=0,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                chunk_start_idx_tensor=metadata,
+                block_cyclic_sp_axis=0,
+                block_cyclic_chunk_local=chunk_local,
+                program_config=glx_config(heads),
+            )
+
+        validation_metadata = make_metadata(chunk_starts[0], on_device=True)
+        with expect_error(RuntimeError, "chunk_start_idx and chunk_start_idx_tensor are mutually exclusive"):
+            run_once(chunk_start=chunk_starts[0], metadata=validation_metadata)
+
+        references = {}
+        for chunk_start in chunk_starts:
+            output = run_once(chunk_start=chunk_start)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
+            references[chunk_start] = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+
+        metadata = make_metadata(chunk_starts[0], on_device=True)
+        host_metadata = {value: make_metadata(value, on_device=False) for value in chunk_starts}
+        run_once(metadata=metadata)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_output = run_once(metadata=metadata)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        trace_capture_ended = True
+        for chunk_start in chunk_starts + chunk_starts[::-1]:
+            ttnn.copy_host_to_device_tensor(host_metadata[chunk_start], metadata)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            actual = ttnn.to_torch(traced_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+            valid_width = min(chunk_start + chunk, cache_width)
+            assert torch.equal(actual[..., :valid_width], references[chunk_start][..., :valid_width])
+    finally:
+        if trace_id is not None:
+            try:
+                if not trace_capture_ended:
+                    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            finally:
+                ttnn.release_trace(mesh_device, trace_id)
+        _clear_ccl_context(mesh_device)
+
+
 @run_for_blackhole("ring_indexer_score_dsa perf requires Blackhole fabric")
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.parametrize("mesh_device", RING_PERF_MESHES, ids=RING_PERF_MESH_IDS, indirect=True)
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("kv_len", RING_PERF_KV_LENS, ids=RING_PERF_KV_IDS)
+@pytest.mark.parametrize("kv_len,bounds_source", RING_PERF_CASES)
 @pytest.mark.timeout(0)
-def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
+def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
     """Profile one warm fused ring score at a 55K or 512K KV prefix.
 
     The realtime profiler's fused-program critical path is converted to FPU
@@ -229,6 +334,14 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    chunk_start_metadata = ttnn.from_torch(
+        torch.tensor([[[[chunk_start]]]], dtype=torch.int64),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     semaphores, subdevice_id = _make_ccl_context(mesh_device)
     trace_id = None
@@ -237,6 +350,11 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
     try:
 
         def run_once():
+            bounds_kwargs = (
+                {"chunk_start_idx": chunk_start, "kv_len": kv_len}
+                if bounds_source == "scalar"
+                else {"chunk_start_idx_tensor": chunk_start_metadata}
+            )
             return ttnn.experimental.ring_indexer_score_dsa(
                 q_dev,
                 k_gathered,
@@ -247,12 +365,11 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
                 topology=ttnn.Topology.Ring,
                 num_links=2,
                 ag_sub_device_id=subdevice_id,
-                chunk_start_idx=chunk_start,
-                kv_len=kv_len,
                 cache_batch_idx=GLM52_INDEX_CACHE_SLOT,
                 block_cyclic_sp_axis=0,
                 block_cyclic_chunk_local=GLM52_Q_PER_CHIP,
                 program_config=_ring_perf_config(),
+                **bounds_kwargs,
             )
 
         # Compile/cache warm-up is deliberately outside the profiler window.
@@ -282,9 +399,10 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         lower = expected_fpu_utilization * (1 - RING_INDEXER_PERF_MARGIN)
         upper = expected_fpu_utilization * (1 + RING_INDEXER_PERF_MARGIN)
         logger.info(
-            "ring_indexer_score_dsa perf: mesh={} fabric={} topology=ring heads={} k_capacity={} kv_len={} "
+            "ring_indexer_score_dsa perf: mesh={} bounds={} fabric={} topology=ring heads={} k_capacity={} kv_len={} "
             "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}% (expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
                 tuple(mesh_device.shape),
+                bounds_source,
                 ttnn.get_fabric_config(),
                 GLM52_INDEX_HEADS,
                 GLM52_K_CACHE_CAPACITY,
@@ -299,7 +417,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         )
         assert duration_ns > 0, "fused ring-indexer profiler duration must be positive"
         assert lower <= fpu_utilization <= upper, (
-            f"ring_indexer_score_dsa mesh={(sp, tp)} kv_len={kv_len}: FPU utilization "
+            f"ring_indexer_score_dsa mesh={(sp, tp)} bounds={bounds_source} kv_len={kv_len}: FPU utilization "
             f"{fpu_utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
             f"(expected {expected_fpu_utilization:.2f}%, margin +/- {RING_INDEXER_PERF_MARGIN * 100:.1f}%)"
         )

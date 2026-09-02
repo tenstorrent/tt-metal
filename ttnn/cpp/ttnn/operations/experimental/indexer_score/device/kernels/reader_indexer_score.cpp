@@ -27,10 +27,9 @@
 // per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
 // Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
-// Trace-safe metadata: the shared 1-element-tensor read (async_read -> barrier -> invalidate_l1_cache ->
-// volatile load; the invalidate is load-bearing because the DRAM address is reused every chunk) and the
-// causal closed form the HOST also uses, so the two provably cannot drift.
+// Metadata reads invalidate the reused L1 address; causal geometry is shared with the host implementation.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "indexer_score_metadata.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/indexer_score_causal_geometry.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
@@ -69,21 +68,14 @@ constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
 
-// Trace-safe metadata block (appended last by the fused factory; the classic factory pushes only the flag=0,
-// so every offset above is unchanged on both paths). When set, this reader reads chunk_start_idx from a
-// 1-element uint32 DRAM tensor and derives the causal geometry + kv_len itself, instead of taking them as
-// host runtime args that a trace replay would freeze at their capture-time values.
-// The indices below fall back to 0 (a valid arg) when the flag is clear, so the non-metadata binary still
-// compiles -- get_compile_time_arg_val would be a hard error on an out-of-range index even inside a ternary.
 constexpr uint32_t meta_ct_base = bc_ct_base + 5;
 constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
-constexpr uint32_t meta_scalar_base = chunk_start_from_metadata ? meta_ct_base + 1 : 0;
-constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_scalar_base + 0);      // RT slot of meta block
-constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_scalar_base + 1);   // -> compute
-constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_scalar_base + 2);    // -> writer
-constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_scalar_base + 3);           // q rows/device (elements)
-constexpr uint32_t meta_has_sp_axis = get_compile_time_arg_val(meta_scalar_base + 4);  // named-SP-axis branch
-constexpr auto meta_args = TensorAccessorArgs<chunk_start_from_metadata ? meta_ct_base + 6 : 0>();
+constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
+constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
+constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
+constexpr uint32_t meta_has_sp_axis = get_compile_time_arg_val(meta_ct_base + 5);
+constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 6>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -378,11 +370,9 @@ struct FusedRingGate {
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
         k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
         local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
-        // Present only on the metadata path; the factory pushes the same three slots there, so consuming
-        // them here keeps argidx (and therefore perm_base) correct on BOTH paths without a second layout.
-        meta_addr(chunk_start_from_metadata ? get_arg_val<uint32_t>(argidx++) : 0u),
-        meta_device_index(chunk_start_from_metadata ? get_arg_val<uint32_t>(argidx++) : 0u),
-        meta_tp_index(chunk_start_from_metadata ? get_arg_val<uint32_t>(argidx++) : 0u),
+        meta_addr(get_arg_val<uint32_t>(argidx++)),
+        meta_device_index(get_arg_val<uint32_t>(argidx++)),
+        meta_tp_index(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
         shard_val{} {
@@ -587,15 +577,8 @@ void kernel_main() {
     };
 
     if constexpr (fused_ring_enabled && chunk_start_from_metadata) {
-        // TRACE-SAFE causal derivation. chunk_start_idx is a host runtime arg on the scalar path, which the
-        // program-cache override re-patches per dispatch -- something a trace replay cannot do. Read it from
-        // device memory instead and recompute everything derived from it here.
-        //
-        // Done BEFORE the ring receiver (which blocks on the producer signal) so compute, which waits on the
-        // mailbox below, is not serialized behind the first gathered slab.
-        // meta_rt_base comes from the factory (rt_arg::reader_band_perm_base) -- never hardcoded here:
-        // that layout already shifted once upstream (fused_rt_width 6 -> 9 moved it 35 -> 38), and a
-        // stale constant would read the WRONG runtime args silently instead of failing to build.
+        // Derive causal values before the blocking ring receiver so compute can consume them independently.
+        // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
         CircularBuffer cb_derived(cb_meta_derived);
         cb_derived.reserve_back(1);
         const uint32_t derived_l1 = cb_derived.get_write_ptr();
@@ -603,6 +586,12 @@ void kernel_main() {
         // one CB serves as both the NoC landing slot and the reader->compute mailbox.
         const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
+        // Preserve the scalar API's alignment and capacity contract before any causal-geometry arithmetic.
+        // Express the capacity check as subtraction to avoid overflowing chunk_start_idx + chunk_global.
+        constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
+        ASSERT(
+            chunk_start_idx % iscore::kCausalTileWidth == 0 && chunk_global_tiles <= k_len_tiles &&
+            chunk_start_idx / iscore::kCausalTileWidth <= k_len_tiles - chunk_global_tiles);
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
@@ -612,29 +601,33 @@ void kernel_main() {
             get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
             get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
-        // kv_len needs no tensor of its own: the scalar path passes exactly chunk_start_idx + sp*chunk_local,
-        // and sp/chunk_local are hashed structure. Deriving it from the one word makes an inconsistent
-        // (chunk_start, kv_len) pair unrepresentable -- and matching the scalar path here is what makes the
-        // traced result BIT-IDENTICAL rather than merely accurate. topk_large_indices takes the same base
-        // through its own valid_length_tensor, so the two bounds cannot drift.
-        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + bc_sp * bc_chunk_local;
+        // Derive kv_len from the same position used for causal geometry.
+        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
         kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
 
-        CoreLocalMem<volatile uint32_t> mailbox(derived_l1);
-        mailbox[0] = kv_len_tiles;
-        mailbox[1] = geom.chunk_start_tiles;
-        mailbox[2] = geom.straddle_q_tile;
-        mailbox[3] = geom.straddle_jump_tiles;
+        const IndexerScoreMetadataBounds bounds{
+            .kv_len_tiles = kv_len_tiles,
+            .chunk_start_tiles = geom.chunk_start_tiles,
+            .straddle_q_tile = geom.straddle_q_tile,
+            .straddle_jump_tiles = geom.straddle_jump_tiles,
+        };
+        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
+        mailbox->kv_len_tiles = bounds.kv_len_tiles;
+        mailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        mailbox->straddle_q_tile = bounds.straddle_q_tile;
+        mailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
         cb_derived.push_back(1);
 
         // Second copy for the writer (one derivation, two consumers -- see the factory note).
         CircularBuffer cb_wmeta(cb_meta_writer);
         cb_wmeta.reserve_back(1);
-        CoreLocalMem<volatile uint32_t> wmailbox(cb_wmeta.get_write_ptr());
-        wmailbox[0] = kv_len_tiles;
-        wmailbox[1] = geom.chunk_start_tiles;
-        wmailbox[2] = geom.straddle_q_tile;
-        wmailbox[3] = geom.straddle_jump_tiles;
+        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
+        wmailbox->kv_len_tiles = bounds.kv_len_tiles;
+        wmailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        wmailbox->straddle_q_tile = bounds.straddle_q_tile;
+        wmailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
         cb_wmeta.push_back(1);
     }
 

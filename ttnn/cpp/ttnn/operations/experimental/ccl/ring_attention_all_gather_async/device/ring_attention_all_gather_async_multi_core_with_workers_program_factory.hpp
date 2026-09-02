@@ -114,17 +114,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
     std::optional<uint32_t> gather_valid_Ht = std::nullopt,
-    // Trace-safe slot select: when set (with input_batch_slice_idx engaged), the readers recompute the
-    // single-slot gather offset from slot = slot_id[0] on-device, so a captured trace replays across
-    // cache slots. slot_id / kv_actual_isl are 1-element uint32 DRAM tensors (were metadata[0] /
-    // metadata[1]); the reader uses slot_id[0] for the gather slot and kv_actual_isl[0] for the gather
-    // extent, and the writer uses kv_actual_isl[0]. std::nullopt => take the host input_batch_base
-    // (default; existing callers unaffected). Both must be supplied together on the metadata path.
+    // Optional trace-safe slot selection. When present, slot_id[0] replaces the host-provided cache slot.
+    // It requires kv_actual_isl because the reader must also derive the valid gather extent on-device.
     std::optional<Tensor> slot_id = std::nullopt,
     std::optional<Tensor> kv_actual_isl = std::nullopt,
-    // Per-device Q slab in tiles (metadata path only): lets the reader/writer recompute the gather extent
-    // (gather_valid_Ht) from kv_actual_isl[0] on-device, so the gather stays bounded even when the host
-    // logical_n is a placeholder. Unused when slot_id is absent.
+    // kv_actual_isl is an independent 1-element uint32 DRAM tensor containing the trace-safe KV extent.
+    // With chunk_local_tiles, it lets reader and writer derive gather_valid_Ht on-device even when no
+    // device-resident slot selection is needed. std::nullopt keeps the host gather extent.
     uint32_t chunk_local_tiles = 0,
     // (user, layer)-major KV-cache batch dim (metadata path only): the reader computes the gathered
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching

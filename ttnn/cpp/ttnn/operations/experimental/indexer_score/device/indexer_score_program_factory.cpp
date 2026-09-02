@@ -337,10 +337,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    // Trace-safe metadata is fused-ring only (validate rejects it here), but the SAME reader binary serves
-    // both factories, so the flag slot must exist on this path too -- an absent compile arg is a hard error
-    // in the kernel, not a default.
     reader_ct.push_back(0u);
+    reader_ct.insert(reader_ct.end(), 5, 0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -349,7 +348,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t out_row_elems = block_pool ? nblocks : T;
     writer_ct.push_back(out_row_elems * out_elem_bytes);
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
-    writer_ct.push_back(0u);  // trace-safe metadata off (see the reader note above)
+    writer_ct.push_back(0u);
+    writer_ct.push_back(0u);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -361,7 +361,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
     compute_ct.push_back(0u);                        // fused_ring off
-    compute_ct.push_back(0u);                        // trace-safe metadata off (see the reader note above)
+    compute_ct.push_back(0u);                        // trace-safe metadata off
+    compute_ct.push_back(0u);                        // metadata CB unused
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(

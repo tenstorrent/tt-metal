@@ -227,8 +227,7 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     }
 }
 
-// Trace-safe metadata path. Structural only (shape/dtype/layout/placement) -- the VALUE lives on device and
-// the host cannot see it, which is the whole point. Runs on miss AND hit, like the other runtime validators.
+// Validate metadata properties available without reading its device-resident value.
 void validate_chunk_start_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!t.has_chunk_start_metadata()) {
         return;
@@ -238,8 +237,7 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
         attrs.has_fused_ring(),
         "indexer_score: chunk_start_idx_tensor is supported only on the fused ring path "
         "(ring_indexer_score_dsa); the classic factory has no on-device metadata read");
-    // Mutually exclusive with the scalar forms, rather than silently preferring one. kv_len is DERIVED from
-    // chunk_start_idx on-device, so supplying it too would express a constraint the kernel ignores.
+    // kv_len is derived from chunk_start_idx_tensor on-device.
     TT_FATAL(
         !attrs.kv_len.has_value(),
         "indexer_score: kv_len must not be set alongside chunk_start_idx_tensor -- on the metadata path it is "
@@ -268,6 +266,8 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
         m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "indexer_score: chunk_start_idx_tensor must be interleaved (a sharded 1-element tensor would not sit at "
         "the single fixed address the kernel reads page 0 from)");
+    TT_FATAL(
+        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: chunk_start_idx_tensor must be in DRAM");
 }
 }  // namespace
 
@@ -317,10 +317,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.tp_axis().value_or(0u),
         attrs.has_indexed_kv_cache(),
         attrs.has_runtime_kv_len(),
-        // Trace-safe metadata selects different reader/compute/writer binaries (extra CBs + accessor
-        // compile args + on-device causal derivation), so presence MUST be hashed. Only presence: the
-        // VALUE lives in device memory and never enters the key, which is what lets one captured program
-        // serve every chunk.
+        // Metadata presence selects kernels with additional CBs and accessor arguments. Its value remains dynamic.
         tensor_args.has_chunk_start_metadata(),
         // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
@@ -817,6 +814,9 @@ ttnn::Tensor launch_indexer_score(
     //   * contiguous: the gathered chunk is seq_ring*Sq. Normally seq_ring is the SP ring; for the identity
     //     block-cyclic SP=1 + TP sub-shard it is the TP ring instead.
     // The deduced window ends at T (incompatible with a growing kv_len < T -- pass chunk_start_idx there).
+    TT_FATAL(
+        !(chunk_start_idx.has_value() && chunk_start_idx_tensor.has_value()),
+        "indexer_score: chunk_start_idx and chunk_start_idx_tensor are mutually exclusive");
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;

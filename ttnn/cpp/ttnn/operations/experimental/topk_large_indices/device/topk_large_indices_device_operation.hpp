@@ -45,11 +45,8 @@ struct TopkLargeIndicesDeviceOperation {
 
 namespace ttnn::experimental {
 
-// valid_length_tensor / valid_length_offset are the TRACE-SAFE form of valid_length: the kernel reads the
-// 1-element uint32 tensor on-device and uses (tensor[0] + valid_length_offset). Supply them INSTEAD of the
-// `valid_length` scalar when the call is captured into a ttnn trace -- a captured scalar is frozen at its
-// capture-time value, so every later chunk would rank the wrong prefix. Defaulted, so existing callers are
-// source-compatible and byte-identical.
+// For trace replay, valid_length_tensor supplies the dynamic value on-device and valid_length_offset supplies
+// an optional constant component. valid_length and valid_length_tensor are mutually exclusive.
 Tensor topk_large_indices(
     const Tensor& input_tensor,
     uint32_t k,

@@ -501,9 +501,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // The host value is a structural placeholder for the indexed gather. On the
     // trace-safe path the reader derives the actual cache slot from slot_id.
-    const bool has_metadata = slot_id.has_value();
+    const bool has_slot_metadata = slot_id.has_value();
+    const bool has_kv_extent_metadata = kv_actual_isl.has_value();
+    TT_FATAL(!has_slot_metadata || has_kv_extent_metadata, "slot metadata requires KV-extent metadata");
     const uint32_t meta_cb_index = tt::CB::c_in3;
-    if (has_metadata) {
+    if (has_kv_extent_metadata) {
         constexpr uint32_t meta_cb_page_size_bytes = 32;
         for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
             desc.cbs.push_back(CBDescriptor{
@@ -551,10 +553,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         1,                                // direction
         fuse_op,                          // fused op
-        static_cast<uint32_t>(has_metadata),
+        static_cast<uint32_t>(has_kv_extent_metadata),
         meta_cb_index,
         num_links,
         static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(has_slot_metadata),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -567,8 +570,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_reader_forward_kernel.compile_time_args);
     }
-    if (has_metadata) {
-        tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_forward_kernel.compile_time_args);
+    if (has_kv_extent_metadata) {
+        tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->buffer() : input_tensor[0].buffer())
+            .append_to(sender_reader_forward_kernel.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_reader_forward_kernel.compile_time_args);
     }
@@ -596,7 +600,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         1,                                        // direction
         unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
         unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
-        static_cast<uint32_t>(has_metadata),
+        static_cast<uint32_t>(has_kv_extent_metadata),
         meta_cb_index,
         num_links,
         static_cast<uint32_t>(effective_split_forwarding),
@@ -608,7 +612,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_writer_forward_kernel.compile_time_args);
     }
-    if (has_metadata) {
+    if (has_kv_extent_metadata) {
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_writer_forward_kernel.compile_time_args);
     }
@@ -634,10 +638,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         0,                                // direction
         fuse_op,                          // fused op
-        static_cast<uint32_t>(has_metadata),
+        static_cast<uint32_t>(has_kv_extent_metadata),
         meta_cb_index,
         num_links,
         static_cast<uint32_t>(effective_split_forwarding),
+        static_cast<uint32_t>(has_slot_metadata),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -650,8 +655,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_reader_backward_kernel.compile_time_args);
     }
-    if (has_metadata) {
-        tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_backward_kernel.compile_time_args);
+    if (has_kv_extent_metadata) {
+        tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->buffer() : input_tensor[0].buffer())
+            .append_to(sender_reader_backward_kernel.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_reader_backward_kernel.compile_time_args);
     }
@@ -679,7 +685,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         0,                                         // direction
         unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
         unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
-        static_cast<uint32_t>(has_metadata),
+        static_cast<uint32_t>(has_kv_extent_metadata),
         meta_cb_index,
         num_links,
         static_cast<uint32_t>(effective_split_forwarding),
@@ -691,7 +697,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_writer_backward_kernel.compile_time_args);
     }
-    if (has_metadata) {
+    if (has_kv_extent_metadata) {
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
             .append_to(sender_writer_backward_kernel.compile_time_args);
     }
@@ -814,8 +820,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(output_tensor[input_idx].buffer());
         }
-        if (has_metadata) {
-            reader_forward_rt_args.push_back(slot_id->buffer());
+        if (has_kv_extent_metadata) {
+            if (has_slot_metadata) {
+                reader_forward_rt_args.push_back(slot_id->buffer());
+            } else {
+                reader_forward_rt_args.push_back(0u);
+            }
             reader_forward_rt_args.push_back(kv_actual_isl->buffer());
             reader_forward_rt_args.push_back(chunk_local_tiles);
             reader_forward_rt_args.push_back(kv_cache_num_layers);
@@ -841,8 +851,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(output_tensor[input_idx].buffer());
         }
-        if (has_metadata) {
-            reader_backward_rt_args.push_back(slot_id->buffer());
+        if (has_kv_extent_metadata) {
+            if (has_slot_metadata) {
+                reader_backward_rt_args.push_back(slot_id->buffer());
+            } else {
+                reader_backward_rt_args.push_back(0u);
+            }
             reader_backward_rt_args.push_back(kv_actual_isl->buffer());
             reader_backward_rt_args.push_back(chunk_local_tiles);
             reader_backward_rt_args.push_back(kv_cache_num_layers);
@@ -875,7 +889,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
         }
-        if (has_metadata) {
+        if (has_kv_extent_metadata) {
             writer_forward_rt_args.push_back(kv_actual_isl->buffer());
             writer_forward_rt_args.push_back(chunk_local_tiles);
         }
@@ -915,7 +929,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());
         }
-        if (has_metadata) {
+        if (has_kv_extent_metadata) {
             writer_backward_rt_args.push_back(kv_actual_isl->buffer());
             writer_backward_rt_args.push_back(chunk_local_tiles);
         }

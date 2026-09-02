@@ -10,6 +10,7 @@
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 #include "topk_large_indices_compute_body_mode.hpp"
+#include "topk_large_indices_metadata.hpp"
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -240,19 +241,14 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_chunks = get_arg_val<uint32_t>(1);
-    uint32_t tail_elements = get_arg_val<uint32_t>(2);
+    const uint32_t search_len = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr auto body_mode = static_cast<ComputeBodyMode>(get_compile_time_arg_val(3));
-    // Trace-safe metadata: take the reader's derivation rather than the (replay-frozen) runtime args, and
-    // rather than re-deriving -- see the reader's note on why a second derivation risks a hang.
-    // Slot 4: upstream claimed slot 3 for body_mode after this work was written.
     constexpr bool valid_length_from_metadata = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t meta_cb_arg = valid_length_from_metadata ? 5 : 0;
-    constexpr uint32_t meta_cb = get_compile_time_arg_val(meta_cb_arg);
+    constexpr uint32_t meta_cb = get_compile_time_arg_val(5);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     static_assert(
@@ -263,16 +259,22 @@ void kernel_main() {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t final_survivor = 0;
 
+    compute_kernel_hw_startup(input_cb, indices_cb);
+    pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+
+    uint32_t num_chunks;
+    uint32_t tail_elements;
     if constexpr (valid_length_from_metadata) {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.wait_front(1);
-        num_chunks = ckernel::read_tile_value(meta_cb, 0, 0);
-        tail_elements = ckernel::read_tile_value(meta_cb, 0, 1);
+        num_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_num_chunks_word);
+        tail_elements = ckernel::read_tile_value(meta_cb, 0, topk_metadata_tail_elements_word);
         meta_cb_obj.pop_front(1);
+    } else {
+        const auto bounds = calculate_topk_bounds(search_len, K);
+        num_chunks = bounds.num_chunks;
+        tail_elements = bounds.tail_elements;
     }
-
-    compute_kernel_hw_startup(input_cb, indices_cb);
-    pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
 
     CircularBuffer input(input_cb);
     CircularBuffer indices(indices_cb);

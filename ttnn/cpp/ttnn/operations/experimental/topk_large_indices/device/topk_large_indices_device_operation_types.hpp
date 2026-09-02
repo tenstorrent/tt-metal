@@ -33,19 +33,13 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
-    // Trace-safe form of `valid_length`: when tensor_args.valid_length_tensor is set the kernel computes
-    // valid_length = tensor[0] + valid_length_offset on-device. The offset exists because the indexer's
-    // bound is chunk_start + chunk_global, and chunk_global is structural (hashed) while only chunk_start
-    // varies per chunk -- so one metadata tensor drives BOTH this op and ring_indexer_score_dsa's kv_len,
-    // and the two provably cannot disagree. Hashed: it shapes nothing but must not be silently ignored.
+    // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
     uint32_t valid_length_offset{0};
 };
 
 struct tensor_args_t {
     Tensor input_tensor;
-    // 1-element uint32 ROW_MAJOR DRAM tensor holding the per-chunk base of valid_length. `valid_length` is
-    // a host runtime arg that a ttnn trace replay freezes at its capture-time value; reading it on-device
-    // is what makes top-k replayable across chunks.
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
     std::optional<Tensor> valid_length_tensor{std::nullopt};
     bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
 };

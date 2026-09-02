@@ -157,12 +157,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    // TRACE-SAFE: 1-element uint32 ROW_MAJOR DRAM tensor carrying this chunk's chunk_start_idx, read
-    // on-device by the reader/writer kernels. Supply it INSTEAD of the `chunk_start_idx` scalar when the
-    // call is to be captured into a ttnn trace -- a replay cannot re-run the host runtime-arg patch that
-    // the scalar path depends on, so a captured scalar would be frozen at its capture-time value. kv_len
-    // is derived from it on-device and must also be left unset. Defaulted, so every existing caller is
-    // source-compatible and byte-identical.
+    // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
     const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental

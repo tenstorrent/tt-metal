@@ -33,13 +33,14 @@ constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
 constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr bool has_metadata = get_compile_time_arg_val(11);
+constexpr bool has_kv_extent_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t num_links = get_compile_time_arg_val(13);
 // Host-derived even-ring split-forwarding gate: the parent fused op owns this protocol decision and
 // passes the same flag to both all-gather directions and its own receiver, so producer and consumer
 // cannot disagree. Standalone (non-fused) callers get the legacy even-ring topology gate from the host.
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(14);
+constexpr bool has_slot_metadata = get_compile_time_arg_val(15);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -47,16 +48,17 @@ constexpr bool split_forwarding_enabled = get_compile_time_arg_val(14);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 15;
+    constexpr uint32_t page_size_base_idx = 16;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
         std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
-    constexpr uint32_t kMetaArgsOffset = has_metadata
+    constexpr uint32_t kMetaArgsOffset = has_kv_extent_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (page_size_base_idx + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
-    constexpr uint32_t kKvMetaArgsOffset = has_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
+    constexpr uint32_t kKvMetaArgsOffset =
+        has_kv_extent_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kKvMetaArgsOffset>();
 
     ///////////////////////////////////////////////////
@@ -109,7 +111,7 @@ void kernel_main() {
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
-    if constexpr (has_metadata) {
+    if constexpr (has_kv_extent_metadata) {
         const uint32_t slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
@@ -119,12 +121,14 @@ void kernel_main() {
         // Use the data CB as temporary metadata scratch. It is empty at this point and avoids
         // a separate tiny-CB read race on the all-gather worker cores.
         CircularBuffer cb_meta(cb_output_id);
-        const uint32_t slot_id =
-            trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
-        const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
-                                          input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+        if constexpr (has_slot_metadata) {
+            const uint32_t slot_id =
+                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
+            const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
+                                              input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+            }
         }
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());

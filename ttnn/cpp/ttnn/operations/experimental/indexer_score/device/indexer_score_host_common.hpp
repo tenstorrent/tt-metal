@@ -106,9 +106,7 @@ inline KMcastBBox k_mcast_bbox(
 // (stored device_index).
 using DeviceCausalGeometry = CausalGeometryTiles;
 
-// Thin host wrapper over the shared closed form in indexer_score_causal_geometry.hpp: unpacks
-// operation_attributes_t, validates what only the host can, and delegates. The kernels call the same
-// function with a metadata-read chunk_start_idx on the trace-safe path, so the two cannot drift.
+// Unpack and validate host attributes before calling the shared causal-geometry implementation.
 static_assert(
     kCausalTileWidth == tt::constants::TILE_WIDTH,
     "indexer_score causal geometry assumes TILE_WIDTH == 32 (the shared kernel-includable header cannot "
