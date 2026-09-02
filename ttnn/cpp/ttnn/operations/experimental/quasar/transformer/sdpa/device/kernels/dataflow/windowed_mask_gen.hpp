@@ -16,7 +16,7 @@
 // content depends solely on tile indices and the window boundaries -- never on the Q/K/V data -- so it
 // can be produced independently of the reader.
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include <tt-metalium/constants.hpp>
 #include "dataflow_common.hpp"
@@ -28,7 +28,7 @@
 // masks, and the standard path decodes Float16_b fine).
 template <uint32_t tile_bytes>
 inline void fill_diag_subtile_zeros(
-    uint32_t cb_id,
+    uint32_t dfb_id,
     uint32_t tile_id,
     uint32_t row_start_idx,
     uint32_t row_end_idx,
@@ -36,8 +36,8 @@ inline void fill_diag_subtile_zeros(
     uint32_t col_end_idx) {
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
-    CircularBuffer cb(cb_id);
-    uint32_t write_addr = cb.get_write_ptr() + tile_id * tile_bytes;
+    DataflowBuffer dfb(dfb_id);
+    uint32_t write_addr = dfb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
     for (uint32_t r = row_start_idx; r < row_end_idx; ++r) {
         const uint32_t face_row = (r >= FH) ? 2u : 0u;
@@ -53,9 +53,9 @@ inline void fill_diag_subtile_zeros(
 // Generate and push the full block-diagonal mask (Sq_chunk_t x Sk_chunk_t tiles per K chunk, for all K
 // chunks) for a single Q chunk. Self-contained: the start window is searched from cu_window_seqlens for
 // this Q chunk's row range, so the result is independent of the order in which Q chunks are scheduled
-// (safe under the regular SDPA factory's global-Q scheduling, incl. zigzag). cb_cu_window_in must already
+// (safe under the regular SDPA factory's global-Q scheduling, incl. zigzag). dfb_cu_window_in must already
 // hold the cu_window_seqlens tensor (loaded + pushed once by the caller).
-template <uint32_t mask_tile_bytes, uint32_t cb_mask_in, uint32_t cb_cu_window_in>
+template <uint32_t mask_tile_bytes, uint32_t dfb_mask_in, uint32_t dfb_cu_window_in>
 inline void generate_windowed_mask_for_q_chunk(
     Noc& noc,
     uint32_t q_chunk,
@@ -68,8 +68,8 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t q_tok_offset) {
     // cu_window_seqlens is INT32/UINT32 (validated host-side); both store non-negative cumulative
     // lengths in 32-bit words, so a plain uint32 read is correct for either.
-    CircularBuffer cb_cu(cb_cu_window_in);
-    volatile tt_l1_ptr uint32_t* cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_cu.get_read_ptr());
+    DataflowBuffer dfb_cu(dfb_cu_window_in);
+    volatile tt_l1_ptr uint32_t* cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_cu.get_read_ptr());
     auto get_cu = [&](uint32_t idx) -> uint32_t { return cu_ptr[idx]; };
     auto get_window_indices = [&](uint32_t i) {
         if (i < cu_window_seqlens_eles) {
@@ -117,13 +117,13 @@ inline void generate_windowed_mask_for_q_chunk(
         k_num_chunks,
         tt::constants::TILE_HEIGHT);
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    CircularBuffer cb_mask(cb_mask_in);
+    DataflowBuffer dfb_mask(dfb_mask_in);
     uint32_t local_window_idx = start_window_idx;
     for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
 
-        cb_mask.reserve_back(mask_chunk_tiles);
-        uint32_t mask_write_ptr_base = cb_mask.get_write_ptr();
+        dfb_mask.reserve_back(mask_chunk_tiles);
+        uint32_t mask_write_ptr_base = dfb_mask.get_write_ptr();
 
         int zero_tile_idx = -1;
         int inf_tile_idx = -1;
@@ -143,7 +143,7 @@ inline void generate_windowed_mask_for_q_chunk(
                 if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx && k_start_idx >= window_low_idx &&
                     k_end_idx <= window_high_idx) {
                     if (zero_tile_idx == -1) {
-                        fill_tile_zeros<mask_tile_bytes, false>(noc, cb_mask_in, in_mask_tile_id);
+                        fill_tile_zeros<mask_tile_bytes, false>(noc, dfb_mask_in, in_mask_tile_id);
                     } else {
                         copy_tile<mask_tile_bytes>(
                             noc, mask_write_ptr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
@@ -153,7 +153,7 @@ inline void generate_windowed_mask_for_q_chunk(
                 }
 
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<mask_tile_bytes>(dfb_mask_in, in_mask_tile_id);
                 } else {
                     copy_tile<mask_tile_bytes>(
                         noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -173,7 +173,7 @@ inline void generate_windowed_mask_for_q_chunk(
 
                     if (cqs < cqe && cks < cke) {
                         fill_diag_subtile_zeros<mask_tile_bytes>(
-                            cb_mask_in,
+                            dfb_mask_in,
                             in_mask_tile_id,
                             cqs - q_start_idx,
                             cqe - q_start_idx,
@@ -191,15 +191,15 @@ inline void generate_windowed_mask_for_q_chunk(
             }
         }
         noc.async_read_barrier();
-        cb_mask.push_back(mask_chunk_tiles);
+        dfb_mask.push_back(mask_chunk_tiles);
     }
 }
 
 // Template wrapper so the windowed generator is instantiated ONLY when use_windowed_mask is true.
 // kernel_main is not a template, so an `if constexpr` there does NOT discard its body — it would still
-// compile, constexpr-evaluating get_tile_size on a possibly-inactive CB id. Inside this template,
+// compile, constexpr-evaluating get_tile_size on a possibly-inactive DFB id. Inside this template,
 // `if constexpr (W)` discards properly, so non-windowed writer builds never touch the generator.
-template <bool W, uint32_t cb_mask_in, uint32_t cb_cu_window_in>
+template <bool W, uint32_t dfb_mask_in, uint32_t dfb_cu_window_in>
 inline void windowed_generate_if_enabled(
     Noc& noc,
     uint32_t q_chunk,
@@ -211,8 +211,8 @@ inline void windowed_generate_if_enabled(
     uint32_t cu_window_seqlens_eles,
     uint32_t q_tok_offset) {
     if constexpr (W) {
-        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-        generate_windowed_mask_for_q_chunk<mask_tile_bytes, cb_mask_in, cb_cu_window_in>(
+        constexpr uint32_t mask_tile_bytes = get_tile_size(dfb_mask_in);
+        generate_windowed_mask_for_q_chunk<mask_tile_bytes, dfb_mask_in, dfb_cu_window_in>(
             noc,
             q_chunk,
             Sq_chunk_t,
