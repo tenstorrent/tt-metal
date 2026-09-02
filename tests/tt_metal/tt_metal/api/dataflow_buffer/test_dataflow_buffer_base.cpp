@@ -195,6 +195,11 @@ DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx1B4, DM, DM, 2, 1, 4, 16, false)
 DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB4Sx1B4, DM, DM, 4, 1, 4, 16, false)
 DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB1Sx2B4, DM, DM, 1, 2, 4, 16, false)
 DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx2B2, DM, DM, 2, 2, 2, 16, false)
+// STRIDED->BLOCKED with implicit sync: the strided producers post per-tile credits through the
+// ISR; the DM consumer's whole-block read waits for and acks each counter's share.
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB1Sx1B4_impl, DM, DM, 1, 1, 4, 16, true)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx2B4_impl, DM, DM, 2, 2, 4, 16, true)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx1B4_impl, DM, DM, 2, 1, 4, 16, true)
 // STRIDED->BLOCKED, Tensix producers -> DM consumers (data verified via the prefilled ring).
 DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Sx1B4, TENSIX, DM, 1, 1, 4, 16, false)
 DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Sx2B4, TENSIX, DM, 2, 2, 4, 16, false)

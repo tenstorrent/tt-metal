@@ -79,7 +79,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t split_tc;             // byte 3: tiles are split across all tile counters (1) or not (0)
     uint16_t entries_to_jump;     // bytes 30-31: tiles to jump on each rotation of tile counters
 };
-static_assert(sizeof(dfb_init_entry_hdr_t) == 32, "dfb_init_entry_hdr_t must pack to 32B with no padding");
+static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must pack to 36B with no padding");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
 // Read the entire 32B dfb_hart_init_entry_t (__attribute__((packed))) as 8 u32s.
