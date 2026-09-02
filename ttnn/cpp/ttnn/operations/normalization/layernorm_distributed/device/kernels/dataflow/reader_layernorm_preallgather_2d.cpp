@@ -42,7 +42,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_buf(dfb::out);
     // Gather buffer on the merge core: every core in the column lands its partial here.
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
-    Semaphore<> reducer_sem(sem::reducer);
+    Semaphore reducer_sem(sem::reducer);
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
