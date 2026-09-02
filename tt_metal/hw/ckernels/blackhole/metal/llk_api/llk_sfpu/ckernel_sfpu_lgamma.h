@@ -96,7 +96,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
-    constexpr float LOG_SQRT_PI = 0.57236494f;  // lgamma(0.5) = ln(sqrt(pi))
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Minimal coefficients for 0-3 ULP
@@ -121,9 +120,22 @@ inline void calculate_lgamma_stirling_fp32(
 
         sfpi::vFloat res = z;
 
-        // Polynomial bridge for small range inputs (z near 1 or 2 only)
+        // Polynomial bridge for small range inputs (z near 0.625, 1, or 2)
 
-        v_if(abs_range1 < 0.25f) {
+        v_if(z < 0.75f) {
+            // Taylor expansion around z=0.625, covers z in [0.5, 0.75), accurate to < 10 ULP
+            constexpr float s0 = 0.36082950f;
+            constexpr float s1 = -1.45270876f;
+            constexpr float s2 = 1.70059159f;
+            constexpr float s3 = -1.47809690f;
+            constexpr float s4 = 1.68212021f;
+            constexpr float s5 = -2.11689171f;
+            constexpr float s6 = 2.80586323f;
+            constexpr float s7 = -3.83975483f;
+            sfpi::vFloat d0 = z - 0.625f;
+            res = PolynomialEvaluator::eval(d0, s0, s1, s2, s3, s4, s5, s6, s7);
+        }
+        v_elseif(abs_range1 < 0.25f) {
             // Taylor Expansion around z=1 (d = z - 1.0)
             constexpr float p0 = -0.57721566f;  // -gamma
             constexpr float p1 = 0.82246703f;   // zeta(2)/2
@@ -151,10 +163,6 @@ inline void calculate_lgamma_stirling_fp32(
             sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
             res = res + inv_z * correction;
         }
-        v_endif;
-
-        // Handle boundary case
-        v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
