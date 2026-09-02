@@ -74,8 +74,8 @@ void kernel_main() {
     // proves that covers it.
     u::Storage<In> tmp_storage(kDfbTmp);
     u::ComputeBlock t = tmp_storage.store(BC_APPLY(b, v));
-    u::noc_store<1>(out_storage.store(u::relu(t + t)), out, 0);
+    u::noc_store<1>(out_storage, u::relu(t + t), out, 0);
 #else
-    u::noc_store<1>(out_storage.store(BC_APPLY(b, v)), out, 0);
+    u::noc_store<1>(out_storage, BC_APPLY(b, v), out, 0);
 #endif
 }

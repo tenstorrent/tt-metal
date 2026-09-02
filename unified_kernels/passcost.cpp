@@ -158,7 +158,7 @@ void kernel_main() {
 #if defined(PC_REDUCE)
     u::Storage<u::Shape<1, 1>> one_storage(kDfbVec);
     u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
-    u::noc_store<0>(out_storage.store(u::reduce_max<u::Axis::Cols>(c0, one)), out, 0);
+    u::noc_store<0>(out_storage, u::reduce_max<u::Axis::Cols>(c0, one), out, 0);
 #else
 #if defined(PC_ALT)
     // Odd passes broadcast, even passes copy, so every pass changes kind.
@@ -184,21 +184,21 @@ void kernel_main() {
     u::ComputeBlock c7 = s7.store(PC_ODD(c6));
 #endif
 #if PASSES == 1
-    u::noc_store<0>(out_storage.store(PC_ODD(c0)), out, 0);
+    u::noc_store<0>(out_storage, PC_ODD(c0), out, 0);
 #elif PASSES == 2
-    u::noc_store<0>(out_storage.store(PC_EVEN(c1)), out, 0);
+    u::noc_store<0>(out_storage, PC_EVEN(c1), out, 0);
 #elif PASSES == 3
-    u::noc_store<0>(out_storage.store(PC_ODD(c2)), out, 0);
+    u::noc_store<0>(out_storage, PC_ODD(c2), out, 0);
 #elif PASSES == 4
-    u::noc_store<0>(out_storage.store(PC_EVEN(c3)), out, 0);
+    u::noc_store<0>(out_storage, PC_EVEN(c3), out, 0);
 #elif PASSES == 5
-    u::noc_store<0>(out_storage.store(PC_ODD(c4)), out, 0);
+    u::noc_store<0>(out_storage, PC_ODD(c4), out, 0);
 #elif PASSES == 6
-    u::noc_store<0>(out_storage.store(PC_EVEN(c5)), out, 0);
+    u::noc_store<0>(out_storage, PC_EVEN(c5), out, 0);
 #elif PASSES == 7
-    u::noc_store<0>(out_storage.store(PC_ODD(c6)), out, 0);
+    u::noc_store<0>(out_storage, PC_ODD(c6), out, 0);
 #else
-    u::noc_store<0>(out_storage.store(PC_EVEN(c7)), out, 0);
+    u::noc_store<0>(out_storage, PC_EVEN(c7), out, 0);
 #endif
 #else
 #if PASSES >= 2
@@ -225,21 +225,21 @@ void kernel_main() {
 
     // The last pass writes the output DFB, so PASSES passes in total.
 #if PASSES == 1
-    u::noc_store<0>(out_storage.store(PC_PASS(c0)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c0), out, 0);
 #elif PASSES == 2
-    u::noc_store<0>(out_storage.store(PC_PASS(c1)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c1), out, 0);
 #elif PASSES == 3
-    u::noc_store<0>(out_storage.store(PC_PASS(c2)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c2), out, 0);
 #elif PASSES == 4
-    u::noc_store<0>(out_storage.store(PC_PASS(c3)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c3), out, 0);
 #elif PASSES == 5
-    u::noc_store<0>(out_storage.store(PC_PASS(c4)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c4), out, 0);
 #elif PASSES == 6
-    u::noc_store<0>(out_storage.store(PC_PASS(c5)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c5), out, 0);
 #elif PASSES == 7
-    u::noc_store<0>(out_storage.store(PC_PASS(c6)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c6), out, 0);
 #else
-    u::noc_store<0>(out_storage.store(PC_PASS(c7)), out, 0);
+    u::noc_store<0>(out_storage, PC_PASS(c7), out, 0);
 #endif
 #endif
 #endif

@@ -281,6 +281,13 @@ _RE_ACCUM = re.compile(r"u::Accumulator<[^;]*?>\s+(\w+)\s*\(\s*\w+\s*,\s*(\w+)\s
 # custom_compute's escape hatch: the routine did the reserve/pack/push itself and hands the
 # harness a bare handle. u::Block<Blk>{out_storage} names its Storage directly.
 _RE_DRAINS_BARE = re.compile(r"noc_store<([^>(]*)>\(\s*u::Block<\w+>\s*\{\s*(\w+)\s*\}")
+# The congruent form, which leads with the Storage the way noc_load does:
+#   noc_store<thread>(out_storage, <expression>, acc, idx)
+# A BARE identifier followed by a comma is what separates it from every other spelling --
+# the Block forms lead with `std::move(`, `u::Block<`, or `<storage>.store(`, none of which
+# is a bare word before a comma. The name captured here is an ordinary Storage variable, so
+# unlike a dfb constant it is already in `storages` and only the ROLE has to be recorded.
+_RE_DRAINS_STORAGE = re.compile(r"noc_store<([^>(]*)>\(\s*(\w+)\s*,")
 
 
 _RE_DEFAULT = re.compile(r"#ifndef\s+(\w+)\s*\n#define\s+\1\s+(\d+)")
@@ -357,6 +364,9 @@ def derive_roles(kernel_source, defines):
         roles.setdefault(storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
     for thread, holder in _RE_DRAINS_INLINE.findall(src):
         roles.setdefault(accum_out.get(holder, holder), (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
+    for thread, storage in _RE_DRAINS_STORAGE.findall(src):
+        if storage in storages:
+            roles.setdefault(storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
     for pattern in (_RE_DRAINS, _RE_DRAINS_C2C):
         for thread, block in pattern.findall(src):
             for src_storage in produced.get(block, ()):
