@@ -22,7 +22,7 @@ handles an arbitrary block one DEST at a time — it never hits the DEST/chunk l
 path chunks around.
 
 Variants:
-  reduce_tile               — the reduce library, default datapath (ReduceAlgorithm::Auto -> ReduceTile,
+  reduce_tile               — the reduce library, default datapath (ReduceAlgorithm::ReduceTile,
                               FPU matmul-with-ones), AVG so the 1/N is per dim.
   accumulate_via_add        — the reduce library with the opt-in ReduceAlgorithm::AccumulateViaAdd.
   accumulate_via_add_inline — the per-output-tile accumulate + SFPU-finalize loop as a standalone
@@ -48,7 +48,7 @@ CB_OUT = 16  # output tiles, fp32, tensor-backed (count depends on dim)
 
 VARIANTS = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline", "dispatch")
 BASELINE = "reduce_tile"
-# reduce_tile               = the reduce library, default datapath (ReduceAlgorithm::Auto -> ReduceTile:
+# reduce_tile               = the reduce library, default datapath (ReduceAlgorithm::ReduceTile:
 #                             FPU matmul-with-ones reduce_tile per input tile).
 # accumulate_via_add        = the reduce library with the opt-in ReduceAlgorithm::AccumulateViaAdd.
 # accumulate_via_add_inline = the same algorithm as a standalone hand-written kernel, with the one-time
@@ -263,7 +263,7 @@ void kernel_main() {
 
 # =============================================================================
 # Helper kernel — the reduce library over the general (Ht, Wt, NC) block, AVG pool. The `algo` CT arg
-# selects the library datapath: 0 = ReduceTile (Auto default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
+# selects the library datapath: 0 = ReduceTile (default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
 # `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths. Both routes use reduce<AVG>;
 # AccumulateViaAdd receives its logical element count as the compile-time `reduce_factor`.
 #
@@ -305,7 +305,8 @@ ALWI void do_reduce_block(
     using namespace compute_kernel_lib;
     using ckernel::PoolType;
     using ckernel::ReduceDim;
-    constexpr ReduceAlgorithm ALG = (algo == 1u) ? ReduceAlgorithm::AccumulateViaAdd : ReduceAlgorithm::Auto;
+    constexpr ReduceAlgorithm ALG =
+        (algo == 1u) ? ReduceAlgorithm::AccumulateViaAdd : ReduceAlgorithm::ReduceTile;
     constexpr ReduceInputPolicy POLICY = (policy_id == 1u)   ? ReduceInputPolicy::WaitAndPopPerTile
                                          : (policy_id == 2u) ? ReduceInputPolicy::WaitUpfrontNoPop
                                          : (policy_id == 3u) ? ReduceInputPolicy::NoWaitNoPop
@@ -400,7 +401,7 @@ void kernel_main() {
     constexpr uint32_t dim = get_compile_time_arg_val(3);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(4);
     constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t algo = get_compile_time_arg_val(6);  // 0 Auto->ReduceTile, 1 AccumulateViaAdd
+    constexpr uint32_t algo = get_compile_time_arg_val(6);  // 0 ReduceTile, 1 AccumulateViaAdd
     constexpr uint32_t partial_elems = get_compile_time_arg_val(7);  // valid elems in last tile (0=aligned)
     constexpr uint32_t policy_id = get_compile_time_arg_val(8);  // 0 Bulk, 1 WaitAndPop, 2 WaitUpfront, 3 NoWait
     constexpr uint32_t recfg = get_compile_time_arg_val(9);  // 1 = ReduceDataFormatReconfigMode::NONE after 1st call

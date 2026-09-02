@@ -310,7 +310,7 @@ def test_reduce_block_device_perf(device):
             )
     lines += [
         "",
-        "Variants: reduce_tile = library default (ReduceAlgorithm::Auto -> ReduceTile, FPU matmul-with-ones); "
+        "Variants: reduce_tile = library default (ReduceAlgorithm::ReduceTile, FPU matmul-with-ones); "
         "acc_via_add = library with the opt-in ReduceAlgorithm::AccumulateViaAdd; inline = the same algorithm "
         "as a hand-written standalone kernel with the one-time init hoisted OUT of the kernel_iters loop. "
         "The library no longer runs the heavy binary_op_init_common per call (that is a once-per-kernel boot "
