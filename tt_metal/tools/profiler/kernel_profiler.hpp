@@ -153,7 +153,6 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // floor, since head <= tail = wIndex's seed.
 [[maybe_unused]] static uint32_t g_head_cache = 0;
 
-
 // Reading L latches the high half and H returns it, so the order is the protocol. The latch is
 // single-agent (tt-isa-documentation, TensixTile/DebugTimestamper.md): another RISC's L read landing in
 // our L->H gap across a 2^32 boundary puts a marker 2^32 cycles (~3.2 s) in the future. At ~1e-9..1e-8

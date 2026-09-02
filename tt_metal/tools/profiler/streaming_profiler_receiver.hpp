@@ -106,7 +106,7 @@ struct ReceiverDeviceConfig {
     uint32_t chip_id = 0;
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
     uint32_t num_cores = 0;
-    std::vector<StreamingProfilerLaneInfo> lane_table;          // size num_cores * 5
+    std::vector<StreamingProfilerLaneInfo> lane_table;  // size num_cores * 5
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // incl. DRISC self-zone cores
     bool clock_synced = false;
     double frequency_ghz = 0.0;

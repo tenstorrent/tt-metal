@@ -93,8 +93,8 @@ struct StreamingProfilerLaneInfo {
 struct StreamingProfilerCaptureContext {
     struct Device {
         uint32_t chip_id = 0;
-        bool clock_synced = false;             // true -> record timestamps are raw device time with a
-        double frequency_ghz = 0.0;            //         registered host anchor; false -> rebase yourself
+        bool clock_synced = false;                     // true -> record timestamps are raw device time with a
+        double frequency_ghz = 0.0;                    //         registered host anchor; false -> rebase yourself
         std::vector<StreamingProfilerLaneInfo> lanes;  // index by StreamingProfilerRecMeta::lane
     };
     std::vector<Device> devices;
@@ -137,7 +137,7 @@ void log_unnamed_ids(std::string_view consumer_name, const ZoneNameMirror& mirro
 
 struct StreamingProfilerRecordBatch {
     std::span<const StreamingProfilerRec> records;  // oldest first; valid only for the duration of the call
-    uint64_t dropped_delta = 0;             // records this consumer lost to ring lag since its last batch
+    uint64_t dropped_delta = 0;                     // records this consumer lost to ring lag since its last batch
     const StreamingProfilerCaptureContext* context = nullptr;
     // PRODUCER-STALL zones in this batch (matched by ELF-resolved name): each is one time a producer
     // RISC blocked on a full L1 ring. Counted among the records handed over here, so it carries the

@@ -210,8 +210,8 @@ void StreamingProfilerReceiver::start() {
     started_ = true;
     // Two decode threads per device is the design point, one per relay; sockets round-robin across them
     // via the strided partition below.
-    const uint32_t nthreads = std::clamp<uint32_t>(
-        env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", 2), 1, streams_.size());
+    const uint32_t nthreads =
+        std::clamp<uint32_t>(env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", 2), 1, streams_.size());
     nthreads_ = nthreads;
     // The audit attaches before ingest starts so its readers see the ring from line 0.
     if (!no_decode_ && !read_only_ && env_u32("TT_METAL_STREAMING_PROFILER_AUDIT", 1) != 0) {
@@ -251,8 +251,7 @@ void ingest_copy_lines_256(
         _mm_prefetch(reinterpret_cast<const char*>(frame + 16ull * k) + 4096, _MM_HINT_T0);
         uint8_t* dst = reinterpret_cast<uint8_t*>(w.emit_slot_ptr(lpos + k));
         const uint8_t* src = reinterpret_cast<const uint8_t*>(frame) + 64ull * k;
-        _mm256_stream_si256(
-            reinterpret_cast<__m256i*>(dst), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src)));
+        _mm256_stream_si256(reinterpret_cast<__m256i*>(dst), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src)));
         _mm256_stream_si256(
             reinterpret_cast<__m256i*>(dst + 32), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 32)));
     }
@@ -683,8 +682,9 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             (void)prog;
         }
     };
-    auto emit_atomic16 = [&](uint32_t lane, uint32_t th, uint32_t prog, const uint32_t* src, uint32_t avail,
-                             uint32_t max_recs) -> uint32_t {
+    auto emit_atomic16 =
+        [&](uint32_t lane, uint32_t th, uint32_t prog, const uint32_t* src, uint32_t avail, uint32_t max_recs)
+        -> uint32_t {
         if (!k512) {
             return 0;  // atomics are rare (launch/rewind anchors); the scalar arm carries them
         }
@@ -709,8 +709,9 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
         rc += a.n;
         return a.n;
     };
-    auto emit_zone_s16 = [&](uint32_t lane, uint64_t cursor, uint32_t prog, const uint32_t* src, uint32_t avail,
-                             uint32_t max_recs) -> profiler::SpscZoneS16Result {
+    auto emit_zone_s16 =
+        [&](uint32_t lane, uint64_t cursor, uint32_t prog, const uint32_t* src, uint32_t avail, uint32_t max_recs)
+        -> profiler::SpscZoneS16Result {
         const auto z = k512 ? profiler::spsc_zone_s16_avx512(src, avail, max_recs, cursor, prog, lane, d, sk)
                             : profiler::spsc_zone_s8_avx2(src, avail, max_recs, cursor, prog, lane, d, sk);
         if (z.n == 0) {
@@ -1144,10 +1145,15 @@ void StreamingProfilerReceiver::log_report() const {
                 "[streaming profiler receiver] d{}/s{} zoneS16 blocks: {} calls, {} recs, {:.2f} recs/call "
                 "| atomic blocks: "
                 "{} calls, {} recs, {:.2f} recs/call (max 16) | scalar by type: {}",
-                s.dev, s.sock_idx, d.vec_zone_s_calls, d.vec_zone_s_recs,
+                s.dev,
+                s.sock_idx,
+                d.vec_zone_s_calls,
+                d.vec_zone_s_recs,
                 d.vec_zone_s_calls ? double(d.vec_zone_s_recs) / double(d.vec_zone_s_calls) : 0.0,
-                d.vec_atomic_calls, d.vec_atomic_recs,
-                d.vec_atomic_calls ? double(d.vec_atomic_recs) / double(d.vec_atomic_calls) : 0.0, bt);
+                d.vec_atomic_calls,
+                d.vec_atomic_recs,
+                d.vec_atomic_calls ? double(d.vec_atomic_recs) / double(d.vec_atomic_calls) : 0.0,
+                bt);
         }
     }
     uint64_t consumer_drops = 0;

@@ -330,8 +330,7 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE",
-         empty_mode >= 2 ? "4" : (empty_mode != 0 ? "3" : (bench_mode ? "2" : (knee_mode ? "1" : "0")))},
+        {"ZONE_MODE", empty_mode >= 2 ? "4" : (empty_mode != 0 ? "3" : (bench_mode ? "2" : (knee_mode ? "1" : "0")))},
         {"EMIT_MARKERS", emit_markers != 0 ? "1" : "0"},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
         {"BENCH_ADDR", "0x170000u"}};

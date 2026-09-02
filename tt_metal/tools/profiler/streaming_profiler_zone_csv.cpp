@@ -248,8 +248,8 @@ const bool g_zone_csv_registered = [] {
         return false;
     }
     g_zone_csv = new ZoneCsvState{p, {}, 0};
-    g_zone_csv->handle = register_consumer(
-        "zone-csv", [](const StreamingProfilerRecordBatch& b) { g_zone_csv->consumer(b); });
+    g_zone_csv->handle =
+        register_consumer("zone-csv", [](const StreamingProfilerRecordBatch& b) { g_zone_csv->consumer(b); });
     std::atexit([] {
         unregister_consumer(g_zone_csv->handle);
         g_zone_csv->consumer.write_csv(g_zone_csv->path);

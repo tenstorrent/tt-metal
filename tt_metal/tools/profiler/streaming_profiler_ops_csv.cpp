@@ -142,8 +142,8 @@ const bool g_ops_csv_registered = [] {
         return false;
     }
     g_ops_csv = new OpsCsvState{p, {}, 0};
-    g_ops_csv->handle = register_consumer(
-        "ops-csv", [](const StreamingProfilerRecordBatch& b) { g_ops_csv->consumer(b); });
+    g_ops_csv->handle =
+        register_consumer("ops-csv", [](const StreamingProfilerRecordBatch& b) { g_ops_csv->consumer(b); });
     std::atexit([] {
         unregister_consumer(g_ops_csv->handle);
         g_ops_csv->consumer.write_csv(g_ops_csv->path);

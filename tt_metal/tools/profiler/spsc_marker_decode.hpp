@@ -80,8 +80,8 @@ struct SpanDecodeState {
     // the first zone after any launch or rewind is an absolute ZONE_ATOMIC. A resync is the one
     // exception; timestamps recover at the next ZONE_ATOMIC, and resyncs are counted and flagged.
     std::vector<uint64_t> cursor;
-    std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
-    std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
+    std::vector<uint32_t> prog;  // per lane: sticky runtime host-id (every RISC emits its own at launch)
+    std::vector<uint32_t> head;  // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
     std::vector<uint8_t> seeded;
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
     uint64_t live_words = 0;
@@ -136,10 +136,10 @@ struct SpscNoZoneS16 {};
 // Eight records = 24 words = 1.5 vectors, so the layout repeats every three lines and every 1.5 source
 // vectors: rows 1-2 serve lines 1&4 and 2&5 (sources: words 8-23, then v2), row 3 is row 0 shifted by 8.
 alignas(64) inline constexpr uint32_t kA16Lines[4][16] = {
-    {1, 16, 0, 17, 18, 2, 4, 16, 3, 17, 18, 5, 7, 16, 6, 17},           // line 0 from v0 (words 0-15)
-    {18, 0, 2, 16, 1, 17, 18, 3, 5, 16, 4, 17, 18, 6, 8, 16},           // lines 1, 4
-    {7, 17, 18, 9, 11, 16, 10, 17, 18, 12, 14, 16, 13, 17, 18, 15},     // lines 2, 5
-    {9, 16, 8, 17, 18, 10, 12, 16, 11, 17, 18, 13, 15, 16, 14, 17},     // line 3 from v1 (words 16-31)
+    {1, 16, 0, 17, 18, 2, 4, 16, 3, 17, 18, 5, 7, 16, 6, 17},        // line 0 from v0 (words 0-15)
+    {18, 0, 2, 16, 1, 17, 18, 3, 5, 16, 4, 17, 18, 6, 8, 16},        // lines 1, 4
+    {7, 17, 18, 9, 11, 16, 10, 17, 18, 12, 14, 16, 13, 17, 18, 15},  // lines 2, 5
+    {9, 16, 8, 17, 18, 10, 12, 16, 11, 17, 18, 13, 15, 16, 14, 17},  // line 3 from v1 (words 16-31)
 };
 
 // ZONE_S block operands, file-scope for the same reason as kA16Lines. Even/odd deinterleave a 16-record
@@ -510,12 +510,10 @@ inline SpscZoneS16Result spsc_zone_s8_avx2(
     }
     const __m256i idx_even = _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6);
     const __m256i idx_odd = _mm256_setr_epi32(1, 3, 5, 7, 1, 3, 5, 7);
-    const __m256i w0s =
-        _mm256_permute2x128_si256(
-            _mm256_permutevar8x32_epi32(v0, idx_even), _mm256_permutevar8x32_epi32(v1, idx_even), 0x20);
-    const __m256i w1s =
-        _mm256_permute2x128_si256(
-            _mm256_permutevar8x32_epi32(v0, idx_odd), _mm256_permutevar8x32_epi32(v1, idx_odd), 0x20);
+    const __m256i w0s = _mm256_permute2x128_si256(
+        _mm256_permutevar8x32_epi32(v0, idx_even), _mm256_permutevar8x32_epi32(v1, idx_even), 0x20);
+    const __m256i w1s = _mm256_permute2x128_si256(
+        _mm256_permutevar8x32_epi32(v0, idx_odd), _mm256_permutevar8x32_epi32(v1, idx_odd), 0x20);
     // Hillis-Steele prefix sum: cross-lane shift via permutevar, low lanes zeroed by blend.
     const __m256i z = _mm256_setzero_si256();
     __m256i pfx = _mm256_srli_epi32(w1s, 16);
@@ -533,10 +531,8 @@ inline SpscZoneS16Result spsc_zone_s8_avx2(
     if constexpr (Sink::kStores) {
         alignas(32) uint32_t id_arr[8];
         alignas(32) uint32_t dur_arr[8];
-        _mm256_store_si256(
-            reinterpret_cast<__m256i*>(id_arr), _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF)));
-        _mm256_store_si256(
-            reinterpret_cast<__m256i*>(dur_arr), _mm256_and_si256(w1s, _mm256_set1_epi32(0xFFFF)));
+        _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF)));
+        _mm256_store_si256(reinterpret_cast<__m256i*>(dur_arr), _mm256_and_si256(w1s, _mm256_set1_epi32(0xFFFF)));
         const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;  // type = Zone
         for (uint32_t k = 0; k < n; k++) {
             sw.put3(cursor + pfx_arr[k], meta64 | id_arr[k], (static_cast<uint64_t>(dur_arr[k]) << 32) | prog);
@@ -640,8 +636,7 @@ inline uint32_t spsc_decode_frame(
     (void)emit_zone_s16;
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
-    const auto xy_it = st.core_of_xy.find(
-        ctrl[raw ? +kernel_profiler::SPSC_CORE_XY : +kernel_profiler::SPSC_WIRE_XY]);
+    const auto xy_it = st.core_of_xy.find(ctrl[raw ? +kernel_profiler::SPSC_CORE_XY : +kernel_profiler::SPSC_WIRE_XY]);
     if (xy_it == st.core_of_xy.end()) {
         st.unknown_core_frames++;
         return 0;
@@ -651,9 +646,8 @@ inline uint32_t spsc_decode_frame(
     // pointers, so the compiler must assume the NT stores alias a SpanDecodeState field and would turn
     // each update here into a load-add-store per record.
     uint64_t vz = 0, va = 0, vac = 0, sr = 0, lw = 0, vzs = 0, vzsc = 0;
-    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
-                   (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE
-                        : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
+    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE
+                                                                  : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
         const uint32_t tail = ctrl[(raw ? +kernel_profiler::SPSC_RING_TAIL_0 : +kernel_profiler::SPSC_WIRE_TAIL_0) + r];
@@ -746,11 +740,10 @@ inline uint32_t spsc_decode_frame(
 #if defined(__AVX2__)
             if constexpr (!std::is_same_v<std::decay_t<EmitZoneS16>, SpscNoZoneS16>) {
                 if (t == PP_ZONE_S) {
-                    const size_t readable = fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i))
-                                                        : static_cast<size_t>(run - i);
+                    const size_t readable =
+                        fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
                     const auto zs = emit_zone_s16(
-                        lane, cur, pg, p + i, readable > 32u ? 32u : static_cast<uint32_t>(readable),
-                        (run - i) / 2u);
+                        lane, cur, pg, p + i, readable > 32u ? 32u : static_cast<uint32_t>(readable), (run - i) / 2u);
                     if (zs.n != 0) {
                         cur = zs.ts_last;
                         vzs += zs.n;
@@ -790,11 +783,10 @@ inline uint32_t spsc_decode_frame(
             // narrower path behind it.
             if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
                 if (t == PP_ZONE_ATOMIC) {
-                    const size_t readable = fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i))
-                                                        : static_cast<size_t>(run - i);
+                    const size_t readable =
+                        fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i)) : static_cast<size_t>(run - i);
                     const uint32_t got = emit_atomic16(
-                        lane, th, pg, p + i, readable > 48u ? 48u : static_cast<uint32_t>(readable),
-                        (run - i) / 3u);
+                        lane, th, pg, p + i, readable > 48u ? 48u : static_cast<uint32_t>(readable), (run - i) / 3u);
                     if (got != 0) {
                         va += got;
                         vac++;
@@ -916,6 +908,5 @@ inline uint32_t spsc_decode_frame(
     }
     return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
-
 
 }  // namespace tt::tt_metal::profiler

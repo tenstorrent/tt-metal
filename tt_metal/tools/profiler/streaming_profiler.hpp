@@ -53,7 +53,7 @@ public:
     void stop();
 
 private:
-    // One DRISC relay per DRAM view, each sweeping an eighth of the worker grid into its own D2H socket.
+    // One DRISC relay per DRAM view, up to kMaxRelays, each sweeping a slice of the worker grid into its own socket.
     static constexpr uint32_t kMaxRelays = 8;
     static constexpr uint32_t kMaxSockets = kMaxRelays;
     static constexpr uint32_t kPageSize = 64;
@@ -76,7 +76,7 @@ private:
         uint32_t drisc_l1_base[kMaxRelays] = {};
         uint32_t stop_addr[kMaxRelays] = {};  // host writes 1 to quiesce, 2 to release the NIU
         uint32_t done_addr[kMaxRelays] = {};  // relay publishes 0xD09E**** once its last page is out
-        uint32_t n_drisc = 0;  // relays (= sockets) in use, [1, kMaxRelays]; set once by boot_device
+        uint32_t n_drisc = 0;                 // relays (= sockets) in use, [1, kMaxRelays]; set once by boot_device
         // core index -> virtual (x,y) [what the SRC lane resolves to]; virtual -> NOC0 (x,y) [Tracy's view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
