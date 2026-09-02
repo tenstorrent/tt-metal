@@ -454,7 +454,59 @@ ON_FLAGS = (
     # laneHY regression shape structurally cannot recur (no bytes, no
     # cycles); softplus re-certifies at its +0.09 floor by bytes.
     # KNOB_MODES flipped on-plus -> drop-one.
-    "-mtt-tensix-optimize-priced-placement"
+    "-mtt-tensix-optimize-priced-placement "
+    # PROMOTED 2026-09-02 (knob promotion round 5, lane KV; the installed
+    # pin-53 binary 46d3116c469d — conf-only ceremony, sfpi-gcc
+    # untouched): the item-#5 schedule pair joins the reviewed ON set
+    # (37 -> 39).  The round's charter ordered the full wave-4/5
+    # rename/schedule dependency closure (rename-temporal KJ,
+    # rename-cc-region KQ, cc-region-general KL, mve-expand KN +
+    # enablers lreg-rename-chains KE, ims KD); FOUR of six are REFUSED
+    # BY MEASUREMENT, all silicon-adjudicated:
+    #   cc-region-general REFUSED (P0 ICE): ON-37 + the flag ICEs
+    #     compiling the blaze clampedsilu-gate BOARD TU (unrecognizable
+    #     zero const_vector insn in lower-subreg, sfpi_funcs.h:514);
+    #     reproduces at pin-52 and at laneKL's own build — LATENT since
+    #     the engine shipped (the TU is corpus-absent).  laneKL owed.
+    #   lreg-rename-chains REFUSED (WRONG CODE, silicon chips 1+2 and
+    #     the pinned sim): ON-37 + the flag alone miscompiles the
+    #     deepseek_top32 semantic-lift TU (top-32 value cells drop
+    #     entries vs torch.topk; num_chunks:2-impl:1 corr FAILS while
+    #     ON-37 passes).  Value-dependent: a 377-node CRAQ session
+    #     passed it on one input seed, the small session and silicon
+    #     fail it — single-seed CRAQ is not a wrong-code-complete gate.
+    #   rename-temporal REFUSED (WRONG CODE, silicon chip 1 + both sim
+    #     oracles): ON-37+chains+temporal miscompiles BOTH addcmul corr
+    #     TUs (temporal-admitted chains with "0 readers,
+    #     close=kill+read"); ON-37+chains passes them.  laneKJ owed.
+    #   rename-cc-region REFUSED BY DEPENDENCY: its only consumer is
+    #     the refused chains engine (a leg without chains is inert).
+    # The v2 rename engine (KE #7) is NOT production-ready: two distinct
+    # silicon-proven value defects (deepseek_top32 via the standalone
+    # pass, addcmul via the temporal tier).  Owning lanes owed fixes;
+    # re-promotion after.
+    # The two PROMOTED flags:
+    #   ims (KD, item #5 stage 1): Rau modulo-schedule candidate orders
+    #     under the unchanged strict whole-row II acceptance — corpus
+    #     delta at ON37+ims = 9 elf-rows (i0/silu/acosh/erfinv/
+    #     tanh_derivative/asin/acos + binary ISCLOSE/POW), all strict
+    #     II decreases, adjudicated by name;
+    #   mve-expand (KN, item #5 stage 2): corpus BYTE-INERT (the laneKN
+    #     zero-fire fact reproduced: on39 == ims4 legs byte-identical)
+    #     — promoted for its NAMED adjudication of owed expansions
+    #     (mve-expand-row-not-counted-kernel replaces the silent
+    #     "MVE owed" dump note on the union).
+    # Promotion gates (laneKV-evidence-20260901): 2 R9 union witnesses
+    # added TWO-SIDED (probes/u39-*); stacked corpus legs at the
+    # installed binary (on37/ims4/on39 + the refusal-evidence legs
+    # ch/tmp/ccr2/ims3, store corpus-legs-laneKV), every moved TU
+    # attributed to the increment that moved it; full-board byte screen
+    # (817 nodes / 1224 TUs) at ON-39; every moved verdict row's cells
+    # re-measured on device (same-chip A/B, corr-first); paired CRAQ at
+    # the pin-53 re-pinned sims (the instrument that first caught the
+    # temporal wrong-code); dg 7708/FAIL-16/0-ERROR re-verified.
+    "-mtt-tensix-optimize-ims "
+    "-mtt-tensix-optimize-mve-expand"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -1321,6 +1373,17 @@ KNOBS = {
     # reorders the hand row too (381105, -1.06%) — the booked comparator
     # stays the hand arm's own booked leg (the II/IG convention).
     "cyclic-region-schedule": "-mtt-tensix-optimize-cyclic-region-schedule",
+    # KD ims (item #5 stage 1): Rau iterative-modulo-schedule candidate
+    # orders on cyclic rows (exact ResMII/RecMII tier in rvtt-timing),
+    # accepted only by the unchanged strict whole-row II decrease.
+    # Registered at knob promotion round 5 (lane KV, promoted ON 37->39).
+    "ims": "-mtt-tensix-optimize-ims",
+    # KN mve-expand (item #5 stage 2): MVE kernel-unroll realization at
+    # the crossrow counted-kernel seam; corpus byte-inert (zero fires,
+    # laneKN attribution control, reproduced at round 5) — its ON value
+    # is the NAMED adjudication of every owed expansion.  Registered at
+    # knob promotion round 5 (lane KV).
+    "mve-expand": "-mtt-tensix-optimize-mve-expand",
     # KJ (rename-temporal, FABLE_GOES_BURR section 4 R1): the 8-LREG-wall
     # rename attack — (1) TEMPORALLY-SCOPED rename targets in the
     # item-#7 du-chain engine (a target LREG is admissible when provably
@@ -1809,6 +1872,13 @@ KNOB_MODES = {
     # (ccmask, the invariant containment fact, the crossloop placement
     # walks): a solo leg is structurally weaker, so the booking A/B is
     # (ON + flag) vs plain ON.
+    # PROMOTION REFUSED at round 5 (lane KV, 2026-09-02): P0 ICE — ON-37
+    # + the flag ICEs compiling the blaze clampedsilu-gate BOARD TU
+    # (unrecognizable zero const_vector insn in lower-subreg, from
+    # sfpi_funcs.h:514); reproduces at pin-52 and at laneKL's own build
+    # — latent since the engine shipped (the TU is corpus-absent, so
+    # this knob's corpus legs stay green; the blaze TU is board-only).
+    # laneKL owed the fix (laneKV-evidence-20260901/probes/ice-*).
     "cc-region-general": "on-plus",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
@@ -1887,6 +1957,12 @@ KNOB_MODES = {
     # construction).  on-plus while a booking knob; promotion requires
     # the ON-delta adjudication ceremony.
     "cyclic-region-schedule": "on-plus",
+    # PROMOTED at knob promotion round 5 (lane KV, 2026-09-02; ON 37 ->
+    # 39, see the ON_FLAGS promotion note): the item-#5 schedule pair is
+    # ON-set — drop-one from here.  ims's drop-one leg also silences
+    # mve-expand's ims-path adjudications (composition fact).
+    "ims": "drop-one",
+    "mve-expand": "drop-one",
     # KJ rename-temporal: default-off Init(0) booking knob; register
     # fields only (delivered word counts belt-asserted unchanged), the
     # II acceptance authority untouched.  A composition knob: its
@@ -1895,15 +1971,27 @@ KNOB_MODES = {
     # (the trig cell rides ON + reclaim + stoch + crs).  on-plus while
     # a booking knob; promotion requires the ON-delta adjudication
     # ceremony.
+    # PROMOTION REFUSED at round 5 (lane KV, 2026-09-02): WRONG CODE,
+    # silicon-confirmed — at ON+chains+temporal the addcmul fresh AND
+    # production corr TUs fail against golden on both sim oracles and
+    # on chip-1 silicon (ON+chains passes); defect shape = temporal-
+    # admitted chains with "0 readers, close=kill+read".  laneKJ owed
+    # the fix (laneKV-evidence-20260901: craq/probe-*, device/
+    # addcmul-probe, probes/addcmul-dump-*).  Stays on-plus; the
+    # weekly knob leg carries a KNOWN-BAD composition on addcmul-class
+    # shapes until the fix lands.
     "rename-temporal": "on-plus",
     # KQ rename-cc-region: default-off Init(0) booking knob; register
-    # fields only (the item-#7 engine's belt asserts delivered word
-    # counts unchanged), the cc-span admission widened to the RTL
-    # view's proven arms.  A composition knob: its consumer is the
-    # chains engine (a solo leg is inert — the pass gates on the
-    # chains/alias flags), so the booking A/B is (booked-leg + chains
-    # + flag) vs (booked-leg + chains).  on-plus while a booking knob;
-    # promotion requires the ON-delta adjudication ceremony.
+    # fields only, the cc-span admission widened to the RTL view's
+    # proven arms.  A composition knob over the chains engine (a solo
+    # leg is inert), so the booking A/B is (booked-leg + chains + flag)
+    # vs (booked-leg + chains).
+    # PROMOTION REFUSED BY DEPENDENCY at round 5 (lane KV, 2026-09-02):
+    # its enabler lreg-rename-chains is refused (WRONG CODE on the
+    # deepseek_top32 semantic-lift TU, silicon chips 1+2 + sim,
+    # laneKV-evidence-20260901/device/ds-*); a cc-region leg without
+    # chains is inert, so there is nothing to promote.  KE owed the
+    # engine fix; re-promotion follows.
     "rename-cc-region": "on-plus",
     # KP residency-merge-rename: default-off Init(0) walk-vocabulary
     # widening whose shipped verdict on every in-vocabulary site is the

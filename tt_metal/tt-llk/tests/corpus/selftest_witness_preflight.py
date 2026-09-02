@@ -197,9 +197,14 @@ if conf_rows:
     # since (pre-existing at pin 51, found and fixed here).  Round 4's
     # own +priced-placement row SHARES that erfinv node (one compile,
     # two dump flags), so the group count stays 17.
+    # Budget refreshed 17 -> 18 at the knob-promotion-round-5 ceremony
+    # (lane KV, 2026-09-02): the Acosh-fresh corr node (carrying the
+    # ims + mve-expand rows) adds one compile group; full table verified
+    # ALL GREEN on the installed pin-53 binary at the ON-39 union in the
+    # same ceremony.
     check(
-        f"checked-in table stays within the 17-compile budget ({n_groups})",
-        1 <= n_groups <= 17,
+        f"checked-in table stays within the 18-compile budget ({n_groups})",
+        1 <= n_groups <= 18,
     )
 
 if FAILS:
