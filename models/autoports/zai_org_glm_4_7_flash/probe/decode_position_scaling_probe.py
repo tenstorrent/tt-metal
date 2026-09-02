@@ -24,7 +24,7 @@ from pathlib import Path
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import GLM47FlashGenerator
-from models.autoports.zai_org_glm_4_7_flash.tt.model import GLM47FlashModel
+from models.autoports.zai_org_glm_4_7_flash.tt.model import GLM47FlashModel, source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 OUT = MODEL_DIR / "doc" / "full_model" / "decode_position_scaling.json"
@@ -79,6 +79,7 @@ def main():
         ttnn.close_mesh_device(dev)
 
     payload = {
+        "source_manifest": source_manifest([__file__]),
         "layers": args.layers,
         "cache_context": args.seq_cap,
         "note": (
@@ -98,7 +99,7 @@ def _eager(gen):
 
 
 def _traced(gen):
-    ttnn.execute_trace(gen.mesh_device, gen._decode_trace_id, cq_id=0, blocking=False)
+    gen.replay_decode_trace()
 
 
 if __name__ == "__main__":

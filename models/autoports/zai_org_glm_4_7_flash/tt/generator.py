@@ -164,6 +164,10 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self._pos_dev = None  # [B] int32, -1 = inactive slot; the RoPE index is derived from it on device
         self._page_table_dev = None  # [B, blocks] int32
         self._page_table_caller_owned = False
+        #: Host mirror of the device current-position tensor. The captured graph
+        #: advances the device copy with ttnn.plus_one, so this is the only way
+        #: the host can tell that the *next* replay would step past the context.
+        self._host_positions = None
         self._bound_cache = None
         self._decode_trace_id = None
         self._decode_logits = None
@@ -218,15 +222,19 @@ class GLM47FlashGenerator(_ReadinessGenerator):
 
     # ------------------------------------------------------------------ persistent decode state
 
-    def bind_decode_state(self, *, kv_cache, page_table, batch=None):
+    def bind_decode_state(self, *, kv_cache, page_table):
         """Allocate/point the persistent decode trace inputs at ``kv_cache``.
 
         Must run before :meth:`capture_decode_trace`; the captured trace binds
-        to exactly these tensors and to these cache buffers.
+        to exactly these tensors and to these cache buffers. The decode batch is
+        the model's ``max_batch_size`` and is not a parameter here: the decoder
+        pins its per-slot shard grids at construction, so a narrower decode
+        batch needs a differently-constructed model, not a differently-bound
+        one.
         """
         import torch
 
-        batch = batch or self.max_batch_size
+        batch = self.max_batch_size
         if self._tokens_dev is None:
             self._tokens_dev = ttnn.from_torch(
                 torch.zeros(1, 1, 1, SAMPLER_ROWS, dtype=torch.int32),
@@ -332,6 +340,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT), self._pos_dev
         )
+        self._host_positions = [int(v) for v in pos.tolist()]
         self.counters["position_refreshes"] += 1
 
     def set_decode_tokens(self, tokens):
@@ -359,6 +368,8 @@ class GLM47FlashGenerator(_ReadinessGenerator):
 
     def _decode_logits_device(self, *, kv_cache=None, page_table=None, advance_positions=True):
         """One eager device decode over the persistent trace inputs."""
+        if advance_positions:
+            self._advance_host_positions()
         return self.model.ttnn_decode_forward(
             self._tokens_dev,
             self._pos_dev,
@@ -441,13 +452,45 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         )
         self.reset()
 
+    def _advance_host_positions(self):
+        """Mirror the trace's on-device ``plus_one``, and refuse a step that
+        would leave the context.
+
+        The captured graph increments the position itself, so nothing on the
+        host would otherwise notice a fixed-step loop running off the end of
+        the page table - and that does not raise on device, it wedges it
+        (work log FM-013). ``-1`` inactive rows are skipped, exactly as
+        ``skip_negative_entries=True`` does.
+        """
+        if self._host_positions is None:
+            raise RuntimeError("set_decode_positions must run before a traced decode step")
+        limit = self.max_seq_len
+        bad = [(slot, p) for slot, p in enumerate(self._host_positions) if p >= 0 and p >= limit]
+        if bad:
+            raise ValueError(
+                f"traced decode would step past the supported context: positions must stay below {limit} "
+                f"(the paged cache and page table only represent [0, {limit})); out-of-range slots: {bad[:8]}. "
+                "Reset the request or bind a larger max_seq_len."
+            )
+        self._host_positions = [p if p < 0 else p + 1 for p in self._host_positions]
+
+    def replay_decode_trace(self):
+        """Replay the model decode trace only (no sampling), position-checked.
+
+        Use this rather than calling ``ttnn.execute_trace`` directly: the
+        captured graph advances the device position itself, so a raw replay
+        leaves the host mirror behind and the context guard blind.
+        """
+        if self._decode_trace_id is None:
+            raise RuntimeError("capture_decode_trace must run first")
+        self._advance_host_positions()
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        self.counters["model_trace_replays"] += 1
+
     def decode_step_traced(self):
         """One traced token-out decode step. Returns nothing; the sampled token
         is already in the persistent decode token tensor."""
-        if self._decode_trace_id is None:
-            raise RuntimeError("capture_decode_trace must run first")
-        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
-        self.counters["model_trace_replays"] += 1
+        self.replay_decode_trace()
         if self.host_sampling or self.sampling is None:
             self._host_sample_into_tokens(self._decode_logits)
             return
@@ -585,6 +628,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         ttnn.deallocate(logits)
         if return_logits:
             return out[0, 0, : toks.numel(), : self.model.vocab_size]
+        self.counters["host_argmax_calls"] += 1
         return torch.argmax(out[0, 0, : toks.numel(), : self.model.vocab_size], dim=-1)
 
     # ------------------------------------------------------------------ high-level contract API

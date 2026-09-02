@@ -22,6 +22,7 @@ import pytest
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import build_generator
+from models.autoports.zai_org_glm_4_7_flash.tt.model import source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 DOC_DIR = MODEL_DIR / "doc" / "full_model"
@@ -49,7 +50,7 @@ def device():
 def built(device):
     timings = {}
     t0 = time.perf_counter()
-    gen = build_generator(MODEL_DIR, device, progress=lambda m: timings.setdefault("_", None))
+    gen = build_generator(MODEL_DIR, device, progress=lambda m: None)
     timings["build_total_s"] = round(time.perf_counter() - t0, 2)
     yield gen, timings
     gen.teardown()
@@ -102,6 +103,7 @@ def test_capacity_json(built):
             f"in {measured['chunk_mib']} MiB chunks before the allocator refused"
         )
     payload = {
+        "source_manifest": source_manifest([__file__]),
         "device": "Blackhole p150-class chip, 1x1 mesh, 11x10 compute grid, 8 DRAM banks",
         "measured_allocatable_dram_bytes": allocatable,
         "measured_allocatable_dram_note": allocatable_note,
@@ -157,7 +159,7 @@ def test_full_model_perf(built):
         ttnn.synchronize_device(model.mesh_device)
         return (time.perf_counter() - t) / iters
 
-    model_only_s = bench(lambda: ttnn.execute_trace(model.mesh_device, gen._decode_trace_id, cq_id=0, blocking=False))
+    model_only_s = bench(gen.replay_decode_trace)
     with_sampling_s = bench(gen.decode_step_traced)
     token_out_s = bench(lambda: (gen.decode_step_traced(), gen.read_decode_tokens(1)))
 
@@ -177,6 +179,7 @@ def test_full_model_perf(built):
     lower_bound_ms = n_moe * LAYER_LOWER_BOUND_MS["moe"] + n_dense * LAYER_LOWER_BOUND_MS["dense"]
 
     payload = {
+        "source_manifest": source_manifest([__file__]),
         "workload": {
             "prompt_len": PROMPT_LEN,
             "generate_len": GEN_LEN,

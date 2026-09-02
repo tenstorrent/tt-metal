@@ -27,7 +27,7 @@ import torch
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import build_generator
-from models.autoports.zai_org_glm_4_7_flash.tt.model import resolve_checkpoint_dir
+from models.autoports.zai_org_glm_4_7_flash.tt.model import resolve_checkpoint_dir, source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 OUT_DIR = MODEL_DIR / "doc" / "full_model" / "qualitative"
@@ -93,6 +93,7 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     fmt = {
+        "source_manifest": source_manifest([__file__]),
         "hf_model_id": HF_MODEL_ID,
         "hf_snapshot_revision": snapshot.name,
         "tokenizer_class": type(tokenizer).__name__,

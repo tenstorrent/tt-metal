@@ -186,6 +186,35 @@ class ShardedCheckpoint:
         self._handles.clear()
 
 
+def source_manifest(extra_paths=()):
+    """sha256 prefixes of the stage-owned source, for stamping evidence files.
+
+    Every generated artifact carries this, so a log or JSON can be tied to the
+    exact source that produced it instead of to a timestamp.
+    """
+    import hashlib
+
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "tt" / "model.py",
+        root / "tt" / "generator.py",
+        root / "tt" / "optimized_decoder.py",
+        root / "tt" / "fused_decoder.py",
+        root / "tt" / "functional_decoder.py",
+        *(Path(p) for p in extra_paths),
+    ]
+    manifest = {}
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            key = str(path.resolve().relative_to(root))
+        except ValueError:
+            key = path.name
+        manifest[key] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return manifest
+
+
 def load_hf_config(snapshot_dir):
     from transformers import AutoConfig
 

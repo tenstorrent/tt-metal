@@ -54,6 +54,12 @@ def summarize(path: Path, anchor: str = ANCHOR):
         "ops_per_step": round(len(rows) / steps, 1),
         "device_us_per_step": round(total / steps, 1),
         "op_to_op_gap_us_per_step": round(gap / steps, 1),
+        "op_to_op_gap_is_instrumentation": True,
+        "op_to_op_gap_note": (
+            "test_full_model_profile.py drains the device profiler after every iteration inside the "
+            "signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. "
+            "Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency."
+        ),
         "top_ops": [
             {
                 "op": op,

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import build_generator
+from models.autoports.zai_org_glm_4_7_flash.tt.model import source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 OUT = MODEL_DIR / "doc" / "full_model" / "compile_cost.json"
@@ -70,16 +71,28 @@ def main():
         gen = build_generator(MODEL_DIR, dev, progress=note)
         marks["build_total_s"] = round(time.perf_counter() - t0, 2)
 
-        result = {"kernel_cache": cache, "build": marks, "prefill": {}}
+        result = {
+            "source_manifest": source_manifest([__file__]),
+            "kernel_cache": cache,
+            "build": marks,
+            "prefill": {},
+        }
 
         def timed_prefill(ids, seq):
             gen.reset()
+            ttnn.synchronize_device(dev)
             t0 = time.perf_counter()
             logits, _ = gen.model.prefill_forward_last_logits_device(
                 ids, kv_cache=gen._kv_cache, page_table=gen._page_table_dev, seq_len=seq
             )
+            # prefill_forward_last_logits_device returns a *device* tensor and
+            # deallocate does not block, so without this the timer measures host
+            # enqueue, not prefill: the first call returns while the device is
+            # still draining and every later call is device-bound behind it.
+            ttnn.synchronize_device(dev)
+            elapsed = (time.perf_counter() - t0) * 1000
             ttnn.deallocate(logits)
-            return (time.perf_counter() - t0) * 1000
+            return elapsed
 
         for seq in (128, 3000):
             ids = _ids(gen, seq)

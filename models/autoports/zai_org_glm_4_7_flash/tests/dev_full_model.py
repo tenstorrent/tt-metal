@@ -239,7 +239,7 @@ def cmd_capacity(args):
             dt = (time.perf_counter() - t0) / n
             print(f"  {label:38s} {dt * 1e3:8.3f} ms/token ({1 / dt:8.2f} t/s/u)", flush=True)
 
-        bench("model trace only", lambda: ttnn.execute_trace(dev, gen._decode_trace_id, cq_id=0, blocking=False))
+        bench("model trace only", gen.replay_decode_trace)
         bench("model + sampling traces", gen.decode_step_traced)
         bench("model + sampling + token readback", lambda: (gen.decode_step_traced(), gen.read_decode_tokens(1)))
         gen.teardown()
@@ -276,7 +276,7 @@ def cmd_trace(args):
             print(f"{label:38s} {dt * 1e3:7.3f} ms/token ({1 / dt:8.2f} t/s/u)", flush=True)
             return dt
 
-        bench("model trace only", lambda: ttnn.execute_trace(dev, gen._decode_trace_id, cq_id=0, blocking=False))
+        bench("model trace only", gen.replay_decode_trace)
         bench("model + sampling traces", gen.decode_step_traced)
 
         def full():

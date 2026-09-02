@@ -29,7 +29,7 @@ from tracy import signpost
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import GLM47FlashGenerator
-from models.autoports.zai_org_glm_4_7_flash.tt.model import GLM47FlashModel
+from models.autoports.zai_org_glm_4_7_flash.tt.model import GLM47FlashModel, source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 DOC_DIR = MODEL_DIR / "doc" / "full_model"
@@ -68,6 +68,7 @@ def reduced(device):
 
 
 def _write(name, payload):
+    payload = {"source_manifest": source_manifest([__file__]), **payload}
     DOC_DIR.mkdir(parents=True, exist_ok=True)
     (DOC_DIR / name).write_text(json.dumps(payload, indent=2) + "\n")
     print(f"wrote {DOC_DIR / name}: {payload}")
@@ -89,7 +90,7 @@ def test_profile_decode(reduced):
     # distort it. The signposted windows exist for device-op attribution only.
     t0 = time.perf_counter()
     for _ in range(DECODE_ITERS):
-        ttnn.execute_trace(dev, gen._decode_trace_id, cq_id=0, blocking=False)
+        gen.replay_decode_trace()
     ttnn.synchronize_device(dev)
     model_only = (time.perf_counter() - t0) / DECODE_ITERS
     t0 = time.perf_counter()
@@ -101,7 +102,7 @@ def test_profile_decode(reduced):
 
     signpost("PERF_FM_DECODE_MODEL")
     for _ in range(DECODE_ITERS):
-        ttnn.execute_trace(dev, gen._decode_trace_id, cq_id=0, blocking=False)
+        gen.replay_decode_trace()
         ttnn.synchronize_device(dev)
         ttnn.ReadDeviceProfiler(dev)  # drain before the DRAM marker buffer fills
     signpost("PERF_FM_DECODE_MODEL_END")
