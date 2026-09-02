@@ -232,46 +232,44 @@ schedule itself checked by
 tokens and that chunks are emitted *during* generation, both of which hold. What is
 not yet deliverable is correct audio out of the interleaved path.
 
-### `test_streaming_perf` hangs on Wormhole — a TTNN defect, not a port defect
+### `test_streaming_perf` hangs on Wormhole — open
 
 `tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedges
 n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackhole
 boards run it. It is skipped on Wormhole with that reason attached rather than left to
 hang, because a wedged board costs every later test in the run.
 
-The cause is now isolated, and it is upstream. Re-seeding a trace's persistent
-buffers *after that trace has executed* hangs Wormhole. The minimal reproduction is
-four calls with no flow decoder, no vocoder, no streaming and no allocation under a
-live trace:
+The cause is not established, and one candidate has been eliminated.
 
-```python
-step = TracedDecodeStep(dec, max_len).capture()
-step.seed(caches)                    # ttnn.copy into buffers that predate the capture
-for i, token in enumerate(generated):
-    step.step(...)                   # execute_trace x164
-step.seed(caches)                    # the same copy again -> hangs on Wormhole
-```
+An earlier revision of this document named an upstream TTNN defect: re-seeding a
+trace's persistent buffers after that trace had executed. That is withdrawn. The probe
+it rested on captured its trace before the first `prefill()` had ever run, so the
+prefill compiled its kernels under a live trace — a property of the probe, not of the
+path it was standing in for. Adding a warm-up before capture removes the hang on both
+architectures:
 
-That is precisely what this test does — it captures once and, as its own comment says,
-re-seeds per pass, so passes 2-4 seed after the trace has executed. Blackhole runs the
-same sequence in under a second, which is why only n300 is skipped.
+| sequence, one variable apart | Wormhole n300 | Blackhole p150a |
+|---|---|---|
+| capture, then first prefill | hangs at the second seed | hangs at `close_device` |
+| one prefill, then capture | clean, teardown included | clean, teardown included |
 
-Two details matter for anyone reproducing it. The hang needs the trace to have
-executed, not merely to exist: earlier attempts that called `capture()` and `seed()`
-without `step()` all survive. And it depends on how the device was opened —
-`ttnn.CreateDevice`, which is what the repository's `device` fixture uses, hangs;
-`ttnn.open_mesh_device(MeshShape(1, 1))` on the same chip does not, though it then
-hangs at teardown instead, on every board tried.
+Four passes of seed plus 164 traced steps, warmed, complete in 14.7 s on n300 and
+8.7 s on p150a. So the decode-only sequence is ruled out, along with the re-seed and
+the trace's lifetime on their own.
 
-So this is not a lifetime problem, which an earlier revision of this document proposed
-as an untested lead: it is not that the trace stays live too long or that the flow
-decoder and vocoder run underneath it. The reproduction strips both of those out and
-still hangs. `synthesize_streaming` escapes it by capturing and releasing per call,
-which is why the shipped path runs on n300 and this test does not.
+What remains is the work this test runs *under* the live trace and
+`synthesize_streaming` does not: the flow decoder and the vocoder, repeatedly, across
+four passes. That is where to look next, and it is a narrowing rather than a diagnosis.
 
 Ruled out along the way: the trace region size (384 MB → 64 MB changed nothing — it
-captures one trace, not the in-place path's 65); the warm-before-capture ordering,
-which is what made it stable on Blackhole; and the `StreamState` fix above.
+captures one trace, not the in-place path's 65); and the `StreamState` fix above.
+
+Two different warm-ups are in play here and they are worth keeping apart. The one this
+test already performs warms the flow decoder and the vocoder before the AR trace is
+captured; reversing that order hangs Blackhole outright, so it is a design constraint
+rather than a lead. The one that mattered for the probe above warms the AR decoder's
+own prefill. This test does not do that second one — its prefill still compiles under
+a live trace, after capture — which makes it the cheapest thing to try next.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 

@@ -393,8 +393,10 @@ cause is now established and whose remedy is known but does not yet ship cleanly
    `synthesize_streaming`'s interleaved audio gets corrupted across a chunk seam,
    diagnosed with a known remedy that is not shipped — it hangs a Blackhole perf test.
    Two, separately: `test_device_streaming_first_audio_latency` hangs Wormhole,
-   now root-caused as an upstream TTNN defect (re-seeding a trace's persistent buffers
-   after it has executed) rather than anything this port did.
+   cause not established. A previous entry here called it an upstream TTNN defect and
+   named re-seeding a trace's buffers after execution; that was withdrawn when the
+   probe behind it turned out to be compiling kernels under a live trace, which the
+   real path does not do.
    `docs/VALIDATION.md` has both full accounts, including what was ruled out for each
    and the design constraint the second one leaves (the flow decoder and vocoder must
    be warmed before the AR decode trace is captured).

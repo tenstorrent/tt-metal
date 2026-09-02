@@ -81,19 +81,18 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # **Skipped on Wormhole for a TTNN defect, isolated below the port.**
-    # Re-seeding a trace's persistent buffers after that trace has *executed* hangs
-    # Wormhole. This test captures once and re-seeds per pass (see below), so passes
-    # 2-4 hit it. The minimal reproduction is `capture -> seed -> step() xN -> seed`
-    # with no flow decoder, no vocoder and no allocation under a live trace, and it
-    # hangs the same way; Blackhole runs that sequence in under a second.
-    # `synthesize_streaming` escapes it by capturing and releasing per call, which is
-    # why the shipped path runs on n300 and this test does not. See docs/VALIDATION.md.
+    # Skipped on Wormhole: this test wedges n300, and the cause is not established.
+    # An earlier revision of this comment named re-seeding a trace's buffers after
+    # execution as the cause. That was withdrawn: the probe it rested on captured its
+    # trace before the first prefill had compiled its kernels, so the prefill compiled
+    # under a live trace, and that -- not the re-seed -- is what hung it. With a
+    # warm-up before capture the same sequence runs clean on both architectures, four
+    # passes of seed plus 164 traced steps in 14.7 s on n300.
+    # What that does rule out is the decode-only sequence. What remains is the flow
+    # decoder and vocoder running under the live trace, which this test does and
+    # `synthesize_streaming` does not. See docs/VALIDATION.md.
     if "WORMHOLE" in str(device.arch()).upper():
-        pytest.skip(
-            "hangs Wormhole n300: re-seeding a trace's persistent buffers after the "
-            "trace has executed; see docs/VALIDATION.md and PERF.md, Known limitations"
-        )
+        pytest.skip("hangs Wormhole n300, cause not established; see docs/VALIDATION.md and PERF.md, Known limitations")
 
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
