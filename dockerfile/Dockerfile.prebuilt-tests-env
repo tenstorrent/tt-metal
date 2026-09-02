@@ -1,0 +1,48 @@
+# Test environment image: the source tree and the build output merged at /work,
+# so a hardware test job needs no /work bind mount, no artifact download and no
+# full source checkout. Built by build-prebuilt-tests-image.yaml, which puts the
+# source at src/ and the payload at artifact/ in the build context.
+
+# The producer always passes BASE; the default is only so this builds standalone.
+ARG BASE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-test-amd64:latest
+FROM ${BASE}
+
+# full  = source tree plus the build tarball unpacked over it; tests run the C++
+#         binaries from /work/build and import ttnn in place via PYTHONPATH=/work.
+# wheel = source tree plus the wheel installed; no build tree.
+ARG PROFILE=full
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+# Source first, payload second: the tarball carries ttnn/ttnn/*.so that has to
+# land inside the source's package directory.
+COPY src/ /work/
+
+# Bind-mounted, not COPYed: a COPYed payload stays in its layer forever and a
+# later rm reclaims nothing, which would eat most of the saving.
+RUN --mount=type=bind,source=artifact,target=/tmp/payload \
+    shopt -s nullglob \
+    && case "${PROFILE}" in \
+        full) \
+            tarballs=( /tmp/payload/*.tar.zst ); \
+            if [ "${#tarballs[@]}" -ne 1 ]; then \
+                echo "::error::PROFILE=full wants exactly one .tar.zst in artifact/, found ${#tarballs[@]}" >&2; \
+                exit 1; \
+            fi; \
+            tar --zstd -xf "${tarballs[0]}" -C /work; \
+            test -d /work/build \
+                || { echo "::error::the tarball produced no /work/build" >&2; exit 1; }; \
+            printf 'profile=full\npayload=%s\n' "$(basename "${tarballs[0]}")" \
+                > /etc/prebuilt-tests-env-manifest ;; \
+        wheel) \
+            wheels=( /tmp/payload/*.whl ); \
+            if [ "${#wheels[@]}" -ne 1 ]; then \
+                echo "::error::PROFILE=wheel wants exactly one .whl in artifact/, found ${#wheels[@]}" >&2; \
+                exit 1; \
+            fi; \
+            uv pip install "${wheels[0]}"; \
+            printf 'profile=wheel\npayload=%s\n' "$(basename "${wheels[0]}")" \
+                > /etc/prebuilt-tests-env-manifest ;; \
+        *) echo "::error::Unsupported PROFILE=${PROFILE}" >&2; exit 1 ;; \
+       esac \
+    && test -s /work/.github/actions/setup-job/action.yml
