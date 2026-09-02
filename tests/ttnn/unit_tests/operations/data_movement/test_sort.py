@@ -999,25 +999,15 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_tied_values_indices_are_a_permutation(descending, device):
     """
-    Regression test for #54767: cross-core index duplication on tied values.
+    Test for cross-core index duplication on tied values.
 
     Every value is equal, so a compare-exchange network must leave the row
-    untouched and return the identity permutation. The CrossCoreDataExchange
-    factory used to merge a split tile pair redundantly on both cores, each
-    keeping one half; because a tie makes topk_merge a no-op, both cores kept
-    the same physical tile and one tile's indices were duplicated over the
-    other's. Gather-based checks cannot see this — the values are tied, so a
-    duplicated index still gathers the right value — so assert injectivity.
+    untouched and return the identity permutation.
 
     Wt = 128 is the smallest width past the single-core threshold. On any grid
     with >= 64 compute cores (every standard Wormhole and Blackhole part) the
     CrossCore capacity is at least 2 * cores >= 128 tiles, so this width always
-    selects the CrossCoreDataExchange factory that carried the bug; on smaller
-    grids it falls to the DRAM multi-core factory, whose tie behaviour this
-    then checks instead. Deriving Wt from the grid size does not do this: a
-    grid whose core count is not a power of two can only take the CrossCore
-    route at widths just above 64 tiles, so e.g. on 140 cores next_pow2(2 *
-    cores) = 512 lands on the multi-core factory while Wt = 128 is CrossCore.
+    selects the CrossCoreDataExchange factory.
     """
     wt = 128
     n = wt * TILE_WIDTH
