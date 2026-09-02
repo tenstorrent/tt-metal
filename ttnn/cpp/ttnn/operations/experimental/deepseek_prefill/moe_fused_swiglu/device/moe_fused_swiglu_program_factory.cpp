@@ -322,7 +322,9 @@ std::vector<uint32_t> make_compute_ct(
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
-    const OperationArguments& operation_arguments, const TensorArguments& tensor_arguments, Tensor& output) {
+    const OperationArguments& operation_arguments,
+    const TensorArguments& tensor_arguments,
+    Tensor& tensor_return_value) {
     ProgramDescriptor descriptor;
     auto* device = tensor_arguments.activations.device();
     const uint32_t hgroups = operation_arguments.grid_x;
@@ -334,7 +336,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t hidden = tensor_arguments.w_gates[0].logical_shape()[-1];
     const bool activations_are_row_major = tensor_arguments.activations.layout() == Layout::ROW_MAJOR;
     const DataFormat weight_format = datatype_to_dataformat_converter(tensor_arguments.w_gates[0].dtype());
-    const DataFormat output_format = datatype_to_dataformat_converter(output.dtype());
+    const DataFormat output_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     const DataFormat activation_format = datatype_to_dataformat_converter(tensor_arguments.activations.dtype());
     const uint32_t weight_tile = tile_size(weight_format);
     const uint32_t bfp8_tile = tile_size(DataFormat::Bfp8_b);
@@ -466,13 +468,14 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         experts_per_chip,
         phase_alias,
         direct_write,
-        output.padded_shape()[-2] / geo::TILE,
+        tensor_return_value.padded_shape()[-2] / geo::TILE,
         weight_tile,
         bfp8_tile,
         output_tile,
         wg,
         wd);
-    for (auto* buffer : {tensor_arguments.w_ups[0].buffer(), output.buffer(), tensor_arguments.w_downs[0].buffer()}) {
+    for (auto* buffer :
+         {tensor_arguments.w_ups[0].buffer(), tensor_return_value.buffer(), tensor_arguments.w_downs[0].buffer()}) {
         TensorAccessorArgs(buffer).append_to(writer_ct);
     }
     auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);
@@ -574,7 +577,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             writer_args.reserve(17 + 2 * kgroups + 4 + 2u * experts_per_chip);
             writer_args.push_back(0u);  // reserved runtime slot
             writer_args.push_back(tensor_arguments.w_ups[0].buffer());
-            writer_args.push_back(output.buffer());
+            writer_args.push_back(tensor_return_value.buffer());
             writer_args.push_back(tensor_arguments.w_downs[0].buffer());
             writer_args.push_back(blocking.kr_sizes[y]);
             writer_args.push_back(blocking.kr_starts[y]);
