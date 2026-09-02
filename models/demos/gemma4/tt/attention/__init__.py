@@ -188,6 +188,7 @@ class Gemma4Attention:
         chunk_start_idx=None,
         chunk_page_table=None,
         packed_global_rope=None,
+        packed_sliding_rope=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -294,6 +295,7 @@ class Gemma4Attention:
                 ring_kv_cache=self.ring_kv_cache,
                 ring_max_seq_len=self.ring_max_seq_len,
                 packed_global_rope=packed_global_rope,
+                packed_sliding_rope=packed_sliding_rope,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk.

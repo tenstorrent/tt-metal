@@ -27,7 +27,7 @@ from models.demos.gemma4.config import MeshConfig
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
-from .global_kv_cache import GLOBAL_ROTARY_DIM, global_kv_indices
+from .global_kv_cache import GLOBAL_ROTARY_DIM, global_kv_indices, sliding_kv_indices
 
 # DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
 # weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
@@ -115,6 +115,12 @@ def load_attention_weights(
             q_w = q_w.reshape(q_size, -1)
             k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
             k_w = k_w.reshape(kv_size, -1)
+        elif is_context_parallel:
+            decode_order = sliding_kv_indices(config.head_dim)
+            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, decode_order)
+            q_w = q_w.reshape(q_size, -1)
+            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, decode_order)
+            k_w = k_w.reshape(kv_size, -1)
 
         if not is_global:
             v_w = state_dict["v_proj.weight"]  # [kv_size, H]
@@ -194,6 +200,10 @@ def load_attention_weights(
                 q_norm_flat = q_norm_flat.index_select(0, query_order) * packed_q_scale
         else:
             k_norm_rotary_w = None
+            if is_context_parallel:
+                decode_order = sliding_kv_indices(config.head_dim)
+                q_norm_flat = q_norm_flat.index_select(0, decode_order)
+                k_norm_w = k_norm_flat.index_select(0, decode_order).reshape(1, 1, -1, ttnn.TILE_SIZE)
         q_norm_w = q_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
     else:
         qkv = None
@@ -227,7 +237,10 @@ def load_attention_weights(
 
     # Cache-only builds may predate the narrow Q+K cache; fall back to full QKV
     # until a full-weight build creates it.
-    packed_cache_suffix = "_packed640" if is_global and is_context_parallel else ""
+    packed_cache_suffix = (
+        "_packed640" if is_global and is_context_parallel else "_decode_order" if is_context_parallel else ""
+    )
+    k_norm_cache_suffix = "_decode_order" if is_context_parallel and not is_global else ""
     qk_cache_name = get_cache_file_name(tensor_cache_path, f"wqk{packed_cache_suffix}{tp_suffix}{dtype_suffix}")
     if tied_qkv and qk is None and not _cached_tensor_exists(qk_cache_name):
         logger.warning(
@@ -306,9 +319,7 @@ def load_attention_weights(
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=replicate_mapper,
-        cache_file_name=get_cache_file_name(
-            tensor_cache_path, f"q_norm.weight{'_packed640' if is_global and is_context_parallel else ''}{tp_suffix}"
-        ),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"q_norm.weight{packed_cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     k_norm_weight = ttnn.as_tensor(
@@ -317,7 +328,7 @@ def load_attention_weights(
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=replicate_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_norm.weight{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_norm.weight{k_norm_cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     k_norm_rotary_weight = (

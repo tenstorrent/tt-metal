@@ -14,6 +14,7 @@ from models.demos.gemma4.tt.attention.global_kv_cache import (
     pack_global_kv_reference,
     pack_global_query_device,
     pack_global_query_reference,
+    sliding_kv_indices,
     unpack_global_value_device,
     unpack_global_value_reference,
 )
@@ -145,6 +146,44 @@ def test_projection_permutations_write_packed_cache_directly():
     torch.testing.assert_close(
         packed_output @ packed_weight,
         unpack_global_value_reference(packed_output) @ output_weight,
+        rtol=2e-5,
+        atol=2e-5,
+    )
+
+
+def test_sliding_projection_order_matches_canonical_rope():
+    torch.manual_seed(19)
+    shape = (1, 4, 9, 256)
+    query = torch.randn(shape)
+    key = torch.randn(shape)
+    q_gamma = torch.randn(256)
+    k_gamma = torch.randn(256)
+    order = sliding_kv_indices()
+    angle = torch.randn(1, 1, shape[-2], 128)
+    cos = torch.cat((angle.cos(), angle.cos()), dim=-1)
+    sin = torch.cat((angle.sin(), angle.sin()), dim=-1)
+
+    def rms(x):
+        return x * torch.rsqrt(x.square().mean(dim=-1, keepdim=True) + 1e-6)
+
+    canonical_q = _partial_rope(rms(query) * q_gamma, cos, sin)
+    canonical_k = _partial_rope(rms(key) * k_gamma, cos, sin)
+    direct_q = _adjacent_rope(
+        rms(query.index_select(-1, order)) * q_gamma.index_select(0, order),
+        cos.index_select(-1, order),
+        sin.index_select(-1, order),
+    )
+    direct_k = _adjacent_rope(
+        rms(key.index_select(-1, order)) * k_gamma.index_select(0, order),
+        cos.index_select(-1, order),
+        sin.index_select(-1, order),
+    )
+
+    torch.testing.assert_close(direct_q, canonical_q.index_select(-1, order), rtol=2e-5, atol=2e-5)
+    torch.testing.assert_close(direct_k, canonical_k.index_select(-1, order), rtol=2e-5, atol=2e-5)
+    torch.testing.assert_close(
+        direct_q @ direct_k.transpose(-1, -2),
+        canonical_q @ canonical_k.transpose(-1, -2),
         rtol=2e-5,
         atol=2e-5,
     )

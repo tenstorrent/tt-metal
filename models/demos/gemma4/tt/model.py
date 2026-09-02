@@ -25,7 +25,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
-from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device
+from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -563,13 +563,9 @@ class Gemma4Model:
                 ring_prefill_chunk_size=prefill_chunk_size,
             )
             # Create a paged cache for paths that consume one. CP global prefill
-            # owns a single packed 640-wide ring cache instead; allocating the
-            # legacy K and V tensors as well would duplicate its dominant footprint.
-            if (
-                create_kv_cache
-                and i not in self.kv_shared_layer_map
-                and not (layer.self_attn.weights.is_global and layer.self_attn.ring_kv_cache is not None)
-            ):
+            # uses its full-history ring cache as durable storage; global layers pack
+            # it to 640 channels. A paged cache here would duplicate the footprint.
+            if create_kv_cache and i not in self.kv_shared_layer_map and layer.self_attn.ring_kv_cache is None:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
@@ -1109,6 +1105,12 @@ class Gemma4Model:
                 *pack_global_rope_device(*prefill_rope_presliced["full_attention"]),
                 self._packed_global_rope_trans_mat,
             )
+        packed_sliding_rope = None
+        if not is_decode and "sliding_attention" in prefill_rope_presliced:
+            packed_sliding_rope = (
+                *pack_sliding_rope_device(*prefill_rope_presliced["sliding_attention"]),
+                self._packed_global_rope_trans_mat,
+            )
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -1212,6 +1214,17 @@ class Gemma4Model:
                     self._packed_global_rope_trans_mat,
                 )
 
+            if (
+                not is_decode
+                and self.hf_config.layer_types[i] == "sliding_attention"
+                and packed_sliding_rope is None
+                and self._packed_global_rope_trans_mat is not None
+            ):
+                packed_sliding_rope = (
+                    *pack_sliding_rope_device(*layer_rope),
+                    self._packed_global_rope_trans_mat,
+                )
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -1234,6 +1247,9 @@ class Gemma4Model:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 packed_global_rope=(packed_global_rope if self.hf_config.layer_types[i] == "full_attention" else None),
+                packed_sliding_rope=(
+                    packed_sliding_rope if self.hf_config.layer_types[i] == "sliding_attention" else None
+                ),
             )
 
             # For KV source layers during prefill, capture the K/V from the attention

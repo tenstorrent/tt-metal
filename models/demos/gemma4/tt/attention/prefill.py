@@ -321,6 +321,7 @@ def _prefill_forward_single(
     ring_layer_idx=0,
     ring_num_layers=1,
     packed_global_rope=None,
+    packed_sliding_rope=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -395,6 +396,7 @@ def _prefill_forward_single(
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
     packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
+    packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
     if shared_kv is not None:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
@@ -445,10 +447,25 @@ def _prefill_forward_single(
         tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=act_mc)
         for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
             tensor.deallocate(True)
+    elif packed_sliding_ring:
+        if packed_sliding_rope is None:
+            raise RuntimeError("packed sliding ring attention requires pre-gathered adjacent RoPE tensors")
+        sliding_cos, sliding_sin, trans_mat = packed_sliding_rope
+        q_unrotated = tt_q
+        tt_q = ttnn.experimental.rotary_embedding_llama(
+            q_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+        )
+        q_unrotated.deallocate(True)
+        if shared_kv is None:
+            k_unrotated = tt_k
+            tt_k = ttnn.experimental.rotary_embedding_llama(
+                k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+            )
+            k_unrotated.deallocate(True)
     else:
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None and tt_k is not None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None and tt_k is not None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     if kv_cache is not None and shared_kv is None and not packed_global_ring:
         k_cache, v_cache = kv_cache
@@ -1030,6 +1047,7 @@ def prefill_forward(
     ring_layer_idx=0,
     ring_num_layers=1,
     packed_global_rope=None,
+    packed_sliding_rope=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1074,6 +1092,7 @@ def prefill_forward(
             ring_layer_idx=ring_layer_idx,
             ring_num_layers=ring_num_layers,
             packed_global_rope=packed_global_rope,
+            packed_sliding_rope=packed_sliding_rope,
         )
 
     tp = mesh_config.tp if mesh_config else 1
