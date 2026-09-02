@@ -367,13 +367,10 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
-    # Which of these succeeds depends only on (C, K, stride) -- same weight shape, same hardware,
-    # same op config every call -- so it's deterministic across calls within a process. Once
-    # discovered (in warmup), the winner is cached and tried first on every later call instead of
-    # re-attempting the doomed configs that preceded it. A cache miss/mismatch still falls through
-    # the full chain below, so this can't make a call fail that would otherwise have succeeded --
-    # it only skips already-known dead ends. Its error text is not a stable API, so any
-    # RuntimeError just moves on to the next candidate.
+    # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
+    # winner found in warmup and try it first, skipping the dead ends that preceded it. A miss still
+    # falls through the whole chain, so this can't fail a call that would otherwise succeed. The
+    # slicer's error text is not a stable API, so any RuntimeError just tries the next candidate.
     candidates = ["direct", 128, 64, 32, "mac"]
     path_key = ("tap_path", C, stride, K)
     known = cache.get(path_key)
@@ -538,12 +535,10 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
-# T-shard alignment is `factor`, not `32 * factor`: the coarser alignment existed only because
-# TILE-layout mesh_partition needs a tile-aligned split offset, but partitioning happens in
-# ROW_MAJOR (fine at unaligned offsets) and every call site untilized right afterward anyway.
-# The tighter alignment shrinks the T-pad image (49 -> 1 rows at T=207, factor 8), which also
-# lets `_set_tpad_tail` maintain just the pad suffix in place (`_set_tpad_tail_local`) instead
-# of multiplying every body row by 1.0.
+# T-shard alignment is `factor`, not `32 * factor`: the coarser alignment only existed because
+# TILE-layout mesh_partition needs a tile-aligned offset, but partitioning is done in ROW_MAJOR
+# (fine at any offset) and every caller untilized right after. The tighter pad (49 -> 1 rows at
+# T=207, factor 8) also lets `_set_tpad_tail` fix just the pad suffix in place (`_set_tpad_tail_local`).
 
 
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -685,15 +680,12 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
 
 
 def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
-    """``_set_tpad_tail`` restricted to the rows it can actually change, written back in place.
+    """``_set_tpad_tail`` restricted to the pad suffix, written back in place.
 
-    Slices just the pad suffix, fixes it, and writes back with `ttnn.experimental.slice_write`
-    (bit-identical to the full-tensor multiply above, and cheaper in ROW_MAJOR) instead of rewriting
-    every row so body rows can multiply by 1.0.
-
-    Writing in place is safe because every op with a receptive field is preceded by its own tail-set,
-    so no consumer reads a stale tail, and the pad rows are cropped from the final waveform. It does
-    mean the caller's tensor is mutated and returned, so `xs is x` and the caller's
+    Slices the suffix, fixes it, and writes it back with `ttnn.experimental.slice_write`
+    (bit-identical to the full-tensor multiply, cheaper in ROW_MAJOR). Safe in place because every
+    op with a receptive field runs its own tail-set first (no stale reads) and the pad is cropped
+    from the final waveform. The caller's tensor is mutated and returned, so its
     `if xs is not x: deallocate(xs)` correctly skips the free.
     """
     B, local_T, C = x_BTC.shape

@@ -293,10 +293,10 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
-        # Audio fidelity/latency trade: "full" (default) splits the dense-conv operands for the
-        # fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split for a faster,
-        # lower-fidelity decode (~5.5 s vs 7.3 s decode at ~42 dB on the 15 s clip). Same weights
-        # on disk; the device-weight cache keys on it via `weights_variant`.
+        # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
+        # operands for the fp32-exact kernels' best accuracy (6.4 s decode, ~67 dB vs CPU); "off"
+        # skips the split for a faster, lower-fidelity decode (4.4 s, ~42 dB). Keys the device-weight
+        # cache via `weights_variant`.
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
