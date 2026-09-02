@@ -1,0 +1,50 @@
+name: "LLK perf SFTP access check"
+# Manual only. Answers one question: can this repo log in to the LLK perf
+# warehouse SFTP server? The transcript names the key we offer and the server's
+# answer, so a refused key is visible without trusting anyone's laptop.
+#
+# Env names are SFTP_HOST / SFTP_USER, not HOSTNAME / USERNAME: bash sets those
+# two itself, and it then wins over the value the job passes in.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hostname:
+        description: "SFTP host"
+        required: true
+        default: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
+        type: string
+      username:
+        description: "SFTP user"
+        required: true
+        default: "llk-perf-run"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: "Log in and list the remote directory"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try to log in
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SFTP_LLK_PERF_KEY }}
+          SFTP_HOST: ${{ inputs.hostname }}
+          SFTP_USER: ${{ inputs.username }}
+        run: |
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::secret SFTP_LLK_PERF_KEY is not set in this repository"
+            exit 1
+          fi
+          printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
+          chmod go-rwx id_key
+          # The fingerprint the server must have installed for $SFTP_USER. A
+          # fingerprint is public; the key file itself is never printed.
+          ssh-keygen -lf id_key
+          echo "ls -hal" > batchfile
+          # -v names the offered key and the server's answer. BatchMode=yes
+          # fails at once instead of waiting for a password.
+          sftp -v -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -i id_key -b batchfile "$SFTP_USER@$SFTP_HOST"
