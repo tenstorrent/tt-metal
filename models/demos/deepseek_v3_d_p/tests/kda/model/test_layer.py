@@ -14,9 +14,9 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     make_config,
-    make_program_config,
     random_weights,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
@@ -123,7 +123,7 @@ def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path
 
 def test_program_config_is_resolved_at_construction(device: ttnn.Device) -> None:
     config = make_config()
-    program_config = replace(make_program_config(), qkv_channel_chunk_size=128, tp_ccl_topology=ttnn.Topology.Ring)
+    program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128, tp_ccl_topology=ttnn.Topology.Ring)
     layer = ttKDA(device, config, random_weights(config), program_config=program_config)
     assert layer.qkv_convolution_program_config.channel_chunk_size == 96
     assert layer.tp_ccl_topology == ttnn.Topology.Ring
@@ -144,7 +144,7 @@ def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error
 
 def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device: ttnn.Device, expect_error) -> None:
     config = replace(make_config(), head_v_dim=64)
-    base_program_config = make_program_config()
+    base_program_config = KDAProgramConfig()
     program_config = replace(
         base_program_config,
         recurrence=replace(
@@ -224,7 +224,7 @@ def test_explicit_fp32_state_is_replaced_without_mutating_input(device: ttnn.Dev
         device,
         config,
         weights,
-        program_config=make_program_config(),
+        program_config=KDAProgramConfig(),
     )
     input_state = layer.allocate_state()
     external_recurrent = input_state.recurrent
