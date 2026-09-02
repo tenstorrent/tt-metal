@@ -267,7 +267,12 @@ def host_decode_mask(
 def sdpa_causal_ok(sliding_window: int, layer_type: str, pos: int) -> bool:
     """Can this step's valid set be expressed as a single SDPA-decode ``cur_pos``?
 
-    The CSA/HCA KV axis is ``[sliding 0..W) | compressor 0..n_win_cap)`` and the
+    Sliding-only: the dense ring is written in order and wraps at ``W``. Valid slots
+    are a prefix of ``min(pos, W-1)`` -- causal for every ``pos``. (Paged sliding
+    uses absolute ``cur_pos`` plus ``sliding_window_size`` instead, inside
+    :meth:`DeepSeekV4Attention.decode_static`.)
+
+    CSA/HCA: the KV axis is ``[sliding 0..W) | compressor 0..n_win_cap)`` and the
     valid set (see :func:`host_decode_mask`) is sliding slot ``i <= pos`` plus
     compressor window ``j < (pos+1)//cr``. Once the ring is full every sliding slot
     is valid, so the union is the contiguous prefix ``[0, W + (pos+1)//cr)`` -- which
@@ -275,19 +280,46 @@ def sdpa_causal_ok(sliding_window: int, layer_type: str, pos: int) -> bool:
     ``pos+1 .. W-1`` are still unwritten) that no ``cur_pos`` can express, so those
     steps must keep the additive mask.
     """
-    return layer_type != "sliding_attention" and pos + 1 >= sliding_window
+    if layer_type == "sliding_attention":
+        return True
+    return pos + 1 >= sliding_window
 
 
-def sdpa_causal_cur_pos(sliding_window: int, compress_rate: int, pos: int) -> int:
-    """Inclusive last-valid index on the ``[sliding | compressor]`` KV axis at ``pos``.
+def sdpa_causal_cur_pos(sliding_window: int, compress_rate: int | None, pos: int) -> int:
+    """Inclusive last-valid index for causal SDPA-decode at ``pos``.
 
-    Only meaningful when :func:`sdpa_causal_ok`. Note the ``-1``: ``(pos+1)//cr`` is
-    the *count* of closed windows, and ``cur_pos`` is inclusive. Dropping it (i.e.
-    using ``W + pos//cr``) happens to agree only at window boundaries and otherwise
-    exposes the still-open window, whose entry is unpooled -- a silent accuracy loss
-    rather than an error.
+    Sliding-only: ``min(pos, W-1)`` on the ring. CSA/HCA: last valid index on the
+    ``[sliding | compressor]`` axis. Only meaningful when :func:`sdpa_causal_ok`.
+    Note the ``-1`` on the compressor formula: ``(pos+1)//cr`` is the *count* of
+    closed windows, and ``cur_pos`` is inclusive. Dropping it (i.e. using
+    ``W + pos//cr``) happens to agree only at window boundaries and otherwise
+    exposes the still-open window, whose entry is unpooled -- a silent accuracy
+    loss rather than an error.
     """
+    if compress_rate is None:
+        return min(pos, sliding_window - 1)
     return sliding_window + (pos + 1) // compress_rate - 1
+
+
+def decode_sdpa_bounds(
+    sliding_window: int,
+    layer_type: str,
+    compress_rate: int | None,
+    pos: int,
+    max_seq: int,
+    device: ttnn.MeshDevice,
+    batch: int = 1,
+) -> tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
+    """``(mask, sdpa_cur_pos)`` for one decode step.
+
+    Causal ``cur_pos`` whenever :func:`sdpa_causal_ok`, so
+    :meth:`DeepSeekV4Attention._sdpa_decode` does not head-broadcast a mask row
+    (a ``Repeat`` of the ``[1,1,1,Skv]`` additive mask across ``H``). Early CSA/HCA
+    steps whose sliding region still has a hole keep the mask.
+    """
+    if sdpa_causal_ok(sliding_window, layer_type, pos):
+        return None, int32_pos_tensor(sdpa_causal_cur_pos(sliding_window, compress_rate, pos), device, batch)
+    return host_decode_mask(sliding_window, layer_type, compress_rate, pos, max_seq, device), None
 
 
 def _interleaved_rotate_matrix(rope_dim: int) -> torch.Tensor:
@@ -1479,14 +1511,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """
         # sdpa_decode requires its K/V operands in DRAM.
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        bounds = (
-            {"is_causal": True, "cur_pos_tensor": cur_pos}
-            if cur_pos is not None
-            else {
-                "is_causal": False,
-                "attn_mask": ttnn.repeat(mask, ttnn.Shape([1, 1, self.local_num_heads, 1])),
-            }
-        )
+        if cur_pos is not None:
+            bounds = {"is_causal": True, "cur_pos_tensor": cur_pos}
+        else:
+            # The op compares logical head counts, so a head-independent ``[1,1,1,Skv]``
+            # row has to be materialised across ``H``. Prefer ``cur_pos`` (above) so this
+            # Repeat never runs once the valid set is a prefix.
+            attn_mask = mask
+            if mask.shape[-2] != self.local_num_heads:
+                attn_mask = ttnn.repeat(mask, ttnn.Shape([1, 1, self.local_num_heads, 1]))
+            bounds = {"is_causal": False, "attn_mask": attn_mask}
         if paged is not None:
             return ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q,
@@ -1519,13 +1553,26 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
 
         ``attn`` is SDPA-decode's ``[1, B, H, Dh]``; returns the block's hidden output
-        back on packed rows, ``[1, 1, B, D]``. Reshape to per-group feature blocks, run
-        the batched ``matmul_decode`` over the group axis (batch = o_groups, weights
-        folded along group + N), then mix groups back to hidden via ``o_b_proj``.
+        back on packed rows, ``[1, 1, B, D]``. ``o_a`` is block-diagonal over
+        ``o_groups``, and ``o_b_proj`` then mixes the groups back to hidden.
 
-        The groups partition the heads, so splitting ``[B, H, Dh]`` into
-        ``[B, g, (H/g)*Dh]`` is a plain reshape and only the group / token axes have to
-        be swapped to give the batched matmul its group-major activation.
+        The groups partition the heads, so folding the head axis onto packed rows
+        (``[1, B, H, Dh]`` -> ``[1, 1, B, H*Dh]``) puts each group's ``K`` features in a
+        contiguous slice of the feature axis -- which is also the slice of ``o_b``'s
+        ``K`` that group feeds. The two o_a modes want different things from that:
+
+        * ``sequential`` (the TP default) runs one ordinary ``matmul_decode`` per local
+          group and can stay on the feature axis end to end: the inputs are feature
+          slices of the folded activation, and concatenating the results back on that
+          same axis *is* ``o_b``'s activation. No group axis is ever materialised, so a
+          step costs the fold plus the split/concat pair -- where routing through a
+          group-major ``[1, g, M, N]`` intermediate additionally paid two ``permute``s,
+          each a transpose plus the tilize/untilize pair a tiled transpose drags along.
+        * ``batched`` runs the groups as a single batched ``matmul_decode`` whose batch
+          axis *is* the group, so it does need the group-major ``[1, g, M, K]``
+          activation, and the reverse permute on the way out -- except at ``M == 1``,
+          where a unit token axis makes group-major and token-major the same bytes and
+          the fold alone gets there.
 
         With TP, each rank owns a contiguous set of complete groups. ``o_a`` is
         consequently group-sharded and runs locally. In the default row-parallel
@@ -1534,25 +1581,46 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         hidden features per rank, and gathers the final hidden state.
         """
         _, m, h, dh = attn.shape
-        in_per_group = (h * dh) // self.local_o_groups
-        # Rank-4 activation [1, g, M, K] (batch = g = o_groups) for the batched matmul_decode; the
-        # op folds the group axis to match the folded (b_blocks x n_blocks) weight layout.
-        x = ttnn.reshape(attn, [m, self.local_o_groups, in_per_group])
-        x = ttnn.permute(x, [1, 0, 2])  # [g, M, K]
-        x = ttnn.reshape(x, [1, self.local_o_groups, m, in_per_group])  # [1, g_local, M, K]
+        groups = self.local_o_groups
+        in_per_group = (h * dh) // groups
         if self.sequential_o_a:
-            group_inputs = ttnn.split(x, 1, dim=1)
-            group_outputs = [
-                ttnn.to_memory_config(proj(group_input), ttnn.DRAM_MEMORY_CONFIG)
-                for proj, group_input in zip(self.o_a_projs, group_inputs)
-            ]
-            y = ttnn.concat(group_outputs, dim=1)
-            for tensor in group_outputs:
-                ttnn.deallocate(tensor)
+            # Row-major, ``[1, B, H, Dh]`` element ``b*H*Dh + head*Dh + c`` is
+            # ``[1, 1, B, H*Dh]`` element ``b*H*Dh + w``, so the head fold is a plain
+            # reshape and group ``j`` is the feature slice ``[j*K, (j+1)*K)``.
+            x = ttnn.reshape(attn, [1, 1, m, h * dh])
+            if groups == 1:
+                # o_groups == TP: the fold is already o_a's activation and o_a's result is
+                # already o_b's, so neither the split nor the concat runs at all.
+                y = ttnn.to_memory_config(self.o_a_projs[0](x), ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                group_outputs = [
+                    ttnn.to_memory_config(proj(group_input), ttnn.DRAM_MEMORY_CONFIG)
+                    for proj, group_input in zip(self.o_a_projs, ttnn.split(x, in_per_group, dim=3))
+                ]
+                y = ttnn.concat(group_outputs, dim=3)  # [1, 1, M, g_local*N]
+                for tensor in group_outputs:
+                    ttnn.deallocate(tensor)
         else:
+            # Group-major [1, g, M, K] (batch = g = o_groups) for the batched
+            # matmul_decode; the op folds the group axis to match the folded
+            # (b_blocks x n_blocks) weight layout.
+            #
+            # At M == 1 the token axis is unit, so group-major and token-major orderings
+            # are the same bytes: the head fold lands the activation directly, and the
+            # matmul's result is already the packed-row output. Both permutes then reduce
+            # to moving a unit axis, which is worth skipping rather than paying for -- a
+            # transpose on tiled data drags a tilize/untilize pair with it. Above one token
+            # the (M, g) axes genuinely have to swap, so the permutes stay.
+            if m == 1:
+                x = ttnn.reshape(attn, [1, groups, m, in_per_group])
+            else:
+                x = ttnn.reshape(attn, [m, groups, in_per_group])
+                x = ttnn.permute(x, [1, 0, 2])  # [g, M, K]
+                x = ttnn.reshape(x, [1, groups, m, in_per_group])  # [1, g_local, M, K]
             y = self.o_a_proj(x)  # DRAM-interleaved [1, g, M, N]
-        y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
-        y = ttnn.reshape(y, [1, 1, m, self.local_o_groups * self.o_lora_rank])
+            if m != 1:
+                y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
+            y = ttnn.reshape(y, [1, 1, m, groups * self.o_lora_rank])
         if self.tp_size > 1 and not self.row_parallel_o_b:
             gathered = ttnn.all_gather(
                 y,
@@ -1791,7 +1859,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             else:
                 _update_cache_at(scache.sliding, kv_new, sliding_pos)
                 ttnn.deallocate(kv_new)
-                out = self._attend(q, scache.sliding, mask, cos, neg_sin)
+                # Dense ring: causal over ``min(pos, W-1)`` when the caller passed
+                # ``sdpa_cur_pos`` (see :func:`decode_sdpa_bounds`). The additive mask
+                # remains as a fallback for callers that have not been switched over.
+                out = self._attend(
+                    q,
+                    scache.sliding,
+                    None if sdpa_cur_pos is not None else mask,
+                    cos,
+                    neg_sin,
+                    sdpa_cur_pos=sdpa_cur_pos,
+                )
             return ttnn.reshape(out, [b, s, 1, d])
 
         # One KV axis holds both regions, so there is no per-step concat: the ring slot

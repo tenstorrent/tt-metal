@@ -36,7 +36,7 @@ from models.experimental.deepseek_v4_flash.tests.test_decoder_layer_pcc import (
 )
 from models.experimental.deepseek_v4_flash.tt.attention import (
     build_static_layer_cache,
-    host_decode_mask,
+    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -238,6 +238,9 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
                 win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
                 win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
 
+            mask, sdpa_cur_pos = decode_sdpa_bounds(
+                cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
+            )
             out_tt = layer.decode_static(
                 _to_tt_replicated(streams[:, pos : pos + 1], submesh),
                 cos,
@@ -245,7 +248,7 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
                 neg_sin,
                 cos_win,
                 sin_win,
-                host_decode_mask(cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh),
+                mask,
                 kv_cache,
                 int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
                 int32_pos_tensor(pos, submesh, batch),
@@ -253,6 +256,7 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
                 pool_compressor=pool,
                 win_slot=win_slot,
                 win_row=win_row,
+                sdpa_cur_pos=sdpa_cur_pos,
             )
             if pos < split:
                 continue

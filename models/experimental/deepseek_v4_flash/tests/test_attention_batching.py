@@ -45,7 +45,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.deepseek_v4_flash.tt.attention import (
     DeepSeekV4Attention,
     build_static_layer_cache,
-    host_decode_mask,
+    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -247,6 +247,7 @@ def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int, pag
             win_slot = int32_pos_tensor(pos % cr, device, batch)
             win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch)
 
+        mask, sdpa_cur_pos = decode_sdpa_bounds(cfg.sliding_window, layer_type, cr, pos, axis_seq, device, batch)
         out_tt = attn.decode(
             _to_tt(hidden[:, pos : pos + 1].reshape(batch, 1, 1, hidden_size), device),
             cos_d,
@@ -254,7 +255,7 @@ def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int, pag
             neg_sin_d,
             cos_win_d,
             sin_win_d,
-            host_decode_mask(cfg.sliding_window, layer_type, cr, pos, axis_seq, device),
+            mask,
             kv_cache,
             int32_pos_tensor(pos % cfg.sliding_window, device, batch),
             int32_pos_tensor(pos, device, batch),
@@ -262,6 +263,7 @@ def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int, pag
             pool_compressor=pool,
             win_slot=win_slot,
             win_row=win_row,
+            sdpa_cur_pos=sdpa_cur_pos,
         )
         if pos >= capture_from:
             captured[pos] = ttnn.to_torch(out_tt).reshape(batch, hidden_size).to(torch.float32)
