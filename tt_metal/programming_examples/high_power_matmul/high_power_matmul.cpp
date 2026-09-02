@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
+#include <map>
 #include <random>
 #include <string>
 #include <thread>
@@ -117,6 +120,60 @@ static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_
     return result;
 }
 
+// Power-experiment configuration. Each kernel can be switched to "idle" mode, in which it still
+// performs its full circular-buffer handshake (so the other kernels never deadlock) but skips its
+// real NoC transfer / FPU work. This isolates which part of the pipeline actually costs power,
+// versus merely keeping a core alive and cycling its CBs.
+struct PowerExperimentConfig {
+    bool disable_reader = false;
+    bool disable_compute = false;
+    bool disable_writer = false;
+    uint32_t write_amplification_pct = 0;
+};
+
+static bool env_flag(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr && std::string(v) == "1";
+}
+
+static PowerExperimentConfig resolve_power_experiment() {
+    PowerExperimentConfig cfg;
+
+    // POWER_CASE, when set, overrides all four individual flags with one of the canonical
+    // scenarios. Cases 1-4 all hold the writer at 100% amplification so that turning the reader
+    // and/or compute off gives a clean single-variable comparison against case 1.
+    if (const char* pc = std::getenv("POWER_CASE"); pc != nullptr && *pc != '\0') {
+        const int c = std::stoi(pc);
+        switch (c) {
+            case 0: cfg = {false, false, false, 0};    break;  // regular (baseline)
+            case 1: cfg = {false, false, false, 100};  break;  // writer_amp
+            case 2: cfg = {false, true,  false, 100};  break;  // compute_idle
+            case 3: cfg = {true,  true,  false, 100};  break;  // reader_compute_idle
+            case 4: cfg = {true,  false, false, 100};  break;  // reader_idle2
+            default:
+                TT_THROW("POWER_CASE must be in [0, 4], got {}", c);
+        }
+        fmt::print(
+            "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={}\n",
+            c,
+            cfg.disable_reader ? "idle" : "real",
+            cfg.disable_compute ? "idle" : "real",
+            cfg.disable_writer ? "idle" : "real",
+            cfg.write_amplification_pct);
+        return cfg;
+    }
+
+    // No POWER_CASE: fall back to the individual flags for finer manual control.
+    cfg.disable_reader = env_flag("HIGH_POWER_DISABLE_READER");
+    cfg.disable_compute = env_flag("HIGH_POWER_DISABLE_COMPUTE");
+    cfg.disable_writer = env_flag("HIGH_POWER_DISABLE_WRITER");
+    if (const char* amp = std::getenv("HIGH_POWER_WRITE_AMPLIFICATION_PCT");
+        amp != nullptr && *amp != '\0') {
+        cfg.write_amplification_pct = static_cast<uint32_t>(std::stoul(amp));
+    }
+    return cfg;
+}
+
 int main(int argc, char* argv[]) {
     uint32_t M = 256;
     uint32_t N = 256;
@@ -153,6 +210,20 @@ int main(int argc, char* argv[]) {
         fmt::print("Mode: SPLIT total work — tiles divided equally across cores\n");
     }
     fmt::print("Expected FLOPs per full run: {:.2e}\n\n", total_flops);
+
+    const PowerExperimentConfig power_cfg = resolve_power_experiment();
+
+    // The writer normally issues 1 NoC write per output tile while the reader issues 2*Kt reads.
+    // Amplification re-writes the same tile to the same address to load the write-side NoC path
+    // symmetrically; 100% matches the reader's read volume exactly. Correctness is unaffected
+    // (the app never verifies its output).
+    const uint32_t write_repeats = (power_cfg.write_amplification_pct == 0)
+        ? 1u
+        : std::max<uint32_t>(
+              1u,
+              static_cast<uint32_t>(std::lround(
+                  (static_cast<double>(power_cfg.write_amplification_pct) / 100.0) * 2.0 *
+                  static_cast<double>(Kt))));
 
     try {
         constexpr int device_id = 0;
@@ -274,6 +345,21 @@ int main(int argc, char* argv[]) {
                 CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
                     .set_page_size(CBIndex::c_16, single_tile_size));
 
+            // Passed as JIT defines rather than compile-time args so that changing POWER_CASE only
+            // triggers a kernel recompile -- the host binary never needs rebuilding.
+            std::map<std::string, std::string> reader_defines;
+            if (power_cfg.disable_reader) {
+                reader_defines["HIGH_POWER_DISABLE_READER"] = "1";
+            }
+            std::map<std::string, std::string> compute_defines;
+            if (power_cfg.disable_compute) {
+                compute_defines["HIGH_POWER_DISABLE_COMPUTE"] = "1";
+            }
+            std::map<std::string, std::string> writer_defines;
+            if (power_cfg.disable_writer) {
+                writer_defines["HIGH_POWER_DISABLE_WRITER"] = "1";
+            }
+
             std::vector<uint32_t> reader_ct_args;
             TensorAccessorArgs(*src0_dram).append_to(reader_ct_args);
             TensorAccessorArgs(*src1_dram).append_to(reader_ct_args);
@@ -285,7 +371,8 @@ int main(int argc, char* argv[]) {
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_1,
                     .noc = NOC::RISCV_1_default,
-                    .compile_args = reader_ct_args});
+                    .compile_args = reader_ct_args,
+                    .defines = reader_defines});
 
             std::vector<uint32_t> writer_ct_args;
             TensorAccessorArgs(*dst_dram).append_to(writer_ct_args);
@@ -297,13 +384,14 @@ int main(int argc, char* argv[]) {
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
-                    .compile_args = writer_ct_args});
+                    .compile_args = writer_ct_args,
+                    .defines = writer_defines});
 
             auto compute_id = tt_metal::CreateKernel(
                 program,
                 OVERRIDE_KERNEL_PREFIX "high_power_matmul/kernels/compute/mm_power.cpp",
                 all_cores,
-                ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
+                ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .defines = compute_defines});
 
             uint32_t work_offset = 0;
             uint32_t core_linear_idx = 0;
@@ -329,7 +417,8 @@ int main(int argc, char* argv[]) {
 
                         tt_metal::SetRuntimeArgs(
                             program, writer_id, core,
-                            {dst_dram->address(), work_per_core, effective_offset, num_iterations});
+                            {dst_dram->address(), work_per_core, effective_offset, num_iterations,
+                             write_repeats});
 
                         tt_metal::SetRuntimeArgs(
                             program, compute_id, core,
