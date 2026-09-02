@@ -112,8 +112,6 @@ class _RecurrenceComputeConfig:
 
 def _validate_recurrence_geometry(
     inputs: _FlatRecurrenceInputs,
-    *,
-    sequence_parallel_axis: int | None,
 ) -> _RecurrenceGeometry:
     """Validate the flat production contract and derive host-only execution metadata."""
     q_shape = tuple(inputs.q.shape)
@@ -134,8 +132,6 @@ def _validate_recurrence_geometry(
         raise ValueError("flat q/k/v widths must be divisible by the number of heads")
     key_dim = q_shape[2] // heads
     value_dim = v_shape[2] // heads
-    if sequence_parallel_axis not in (None, 0, 1):
-        raise ValueError("sequence_parallel_axis must be 0 or 1")
     if sequence <= 0 or sequence % KDA_CHUNK_SIZE:
         raise ValueError(f"flat KDA recurrence requires T divisible by {KDA_CHUNK_SIZE}")
 
@@ -465,19 +461,9 @@ class _DistributedGroupedScan(_GroupedScan):
         geometry: _RecurrenceGeometry,
         groups_per_head: int,
     ) -> ttnn.Tensor:
-        del grouped_final_states, geometry, groups_per_head
         if strategy_final_state is None:
             raise RuntimeError("distributed grouped KDA scan did not produce a final state")
         return strategy_final_state
-
-
-def _uses_grouped_scan(
-    *,
-    program_config: KDARecurrenceProgramConfig,
-    sequence_parallel_axis: int | None,
-) -> bool:
-    """Return the constructor-fixed local policy; sequence parallelism necessarily uses grouped scan."""
-    return sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
 
 
 def _select_scan(
@@ -486,85 +472,11 @@ def _select_scan(
     compute_config: _RecurrenceComputeConfig,
     sequence_parallel_axis: int | None,
 ) -> _RecurrenceScan:
-    if not _uses_grouped_scan(
-        program_config=program_config,
-        sequence_parallel_axis=sequence_parallel_axis,
-    ):
+    if sequence_parallel_axis is None and program_config.local_scan_strategy != "grouped":
         return _DirectScan(program_config, compute_config)
     if sequence_parallel_axis is None:
         return _LocalGroupedScan(program_config, compute_config)
     return _DistributedGroupedScan(sequence_parallel_axis, program_config, compute_config)
-
-
-def _restore_recurrence_output(scan: _ScanResult, geometry: _RecurrenceGeometry) -> _ScanResult:
-    output = ttnn.reshape(
-        scan.output,
-        (geometry.batch_heads, geometry.sequence, geometry.value_dim),
-    )
-    final_state = ttnn.reshape(
-        scan.final_state,
-        (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim),
-    )
-    return _ScanResult(output=output, final_state=final_state)
-
-
-def _chunk_recurrence(
-    inputs: _FlatRecurrenceInputs,
-    initial_state: ttnn.Tensor,
-    *,
-    compute_config: _RecurrenceComputeConfig,
-    sequence_parallel_axis: int | None,
-    scan_strategy: _RecurrenceScan,
-) -> _ScanResult:
-    """Run the fixed Kimi-K3 recurrence contract through the selected scan strategy."""
-    geometry = _validate_recurrence_geometry(
-        inputs,
-        sequence_parallel_axis=sequence_parallel_axis,
-    )
-    tensors = {
-        "q": inputs.q,
-        "k": inputs.k,
-        "v": inputs.v,
-        "gate": inputs.gate,
-        "beta": inputs.beta,
-        "initial_state": initial_state,
-    }
-    for name, tensor in tensors.items():
-        if tensor.layout != ttnn.TILE_LAYOUT:
-            raise ValueError(f"{name} layout must be TILE_LAYOUT, got {tensor.layout}")
-    expected_dtypes = {
-        "q": KDA_QKV_DTYPE,
-        "k": KDA_QKV_DTYPE,
-        "v": KDA_QKV_DTYPE,
-        "gate": KDA_GATE_DTYPE,
-        "beta": KDA_BETA_DTYPE,
-        "initial_state": KDA_RECURRENT_STATE_DTYPE,
-    }
-    for name, expected_dtype in expected_dtypes.items():
-        actual_dtype = tensors[name].dtype
-        if actual_dtype != expected_dtype:
-            raise ValueError(f"{name} dtype must be {expected_dtype}, got {actual_dtype}")
-    expected_state_shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
-    if tuple(initial_state.shape) != expected_state_shape:
-        raise ValueError(f"initial_state shape {tuple(initial_state.shape)} != {expected_state_shape}")
-    if initial_state.memory_config() != KDA_OUTPUT_MEMORY_CONFIG:
-        raise ValueError("initial_state memory config must be DRAM interleaved")
-
-    state = ttnn.reshape(
-        initial_state,
-        (geometry.batch_heads, geometry.key_dim, geometry.value_dim),
-    )
-    chunk_inputs = _prepare_chunk_inputs(inputs, geometry)
-    prepared = _prepare_chunk_terms(
-        chunk_inputs,
-        geometry,
-        compute_config=compute_config,
-    )
-    scan = scan_strategy.run(prepared, state, geometry)
-    result = _restore_recurrence_output(scan, geometry)
-    assert result.output.dtype == KDA_SCAN_OUTPUT_DTYPE
-    assert result.final_state.dtype == KDA_RECURRENT_STATE_DTYPE
-    return result
 
 
 class KDARecurrence:
@@ -603,7 +515,6 @@ class KDARecurrence:
             affine_prefix=affine_prefix,
             scan=scan,
         )
-        self._sequence_parallel_axis = sequence_parallel_axis
         self._scan_strategy = _select_scan(
             program_config=program_config,
             compute_config=self._compute_config,
@@ -621,14 +532,59 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return ``(new_state, output)`` for directly named recurrence tensors."""
-        result = _chunk_recurrence(
-            _FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta),
+        inputs = _FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta)
+        geometry = _validate_recurrence_geometry(inputs)
+        tensors = {
+            "q": q,
+            "k": k,
+            "v": v,
+            "gate": gate,
+            "beta": beta,
+            "initial_state": initial_state,
+        }
+        for name, tensor in tensors.items():
+            if tensor.layout != ttnn.TILE_LAYOUT:
+                raise ValueError(f"{name} layout must be TILE_LAYOUT, got {tensor.layout}")
+        expected_dtypes = {
+            "q": KDA_QKV_DTYPE,
+            "k": KDA_QKV_DTYPE,
+            "v": KDA_QKV_DTYPE,
+            "gate": KDA_GATE_DTYPE,
+            "beta": KDA_BETA_DTYPE,
+            "initial_state": KDA_RECURRENT_STATE_DTYPE,
+        }
+        for name, expected_dtype in expected_dtypes.items():
+            actual_dtype = tensors[name].dtype
+            if actual_dtype != expected_dtype:
+                raise ValueError(f"{name} dtype must be {expected_dtype}, got {actual_dtype}")
+        expected_state_shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
+        if tuple(initial_state.shape) != expected_state_shape:
+            raise ValueError(f"initial_state shape {tuple(initial_state.shape)} != {expected_state_shape}")
+        if initial_state.memory_config() != KDA_OUTPUT_MEMORY_CONFIG:
+            raise ValueError("initial_state memory config must be DRAM interleaved")
+
+        state = ttnn.reshape(
             initial_state,
-            compute_config=self._compute_config,
-            sequence_parallel_axis=self._sequence_parallel_axis,
-            scan_strategy=self._scan_strategy,
+            (geometry.batch_heads, geometry.key_dim, geometry.value_dim),
         )
-        return result.final_state, result.output
+        chunk_inputs = _prepare_chunk_inputs(inputs, geometry)
+        prepared = _prepare_chunk_terms(
+            chunk_inputs,
+            geometry,
+            compute_config=self._compute_config,
+        )
+        scan = self._scan_strategy.run(prepared, state, geometry)
+        output = ttnn.reshape(
+            scan.output,
+            (geometry.batch_heads, geometry.sequence, geometry.value_dim),
+        )
+        final_state = ttnn.reshape(
+            scan.final_state,
+            (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim),
+        )
+        assert output.dtype == KDA_SCAN_OUTPUT_DTYPE
+        assert final_state.dtype == KDA_RECURRENT_STATE_DTYPE
+        return final_state, output
 
 
 def _distributed_affine_prefix(
