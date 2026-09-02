@@ -103,20 +103,23 @@ struct ScatterPlan {
 
 class Blocking {
 public:
+    // Trailing underscores, matching the definition: every one of these names is also a member, and
+    // the constructor body reads the members unqualified. Dropping the suffix would leave the
+    // parameters shadowing them there.
     Blocking(
-        uint32_t hgroups,
-        uint32_t kgroups,
-        uint32_t emb,
-        uint32_t hidden,
-        uint32_t m_t_max,
-        uint32_t w_tile,
-        uint32_t bfp8_tile,
-        uint32_t bf16_tile,
-        uint32_t x_stick,
-        uint32_t l1_budget,
-        uint32_t out_tile,
-        bool enable_phase_alias,
-        bool x_is_rm);
+        uint32_t hgroups_,
+        uint32_t kgroups_,
+        uint32_t emb_,
+        uint32_t hidden_,
+        uint32_t m_t_max_,
+        uint32_t w_tile_,
+        uint32_t bfp8_tile_,
+        uint32_t bf16_tile_,
+        uint32_t x_stick_,
+        uint32_t l1_budget_,
+        uint32_t out_tile_,
+        bool enable_phase_alias_,
+        bool x_is_rm_);
 
     std::vector<CbView> cb_layout(
         bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
