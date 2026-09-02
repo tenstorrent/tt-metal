@@ -7,14 +7,14 @@
 The runner moves MTP's K token windows from the producer to the rank that runs the levels without a
 host round trip anywhere. Four hardware claims carry it:
 
-1. **The lookahead ids ride the trunk's own H2D row and arrive as their own tensor.** The producer
-   pushes chip ``c`` the single row ``stream[c*L : c*L + L + overhang]`` through ONE H2D socket, and
-   ``inbound_socket_service_sync`` splits it as it copies it out: ``tt_ids`` is the leading ``L`` ids,
-   ``tt_overhang`` the trailing ``overhang``. The trunk tensor must come back byte-identical to the
-   row an MTP-*off* run sends, and the tail must be the ``overhang`` ids that immediately follow it --
-   otherwise level ``k``'s window is off by a chip's worth of positions. This goes through a REAL
-   ``H2DStreamService`` and the real op, with the real ``producer._h2d_rows`` on the far end, so the
-   two ends cannot agree here and disagree in production.
+1. **The producer's three tensors survive ONE H2D socket.** It builds the chunk (``[SP,1,L]``,
+   untouched by MTP), the lookahead (``[SP,1,overhang]``, row ``c`` = ``stream[(c+1)*L : +overhang]``)
+   and the metadata as three separate buffers; the socket carries one global tensor per transfer, so
+   the first two share chip ``c``'s page and ``inbound_socket_service_sync`` splits them apart again
+   as it copies out. ``tt_ids`` must come back byte-identical to what an MTP-*off* run pushes and
+   ``tt_overhang`` must be the ``overhang`` ids that immediately follow it -- otherwise level ``k``'s
+   window is off by a chip's worth of positions. This drives a REAL ``H2DStreamService``, the real op
+   and the real ``producer._push``, so the two ends cannot agree here and disagree in production.
 2. **Two gathers, and the trunk gather IS the model's input.** The union is embedded as two blocks,
    never as one rejoined id row, so the trunk block can be handed to the transformer directly
    (``input_is_embedded``) instead of gathering the same ``L`` rows a second time. The 32-row
@@ -123,12 +123,14 @@ def producer_env(monkeypatch):
     producer._load_env_config()
 
 
-def _producer_rows(tokens: list[int], levels: int):
-    """``producer._h2d_rows`` at a chosen MTP level count -- ``levels=0`` gives the plain-path row."""
+def _producer_tensors(pool: list[int], levels: int):
+    """The producer's two token tensors for the chunk at position 0 of ``pool``, at a chosen MTP level
+    count: ``(chunk [SP,1,L], lookahead [SP,1,overhang] or None)``. ``levels=0`` gives the plain path,
+    whose chunk tensor is the whole push."""
     os.environ["PREFILL_MTP_LEVELS"] = str(levels)
     producer._load_env_config()
     try:
-        return producer._h2d_rows(tokens)
+        return producer._h2d_rows(producer._chunk_slice(pool, 0)), producer._mtp_rows(pool, 0)
     finally:
         os.environ["PREFILL_MTP_LEVELS"] = str(K)
         producer._load_env_config()
@@ -226,10 +228,8 @@ def _cut_stream(stream: torch.Tensor, mesh_device, service=None):
     own = service is None
     service = service or _h2d_service(mesh_device)
     try:
-        rows = _producer_rows(stream.tolist(), K)
-        service.forward_to_tensor_bytes(
-            rows.astype("int32").reshape(SP, 1, UNION_ROWS).copy(), metadata=struct.pack("<III", 0, 0, CHUNK)
-        )
+        chunk_rows, lookahead_rows = _producer_tensors(stream.tolist(), K)
+        producer._push(service, SP * UNION_ROWS * 4, chunk_rows, lookahead_rows, struct.pack("<III", 0, 0, CHUNK))
         tt_ids, tt_overhang, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
             service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=OVERHANG * 4
         )
@@ -257,7 +257,9 @@ def test_h2d_row_cuts_into_the_plain_trunk_and_its_lookahead(mesh_device, stream
     assert list(tt_ids.shape) == [1, 1, L], f"trunk is {tt_ids.shape}, expected the plain-path [1,1,{L}]"
     assert list(tt_overhang.shape) == [1, 1, OVERHANG], f"overhang row is {tt_overhang.shape}"
 
-    plain = torch.from_numpy(_producer_rows(stream[:CHUNK].tolist(), 0).astype("int64"))
+    plain_rows, plain_lookahead = _producer_tensors(stream[:CHUNK].tolist(), 0)
+    assert plain_lookahead is None, "the MTP-off producer must push no lookahead tensor at all"
+    plain = torch.from_numpy(plain_rows.astype("int64"))
     assert plain.shape == (SP, 1, L), f"the MTP-off producer row is {tuple(plain.shape)}"
 
     for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_overhang))):

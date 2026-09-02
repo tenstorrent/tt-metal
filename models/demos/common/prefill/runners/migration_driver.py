@@ -1096,14 +1096,14 @@ def main() -> None:
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, is_last: bool) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        chunk_bytes = producer._chunk_to_host_array(pool[actual_start : actual_start + producer.CHUNK_SIZE])
-        assert (
-            chunk_bytes.nbytes == payload_bytes
-        ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
         logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        service.forward_to_tensor_bytes(
-            chunk_bytes, metadata=producer._pack_metadata(slot_id, actual_start, actual_end, is_last)
+        producer._push(
+            service,
+            payload_bytes,
+            producer._h2d_rows(producer._chunk_slice(pool, actual_start)),
+            producer._mtp_rows(pool, actual_start),
+            producer._pack_metadata(slot_id, actual_start, actual_end, is_last),
         )
         return (time.perf_counter() - push_start) * 1000.0
 
@@ -1213,9 +1213,14 @@ def main() -> None:
     # Optional graceful shutdown: sent LAST, because the UMD read-backs above need the mesh/DRAM alive.
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
-        payload = producer._chunk_to_host_array([1] * producer.CHUNK_SIZE)
         logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        service.forward_to_tensor_bytes(payload, metadata=sentinel)
+        producer._push(
+            service,
+            payload_bytes,
+            producer._h2d_rows(producer._chunk_slice([], 0)),
+            producer._mtp_rows([], 0),
+            sentinel,
+        )
         service.barrier()
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")

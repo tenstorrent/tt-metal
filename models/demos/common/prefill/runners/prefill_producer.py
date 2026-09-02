@@ -99,7 +99,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, mtp_overhang, resolve_trace_dir
+from models.demos.common.prefill.runners.runner_utils import (
+    h2d_row_len,
+    load_trace_token_ids,
+    mtp_overhang,
+    resolve_trace_dir,
+)
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -190,9 +195,9 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    # MTP: with K levels each chip's H2D row is widened by mtp_overhang(K) lookahead ids (still ONE
-    # socket, one push). Must match the runner's PREFILL_MTP_LEVELS, which sizes the same row on the
-    # receiving side; a mismatch shows up as the payload-size assert in _push.
+    # MTP: with K levels the producer pushes a SECOND token tensor of mtp_overhang(K) lookahead ids
+    # per chip (_mtp_rows), on the same socket and the same push. Must match the runner's
+    # PREFILL_MTP_LEVELS, which sizes the receiving side; a mismatch trips the size assert in _push.
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # MTP adds a 4th metadata word, `is_last`. Only the producer knows where the request's real length
     # falls, and on the LAST chunk the ids the MTP windows read past `actual_isl` do not exist -- the
@@ -220,15 +225,18 @@ def _pack_metadata(slot_id: int, actual_start: int, actual_end: int, is_last: bo
     return struct.pack(f"<{len(words)}I", *words)
 
 
-def _push(service, expect_bytes: int, payload, metadata: bytes) -> None:
-    """One page onto one H2D socket, size-checked against what that socket advertised."""
+def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
+    """One push, carrying the producer's three tensors: chunk tokens, MTP lookahead tokens, metadata.
+
+    `tokens` is the `[SP, 1, L]` chunk buffer the plain path has always sent, unchanged by MTP;
+    `mtp_tokens` is the separate `[SP, 1, overhang]` lookahead buffer (None when MTP is off). One H2D
+    socket delivers ONE global tensor per transfer, so the lookahead rides that tensor beside each
+    chip's token row -- the way `metadata` rides the transfer rather than the row -- and
+    `inbound_socket_service_sync` hands the runner all three back as separate tensors.
+    """
+    payload = tokens if mtp_tokens is None else np.concatenate([tokens, mtp_tokens], axis=-1)
     assert payload.nbytes == expect_bytes, f"payload {payload.nbytes}B != service-expected {expect_bytes}B"
     service.forward_to_tensor_bytes(payload, metadata=metadata)
-
-
-def _chunk_len() -> int:
-    """Tokens `_chunk_slice` must hand back: the chunk itself plus the MTP overhang past its edge."""
-    return CHUNK_SIZE + mtp_overhang(MTP_LEVELS)
 
 
 def _to_host_array(rows) -> "np.ndarray":
@@ -237,42 +245,51 @@ def _to_host_array(rows) -> "np.ndarray":
     return rows.to(torch.uint32).contiguous().numpy()
 
 
-def _h2d_rows(tokens):
-    """The ONE H2D tensor: `[SP, 1, L + overhang]`, row c holding `tokens[c*L : c*L + L + overhang]`.
+def _pool_slice(pool, start: int, count: int):
+    """`count` ids of `pool` from `start`, right-padded with pad id 1 (_load_token_pool's own filler).
 
-    Block-cyclic / chip-major, matching the runner's prepare_prefill_input_tensor. With MTP off
-    `overhang` is 0 and the rows are the disjoint `[c*L, (c+1)*L)` shards this has always sent.
-
-    With MTP on each row runs `overhang` ids PAST its own shard, into what is chip c+1's trunk (and,
-    for the last chip, into the next chunk). That overlap is the whole trick: the runner cuts the row
-    at L, so chip c's trunk is untouched, while its lookahead rows are the ids that immediately
-    follow it -- which is what lets MTP level k read the SAME local slice `[k, k+L)` on every chip,
-    with no SP ring-shift and no cross-chip rotation. It costs `overhang` re-sent ids per chip.
-
-    `unfold(0, row, L)` is exactly that: SP windows of width `row` at stride L. It is a view;
-    `_to_host_array` materializes it.
+    Only the last chip's lookahead can run past a pool sized to a whole number of chunks, and those
+    ids are read only by MTP levels whose window extends past the request's real length -- rows the
+    transformer's own right-padding already discards.
     """
-    sp = GLOBAL_MESH_SHAPE[0]
-    stride = CHUNK_SIZE // sp
-    row = stride + mtp_overhang(MTP_LEVELS)
-    assert len(tokens) == _chunk_len(), f"expected {_chunk_len()} tokens, got {len(tokens)}"
-    flat = torch.tensor(tokens, dtype=torch.int64)
-    rows = flat.unfold(0, row, stride).unsqueeze(1)
-    assert rows.shape == (sp, 1, row), f"built {tuple(rows.shape)} rows, expected {(sp, 1, row)}"
-    return _to_host_array(rows)
+    ids = list(pool[start : start + count])
+    return ids + [1] * (count - len(ids))
 
 
 def _chunk_slice(pool, actual_start: int):
-    """This chunk's `_chunk_len()` tokens out of `pool`, right-padded if the pool ends first.
+    """This chunk's CHUNK_SIZE tokens out of `pool`, right-padded if the pool ends first."""
+    return _pool_slice(pool, actual_start, CHUNK_SIZE)
 
-    Only the MTP overhang can run past a pool sized to a whole number of chunks, and those tokens are
-    read only by MTP levels whose window extends past the request's real length -- rows the
-    transformer's own right-padding already discards. (The overhang is K rounded up to a tile, so most
-    of it is transport padding no level reads at all.) Pad id 1 matches _load_token_pool's own filler.
+
+def _h2d_rows(tokens):
+    """The chunk tensor: `[SP, 1, L]`, row c holding `tokens[c*L : (c+1)*L]`.
+
+    Block-cyclic / chip-major, matching the runner's prepare_prefill_input_tensor. MTP does not widen
+    it -- the lookahead ids are `_mtp_rows`, a tensor of their own -- so an MTP run pushes the model
+    byte-identical trunk ids to a plain one.
     """
-    want = _chunk_len()
-    tokens = list(pool[actual_start : actual_start + want])
-    return tokens + [1] * (want - len(tokens))
+    sp = GLOBAL_MESH_SHAPE[0]
+    stride = h2d_row_len(CHUNK_SIZE, sp)
+    assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
+    return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
+
+
+def _mtp_rows(pool, actual_start: int):
+    """The MTP lookahead tensor: `[SP, 1, overhang]`, row c holding the ids that follow chip c's
+    shard -- `stream[(c+1)*L : (c+1)*L + overhang]`. None when MTP is off.
+
+    Only the LAST chip's row reaches past this chunk; the other sp-1 take theirs from inside it. That
+    overlap is the whole trick: `chunk_row ++ lookahead_row` is the contiguous
+    `stream[c*L : c*L + L + overhang]`, so MTP level k reads the SAME local slice `[k, k+L)` on every
+    chip, with no SP ring-shift and no cross-chip rotation. It costs `overhang` re-sent ids per chip.
+    """
+    overhang = mtp_overhang(MTP_LEVELS)
+    if not overhang:
+        return None
+    sp = GLOBAL_MESH_SHAPE[0]
+    stride = h2d_row_len(CHUNK_SIZE, sp)
+    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, overhang) for c in range(sp)]
+    return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1618,7 @@ def main() -> None:
         metadata = _pack_metadata(slot_id, actual_start, actual_end, is_last)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        _push(service, payload_bytes, _h2d_rows(tokens), metadata)
+        _push(service, payload_bytes, _h2d_rows(tokens), _mtp_rows(pool, actual_start), metadata)
         return (time.perf_counter() - push_start) * 1000.0
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1655,10 +1672,9 @@ def main() -> None:
         nwords = CHUNK_METADATA_SIZE_BYTES // 4
         sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
         assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
-        # contents ignored by the runner; size must match.
-        pad_tokens = [1] * _chunk_len()
+        # contents ignored by the runner; size must match. An empty pool pads both tensors.
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        _push(service, payload_bytes, _h2d_rows(pad_tokens), sentinel)
+        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
         service.barrier()  # drain the sentinel before releasing the descriptor
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:
