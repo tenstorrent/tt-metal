@@ -49,13 +49,19 @@ def _round_up_to_tile(n: int) -> int:
     return ((n + 31) // 32) * 32
 
 
-def _fold_cameras_into_batch(tensor, bs: int, num_cams: int, seq_len: int, embed_dims: int):
+def fold_cameras_into_batch(tensor, bs: int, num_cams: int, seq_len: int, embed_dims: int):
     """``[num_cams, seq_len, bs, embed_dims]`` -> ``[bs * num_cams, seq_len, embed_dims]``.
 
     Done in ROW_MAJOR. ``bs`` arrives second-to-last, so a tiled input pads it to a full tile — 32x
     the buffer at bs=1, on the largest tensor in the layer. The folded shape is tile-clean, so
     converting after the fold is the cheap direction; converting before it is not.
+
+    A rank-3 tensor is already folded and passes through. The camera features are one buffer shared
+    by every encoder layer, so the encoder folds them once and hands each layer the result.
     """
+    if len(tensor.shape) == 3:
+        return tensor
+
     folded = ttnn.permute(ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), (2, 0, 1, 3))
     folded = ttnn.reshape(folded, (bs * num_cams, seq_len, embed_dims))
     return ttnn.to_layout(folded, ttnn.TILE_LAYOUT)
@@ -303,7 +309,8 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Complete")
 
-        _, L, _, _ = key.shape
+        # Index 1 is the sequence length whether or not the cameras are already folded in.
+        L = key.shape[1]
 
         # Validate spatial shapes consistency to prevent incorrect sampling locations
         if spatial_shapes is not None:
@@ -319,9 +326,9 @@ class TTSpatialCrossAttention:
 
         # Callers routinely pass one tensor as both key and value; the fold is the most expensive
         # reshape in the layer, so it is not worth doing twice for the same buffer.
-        key_reshaped = _fold_cameras_into_batch(key, bs, self.num_cams, L, self.embed_dims)
+        key_reshaped = fold_cameras_into_batch(key, bs, self.num_cams, L, self.embed_dims)
         value_reshaped = (
-            key_reshaped if value is key else _fold_cameras_into_batch(value, bs, self.num_cams, L, self.embed_dims)
+            key_reshaped if value is key else fold_cameras_into_batch(value, bs, self.num_cams, L, self.embed_dims)
         )
 
         if ENABLE_LOGGING:

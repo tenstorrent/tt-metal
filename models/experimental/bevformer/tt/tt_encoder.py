@@ -15,7 +15,7 @@ import ttnn
 import torch
 from typing import Optional, List, Dict, Any
 
-from .tt_spatial_cross_attention import TTSpatialCrossAttention
+from .tt_spatial_cross_attention import TTSpatialCrossAttention, fold_cameras_into_batch
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -471,6 +471,19 @@ class TTBEVFormerEncoder:
 
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Complete")
+
+        # Every layer's spatial cross attention wants the cameras folded into the batch, and the
+        # camera features are the same buffer for all of them — the fold is the layer's most
+        # expensive layout op, so it is paid once here rather than once per layer.
+        if key is not None:
+            num_cams, key_len, key_bs, key_embed = key.shape
+            folded_key = fold_cameras_into_batch(key, key_bs, num_cams, key_len, key_embed)
+            value = (
+                folded_key
+                if value is None or value is key
+                else fold_cameras_into_batch(value, key_bs, num_cams, key_len, key_embed)
+            )
+            key = folded_key
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
