@@ -482,7 +482,12 @@ MESH = [
 # (1.87x at axis 0, 2.20x at axis 1), and `cpu_vs_device.py` scores sharded at the same PSNR as single
 # device (81.89 vs 81.99 dB at the constructed defaults): sharding buys latency, not accuracy.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
-KNOWN_BROKEN: set[tuple[int, int]] = set()
+# (8, 1): at factor 8 each shard holds ~26 of the 207 T-rows -- too few for the HEIGHT_SHARDED
+# depthwise resample conv1d to spread over the core grid, so the DRAM auto-slicer cannot fit its
+# C*K-wide activation block in L1 (it hard-throws instead of taking the C-chunk/MAC fallback).
+# Factor 4 (~52 rows) fits. Production runs the audio decoder unsharded, so this path is unused;
+# left as a known limit of factor-8 audio T-sharding rather than a blocker.
+KNOWN_BROKEN: set[tuple[int, int]] = {(8, 1)}
 
 
 def _build(mesh_device, config, converted, parallel_config, ccl_manager):
