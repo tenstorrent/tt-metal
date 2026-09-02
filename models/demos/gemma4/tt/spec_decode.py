@@ -391,6 +391,65 @@ class SpeculativeDecoder:
             return P
         return 1
 
+    def _fast_host_enabled(self):
+        """One packed H2D + one accept D2H per fused iter (default).
+
+        Production packed verify (batch-SDPA + seq-KV) has no TILE masks / embed /
+        hot pages to refresh, so the inter-replay host path only needs the next
+        token and the P consecutive positions. ``GEMMA4_SPEC_FAST_HOST=0``
+        restores the older per-tensor copies and dual ``to_torch`` reads.
+        """
+        if os.environ.get("GEMMA4_SPEC_FAST_HOST", "1").lower() in ("0", "false", "no", "off"):
+            return False
+        return self._batch_sdpa_enabled() and self._seq_kv_enabled()
+
+    def _mesh0_to_torch(self, tensor):
+        if self._tp > 1:
+            return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+        return ttnn.to_torch(tensor)
+
+    def _io_pack_torch(self, token, pos, P, buf=None):
+        n = 1 + P
+        if buf is None or buf.shape[-1] != n:
+            buf = torch.zeros(1, n, dtype=torch.int64)
+        buf[0, 0] = int(token)
+        buf[0, 1:] = torch.arange(int(pos), int(pos) + P, dtype=torch.int64)
+        return buf
+
+    def _unpack_fused_io(self, tr):
+        """Derive fused inputs from ``tr['io_pack']`` [1, 1+P] uint32: token + v_pos."""
+        pack = tr["io_pack"]
+        P = int(tr["P"])
+        anchor_tok = ttnn.slice(pack, [0, 0], [1, 1])
+        pos_u = ttnn.slice(pack, [0, 1], [1, 2])
+        v_pos = ttnn.slice(pack, [0, 1], [1, 1 + P])
+        d_pu = ttnn.concat([pos_u, tr["d_pu_tail"]], dim=1)
+        d_pi = ttnn.typecast(ttnn.reshape(pos_u, (1,)), ttnn.int32)
+        v_pos_cache = ttnn.typecast(ttnn.reshape(v_pos, (P,)), ttnn.int32)
+        return anchor_tok, d_pu, d_pi, v_pos, v_pos_cache
+
+    def _stage_fused_io_pack(self, tr, token, pos):
+        buf = self._io_pack_torch(token, pos, int(tr["P"]), tr.get("_io_torch"))
+        tr["_io_torch"] = buf
+        host = self._pv_from_torch(buf, ttnn.uint32, device=False)
+        ttnn.copy_host_to_device_tensor(host, tr["io_pack"])
+        host.deallocate(True)
+
+    def _accept_ids_from_trace(self, tr):
+        """One D2H of concat([verify_x, vidx]) → (vx_flat, target_ids)."""
+        K = self.draft_len
+        nv = int(tr["accept_n_vx"])
+        host = tr.get("accept_host")
+        if host is not None:
+            ttnn.copy_device_to_host_tensor(tr["accept"], host)
+            t = self._mesh0_to_torch(host)
+        else:
+            t = self._mesh0_to_torch(tr["accept"])
+        flat = t.reshape(-1)
+        vx = flat[:nv]
+        target_ids = [int(flat[nv + j]) for j in range(K + 1)]
+        return vx, target_ids
+
     def _pv_seed_staging(self, c):
         """Seed every layer's staging block-slot 0 with the committed content of
         the hot block at position ``c`` (read from the cache — the only
@@ -1183,12 +1242,17 @@ class SpeculativeDecoder:
         shift-seed copy between replays."""
         K = self.draft_len
         page_tables = {lt: tr["d_pt"] for lt in self._shared_kv}
-        tok = tr["anchor_tok"]
+        if "io_pack" in tr:
+            anchor_tok, d_pu, d_pi, v_pos, v_pos_cache = self._unpack_fused_io(tr)
+        else:
+            anchor_tok, d_pu, d_pi = tr["anchor_tok"], tr["d_pu"], tr["d_pi"]
+            v_pos, v_pos_cache = tr["v_pos"], tr.get("v_pos_cache")
+        tok = anchor_tok
         if self._fused_reseed:
             seed_logits, h = self.target.ttnn_verify_forward(
-                x=tr["anchor_tok"],
-                current_pos=tr["d_pu"],
-                current_pos_cache=tr["d_pi"],
+                x=anchor_tok,
+                current_pos=d_pu,
+                current_pos_cache=d_pi,
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
             )
@@ -1198,7 +1262,7 @@ class SpeculativeDecoder:
             h = tr["h"]
         draft_ids = []
         for _ in range(K):
-            idx, h = self._greedy_draft_idx(tok, h, page_tables, tr["d_pu"], tr["d_pi"], rows=1)
+            idx, h = self._greedy_draft_idx(tok, h, page_tables, d_pu, d_pi, rows=1)
             tok = ttnn.reshape(idx, (1, 1))  # [1,1] uint32 RM
             draft_ids.append(tok)
         # In exact-reseed mode, the seed forward already computed row 0
@@ -1206,13 +1270,13 @@ class SpeculativeDecoder:
         # drafter reads shared KV. Verify only the draft tokens at p+1..p+K and
         # prepend seed_idx to form target_ids[0..K]. In shift mode, keep the old
         # single verify batch [anchor, d0..dK-1].
-        verify_inputs = draft_ids if self._fused_reseed else [tr["anchor_tok"]] + draft_ids
+        verify_inputs = draft_ids if self._fused_reseed else [anchor_tok] + draft_ids
         verify_x = ttnn.concat(verify_inputs, dim=1)  # reseed: [1,K], shift: [1,K+1]
         P = K if self._fused_reseed else K + 1
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
-            position_idx=tr["v_pos"],
-            position_idx_cache=tr.get("v_pos_cache"),
+            position_idx=v_pos,
+            position_idx_cache=v_pos_cache,
             attn_mask_full=tr.get("mask_full"),
             attn_mask_sliding=tr.get("mask_slide"),
             packed_p=P,
@@ -1237,7 +1301,10 @@ class SpeculativeDecoder:
         # into the same graph as the K drafter steps.
         hd = int(vhidden.shape[-1])
         h_rows = [ttnn.slice(vhidden, [0, 0, r, 0], [1, 1, r + 1, hd]) for r in range(tail_rows)]
-        return verify_x, vidx, vhidden, h_rows
+        vx_f = ttnn.reshape(verify_x, (1, int(verify_x.shape[-1])))
+        vidx_f = ttnn.reshape(vidx, (1, int(vidx.shape[-1])))
+        accept = ttnn.concat([vx_f, vidx_f], dim=1)
+        return verify_x, vidx, vhidden, h_rows, accept
 
     def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos):
         """Capture ONE fused iteration at the real first-call inputs.
@@ -1248,45 +1315,66 @@ class SpeculativeDecoder:
         with the SAME tokens (deterministic), so the writes are idempotent."""
         from loguru import logger as _lg
 
-        c, P, h = self._fused_pv_prepare(anchor_pos)
-        d_pu, d_pi = self._pos_tensors([anchor_pos])
-        tr = {
-            "anchor_tok": self._tokens_tensor([anchor_token]),
-            "h": ttnn.clone(anchor_hidden),
-            "d_pu": d_pu,
-            "d_pi": d_pi,
-            "d_pt": self._page_table(1),
-            "v_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": (
-                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_full"] is not None
-                else None
-            ),
-            "mask_slide": (
-                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_slide"] is not None
-                else None
-            ),
-            "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
-            "v_pt": self._page_table(self._pv_page_table_batch(P)),
-            "S_k": h["S_k"],
-            "P": P,
-            "c": c,
-        }
-        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
-            tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        if self._fast_host_enabled():
+            c, P = self._fused_verify_c_p(anchor_pos)
+            self._pv_setup()
+            io_torch = self._io_pack_torch(anchor_token, anchor_pos, P)
+            tr = {
+                "h": ttnn.clone(anchor_hidden),
+                "d_pt": self._page_table(1),
+                "io_pack": self._pv_from_torch(io_torch, ttnn.uint32),
+                "d_pu_tail": self._pv_from_torch(torch.zeros(1, 31, dtype=torch.int64), ttnn.uint32),
+                "mask_full": None,
+                "mask_slide": None,
+                "embed": {},
+                "hot": None,
+                "v_pt": self._page_table(self._pv_page_table_batch(P)),
+                "S_k": 0,
+                "P": P,
+                "c": c,
+                "_io_torch": io_torch,
+            }
+        else:
+            c, P, h = self._fused_pv_prepare(anchor_pos)
+            d_pu, d_pi = self._pos_tensors([anchor_pos])
+            tr = {
+                "anchor_tok": self._tokens_tensor([anchor_token]),
+                "h": ttnn.clone(anchor_hidden),
+                "d_pu": d_pu,
+                "d_pi": d_pi,
+                "d_pt": self._page_table(1),
+                "v_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
+                "mask_full": (
+                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                    if h["mask_full"] is not None
+                    else None
+                ),
+                "mask_slide": (
+                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                    if h["mask_slide"] is not None
+                    else None
+                ),
+                "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
+                "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+                "v_pt": self._page_table(self._pv_page_table_batch(P)),
+                "S_k": h["S_k"],
+                "P": P,
+                "c": c,
+            }
+            if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+                tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         _lg.info("[spec-trace] capture fused: compile run")
-        vx, vidx, vh, h_rows = self._fused_body(tr)
+        vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
         vx.deallocate(True)
         vidx.deallocate(True)
         vh.deallocate(True)
+        accept.deallocate(True)
         for r in h_rows:
             r.deallocate(True)
         _lg.info("[spec-trace] capture fused: begin_trace_capture")
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        vx, vidx, vh, h_rows = self._fused_body(tr)
+        vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         _lg.info("[spec-trace] capture fused: DONE")
         tr["id"] = tid
@@ -1294,6 +1382,9 @@ class SpeculativeDecoder:
         tr["vidx"] = vidx
         tr["vhidden"] = vh
         tr["h_rows"] = h_rows
+        tr["accept"] = accept
+        tr["accept_n_vx"] = int(vx.shape[-1])
+        tr["accept_host"] = ttnn.allocate_tensor_on_host(accept.spec, self.mesh_device)
         self._fused_trace = tr
         # Compile + capture already wrote this iteration's packed KV; keep the
         # staging rollover index in sync with a real packed verify.
@@ -1380,23 +1471,26 @@ class SpeculativeDecoder:
         replay_t0 = time.perf_counter()
         while len(out) < max_new_tokens:
             if not first:
-                c, P, h = self._fused_pv_prepare(cur_pos)
-                if h["S_k"] != tr["S_k"] and not self._batch_sdpa_enabled():
-                    # Mask key-length bucket rolled; recapture at the new shape.
-                    # Batch-SDPA has no S_k-shaped masks, so skip this cliff.
-                    # tr["h"] already holds this iter's shift seed.
-                    self._capture_fused_trace(cur_token, tr["h"], cur_pos)
-                    tr = self._fused_trace
+                if "io_pack" in tr:
+                    self._stage_fused_io_pack(tr, cur_token, cur_pos)
                 else:
-                    h_tok = self._host_tokens([cur_token])
-                    ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
-                    h_tok.deallocate(True)
-                    d_hpu, d_hpi = self._host_pos([cur_pos])
-                    ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
-                    ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
-                    d_hpu.deallocate(True)
-                    d_hpi.deallocate(True)
-                    self._copy_pv_into_tr(tr, h)
+                    c, P, h = self._fused_pv_prepare(cur_pos)
+                    if h["S_k"] != tr["S_k"] and not self._batch_sdpa_enabled():
+                        # Mask key-length bucket rolled; recapture at the new shape.
+                        # Batch-SDPA has no S_k-shaped masks, so skip this cliff.
+                        # tr["h"] already holds this iter's shift seed.
+                        self._capture_fused_trace(cur_token, tr["h"], cur_pos)
+                        tr = self._fused_trace
+                    else:
+                        h_tok = self._host_tokens([cur_token])
+                        ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
+                        h_tok.deallocate(True)
+                        d_hpu, d_hpi = self._host_pos([cur_pos])
+                        ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
+                        ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
+                        d_hpu.deallocate(True)
+                        d_hpi.deallocate(True)
+                        self._copy_pv_into_tr(tr, h)
                 # In reseed mode the trace computes the exact seed internally.
                 # Otherwise tr["h"] already holds this iter's approximate seed
                 # (set at the end of the previous iteration).
@@ -1407,14 +1501,9 @@ class SpeculativeDecoder:
             c, _P = self._fused_verify_c_p(cur_pos)
             self._pv_a_prev = c // self._pv_bs
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            )
+            vx, target_ids = self._accept_ids_from_trace(tr)
             vx = vx.reshape(-1)
             drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
-            target_ids = self._ids_to_host(tr["vidx"], K + 1)
             m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
             committed = drafts[:m] + [target_ids[m]]
             accepts.append(m)
