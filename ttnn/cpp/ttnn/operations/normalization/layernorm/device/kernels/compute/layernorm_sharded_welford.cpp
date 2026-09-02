@@ -407,12 +407,13 @@ void kernel_main() {
         // centred second pass can reuse them without another unpack.
         if (num_full_welford_tiles > 0) {
             transpose_tile(dfb_x_welford_id, index_h_offset, retained_welford_input_dst);
-            two_pass_stats_update_shifted_rows<false, true>(retained_welford_input_dst, 0, tile_width);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                retained_welford_input_dst, 0, tile_width);
         }
         for (uint32_t w = 1; w < num_full_welford_tiles; ++w) {
             const uint32_t stats_input_dst = w < 3 ? w : welford_input_dst;
             transpose_tile(dfb_x_welford_id, w + index_h_offset, stats_input_dst);
-            two_pass_stats_update_shifted_rows<false>(stats_input_dst, 0, tile_width);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(stats_input_dst, 0, tile_width);
         }
         // Do the partial statistics tile, if any. It is the tile immediately after this core's full tiles
         // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
@@ -425,9 +426,11 @@ void kernel_main() {
                     : welford_input_dst;
             transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, stats_input_dst);
             if (num_full_welford_tiles == 0) {
-                two_pass_stats_update_shifted_rows<false, true>(stats_input_dst, 0, partial_welford_tile_w);
+                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                    stats_input_dst, 0, partial_welford_tile_w);
             } else {
-                two_pass_stats_update_shifted_rows<false>(stats_input_dst, 0, partial_welford_tile_w);
+                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(
+                    stats_input_dst, 0, partial_welford_tile_w);
             }
         }
         two_pass_stats_finish_shifted_mean((*p_reciprocals)[partial_reduce_W - 1]);

@@ -173,17 +173,18 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_stats_input, i, input_dst);
-            two_pass_stats_update_shifted_rows<false, true>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                input_dst, 0, rows);
             block_n += rows;
         }
         for (uint32_t i = 1; i < block.size(); ++i) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_stats_input, i, input_dst);
-            two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_shifted_mean<true, true>(reciprocal_lut[block_n - 1]);
+        two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_lut[block_n - 1]);
 
         for (auto i : block.local()) {
             const uint32_t global_tile = block.to_global(i);
@@ -253,10 +254,10 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     copy_tile(dfb_ex2_welford, 0, var_dst);
     welford_restore_state(mean_dst);
     if constexpr (fp32_sfpu_finalizer) {
-        two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+        two_pass_stats_finalize_to_row<false /* dual_m2 */>(mean_dst, reciprocal_lut[W - 1]);
     } else {
         two_pass_stats_restore_anchor_from_state(mean_dst);
-        two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+        two_pass_stats_finalize_split_mean_to_row<false /* dual_m2 */>(mean_dst, reciprocal_lut[W - 1]);
     }
     tile_regs_commit();
     dfb_ex_obj.pop_front(1);
@@ -318,17 +319,18 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_x_welford, i, input_dst);
-            two_pass_stats_update_shifted_rows<false, true>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                input_dst, 0, rows);
             block_n += rows;
         }
         for (uint32_t i = 1; i < block.size(); ++i) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_x_welford, i, input_dst);
-            two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_shifted_mean<true, true>(reciprocal_lut[block_n - 1]);
+        two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_lut[block_n - 1]);
 
         // The block remains at the CB front, so the second SFPU traversal is
         // an L1 reread rather than another DRAM traversal.
@@ -363,10 +365,10 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     welford_restore_state(mean_dst);
     if constexpr (fp32_sfpu_finalizer) {
-        two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+        two_pass_stats_finalize_to_row<false /* dual_m2 */>(mean_dst, reciprocal_lut[W - 1]);
     } else {
         two_pass_stats_restore_anchor(anchor_dst);
-        two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+        two_pass_stats_finalize_split_mean_to_row<false /* dual_m2 */>(mean_dst, reciprocal_lut[W - 1]);
     }
     tile_regs_commit();
 }

@@ -205,7 +205,7 @@ void kernel_main() {
         for (std::uint32_t i = 0; i < block_h; ++i) {
             if constexpr (num_groups > 1) {
                 if (i > 0) {
-                    two_pass_stats_switch_group<false>(mean_dst, active_group, 0);
+                    two_pass_stats_switch_group<false /* dual_accumulator */>(mean_dst, active_group, 0);
                     active_group = 0;
                 }
             }
@@ -237,11 +237,15 @@ void kernel_main() {
                     std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     if (i == 0 && channels_left == num_channels_per_group) {
-                        two_pass_stats_update_shifted_rows<false, true, num_groups == 1>(
-                            input_dst, group_offset, cols_consumed);
+                        two_pass_stats_update_shifted_rows<
+                            false /* accumulate_m2 */,
+                            true /* initialize_anchor */,
+                            num_groups == 1 /* dual_accumulator */>(input_dst, group_offset, cols_consumed);
                     } else {
-                        two_pass_stats_update_shifted_rows<false, false, num_groups == 1>(
-                            input_dst, group_offset, cols_consumed);
+                        two_pass_stats_update_shifted_rows<
+                            false /* accumulate_m2 */,
+                            false /* initialize_anchor */,
+                            num_groups == 1 /* dual_accumulator */>(input_dst, group_offset, cols_consumed);
                     }
 
                     channels_left -= cols_consumed;
@@ -259,7 +263,7 @@ void kernel_main() {
                     // We update the min_group so we never revisit this group again.
                     ++min_group;
                     if (min_group < num_groups) {
-                        two_pass_stats_switch_group<false>(mean_dst, active_group, min_group);
+                        two_pass_stats_switch_group<false /* dual_accumulator */>(mean_dst, active_group, min_group);
                         active_group = min_group;
                     }
                     channels_left = num_channels_per_group;
@@ -276,18 +280,18 @@ void kernel_main() {
 
         // Convert shifted sums to means, ending with group 0 resident in LREGs so
         // the second pass can begin without another save/restore pair.
-        two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
+        two_pass_stats_finish_shifted_mean<num_groups == 1 /* dual_sum */>(sfpu_two_pass_reciprocal);
         if constexpr (num_groups > 1) {
             welford_save_state(mean_dst, active_group);
         }
         for (std::uint32_t g = 1; g + 1 < num_groups; ++g) {
             welford_restore_state(mean_dst, g);
-            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1 /* dual_sum */>(sfpu_two_pass_reciprocal);
             welford_save_state(mean_dst, g);
         }
         if constexpr (num_groups > 1) {
             welford_restore_state(mean_dst, 0);
-            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1 /* dual_sum */>(sfpu_two_pass_reciprocal);
         }
 
         // Second pass: accumulate centered squared residuals in FP32 SFPU.
@@ -296,7 +300,7 @@ void kernel_main() {
         for (std::uint32_t i = 0; i < block_h; ++i) {
             if constexpr (num_groups > 1) {
                 if (i > 0) {
-                    two_pass_stats_switch_group<false>(mean_dst, active_group, 0);
+                    two_pass_stats_switch_group<false /* dual_accumulator */>(mean_dst, active_group, 0);
                     active_group = 0;
                 }
             }
@@ -314,7 +318,7 @@ void kernel_main() {
                 for (std::uint32_t g = min_group; g < num_groups; ++g) {
                     const std::uint32_t cols_available = tile_width - group_offset;
                     const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
-                    two_pass_stats_update_rows<num_groups == 1>(input_dst, group_offset, cols_consumed);
+                    two_pass_stats_update_rows<num_groups == 1 /* dual_m2 */>(input_dst, group_offset, cols_consumed);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
                     if (channels_left > 0) {
@@ -322,7 +326,7 @@ void kernel_main() {
                     }
                     ++min_group;
                     if (min_group < num_groups) {
-                        two_pass_stats_switch_group<false>(mean_dst, active_group, min_group);
+                        two_pass_stats_switch_group<false /* dual_accumulator */>(mean_dst, active_group, min_group);
                         active_group = min_group;
                     }
                     channels_left = num_channels_per_group;
@@ -335,16 +339,18 @@ void kernel_main() {
         }
         // Finalize the resident last group before loading the others.
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
-        two_pass_stats_finalize_and_combine_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+        two_pass_stats_finalize_and_combine_to_face<num_groups == 1 /* dual_m2 */>(
+            mean_dst, active_group, sfpu_two_pass_reciprocal);
 #else
-        two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+        two_pass_stats_finalize_to_face<num_groups == 1 /* dual_m2 */>(
+            mean_dst, active_group, sfpu_two_pass_reciprocal);
 #endif
         for (std::uint32_t g = 0; g + 1 < num_groups; ++g) {
             welford_restore_state(mean_dst, g);
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
-            two_pass_stats_finalize_and_combine_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
+            two_pass_stats_finalize_and_combine_to_face<false /* dual_m2 */>(mean_dst, g, sfpu_two_pass_reciprocal);
 #else
-            two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
+            two_pass_stats_finalize_to_face<false /* dual_m2 */>(mean_dst, g, sfpu_two_pass_reciprocal);
 #endif
         }
 

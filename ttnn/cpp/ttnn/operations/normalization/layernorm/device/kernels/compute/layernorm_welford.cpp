@@ -215,9 +215,10 @@ void kernel_main() {
             const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
             transpose_tile(dfb_x_welford, wt, stats_input_dst);
             if (wt == 0) {
-                two_pass_stats_update_shifted_rows<false, true>(stats_input_dst, 0, tile_width);
+                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                    stats_input_dst, 0, tile_width);
             } else {
-                two_pass_stats_update_shifted_rows<false>(stats_input_dst, 0, tile_width);
+                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(stats_input_dst, 0, tile_width);
             }
         }
 
@@ -235,11 +236,12 @@ void kernel_main() {
             last_tile_idx < 3 ? (last_tile_idx == 0 ? retained_input_dst : last_tile_idx) : input_dst;
         transpose_tile(dfb_x_welford, Wt - 1, last_pass1_dst);
         if constexpr (Wt == 1) {
-            two_pass_stats_update_shifted_rows<false, true>(last_pass1_dst, 0, last_tile_rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                last_pass1_dst, 0, last_tile_rows);
         } else {
-            two_pass_stats_update_shifted_rows<false>(last_pass1_dst, 0, last_tile_rows);
+            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(last_pass1_dst, 0, last_tile_rows);
         }
-        two_pass_stats_finish_shifted_mean<true, true>(reciprocal_w);
+        two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_w);
 
         constexpr uint32_t num_front_retained = Wt < 3 ? Wt : 3;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
