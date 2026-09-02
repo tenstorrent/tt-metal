@@ -133,7 +133,7 @@ two independent processes stop writing at the *same instant*, there are zero
 to the card**, which cannot be software-timed-out → VM lockup → watchdog reboot.
 
 **Repro.** Not deterministic. Reproduced on **bh-05 (2026-08-06)** during a DRISC
-perf-debug profiler sweep: box went down mid-sweep, `last -x` showed `crash` with no `shutdown` in the
+streaming profiler sweep: box went down mid-sweep, `last -x` showed `crash` with no `shutdown` in the
 following boot. Run a long DRISC sweep and watch for the signature.
 
 **Catch the mechanism instead of guessing:**

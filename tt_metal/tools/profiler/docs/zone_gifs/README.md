@@ -23,14 +23,14 @@ void kernel_main() {
 }
 ```
 
-Host callback — a zone arrives as ONE record, whole, when it closes:
+Host callback — a zone arrives as one record, whole, when it closes:
 
 ```cpp
-perf_debug::ZoneNameMirror names;   // id -> name; grows as kernels JIT-load
-auto h = perf_debug::register_consumer("zone-sink", [&](const perf_debug::PerfDebugRecordBatch& b) {
+streaming_profiler::ZoneNameMirror names;   // id -> name; grows as kernels JIT-load
+auto h = streaming_profiler::register_consumer("zone-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
     names.refresh();
     for (const auto& r : b.records) {
-        if (r.meta.type != perf_debug::PerfDebugRecType::Zone) continue;
+        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Zone) continue;
         fmt::print("{}: start={} dur={} cycles (lane {}, op {})\n",
             names.lookup(r.id),          // "compute"
             r.data.zone.start, r.data.zone.duration, r.meta.lane, r.prog);
@@ -63,14 +63,14 @@ A 64-bit value like this one fits entirely in the `Ext`; `Cont` records appear o
 past two words (one uint64 each, words 3 and up):
 
 ```cpp
-auto h = perf_debug::register_consumer("data-sink", [&](const perf_debug::PerfDebugRecordBatch& b) {
+auto h = streaming_profiler::register_consumer("data-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
     names.refresh();
     for (const auto& r : b.records) {
         switch (r.meta.type) {
-            case perf_debug::PerfDebugRecType::Data:  // marker: name id + device timestamp
+            case streaming_profiler::StreamingProfilerRecType::Data:  // marker: name id + device timestamp
                 pending = {names.lookup(r.id), r.data.ts};   // "BYTES-MOVED"
                 break;
-            case perf_debug::PerfDebugRecType::Ext:  // payload words 1-2: the whole uint64 here
+            case streaming_profiler::StreamingProfilerRecType::Ext:  // payload words 1-2: the whole uint64 here
                 fmt::print("{} @ {}: value={}\n", pending.name, pending.ts, r.data.ext);
                 break;
             default: break;  // Cont (words 3+) unused for a single-uint64 payload
@@ -98,10 +98,10 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — an `Event` record is complete by itself: name id + timestamp, no payload:
 
 ```cpp
-auto h = perf_debug::register_consumer("flag-sink", [&](const perf_debug::PerfDebugRecordBatch& b) {
+auto h = streaming_profiler::register_consumer("flag-sink", [&](const streaming_profiler::StreamingProfilerRecordBatch& b) {
     names.refresh();
     for (const auto& r : b.records) {
-        if (r.meta.type != perf_debug::PerfDebugRecType::Event) continue;
+        if (r.meta.type != streaming_profiler::StreamingProfilerRecType::Event) continue;
         fmt::print("{} @ {} (lane {})\n",
             names.lookup(r.id), r.data.ts, r.meta.lane);     // "LOOP-START" @ device time
     }

@@ -1,7 +1,7 @@
 // Prove that PLOT samples decoded from device data sit on the DEVICE TIMEBASE.
 //
 // The failure this exists to rule out: Tracy's PlotData() stamps the instant the call is MADE, and the
-// perf-debug profiler decodes device markers milliseconds after the device produced them (the drainer's DRAM
+// streaming profiler decodes device markers milliseconds after the device produced them (the drainer's DRAM
 // ring alone trails the last worker zone by 2.5-2.9 ms). A plot built that way sits to the RIGHT of the zones
 // it explains and is worse than no plot at all. PlotDataAt + the device->TSC inverse is supposed to fix that,
 // and "supposed to" is not a measurement.

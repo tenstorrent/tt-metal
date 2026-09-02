@@ -1,25 +1,18 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// perf-debug profiler workload: compute RISCs (TRISC0/1/2). Same 10-zone sweep as zones_dm.cpp, tagged per
-// TRISC (T0_/T1_/T2_) so each of the 3 compute RISCs emits its own 10 distinctly-named zones.
+// Streaming-profiler workload for the data-movement RISCs (BRISC = RISCV_0, NCRISC = RISCV_1). Each
+// iteration enters 10 differently-named DeviceZoneScopedN scopes with increasing durations. The name carries
+// a per-RISC tag (BR_/NC_) so each RISC's 10 zones are distinct, and N_ITERS repeats the sweep.
 #include <cstdint>
-#include "api/compute/compute_kernel_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 #ifndef N_ITERS
 #define N_ITERS 50u
 #endif
 
-// ZONE_CYC: UNIFORM per-zone spin count, for producer-rate (knee) sweeps. 0 = keep the graduated
-// ~1..100 us table below, which is what you want for a representative Tracy capture. A non-zero value
-// makes every zone the same length, which is what you want for a knee: the marker rate per lane becomes
-// a single number (2 markers per zone, so ~2 * aiclk / ZONE_CYC markers/s), and every lane runs at that
-// same rate. Graduated durations would smear the knee, because the instantaneous aggregate rate would
-// swing through the sweep of durations instead of holding at the peak.
-// ZONE_MODE selects the zone body; ZONE_CYC is the nop-iteration count used when ZONE_MODE == 1.
-// These are SEPARATE on purpose: ZONE_CYC == 0 is a legitimate knee point (max rate, no spin at all), the
-// same as the standalone drain harness --proddelay 0, so it must not double as "use the graduated table".
+// ZONE_CYC == 0 is a legitimate rate point (max rate, no spin), so it cannot double as "use the graduated
+// table"; ZONE_MODE selects the body instead.
 #ifndef ZONE_MODE
 #define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
 #endif
@@ -27,25 +20,16 @@
 #define ZONE_CYC 0u
 #endif
 
-#if COMPILE_FOR_TRISC == 0
-#define ZTAG "T0"
-#elif COMPILE_FOR_TRISC == 1
-#define ZTAG "T1"
+#if defined(COMPILE_FOR_BRISC)
+#define ZTAG "BR"
 #else
-#define ZTAG "T2"
+#define ZTAG "NC"
 #endif
 
-// One named zone whose body busy-waits CYC wall-clock spin-counts. CYC is EMPIRICALLY calibrated so the
-// zone displays ~CYC/2500 us in Tracy: at the ~1.35 GHz boosted aiclk the profiler records ~0.55 timestamp
-// tick per spin-count and the context period is ~0.741 ns/tick, so displayed_ns ~= CYC * 0.41. LOW-register-
-// only read with unsigned-wrap subtraction is tear-free for spins << 2^32.
-// _zwc points AT the wall-clock LOW register (RISCV_DEBUG_REG_WALL_CLOCK_L), so the low word is index 0.
-// Deliberately NOT kernel_profiler::WALL_CLOCK_LOW_INDEX: that constant is declared inside the
-// `#if defined(PROFILE_KERNEL) && ...` block of kernel_profiler.hpp, i.e. it is internal state of the
-// STREAMING backend and does not exist when the profiler is compiled out. Referencing it made this kernel
-// fail to COMPILE in the unprofiled build ("'WALL_CLOCK_LOW_INDEX' is not a member of 'kernel_profiler'")
-// even though DeviceZoneScopedN() expands to nothing there -- and that build failure looks exactly like a
-// card wedge from the host side. The spin must work with or without the profiler compiled in.
+// Body busy-waits CYC spin-counts, calibrated so the zone displays ~CYC/2500 us in Tracy (displayed_ns ~=
+// CYC * 0.41 at the 1.35 GHz aiclk). Low register only with wrap-safe subtraction, tear-free for spins << 2^32.
+// Not kernel_profiler::WALL_CLOCK_LOW_INDEX: it lives inside the PROFILE_KERNEL block and breaks the
+// profiler-off build.
 static constexpr int kWallClockLowIdx = 0;
 
 #define ZONE_WALL(NAME, CYC)                                                               \
@@ -59,12 +43,7 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                                  \
     }
 
-// KNEE body (ZONE_MODE == 1): byte-identical to the standalone drain harness's producer loop (realprof_dm.cpp,
-// WORK_SIZE), so ZONE_CYC and that test's --proddelay are the SAME UNIT and the two knees are directly
-// comparable. The counter MUST stay `volatile`: that is what forces a load/increment/store/compare per
-// iteration, so one iteration costs several cycles rather than a single nop. Do NOT turn this into a
-// wall-clock spin -- that is exactly what made ZONE_CYC 30000 produce 22.2 us zones (30000 / 1.35 GHz)
-// while --proddelay 950 produces ~5-6 us, i.e. two knees on different axes that looked like a regression.
+// `volatile` forces load/increment/store/compare per iteration, the calibrated 10 cycles.
 #define ZONE_NOPS(NAME, ITERS)                                            \
     {                                                                     \
         DeviceZoneScopedN(NAME);                                          \
@@ -73,15 +52,15 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
-// EMPTY body (ZONE_MODE == 3): the pure-overhead microbenchmark -- see zones_dm.cpp for the
-// duration/gap decomposition it measures.
+// Back-to-back empty zones, so the stream prices the profiler itself; mode 2 is the device-side twin (what the
+// producer pays vs what the capture observes).
 #define ZONE_EMPTY(NAME)         \
     {                            \
         DeviceZoneScopedN(NAME); \
     }
 
-// PRICE-CLOCK body (ZONE_MODE == 4): the EMPTY zone plus ONE extra latched wall-clock read pair in
-// the body. duration(mode 4) - duration(mode 3) = the cost of one read_wall_clock on this RISC.
+// ZONE_MODE == 4: the empty zone plus one extra latched wall-clock read pair in the body, so
+// duration(mode 4) - duration(mode 3) is the cost of one wall-clock read on this RISC.
 #define ZONE_PRICE_CLOCK(NAME)                                                             \
     {                                                                                      \
         DeviceZoneScopedN(NAME);                                                           \
@@ -92,8 +71,8 @@ static constexpr int kWallClockLowIdx = 0;
         asm volatile("" ::"r"(_plo), "r"(_phi));                                           \
     }
 
-// GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
-// microseconds for a representative capture, which a nop-iteration count cannot express.
+// ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
+// nop-iteration count cannot express.
 #if ZONE_MODE == 4
 #define ZONE(NAME, GRADUATED) ZONE_PRICE_CLOCK(NAME)
 #elif ZONE_MODE == 3
@@ -104,17 +83,16 @@ static constexpr int kWallClockLowIdx = 0;
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
-// ZONE_MODE == 2: the DeviceZoneScopedN microbench, same shape as zones_dm.cpp. Slots 2..4 of BENCH_ADDR
-// so all five lanes of a core report side by side.
+// Device-side microbench: enter and leave empty scopes, time each burst against the wall clock, leave totals
+// in L1 (DPRINT and the profiler are mutually exclusive). kBurst * 3 words stays under the 512-word ring so a
+// burst never blocks.
 #if ZONE_MODE == 2
 void kernel_main() {
     volatile tt_reg_ptr uint32_t* wc = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-#if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
-    constexpr uint32_t kSlot = 2;
-#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
-    constexpr uint32_t kSlot = 3;
+#if defined(COMPILE_FOR_BRISC)
+    constexpr uint32_t kSlot = 0;
 #else
-    constexpr uint32_t kSlot = 4;
+    constexpr uint32_t kSlot = 1;
 #endif
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
     constexpr uint32_t kBurst = 100;
@@ -132,8 +110,14 @@ void kernel_main() {
 }
 #else
 void kernel_main() {
-    // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
+    // Durations span ~1..100 us. CYC = us * 2500, per the ZONE_WALL calibration above.
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
+// Opt-in (--markers 1): exercises every point-marker shape but adds wire volume a rate sweep does not want.
+#if defined(EMIT_MARKERS) && EMIT_MARKERS && ZONE_MODE < 3
+        DeviceFlag(ZTAG "_Flag");
+        DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
+        DeviceTimestampedData(ZTAG "_Iter", it);
+#endif
         ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
         ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
         ZONE(ZTAG "_Zone2", 7500u);    // ~3 us

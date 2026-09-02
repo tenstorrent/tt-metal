@@ -445,16 +445,13 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                # A crashed capture tool (e.g. the profiling stream SIGSEGVs tracy-capture) makes
-                # communicate() return normally with a nonzero/negative returncode -- there is no
-                # TimeoutExpired. Detect that here and fail LOUDLY, instead of silently walking into
-                # the copy below and emitting a misleading "Could not copy ... No such file" warning
-                # for a .tracy that was never written.
+                # A crashed capture tool returns from communicate() normally with a nonzero returncode
+                # rather than raising TimeoutExpired; without this check the copy below only warns that
+                # the .tracy it never wrote is missing.
                 capRc = captureProcess.returncode
                 if capRc != 0:
-                    # A signal death shows up either as a negative returncode (direct child) or as
-                    # 128+signo (when launched via a shell). Decode both so the message names the
-                    # actual signal (e.g. SIGSEGV) instead of a bare exit code.
+                    # A signal death shows up as a negative returncode for a direct child, or as
+                    # 128+signo when launched via a shell.
                     sigNo = None
                     if capRc is not None and capRc < 0:
                         sigNo = -capRc

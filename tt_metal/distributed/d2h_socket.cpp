@@ -274,10 +274,8 @@ void D2HSocket::write_socket_metadata(
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else if (sender_uses_physical_noc_addr_) {
-        // Non-worker sender (e.g. a DRISC drainer): sender_core_.core_coord is a physical NoC coord and
-        // config_buffer_address_ is the full L1 address. Write directly via the cluster using
-        // the virtual coord (worker_core_from_logical_core / WORKER translation would target a
-        // Tensix worker instead).
+        // Non-worker sender: core_coord is a physical NoC coord, so write via the virtual coord; the WORKER
+        // translation would target a Tensix.
         const auto& cluster = MetalContext::instance().get_cluster();
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         CoreCoord virt =
