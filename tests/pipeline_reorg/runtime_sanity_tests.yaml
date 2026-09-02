@@ -102,6 +102,8 @@
 # Quasar simulator coverage (ttsim-owned list, full set as originally requested by Matt
 # Craighead). Some of these may fail today due to a known libttsim_qsr.so NOC_API_V2 gap
 # in the simulator itself, not this CI wiring — see #54794.
+# QuasarMultiSemaphorePipeline and QuasarMultipleClustersMultiSemaphorePipeline are
+# excluded: both are disabled on tt-metal main.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
     f=HostOnlyTest.Bfp8Conversion;
@@ -113,7 +115,6 @@
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
-    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline;
     f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
     f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
     f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
