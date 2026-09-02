@@ -25,9 +25,12 @@ struct ReduceParams {
     // respects the exponent of the scaler. To produce numerically correct results for any
     // scalar, the host instead requests reduction with `scaler=1.0` and applies the user
     // scalar afterwards via SFPU post-multiplication (mul_unary_tile) inside the compute
-    // kernel, gated by the REDUCE_POST_MUL define. When `post_mul_scaler == 1.0f`, the
-    // post-multiplication path is disabled and the existing reduce-only flow runs unchanged.
+    // kernel, gated by the REDUCE_POST_MUL define. Exactly one of `scaler` / `post_mul_scaler`
+    // is non-unity; `scaler_mode` says which, and a 1.0f value is skipped in-kernel.
     float post_mul_scaler{1.0f};
+    // Which scalar slot is live. Derived from math_op/dtype/dim/use_sfpu_reduce alone, so it is
+    // safe to hash; the two floats above are not.
+    ScalerMode scaler_mode{ScalerMode::ScalerTile};
     // Dense row-major path for **mean only** (generic_reductions dispatches AVG over W/H): host enables only when
     // constraints match tilized mean (4D, BF16/FLOAT32, interleaved I/O); AVG is lowered to SUM + scaler before
     // launch. Other ROW_MAJOR reductions tilize and use the standard tile kernels. Exactly one of the two flags
