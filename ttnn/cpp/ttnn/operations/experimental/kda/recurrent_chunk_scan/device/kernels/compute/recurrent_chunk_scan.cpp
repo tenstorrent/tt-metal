@@ -30,6 +30,7 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
     const uint32_t output_id = output.get_id();
 
     output.reserve_back(Mt * Nt);
+    pack_reconfig_data_format(output_id);
     reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
     matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
@@ -285,7 +286,6 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
     DataflowBuffer scratch(dfb::scratch);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
-    pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt, dfb::scratch, dfb::output_intermediate>(
@@ -293,7 +293,6 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
         compute_chunk_output<Ct, Kt, Vt, dfb::output_intermediate, dfb::scratch, dfb::output>(
             current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
 
-        pack_reconfig_data_format(dfb::state_update);
         compute_state_update<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(value_new, k_decay_transposed, state_update);
         if (chunk == 0) {
             if (chunk + 1 == num_chunks) {

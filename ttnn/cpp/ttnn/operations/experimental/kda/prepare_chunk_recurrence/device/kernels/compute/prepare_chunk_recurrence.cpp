@@ -29,25 +29,6 @@ namespace ckl = compute_kernel_lib;
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
 
-// Ckl binds DFB identities at compile time. Keep the common tilewise binary form concise while exposing the
-// final-consumer pop policy at each call site.
-template <
-    ckl::BinaryFpuOp Op,
-    uint32_t ADfb,
-    uint32_t BDfb,
-    uint32_t OutputDfb,
-    ckl::PopPolicy APop = ckl::PopPolicy::None,
-    ckl::PopPolicy BPop = ckl::PopPolicy::None>
-inline void elementwise_binary(uint32_t tiles) {
-    ckl::eltwise_chain(
-        ckl::IterationShape::tiles(tiles).block_size(max_dst_tiles),
-        ckl::BinaryFpu<
-            Op,
-            ckl::input(ADfb, ckl::WaitPolicy::None, APop, ckl::InputTileMapping::Block),
-            ckl::input(BDfb, ckl::WaitPolicy::None, BPop, ckl::InputTileMapping::Block)>{},
-        ckl::PackTile<ckl::output(OutputDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{});
-}
-
 // Compute out[Mt,Nt] = A[Mt,Kt] @ (transpose_b ? B[Nt,Kt]^T : B[Kt,Nt]) in the largest rectangular
 // subblocks that exactly divide the output and fit in destination registers.
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
@@ -225,18 +206,11 @@ template <
     uint32_t NormalizedDfb,
     uint32_t SquaredDfb,
     uint32_t InverseNormsDfb>
-inline void normalize_l2_rows(
-    DataflowBuffer& input,
-    DataflowBuffer& normalized,
-    uint32_t eps_bits,
-    uint32_t scale_bits,
-
-    // intermediate
-    DataflowBuffer& squared,
-    DataflowBuffer& inverse_norms) {
+inline void normalize_l2_rows(DataflowBuffer& normalized, uint32_t eps_bits, uint32_t scale_bits) {
     constexpr uint32_t matrix_tiles = RowTiles * ColumnTiles;
 
-    ckl::square<
+    ckl::unary<
+        ckl::Square<>,
         ckl::input(InputDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(SquaredDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
         ckl::IterationShape::tiles(matrix_tiles).block_size(max_dst_tiles));
@@ -258,7 +232,7 @@ inline void normalize_l2_rows(
 }
 
 template <uint32_t Ct, uint32_t Vt, uint32_t VDfb, uint32_t BetaDfb, uint32_t VBetaDfb>
-inline void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
+inline void prepare_v_beta() {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     ckl::mul<
         ckl::input(VDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
@@ -322,7 +296,11 @@ inline void prepare_gate_factors(
 
     {
         DataflowBuffer& centered_g = anchor_decay;
-        elementwise_binary<ckl::BinaryFpuOp::Sub, CenteredDecayDfb, AnchorGDfb, AnchorDecayDfb>(chunk_key_tiles);
+        ckl::sub<
+            ckl::input(CenteredDecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::input(AnchorGDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::output(AnchorDecayDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
         centered_g.wait_front(chunk_key_tiles);
         centered_decay.pop_front(chunk_key_tiles);
         ckl::unary<
@@ -361,16 +339,7 @@ template <
     uint32_t KDDfb,
     uint32_t KBetaPairwiseDfb,
     uint32_t QPairwiseDfb>
-inline void prepare_scan_and_pairwise_inputs(
-    DataflowBuffer& normalized_q,
-    DataflowBuffer& normalized_k,
-    DataflowBuffer& beta,
-    DataflowBuffer& decay,
-    DataflowBuffer& centered_decay,
-    DataflowBuffer& q_decay,
-    DataflowBuffer& kd,
-    DataflowBuffer& k_beta_pairwise,
-    DataflowBuffer& q_pairwise) {
+inline void prepare_scan_and_pairwise_inputs(DataflowBuffer& k_beta_pairwise, DataflowBuffer& q_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     {
@@ -389,36 +358,35 @@ inline void prepare_scan_and_pairwise_inputs(
     }
 
     // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-    elementwise_binary<ckl::BinaryFpuOp::Mul, NormalizedQDfb, DecayDfb, QDecayDfb>(chunk_key_tiles);
+    ckl::mul<
+        ckl::input(NormalizedQDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::input(DecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::output(QDecayDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
     {
         DataflowBuffer& beta_k = q_pairwise;
-        elementwise_binary<
-            ckl::BinaryFpuOp::Mul,
-            QPairwiseDfb,
-            DecayDfb,
-            KDDfb,
-            ckl::PopPolicy::None,
-            ckl::PopPolicy::AtEnd>(chunk_key_tiles);
-        elementwise_binary<
-            ckl::BinaryFpuOp::Mul,
-            QPairwiseDfb,
-            CenteredDecayDfb,
-            KBetaPairwiseDfb,
-            ckl::PopPolicy::AtEnd>(chunk_key_tiles);
+        ckl::mul<
+            ckl::input(QPairwiseDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::input(DecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::output(KDDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
+        ckl::mul<
+            ckl::input(QPairwiseDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(CenteredDecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::output(KBetaPairwiseDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
     }
-    elementwise_binary<
-        ckl::BinaryFpuOp::Mul,
-        NormalizedQDfb,
-        CenteredDecayDfb,
-        QPairwiseDfb,
-        ckl::PopPolicy::AtEnd,
-        ckl::PopPolicy::AtEnd>(chunk_key_tiles);
+    ckl::mul<
+        ckl::input(NormalizedQDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::input(CenteredDecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::output(QPairwiseDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t GLastDfb, uint32_t FinalDecayRowsDfb>
-inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
+inline void prepare_final_decay_rows(DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     ckl::unary<
@@ -430,17 +398,14 @@ inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& fin
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t NormalizedKDfb, uint32_t CenteredInverseDecayDfb, uint32_t KPairwiseDfb>
-inline void prepare_k_pairwise(
-    DataflowBuffer& normalized_k, DataflowBuffer& centered_inverse_decay, DataflowBuffer& k_pairwise) {
+inline void prepare_k_pairwise(DataflowBuffer& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    elementwise_binary<
-        ckl::BinaryFpuOp::Mul,
-        NormalizedKDfb,
-        CenteredInverseDecayDfb,
-        KPairwiseDfb,
-        ckl::PopPolicy::AtEnd,
-        ckl::PopPolicy::AtEnd>(chunk_key_tiles);
+    ckl::mul<
+        ckl::input(NormalizedKDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::input(CenteredInverseDecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::output(KPairwiseDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
     k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
 }
 
@@ -454,12 +419,7 @@ template <
     uint32_t AkkDfb,
     uint32_t IntraDfb>
 inline void prepare_pairwise_matrices(
-    DataflowBuffer& k_beta_pairwise,
-    DataflowBuffer& q_pairwise,
-    DataflowBuffer& k_pairwise,
-    DataflowBuffer& causal_mask,
-    DataflowBuffer& akk,
-    DataflowBuffer& intra) {
+    DataflowBuffer& k_beta_pairwise, DataflowBuffer& q_pairwise, DataflowBuffer& k_pairwise, DataflowBuffer& akk) {
     constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
@@ -475,8 +435,11 @@ inline void prepare_pairwise_matrices(
         matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
         aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
         q_pairwise.pop_front(chunk_key_tiles);
-        elementwise_binary<ckl::BinaryFpuOp::Mul, KBetaPairwiseDfb, CausalMaskDfb, IntraDfb, ckl::PopPolicy::AtEnd>(
-            chunk_matrix_tiles);
+        ckl::mul<
+            ckl::input(KBetaPairwiseDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(CausalMaskDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::output(IntraDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_matrix_tiles).block_size(max_dst_tiles));
     }
 }
 
@@ -492,7 +455,6 @@ template <
     uint32_t ProductDfb>
 inline void prepare_t_inv(
     DataflowBuffer& akk,
-    DataflowBuffer& causal_mask,
     DataflowBuffer& identity,
     DataflowBuffer& t_inv,
 
@@ -508,18 +470,23 @@ inline void prepare_t_inv(
         DataflowBuffer& diagonal_akk = scratch_1;
 
         // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ckl::BinaryFpuOp::Mul, AkkDfb, CausalMaskDfb, Scratch0Dfb, ckl::PopPolicy::AtEnd>(
-            chunk_matrix_tiles);
+        ckl::mul<
+            ckl::input(AkkDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(CausalMaskDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::output(Scratch0Dfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_matrix_tiles).block_size(max_dst_tiles));
         lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
-        elementwise_binary<ckl::BinaryFpuOp::Mul, Scratch0Dfb, IdentityDfb, Scratch1Dfb>(chunk_matrix_tiles);
+        ckl::mul<
+            ckl::input(Scratch0Dfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::input(IdentityDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::output(Scratch1Dfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_matrix_tiles).block_size(max_dst_tiles));
         diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
-        elementwise_binary<
-            ckl::BinaryFpuOp::Sub,
-            Scratch1Dfb,
-            Scratch0Dfb,
-            AkkDfb,
-            ckl::PopPolicy::AtEnd,
-            ckl::PopPolicy::AtEnd>(chunk_matrix_tiles);
+        ckl::sub<
+            ckl::input(Scratch1Dfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(Scratch0Dfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::output(AkkDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_matrix_tiles).block_size(max_dst_tiles));
         akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
     }
 
@@ -542,11 +509,7 @@ template <
     uint32_t FinalDecayRowsDfb,
     uint32_t KDecTDfb>
 inline void prepare_decay_outputs(
-    DataflowBuffer& k_pairwise,
-    DataflowBuffer& anchor_decay,
-    DataflowBuffer& final_decay_rows,
-    DataflowBuffer& k_dec_t,
-    DataflowBuffer& final_decay) {
+    DataflowBuffer& final_decay_rows, DataflowBuffer& k_dec_t, DataflowBuffer& final_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // dl [K,1] is the transpose of any replicated exp(G_last) row.
@@ -557,13 +520,11 @@ inline void prepare_decay_outputs(
         DataflowBuffer& k_dec = final_decay_rows;
 
         // k_dec_t = (kr * exp(G_last))^T.
-        elementwise_binary<
-            ckl::BinaryFpuOp::Mul,
-            KPairwiseDfb,
-            AnchorDecayDfb,
-            FinalDecayRowsDfb,
-            ckl::PopPolicy::AtEnd,
-            ckl::PopPolicy::AtEnd>(chunk_key_tiles);
+        ckl::mul<
+            ckl::input(KPairwiseDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(AnchorDecayDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::output(FinalDecayRowsDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(chunk_key_tiles).block_size(max_dst_tiles));
         k_dec.wait_front(chunk_key_tiles);
         transpose_tile_row_to_column(k_dec, k_dec_t, Kt);
         k_dec.pop_front(chunk_key_tiles);
@@ -624,22 +585,12 @@ TT_KERNEL void compute(uint32_t work_item_count) {
         beta.wait_front(Ct);
 
         normalize_l2_rows<Ct, Kt, true, dfb::q, dfb::normalized_q, dfb::workspace_3, dfb::workspace_1>(
-            q,
-            normalized_q,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/workspace_1);
+            normalized_q, EPS_BITS, SCALE_BITS);
 
         normalize_l2_rows<Ct, Kt, false, dfb::k, dfb::normalized_k, dfb::workspace_3, dfb::workspace_1>(
-            k,
-            normalized_k,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/workspace_1);
+            normalized_k, EPS_BITS, SCALE_BITS);
 
-        prepare_v_beta<Ct, Vt, dfb::v, dfb::beta, dfb::v_beta>(v, beta, v_beta);
+        prepare_v_beta<Ct, Vt, dfb::v, dfb::beta, dfb::v_beta>();
 
         DataflowBuffer& centered_decay = workspace_0;
         DataflowBuffer& g_last = workspace_3;
@@ -678,15 +629,13 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             dfb::q_decay,
             dfb::kd,
             dfb::workspace_1,
-            dfb::workspace_2>(
-            normalized_q, normalized_k, beta, scan_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
+            dfb::workspace_2>(k_beta_pairwise, q_pairwise);
 
         DataflowBuffer& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt, dfb::workspace_3, dfb::workspace_0>(g_last, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt, dfb::workspace_3, dfb::workspace_0>(final_decay_rows);
 
         DataflowBuffer& k_pairwise = workspace_3;
-        prepare_k_pairwise<Ct, Kt, dfb::normalized_k, dfb::centered_inverse_decay, dfb::workspace_3>(
-            normalized_k, centered_inverse_decay, k_pairwise);
+        prepare_k_pairwise<Ct, Kt, dfb::normalized_k, dfb::centered_inverse_decay, dfb::workspace_3>(k_pairwise);
 
         prepare_pairwise_matrices<
             Ct,
@@ -696,7 +645,7 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             dfb::workspace_3,
             dfb::tril,
             dfb::akk,
-            dfb::intra>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra);
+            dfb::intra>(k_beta_pairwise, q_pairwise, k_pairwise, akk);
 
         // normalized_q and normalized_k are fully consumed and popped; reuse their empty DFBs as local scratch.
         prepare_t_inv<
@@ -710,7 +659,6 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             dfb::normalized_q,
             dfb::normalized_k>(
             akk,
-            tril,
             eye,
             t_inv,
             /*scratch_0=*/workspace_1,
@@ -719,7 +667,7 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             /*product=*/normalized_k);
 
         prepare_decay_outputs<Ct, Kt, dfb::workspace_3, dfb::anchor_decay, dfb::workspace_0, dfb::k_decay_transposed>(
-            k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+            final_decay_rows, k_decay_transposed, final_decay);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
 }

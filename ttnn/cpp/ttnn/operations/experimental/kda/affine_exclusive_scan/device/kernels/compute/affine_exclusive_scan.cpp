@@ -12,6 +12,9 @@
 
 namespace ckl = compute_kernel_lib;
 
+constexpr uint32_t max_dst_tiles =
+    ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+
 constexpr uint32_t largest_common_divisor_at_most(uint32_t lhs, uint32_t rhs, uint32_t limit) {
     for (uint32_t divisor = limit; divisor > 1; --divisor) {
         if (lhs % divisor == 0 && rhs % divisor == 0) {
@@ -162,11 +165,11 @@ TT_KERNEL void compute(uint32_t group) {
     ckl::copy<
         ckl::input(dfb::initial_a, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::output(dfb::to_remote_a, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(affine_a_tiles));
+        ckl::IterationShape::tiles(affine_a_tiles).block_size(max_dst_tiles));
     ckl::copy<
         ckl::input(dfb::initial_b, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::output(dfb::to_remote_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(affine_b_tiles));
+        ckl::IterationShape::tiles(affine_b_tiles).block_size(max_dst_tiles));
 
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < distance) {
@@ -186,7 +189,7 @@ TT_KERNEL void compute(uint32_t group) {
             ckl::input(
                 dfb::initial_state, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::output(dfb::final, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(affine_b_tiles));
+            ckl::IterationShape::tiles(affine_b_tiles).block_size(max_dst_tiles));
     } else {
         initial_state.wait_front(affine_b_tiles);
         from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
