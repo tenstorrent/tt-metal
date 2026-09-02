@@ -428,9 +428,70 @@ void Accumulator<S, Mode>::clear() {
 
 // --- ComputeBlock ---
 
+// Opt in with -DTT_UNIFIED_CHECK_ALIASING=1. NOT carried by the other asserts, and that is
+// a MEASURED constraint rather than caution: flash_attention's program sits within about
+// 700 bytes of the 70656-byte kernel config buffer, and the call sites this adds -- one
+// pair per ComputeBlock<S, DfbId> instantiation, and flash has many -- push it and
+// attention_proj over. Inlined the checks cost 4.3 KB (74960 bytes, 4304 over); noinline
+// brought that to 71328, still 672 over. No version of this fits the default build.
+//
+// So it is a diagnostic to switch on when a result is wrong in the specific way described
+// below -- alongside TT_UNIFIED_DST_32BIT and friends -- not an invariant every debug run
+// carries.
+#if defined(TT_UNIFIED_CHECK_ALIASING) && TT_UNIFIED_CHECK_ALIASING && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+#define TT_U_ALIASING_CHECKED 1
+
+// One bit per dataflow buffer: is a ComputeBlock over it alive right now?
+//
+// A ComputeBlock names a BUFFER and not a block within it -- it carries only dfb_id, and
+// as_node hands the math layer exactly that -- so a second live ComputeBlock over one buffer
+// reads the pages of the FIRST. Measured on device: exp(a) + relu(a) returns 2 * exp(a), at
+// every buffer depth tried, with the protocol perfectly balanced and nothing to notice it
+// by. This is the only check that catches it.
+//
+// Keyed by dfb_id at RUNTIME, not by a static member of the class. A static member of
+// ComputeBlock<S, DfbId> is per-instantiation, and two blocks of the same TYPE over
+// DIFFERENT buffers is the common case -- `a` from in0 and `b` from in1 are both
+// ComputeBlock<Row2> -- so a per-type flag would fire on correct code constantly.
+//
+// DELIBERATELY STRICT. Reusing one scratch buffer for a sequence of results is legitimate
+// when the earlier ones are dead, and this rejects it anyway, because the library cannot
+// tell "dead" from "still needed" at a destructor. The workaround is to say so: give each
+// use its own scope, and the pop lands where the value stops being needed.
+//
+// 32 is the dataflow-buffer range this model works in, the same bound report() walks in
+// unified_selftest.cpp. An id outside it is untracked rather than an out-of-bounds write.
+inline uint32_t& live_compute_blocks() {
+    static uint32_t live = 0;
+    return live;
+}
+
+// NOINLINE, and that is load-bearing rather than tidiness. Inlined, these bodies are
+// duplicated into every ComputeBlock<S, DfbId> constructor and destructor the kernel
+// instantiates, and flash_attention instantiates a lot of them: the first version of this
+// check cost 4.3 KB and pushed both flash and attention_proj past the 70656-byte kernel
+// config buffer -- a debug-only check that made the debug build unusable on the two
+// biggest kernels. One copy each, called from everywhere.
+//
+// The mask rather than a bounds branch for the same reason: dfb_id is under 32 in this
+// model, and `& 31` costs one instruction where a compare and branch costs several per
+// call site.
+__attribute__((noinline)) inline void claim_compute_block(uint32_t dfb_id) {
+    ASSERT((live_compute_blocks() & (1u << (dfb_id & 31u))) == 0);
+    live_compute_blocks() |= (1u << (dfb_id & 31u));
+}
+
+__attribute__((noinline)) inline void release_compute_block(uint32_t dfb_id) {
+    live_compute_blocks() &= ~(1u << (dfb_id & 31u));
+}
+#endif
+
 template <typename S>
 ComputeBlock<S, kNoDfb>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
     block.consume();
+#if defined(TT_U_ALIASING_CHECKED)
+    claim_compute_block(dfb_id);
+#endif
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     buffer(dfb_id).wait_front(num_entries);
 #endif
@@ -438,6 +499,9 @@ ComputeBlock<S, kNoDfb>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
 
 template <typename S>
 ComputeBlock<S, kNoDfb>::~ComputeBlock() {
+#if defined(TT_U_ALIASING_CHECKED)
+    release_compute_block(dfb_id);
+#endif
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     buffer(dfb_id).pop_front(num_entries);
 #endif
