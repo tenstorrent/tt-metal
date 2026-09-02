@@ -214,6 +214,7 @@ public:
     uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
+    std::string get_profiler_zone_src_id() const override { return this->kernel_src_.profiler_zone_src_id(); }
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
