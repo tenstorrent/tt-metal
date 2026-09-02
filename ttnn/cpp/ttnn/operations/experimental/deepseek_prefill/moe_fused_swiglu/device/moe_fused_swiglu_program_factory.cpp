@@ -367,8 +367,10 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t idx_page =
         std::max<uint32_t>(tensor_arguments.global_expert_idx_table.buffer()->aligned_page_size(), dram_alignment);
     const uint32_t start_page = std::max<uint32_t>(start_tensor.buffer()->aligned_page_size(), dram_alignment);
-    const uint32_t counts_page =
-        std::max(std::max<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size(), dram_alignment), start_page);
+    // aligned_page_size() is a 64-bit DeviceAddr, and a narrowing conversion inside a braced-init
+    // list is ill-formed, so the cast is what lets the three bounds share one std::max.
+    const uint32_t counts_page = std::max<uint32_t>(
+        {static_cast<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size()), dram_alignment, start_page});
     const bool phase_alias = blocking.phase_cb_alias(output_tile);
     const uint64_t l1_need = blocking.l1_bytes(activations_are_row_major, output_tile, true);
     TT_FATAL(
