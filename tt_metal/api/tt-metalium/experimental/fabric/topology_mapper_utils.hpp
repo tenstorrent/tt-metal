@@ -682,10 +682,7 @@ private:
     // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
     // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
     bool host_cap_relaxed_ = false;
-    // Intra-mesh forbid/retry state, mirroring the single-solve retry loop: when an inter-mesh placement's
-    // intra-mesh completion fails, next() forbids that (logical, physical) pair via handle_forbidden_constraint
-    // and re-solves for a different orientation. Enumeration ends when SAT is UNSAT or a forbid over-constrains
-    // a logical mesh (can_retry == false). intra_failed_mesh_pairs_ is the cumulative forbidden-pair log.
+    // Intra-mesh forbid/retry state
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
 };
 
