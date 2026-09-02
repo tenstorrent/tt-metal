@@ -128,6 +128,7 @@ class TPAttention:
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
         self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
+        self._spec_sdpa_cfg_cache = {}  # T -> fused spec-verify SDPA (progcfg, groups, tiles); None = no fit
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -146,6 +147,9 @@ class TPAttention:
         self._fuse_agmm = self._fused_qkv
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
+        # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
+        # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
+        self.decode_sdpa_max_cores = None
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -516,13 +520,89 @@ class TPAttention:
             self._kv_shard_cfg_cache[B] = cfg
         return cfg
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None, alias_kv_write=False):
+    # Fused spec-verify SDPA (spec_multi_pos_tiles=Tg): the T=K+1 candidates ride B batch rows of Tg
+    # 32-row Q tiles each (candidate c = b*Tg + j) instead of T batch rows, so each row's KV cache
+    # streams out of DRAM ONCE per layer instead of Tg times — T/Tg reads per layer instead of T.
+    #
+    # Tg, not T, is what sizes L1: every Q-shaped CB in the kernel scales with Tg, so the
+    # (cores-per-head, k-chunk) budget shrinks as Tg grows (the op TT_FATALs with the exact byte
+    # counts when a pair does not fit). Tg=4 is the sweet spot at head_dim=256 — it still affords 64
+    # cores/head — while Tg=7 fits only 4 cores/head, which measured as a net regression against the
+    # legacy call. So wide drafts SPLIT instead of widening: T=8 runs as B=2 groups of 4, where the
+    # factory's per-batch split gives 110/2 = 55 cores/head and keeps the whole 110-core grid busy.
+    # A T with no such split (7, 11, ...) falls through to the legacy B=T call.
+    #
+    # k_chunk_size=0 = the in-kernel dynamic chunk (capped at 4 tiles in spec mode), which also
+    # skips the compute kernel's granularity defines. A FIXED k-chunk does not: the kernel needs
+    # MUL_BCAST_GRANULARITY = min(Tg * k_chunk_tiles, dst_size=8) to be a power of 2, so an odd Tg
+    # would rule out a 1-tile chunk (Tg=7, k_chunk_size=32 TT_FATALs with "MUL_BCAST_GRANULARITY (7)
+    # must be power of 2"). Tg=4 has no such constraint; the dynamic chunk is used at both points.
+    #
+    # T -> (B groups, max_cores_per_head_batch, k_chunk_size); Tg = T // B. Exact match only: a T
+    # that is not listed has no measured-fitting split and takes the legacy path.
+    _SPEC_SDPA_L1_FIT = {
+        4: (1, 64, 0),  # Tg=4 on one row, 64 cores/head (the whole grid on one reduction group)
+        8: (2, 55, 0),  # two groups of 4, 55 cores/head each -> 110 active, 1,310,976 B CB
+    }
+
+    def _spec_sdpa_plan(self, T):
+        """(SDPAProgramConfig, groups B, tiles-per-group Tg) for the fused spec-verify SDPA at T
+        candidates, or None when T has no L1-fitting split (caller falls back to the legacy B=T
+        call)."""
+        if T not in self._spec_sdpa_cfg_cache:
+            plan = None
+            fit = self._SPEC_SDPA_L1_FIT.get(T)
+            if fit is not None:
+                groups, max_cores, k_chunk = fit
+                grid = self.mesh.compute_with_storage_grid_size()
+                plan = (
+                    ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=(grid.x, grid.y),
+                        exp_approx_mode=False,
+                        q_chunk_size=0,
+                        k_chunk_size=k_chunk,
+                        max_cores_per_head_batch=max_cores,
+                    ),
+                    groups,
+                    T // groups,
+                )
+            self._spec_sdpa_cfg_cache[T] = plan
+        return self._spec_sdpa_cfg_cache[T]
+
+    def spec_sdpa_enabled(self, T):
+        """Whether the fused spec-verify SDPA will be used at T candidates (for logging / A-B)."""
+        if T <= 1 or os.environ.get("QWEN36_SPEC_FUSED_SDPA", "1") == "0":
+            return False
+        return self._spec_sdpa_plan(T) is not None
+
+    def spec_sdpa_groups(self, T):
+        """Batch rows (= page-table rows) the fused spec-verify SDPA wants at T candidates; 1 when
+        the fused path is off (the legacy call ignores the spec page table entirely)."""
+        return self._spec_sdpa_plan(T)[1] if self.spec_sdpa_enabled(T) else 1
+
+    def forward_decode(
+        self,
+        x,
+        cur_pos_tt,
+        cos_tt,
+        sin_tt,
+        page_table=None,
+        alias_kv_write=False,
+        spec_verify_mode=False,
+        spec_page_table=None,
+    ):
         """One decode step for B "users".
 
         alias_kv_write: the B rows are NOT independent users — they all belong to ONE sequence and
         therefore share ONE page table (identical rows), the way the speculative verify runs its
         K+1 candidates as B pseudo-users at consecutive positions. See the KV-write branch below for
         why that needs a per-row loop instead of the batched update.
+
+        spec_verify_mode / spec_page_table: set ONLY by the speculative verify (never inferred from
+        B — a real B-user decode must not take this path). Folds the B=T candidate rows into
+        spec_sdpa_groups(T) batch rows for the SDPA read via spec_multi_pos_tiles, using the
+        same-row-count aliased page table in spec_page_table. The KV write above still runs per row
+        off the T-row `page_table`. QWEN36_SPEC_FUSED_SDPA=0 forces the legacy B=T call for A/B.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
@@ -585,12 +665,21 @@ class TPAttention:
         # SdpaDecodeDeviceOperation duration B=8: 1569.9us -> 1396.2us (-11%); B=1: 220.8us ->
         # 215.5us (-2.4%, no regression). Using the full grid unconditionally since it never hurts
         # and helps significantly at long context, where batched decode is otherwise slowest.
+        #
+        # The grid alone does not decide the split: cores_per_head is
+        # min(grid_total, max_cores_per_head_batch * B * kv_heads) / B / heads_per_core, and
+        # max_cores_per_head_batch defaults to 16 — so a B=1, 1-kv-head decode gets 16 of the 110
+        # cores no matter how big the grid is. decode_sdpa_max_cores lifts that per instance; the
+        # MTP drafter sets 64 (the kernel's tree reduction caps at MAX_TREE_REDUCTION_ROUNDS=6, i.e.
+        # 2^6 cores/head) because its B=1 draft steps scan the whole prompt-length KV K times per
+        # iteration. Base-model layers leave it None and are byte-identical to before.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
             exp_approx_mode=False,
             q_chunk_size=0,
             k_chunk_size=0,
+            **({} if self.decode_sdpa_max_cores is None else {"max_cores_per_head_batch": self.decode_sdpa_max_cores}),
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
@@ -645,19 +734,53 @@ class TPAttention:
                 f"decode SDPA batch mismatch: q rows {B}, page_table rows {page_table.shape[0]}, "
                 f"cur_pos len {cur_pos_tt.shape[-1]}"
             )
-            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q,
-                keys,
-                values,
-                page_table_tensor=page_table,
-                cur_pos_tensor=cur_pos_tt,
-                scale=self.scale,
-                program_config=sdpa_dec_cfg,
-                # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
-                # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
-                memory_config=_L1,
-            )
-            ttnn.deallocate(q)
+            _spec_plan = self._spec_sdpa_plan(B) if (spec_verify_mode and self.spec_sdpa_enabled(B)) else None
+            if _spec_plan is not None:
+                _spec_cfg, _spec_groups, _spec_tiles = _spec_plan
+                # FUSED spec verify: _spec_groups batch rows of _spec_tiles q tiles each instead of
+                # B=T batch rows, so each group reads the KV cache once. The B rows of q are already
+                # exactly T consecutive 32-row tiles (logical [1,T,NH,HD] over a padded
+                # [1,T,32,HD]), and the tile order of [1,G,Tg*32,HD] over the same bytes puts
+                # candidate b*Tg+j on group b, row-tile j — exactly the layout the op indexes. So
+                # the shape the op wants is the SAME BYTES re-viewed: ttnn.reshape with an explicit
+                # padded shape takes its tile-view path and returns a metadata alias at the
+                # identical buffer address (measured), no copy and no allocation. Rebind q so
+                # exactly one handle survives and the deallocate below frees the buffer once.
+                assert spec_page_table is not None and spec_page_table.shape[0] == _spec_groups, (
+                    f"spec_verify_mode at T={B} needs a {_spec_groups}-row page table (one aliased row "
+                    f"per candidate group), got {None if spec_page_table is None else spec_page_table.shape}"
+                )
+                _spec_rows = _spec_tiles * ttnn.TILE_SIZE
+                _spec_shape = ttnn.Shape([1, _spec_groups, _spec_rows, HD])
+                q = ttnn.reshape(q, _spec_shape, _spec_shape)
+                attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    q,
+                    keys,
+                    values,
+                    page_table_tensor=spec_page_table,
+                    cur_pos_tensor=cur_pos_tt,
+                    scale=self.scale,
+                    program_config=_spec_cfg,
+                    memory_config=_L1,
+                    spec_multi_pos_tiles=_spec_tiles,
+                )
+                ttnn.deallocate(q)
+                # Output is byte-identical to the legacy [1,B,32,HD]; view it back (same alias trick).
+                attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
+            else:
+                attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    q,
+                    keys,
+                    values,
+                    page_table_tensor=page_table,
+                    cur_pos_tensor=cur_pos_tt,
+                    scale=self.scale,
+                    program_config=sdpa_dec_cfg,
+                    # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
+                    # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
+                    memory_config=_L1,
+                )
+                ttnn.deallocate(q)
         else:
             # Internal per-head KV caches; pad NKV head dim to 32 for tile-aligned update
             for h in range(NKV):

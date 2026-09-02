@@ -169,6 +169,8 @@ class Qwen36DecoderLayer:
         exact_kv_pos=None,
         exact_kv_pt=None,
         alias_kv_write=False,
+        spec_verify_mode=False,
+        spec_page_table=None,
     ):
         # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
         # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
@@ -225,8 +227,17 @@ class Qwen36DecoderLayer:
                 else:
                     # alias_kv_write: the B rows share one sequence (spec verify's candidates as
                     # pseudo-users), so the KV write must be per-row — see TPAttention.forward_decode.
+                    # spec_verify_mode/spec_page_table: additionally fold those rows into ONE SDPA
+                    # batch row so the KV cache is read once per layer (same place).
                     attn_output = self.attention.forward_decode(
-                        attn_input, position_tensor, cos, sin, page_table=page_table, alias_kv_write=alias_kv_write
+                        attn_input,
+                        position_tensor,
+                        cos,
+                        sin,
+                        page_table=page_table,
+                        alias_kv_write=alias_kv_write,
+                        spec_verify_mode=spec_verify_mode,
+                        spec_page_table=spec_page_table,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on

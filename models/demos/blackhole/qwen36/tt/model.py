@@ -1297,6 +1297,14 @@ class Qwen36Model:
                     position_tensor=self._vfy_kvpos_buf,
                     page_table=self._vfy_kvpt_buf,
                     alias_kv_write=True,
+                    # ...and the SDPA read folds those T rows back into a few batch rows
+                    # (spec_multi_pos_tiles: 1 group of 4 at T=4, 2 groups of 4 at T=8), so the KV
+                    # cache streams out of DRAM once per GROUP per layer instead of T times. The op
+                    # wants one aliased page-table row per group; the per-row KV write above still
+                    # needs the T-row alias table. Attention falls back to the legacy B=T call for a
+                    # T with no L1-fitting split (7, 11, ...) or when QWEN36_SPEC_FUSED_SDPA=0.
+                    spec_verify_mode=True,
+                    spec_page_table=self._vfy_kvpt1_buf,
                 )
             else:
                 x_new = layer.forward(
@@ -1328,7 +1336,9 @@ class Qwen36Model:
         ttnn.deallocate(u)
         return logits, rows, ids
 
-    def capture_verify_trace(self, page_table, T, gdn_recurrent=True, decode_cfg=None, warm_start=0):
+    def capture_verify_trace(
+        self, page_table, T, gdn_recurrent=True, decode_cfg=None, warm_start=0, commit_warmup=False
+    ):
         """Capture ONE trace of the recurrent verify forward over a fixed T-token bucket (T = number
         of candidate tokens = len([pending] + drafts)). Replay with verify_traced. GDN state is CARRIED
         (not reset) — the trace advances it in place and the caller rolls it to the accepted slot
@@ -1380,6 +1390,9 @@ class Qwen36Model:
         self._vfy_T, self._vfy_gdn_recurrent = T, gdn_recurrent
         self._vfy_decode_cfg = decode_cfg
 
+        # The commit traces bake in the address of the GDN layers' _verify_states_buf, which the
+        # capture below re-allocates, so they cannot outlive the verify trace they were cut against.
+        self.release_commit_traces()
         if getattr(self, "_vfy_trace_id", None) is not None:
             ttnn.release_trace(dev, self._vfy_trace_id)
             self._vfy_trace_id = None
@@ -1405,6 +1418,20 @@ class Qwen36Model:
         )
         self._vfy_kvpt_buf = ttnn.from_torch(
             page_table.repeat(T, 1).contiguous(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        # ...plus the SAME table with one row per CANDIDATE GROUP, for the fused spec SDPA
+        # (spec_multi_pos_tiles), which splits the T candidates across spec_sdpa_groups(T) batch
+        # rows (1 at T=4, 2 at T=8) and wants one aliased page-table row per group. Both tables are
+        # built here: the per-row KV write needs the T-row form (and must not slice a narrower table
+        # full-span — a full-span ttnn.slice aliases its input), the SDPA read needs this one.
+        _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
+        _spec_groups = _att0.spec_sdpa_groups(T)
+        self._vfy_kvpt1_buf = ttnn.from_torch(
+            page_table.repeat(_spec_groups, 1).contiguous(),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=dev,
@@ -1437,6 +1464,34 @@ class Qwen36Model:
         ttnn.deallocate(wr)
         ttnn.deallocate(wi)
         ttnn.synchronize_device(dev)
+
+        # Commit warmup, for capture_commit_traces() below. The commit's slice/copy programs have
+        # never run at these offsets, and a program that first compiles once ANY trace is parked
+        # lands its kernel binaries in memory the replayed trace writes over — so they have to
+        # compile HERE, before the first begin_trace_capture. The warmup pass above just populated
+        # _verify_states_buf / _verify_win_buf with real (throwaway) contents, so this runs against
+        # exactly the tensors the commit traces will read.
+        #
+        # EVERY mi, not just one: SliceDeviceOperation::compute_program_hash folds slice_start and
+        # slice_end in, so each accepted-prefix index is its own program however identical the output
+        # shape is — and the two paths differ anyway (mi == 0 is tile-aligned on the conv window's
+        # row dim and takes the TILE slice; mi > 0 is not and takes the row-major one). It stays
+        # cheap: all 48 GDN layers share shapes, so only layer 0 compiles and the rest are cache
+        # hits — 2 programs per mi, not 2 x 48. The restore below undoes the state this writes.
+        self._commit_warmup_T = None
+        if commit_warmup:
+            _not_ready = [i for i, dn in enumerate(gdn) if not dn.traced_commit_ready()]
+            if _not_ready:
+                logger.info(
+                    f"[spec] commit warmup skipped: {len(_not_ready)}/{len(gdn)} GDN layers not traced-commit ready "
+                    f"(layer {_not_ready[0]}: {gdn[_not_ready[0]].traced_commit_why()})"
+                )
+            else:
+                for mi in range(T - 1):
+                    for dn in gdn:
+                        dn.commit_verify_slot_ops(mi)
+                ttnn.synchronize_device(dev)
+                self._commit_warmup_T = T
         self._restore_gdn_verify(gdn, snap)
 
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
@@ -1444,7 +1499,89 @@ class Qwen36Model:
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
         self._restore_gdn_verify(gdn, snap)
         self._vfy_gdn = gdn
-        logger.info(f"Verify trace (T={T}, decode_cfg={decode_cfg}) captured successfully!")
+        # Which SDPA the verify's 16 full-attention layers took: the fused grouped read
+        # (spec_multi_pos_tiles, B groups of T/B candidates) or the legacy T-pseudo-user call. A T
+        # with no L1-fitting split (7, 11, ...) stays legacy; QWEN36_SPEC_FUSED_SDPA=0 forces legacy
+        # at every T.
+        _fused = _att0.spec_sdpa_enabled(T)
+        _how = (
+            f"FUSED spec_multi_pos_tiles (B={_spec_groups} groups x Tg={T // _spec_groups})"
+            if _fused
+            else "legacy B=T pseudo-users"
+        )
+        logger.info(f"Verify trace (T={T}, decode_cfg={decode_cfg}) captured successfully! verify SDPA: {_how}")
+
+    # --------------------------------------------------------------------- #
+    # Traced commit (see TTGatedDeltaNetTP.commit_verify_slot_ops)
+    # --------------------------------------------------------------------- #
+    def capture_commit_traces(self):
+        """Capture ONE tiny trace per accepted-prefix index mi, each holding all GDN layers' commit
+        device ops for that mi. Returns the number of traces captured (0 = not available; the caller
+        keeps the eager commit).
+
+        mi ranges over 0..T-2 only: at mi == T-1 (full acceptance) the verify already left the
+        durable state at the last token, so commit_verify_slot's early-out does nothing and there is
+        nothing to trace.
+
+        MUST run after capture_verify_trace: the ops read the GDN layers' _verify_states_buf, which
+        is allocated by the verify trace's capture pass, so its address only exists once that trace
+        has been cut. The programs themselves are already compiled — capture_verify_trace's
+        commit_warmup ran them eagerly BEFORE its own begin_trace_capture — so nothing compiles here
+        with the verify trace parked.
+
+        Capture records dispatch commands without executing them, but snapshot/restore around it
+        anyway: it is the same belt-and-braces the verify capture uses, and it costs one host
+        round-trip per generate.
+        """
+        assert getattr(self, "_vfy_trace_id", None) is not None, "capture the verify trace first"
+        gdn = self._vfy_gdn
+        # The warmup is not optional: every mi's slice program has to be in the program cache before
+        # any begin_trace_capture, and SliceDeviceOperation::compute_program_hash folds the slice
+        # offsets in, so a missing warmup is a hard TT_FATAL ("Cannot load new binaries during trace
+        # capture") halfway through the capture, not a slow path. Refuse instead and let the caller
+        # keep the eager commit.
+        if getattr(self, "_commit_warmup_T", None) != self._vfy_T:
+            logger.info("[spec] traced commit unavailable: capture_verify_trace ran no commit warmup at this T")
+            return 0
+        if not gdn or not all(dn.traced_commit_ready() for dn in gdn):
+            logger.info("[spec] traced commit unavailable (GDN layers not on the batched-conv verify window)")
+            return 0
+        dev = self.device
+        self.release_commit_traces()
+        snap = self._snapshot_gdn_verify(gdn)
+        ids = {}
+        for mi in range(self._vfy_T - 1):
+            tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            for dn in gdn:
+                dn.commit_verify_slot_ops(mi)
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            ids[mi] = tid
+        self._commit_trace_ids = ids
+        self._restore_gdn_verify(gdn, snap)
+        logger.info(f"Commit traces captured: {len(ids)} (mi=0..{self._vfy_T - 2}) x {len(gdn)} GDN layers")
+        return len(ids)
+
+    def replay_commit_trace(self, mi):
+        """Replay the commit trace for accepted-prefix index `mi`. Device half only — the caller
+        still runs each layer's commit_verify_slot_host. Returns False when mi has no trace (full
+        acceptance, which is a no-op by construction)."""
+        ids = getattr(self, "_commit_trace_ids", None)
+        tid = None if ids is None else ids.get(mi)
+        if tid is None:
+            return False
+        ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+        return True
+
+    def release_commit_traces(self):
+        """Drop the captured commit traces (they are only valid against the verify trace they were
+        cut against)."""
+        ids = getattr(self, "_commit_trace_ids", None)
+        if not ids:
+            self._commit_trace_ids = None
+            return
+        for tid in ids.values():
+            ttnn.release_trace(self.device, tid)
+        self._commit_trace_ids = None
 
     def _snapshot_gdn_verify(self, gdn):
         """Host-roundtrip snapshot of the durable GDN state (rec_state + conv_states) across all TP
@@ -1489,7 +1626,7 @@ class Qwen36Model:
             dn._conv_taps_stale, dn._conv_win_stale = False, True
             dn.sync_conv_win()
 
-    def verify_traced(self, draft_tokens, chunk_start, read_logits=False):
+    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True):
         """Replay the captured verify trace for `draft_tokens` at absolute `chunk_start`. Advances GDN
         in place + captures per-token slots (commit_verify_slot rolls to the accepted slot after).
         Returns (logits [T,vocab] host float or None, rows [1,1,T,dim/tp] device hidden, ids [T] host
@@ -1552,7 +1689,15 @@ class Qwen36Model:
         if read_logits:
             lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
             lt = lt.reshape(-1, self.vocab_size)[:T].float()
-        rows = ttnn.clone(self._vfy_rows_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # clone_rows=False hands back the trace's OWN persistent [1,1,T,dim/tp] output instead of a
+        # fresh DRAM clone. The caller must then not deallocate it and must be done with it before
+        # the next replay (the spec loop is: it reads the anchor row and reseeds the drafter, both
+        # within the iteration). That matters beyond saving one allocation: the clone was a
+        # per-iteration buffer LIVE across the commit phase, so it could land on an address a commit
+        # trace had baked in as scratch — see SpeculativeDecoder._anchor_warmup.
+        rows = self._vfy_rows_out
+        if clone_rows:
+            rows = ttnn.clone(rows, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return lt, rows, ids
 
     def decode_step_paged(self, token_id, pos, page_table):
@@ -3447,6 +3592,9 @@ class Qwen36Model:
 
     def free_kv_caches(self):
         """Release KV caches + GDN state for a fresh generation run."""
+        # Commit traces write the GDN layers' rec_state / _conv_win_buf, which the next
+        # allocate_kv_caches re-allocates (reset_state), so they must not survive this.
+        self.release_commit_traces()
         if self._deltanet_external_states is None:
             return
         if getattr(self, "_chunked_trace_id", None) is not None:

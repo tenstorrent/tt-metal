@@ -90,6 +90,20 @@ class Qwen36MTP:
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
+        # Drafter-only decode SDPA width. The shared decode program config leaves
+        # max_cores_per_head_batch at ttnn's default of 16, which at B=1 and 1 local KV head puts 16
+        # of the grid's 110 cores on the KV reduction. The drafter is exactly the shape that hurts:
+        # every one of the K draft steps is a B=1 decode that rescans the WHOLE prompt-length KV, so
+        # its SDPA is reduction-bound and scales with the core count. 64 is the ceiling the kernel
+        # allows (tree reduction is capped at MAX_TREE_REDUCTION_ROUNDS=6 rounds = 2^6 cores/head).
+        #
+        # Set on the MTP's own TPAttention instance only, so the base model's 16 full-attention
+        # layers keep the config they have. The batched reseed (B=K+1 rows through this same
+        # instance) is unaffected: at B=11 both 16 and 64 resolve to min(110, max*B)/B = 10
+        # cores/head. It DOES change the drafter's reduction order, so bf16 near-ties can round the
+        # other way and a different token gets drafted — which only shifts acceptance, never
+        # correctness: every draft is arbitrated by the base model's verify.
+        self.attention.decode_sdpa_max_cores = 64
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):
         """RMSNorm (zero-centered) wrapped in DistributedNorm under TP; plain RMSNorm otherwise."""

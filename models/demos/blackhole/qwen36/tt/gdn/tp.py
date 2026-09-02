@@ -1799,3 +1799,84 @@ class TPGatedDeltaNet:
                 ttnn.copy(c, self.conv_states[j])
             self._conv_taps_stale, self._conv_win_stale = False, True
         self._verify_states = None
+
+    # ------------------------------------------------------------------ #
+    # Traced commit (QWEN36_SPEC_TRACED_COMMIT)
+    # ------------------------------------------------------------------ #
+    # commit_verify_slot above is the one EAGER step of the spec iteration that scales with layer
+    # count: 4 device ops x 48 layers at this stack's eager dispatch cost = ~4.9 ms/iteration
+    # (measured), almost all of it host launch overhead over a few KB of data. The device ops are
+    # IDENTICAL every iteration for a given accepted-prefix index, because every tensor they touch
+    # is persistent:
+    #
+    #   read  _verify_states_buf  the verify trace's per-token state output; the handle is re-armed
+    #                             each replay (verify_traced) but the BUFFER is the same one the
+    #                             capture pass allocated, so its address is fixed.
+    #   read  _verify_win_buf     persistent, allocated in _ensure_verify_slot_bufs.
+    #   write rec_state           persistent under _stable_state (in-place ttnn.copy).
+    #   write _conv_win_buf       persistent, allocated in _ensure_conv_win.
+    #
+    # So the whole commit for a given idx can be captured once as a trace and replayed: 4.9 -> 3.2 ms
+    # measured (ISL 16k, K=7). The replay is not free — it still dispatches ~192 programs on device —
+    # but it stops paying host launch for every one of them.
+    # commit_verify_slot_ops is the device half (the trace body), commit_verify_slot_host the host
+    # half (staleness flags + dropping the verify handle), which still runs every iteration.
+
+    def commit_verify_slot_ops(self, idx):
+        """Device half of commit_verify_slot(idx): the ops a commit trace captures.
+
+        Byte-identical work to commit_verify_slot's device ops on the batched-conv (window) path,
+        minus the full-acceptance early-out (the caller skips idx == T-1 entirely) and minus every
+        host side effect, so a replay of this body is exactly what the eager commit would have done.
+
+        Reads self._verify_states_buf rather than self._verify_states: the latter is nulled by each
+        commit and re-armed by verify_traced, while the former is the stable handle on the buffer
+        whose address the trace bakes in.
+        """
+        assert self._verify_states_buf is not None, "traced commit needs a captured verify"
+        assert self._win_captured, "traced commit is the batched-conv (window) verify path only"
+        st = ttnn.reshape(
+            ttnn.slice(self._verify_states_buf, (0, idx, 0, 0, 0), (self.B, idx + 1, self.Nv, self.Dk, self.Dv)),
+            (self.B, self.Nv, self.Dk, self.Dv),
+        )
+        ttnn.copy(st, self.rec_state)
+        ttnn.deallocate(st)
+        w = ttnn.slice(self._verify_win_buf, (0, idx, 0), (1, idx + self.K, self.qkv_dim_tp))
+        ttnn.copy(w, self._conv_win_buf)
+        ttnn.deallocate(w)
+
+    def commit_verify_slot_host(self, idx):
+        """Host half of commit_verify_slot(idx): the staleness marks and the verify handle drop.
+
+        Runs every iteration whether the device half was eager or a trace replay — python does not
+        re-run inside execute_trace, so these marks have to be set from here either way.
+        """
+        assert self._verify_states is not None, "commit_verify_slot called without a captured verify"
+        if self._win_captured:
+            self._conv_taps_stale, self._conv_win_stale = True, False
+        self._verify_states = None
+
+    def _traced_commit_blockers(self):
+        """Which traced-commit preconditions this layer fails, as a list of names. Empty == ready."""
+        return [
+            name
+            for name, ok in (
+                ("use_fullbatch_verify", self.use_fullbatch_verify),
+                ("_win_captured", self._win_captured),
+                ("_stable_state", self._stable_state),
+                ("_verify_states_buf", self._verify_states_buf is not None),
+                ("_verify_win_buf", self._verify_win_buf is not None),
+                ("_conv_win_buf", self._conv_win_buf is not None),
+                ("rec_state", self.rec_state is not None),
+            )
+            if not ok
+        ]
+
+    def traced_commit_ready(self):
+        """Whether this layer's commit can be traced: the batched-conv verify window has to be live
+        and every buffer the commit ops touch has to be a persistent (fixed-address) one."""
+        return not self._traced_commit_blockers()
+
+    def traced_commit_why(self):
+        """Human-readable reason traced_commit_ready() is False (for the capture-time log)."""
+        return ", ".join(self._traced_commit_blockers()) or "ready"

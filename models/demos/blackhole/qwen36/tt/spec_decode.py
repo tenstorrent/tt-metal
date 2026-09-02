@@ -91,6 +91,18 @@ class SpeculativeDecoder:
             # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
             gdn.use_fused_recurrent_decode = True
         self._vfy_captured = False
+        # QWEN36_SPEC_TRACED_COMMIT=0 reverts the commit phase to the eager per-layer
+        # commit_verify_slot loop; the default replays one pre-captured trace per accepted-prefix
+        # index instead. Measured A/B at ISL 16k, K=7 (traced_16k demo case): commit 4.87 -> 3.21
+        # ms/iteration, total 88.32 -> 86.55, 38.65 -> 39.44 tok/s, with acceptance byte-identical
+        # (2.41/7 both ways) — the trace does the same copies, it just stops paying host dispatch
+        # for 4 ops x 48 layers. The remaining 3.2 ms is the replay's own on-device dispatch of
+        # those ~192 programs, which is why this is worth ~2% and not the whole 4.9 ms.
+        # Kept as an env flag purely so the two can be A/B'd on the same build.
+        self.traced_commit = os.environ.get("QWEN36_SPEC_TRACED_COMMIT", "1") != "0"
+        self._commit_traced = False  # resolved in generate(): did the capture actually take?
+        # Persistent anchor-hidden buffer, allocated before any trace capture (see _anchor_warmup).
+        self._hp_buf = None
         # Read the full [T, vocab] verify logits back to host as well as the argmax ids. Greedy
         # acceptance does not need them (the trace argmaxes on device), so this is off; the device
         # path stays in model.verify_traced for whatever needs distributions (sampling, debug).
@@ -366,20 +378,85 @@ class SpeculativeDecoder:
 
         Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
         """
-        _lt, vhidden, ids = self.model.verify_traced(tokens, p + 1, read_logits=self.read_verify_logits)
+        _lt, vhidden, ids = self.model.verify_traced(
+            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False
+        )
         return ids, vhidden
+
+    def _commit(self, mi):
+        """Point the durable GDN state at the accepted prefix's last verify slot `mi`.
+
+        Traced path (default): ONE execute_trace carries all 48 layers' commit device ops for this
+        mi, and python only does the per-layer host bookkeeping (staleness marks + dropping the
+        verify handle). Eager path: the original per-layer commit_verify_slot loop, unchanged.
+
+        mi == K is FULL acceptance: the verify already left rec_state at the last token and
+        _conv_win_buf at the last window, so there is nothing to copy and no trace was captured for
+        it — replay_commit_trace returns False and only the host half runs. Same early-out the eager
+        path takes, so the two agree token for token.
+        """
+        if not self._commit_traced:
+            for dn in self._gdn:
+                dn.commit_verify_slot(mi)
+            return
+        self.model.replay_commit_trace(mi)
+        for dn in self._gdn:
+            dn.commit_verify_slot_host(mi)
+
+    def _anchor_warmup(self, T, dim_frac, dtype):
+        """Allocate the persistent anchor-hidden buffer and compile every op the loop uses to refill
+        it — BEFORE any trace is captured.
+
+        Two reasons this has to happen here rather than lazily in the loop.
+
+        1. ADDRESS STATIONARITY. The anchor hidden used to be a fresh ttnn.clone per iteration, and
+           it is LIVE across the commit phase. A commit trace bakes its intermediates' addresses in
+           at capture time, when no such per-iteration buffer exists, so the loop's clone could land
+           on one of them and the replay would overwrite the anchor mid-flight — the drafter then
+           chains from corrupted hidden and acceptance collapses (measured: 2.36 -> 0.09 on the third
+           generate of test_spec_determinism). One fixed-address buffer, allocated before the
+           captures, removes the whole class: at commit-replay time nothing but persistent buffers
+           is allocated, exactly as at capture time.
+        2. NO POST-CAPTURE COMPILE. The refill slices row `mi` of the verify window, and
+           SliceDeviceOperation::compute_program_hash folds the slice offsets in, so every mi is its
+           own program. Compiling one while a trace is parked writes kernel binaries over it.
+        """
+        self._hp_buf = ttnn.zeros(
+            [1, 1, 1, dim_frac],
+            device=self.mesh,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        z = ttnn.zeros(
+            [1, 1, T, dim_frac],
+            device=self.mesh,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for mi in range(T):
+            self._set_anchor(z, mi)
+        ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(z)
+
+    def _set_anchor(self, vhidden, mi):
+        """Refill the persistent anchor-hidden buffer from row `mi` of the verify window."""
+        row = ttnn.slice(vhidden, (0, 0, mi, 0), (1, 1, mi + 1, vhidden.shape[-1]))
+        ttnn.copy(row, self._hp_buf)
+        ttnn.deallocate(row)
 
     def _seed(self, first, p):
         """Consume the prompt's first predicted token at position p -> (logits, hidden).
 
         One eager recurrent verify forward. Runs once per request, so it is not on the hot path.
+        The hidden is the persistent anchor buffer (_anchor_warmup), not a fresh clone.
         """
         clogits, chidden = self.model.verify_forward([first], p + 1, self.page_table, gdn_recurrent=True)
-        row = ttnn.slice(chidden, (0, 0, 0, 0), (1, 1, 1, chidden.shape[-1]))
-        hidden = ttnn.clone(row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(row)
+        self._anchor_warmup(self.K + 1, chidden.shape[-1], chidden.dtype)
+        self._set_anchor(chidden, 0)
         ttnn.deallocate(chidden)
-        return clogits[0], hidden
+        return clogits[0], self._hp_buf
 
     def _phase(self, name, fn):
         """Run fn, accumulating its synchronize-bracketed wall time under `name` when profiling."""
@@ -555,8 +632,17 @@ class SpeculativeDecoder:
         # the seed's slot at T, and overwritten by the first real verify — and restore the GDN state
         # they advance. Counts toward TTFT, not decode_time.
         if not self._vfy_captured:
-            model.capture_verify_trace(self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True)
+            model.capture_verify_trace(
+                self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True, commit_warmup=self.traced_commit
+            )
             self._vfy_captured = True
+        # Commit traces, one per accepted-prefix index mi in 0..K-1 (mi == K is full acceptance,
+        # which commit_verify_slot early-outs to nothing). MUST come after the verify capture: the
+        # commit ops read the per-token state buffer that capture allocates. Their programs were
+        # compiled by capture_verify_trace's commit_warmup, before ANY begin_trace_capture, so
+        # nothing compiles here with the verify trace parked.
+        self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
+        logger.info(f"[spec] commit={'traced' if self._commit_traced else 'eager'}")
         p = T
         # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
         # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
@@ -581,33 +667,31 @@ class SpeculativeDecoder:
             committed = [pending] + drafts[:m]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
             _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
-            self._phase("commit", lambda: [dn.commit_verify_slot(mi) for dn in self._gdn])
+            self._phase("commit", lambda: self._commit(mi))
             _t_commit = self._tick() if self._timing else 0.0
-            ttnn.deallocate(Hp)
             prev_p = p
             # The next anchor's own next token: the base's argmax at the accepted-prefix's last row.
             next_pending = vids[mi]
-            # The new anchor hidden is the accepted prefix's last row of the verify window.
-            _view = ttnn.slice(vhidden, (0, 0, mi, 0), (1, 1, mi + 1, vhidden.shape[-1]))
-            new_Hp = ttnn.clone(_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(_view)
+            # The new anchor hidden is the accepted prefix's last row of the verify window, refilled
+            # into the SAME persistent buffer the drafter already read this iteration (see
+            # _anchor_warmup: a fresh per-iteration clone here is what the commit traces aliased).
+            self._set_anchor(vhidden, mi)
 
             # MTP KV maintenance over the slots just committed, in ONE drafter forward over the
             # verify window (row i is the base hidden at slot prev_p+1+i, paired with the token at
-            # slot+1). Done before vhidden is freed.
+            # slot+1). vhidden is the verify trace's own persistent output row buffer, so it is not
+            # freed here — the next replay overwrites it in place.
             _rfn = self._reseed_mtp_batched if self._batched_reseed else self._reseed_mtp
             self._phase("reseed", lambda: _rfn(prev_p + 1, vhidden, committed[1:]))
             _t_reseed = self._tick() if self._timing else 0.0
-            ttnn.deallocate(vhidden)
 
             p += len(committed)
-            Hp = new_Hp
             pending = next_pending
 
             out.extend(committed)
             if self._timing:
-                # `other` = the anchor-hidden slice/clone, the deallocates, and the host argmax that
-                # picks the next `pending`.
+                # `other` = the anchor-hidden slice + copy, the deallocates, and the host argmax
+                # that picks the next `pending`.
                 self._log_iter_timing(
                     {
                         "draft": _t_draft - _tm,
@@ -627,7 +711,8 @@ class SpeculativeDecoder:
             if committed[-1] in self.stop_tokens:
                 break
 
-        ttnn.deallocate(Hp)
+        ttnn.deallocate(self._hp_buf)  # == Hp; the persistent anchor buffer, one per generate
+        self._hp_buf = None
         ttnn.synchronize_device(self.mesh)
         self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
         # The verify advances the GDN conv window only; bring the K per-tap buffers back in step so
