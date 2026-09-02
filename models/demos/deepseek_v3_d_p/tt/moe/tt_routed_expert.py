@@ -57,6 +57,13 @@ _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. The composite
+# covers all three, so this only constrains which experts a hybrid split may hand to the fused op.
+_FUSED_OP_ACTIVATIONS = (
+    ttnn.RoutedExpertActivation.Silu,
+    ttnn.RoutedExpertActivation.SituGlu,
+)
+
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
@@ -387,6 +394,22 @@ class TtRoutedExpert(LightweightModule):
                 raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
             if hybrid_token_threshold < 0:
                 raise ValueError(f"hybrid_token_threshold must be >= 0, got {hybrid_token_threshold}")
+            # moe_fused_swiglu takes no bias tensors, so the experts in its band would compute
+            # without theirs while the composite's band applies them -- wrong numbers, no error.
+            if torch_biases is not None:
+                raise NotImplementedError(
+                    "hybrid_token_threshold cannot be combined with expert biases: moe_fused_swiglu "
+                    "has no bias inputs, so the experts in its band would silently drop them. Leave "
+                    "the threshold as None to keep every expert on the composite."
+                )
+            # The fused op validates its activation on device, so an unsupported one reaches the
+            # caller as a TT_FATAL mid-forward instead of a rejected configuration.
+            if activation not in _FUSED_OP_ACTIVATIONS:
+                raise NotImplementedError(
+                    f"hybrid_token_threshold cannot be combined with {activation}: moe_fused_swiglu "
+                    "implements Silu and SituGlu only. Leave the threshold as None to keep every "
+                    "expert on the composite."
+                )
         self.hybrid_token_threshold = hybrid_token_threshold
 
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
