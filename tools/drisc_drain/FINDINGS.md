@@ -7062,3 +7062,46 @@ the previous sweep's UMD DeviceTimeoutError.
 per link**, NOT a closure number -- closure is k*eps and k depends on topology, so any closure
 figure is meaningless without its edge set. Delivered accuracy is still dominated by the
 shared-slope term (ppm-scale, ms over a session), which none of these knobs touch.
+
+---
+
+## RETRACTION: "shared-slope dominates delivered accuracy" is WRONG -- it measured drift vs HOST
+
+Asserted in the rate-sweep section and repeated after it: that the accuracy frontier is the
+shared-slope assumption, with non-root devices diverging at 21-61 ppm to millisecond-scale error,
+"~1000x larger than everything else". **That is measuring the wrong quantity**, and it is the
+SECOND time this session the same error was made in the same place.
+
+`ANCHOR STALENESS` extrapolates a device's ORIGINAL anchor forward with its assumed frequency and
+compares against the HOST clock. For a non-root device that relationship is DELIBERATELY NOT
+MAINTAINED -- it is the per-device host fit that was removed on purpose, because independent host
+fits disagree by microseconds and inject cross-device skew. A large staleness number for a non-root
+device is the design working, not a defect. The caveat was even written into the rate-sweep section
+("staleness is drift vs HOST, not end-of-session cross-device skew ... the quantity a multi-device
+timeline actually cares about") and then ignored in that same section's conclusion.
+
+What the DELIVERED cross-device path actually shows, same run (100 Hz, default orientation):
+
+    published corrections:  chip1 45 cy, chip2 58 cy, chip3 43 cy   = 33 / 43 / 32 ns
+    echo-inside-own-RTT-box: 2934 / 2934  (100.0%)
+
+Both are cross-device consistency checks and both are ns-class. Nothing in the delivered path
+exhibits milliseconds.
+
+### What is actually established, and what is not
+- **Established:** the measured per-link bias is `eps ~= 23-24 ns`, it is a responder-turnaround
+  term (topology experiment, k=2 vs k=4), and it is unaffected by round rate and republish cadence.
+  That is the accuracy limit this sweep can speak to.
+- **NOT established, and NOT to be replaced by another guess:** end-of-session cross-device skew was
+  never measured directly. The corrections and the echo-box check bound it well below milliseconds
+  but do not pin it. Measuring it needs a capture with the paired FSYNC_ECHO / FSYNC_ECHO_RAW
+  residual read at the START and END of a long single-session run (the pairing script overflows on
+  multi-session captures -- use a single-session config).
+- The shared-slope choice may still be worth revisiting on its own merits; nothing here is evidence
+  against it, and the ppm figures quoted earlier are evidence about the HOST relationship only.
+
+### Method lesson (twice-learned)
+Writing the caveat is not the same as honoring it. A metric that measures a relationship the design
+deliberately abandons cannot be promoted to "the dominant error" three paragraphs later. When a
+number is 1000x everything else, that is a signal to re-check WHAT IT MEASURES before treating it
+as the headline.
