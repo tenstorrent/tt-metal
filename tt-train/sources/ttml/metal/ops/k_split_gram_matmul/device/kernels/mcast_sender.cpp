@@ -177,8 +177,12 @@ void kernel_main() {
 #endif
                         noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, sem_mcast_addr, lower_num_dests);
 
-                        noc_semaphore_wait(receiver_sem_ptr, VALID);
-                        noc_semaphore_set(receiver_sem_ptr, INVALID);
+                        // receiver_sem_addr is the SOURCE of the multicast above, so our own
+                        // copy is already VALID -- waiting on it is a no-op, and clearing it
+                        // poisons the source for the next round (the group would be sent
+                        // INVALID). A write barrier is what actually proves our loopback copy
+                        // landed.
+                        noc_async_write_barrier();
                     } else {
                         noc_semaphore_wait(sender_sem_ptr, lower_num_dests);
                         noc_semaphore_set(sender_sem_ptr, 0);
