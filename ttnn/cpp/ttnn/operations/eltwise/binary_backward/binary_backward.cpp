@@ -4,7 +4,9 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <array>
 #include <numbers>
+#include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -100,18 +102,28 @@ std::vector<Tensor> atan2_bw(
     float t_nan = std::nanf("");
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    std::vector<EltwiseUnaryWithParam> ops_chain = {
-        EltwiseUnaryWithParam{UnaryOpType::SQUARE}, EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+
+    // The denominator was square(hypot(a, b)). hypot rescales to keep a*a + b*b
+    // from overflowing, and squaring it puts the overflow straight back, so the
+    // rescaling bought nothing and the sqrt inside it was undone by the square.
+    // add squares each operand on the way in, which is the same number.
+    const std::array square_it = {EltwiseUnaryWithParam{UnaryOpType::SQUARE}};
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
+    const std::array negate_it = {EltwiseUnaryWithParam{UnaryOpType::NEG}};
+
+    Tensor sum_of_squares =
+        ttnn::add(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, square_it, square_it);
     Tensor recip_mul = ttnn::multiply(
-        grad_tensor,
-        ttnn::unary_chain(ttnn::hypot(input_a, other, output_mem_config), ops_chain, output_mem_config),
-        std::nullopt,
-        output_mem_config);
+        grad_tensor, sum_of_squares, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
+    sum_of_squares.deallocate();
     Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_mem_config);
-    Tensor cond = ttnn::logical_and(ttnn::eqz(input_a, output_mem_config), ttnn::eqz(other, output_mem_config));
+    Tensor cond =
+        ttnn::logical_and(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero);
     grad_a = ttnn::where(cond, t_nan, grad_a, output_mem_config);
     grad.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(input_a), recip_mul, std::nullopt, output_mem_config);
+    Tensor grad_b =
+        ttnn::multiply(input_a, recip_mul, std::nullopt, output_mem_config, std::nullopt, {}, negate_it, {});
     grad_b = ttnn::where(cond, t_nan, grad_b, output_mem_config);
     recip_mul.deallocate();
     cond.deallocate();
@@ -526,19 +538,19 @@ std::vector<std::optional<Tensor>> concat_bw(
         input_grad, other_grad, input_tensor_a_arg, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs[0]) {
-        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> end_index = {
             input_tensor_a_arg.logical_shape()[0],
             input_tensor_a_arg.logical_shape()[1],
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
-        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<std::uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
     if (are_required_outputs[1]) {
-        ttsl::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
             start_index_2 = {input_tensor_a_arg.logical_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
@@ -548,12 +560,12 @@ std::vector<std::optional<Tensor>> concat_bw(
         } else if (dim == 3) {
             start_index_2 = {0, 0, 0, input_tensor_a_arg.logical_shape()[3]};
         }
-        ttsl::SmallVector<uint32_t> end_index_2 = {
+        ttsl::SmallVector<std::uint32_t> end_index_2 = {
             grad_tensor_arg.logical_shape()[0],
             grad_tensor_arg.logical_shape()[1],
             grad_tensor_arg.logical_shape()[2],
             grad_tensor_arg.logical_shape()[3]};
-        ttsl::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
+        ttsl::SmallVector<std::uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }
