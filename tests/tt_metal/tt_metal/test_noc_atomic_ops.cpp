@@ -195,11 +195,11 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
            "the 4-bit CAS is NOT safe next to words that can exceed 15.";
     EXPECT_EQ(result[0], result[1])
-        << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
-           "any consumer of cas4 returns is REQUIRED, not optional.";
+        << "noc_async_atomic_barrier did NOT order the CAS return-value write: EXTERNAL down() reads "
+           "the return slot right after the barrier, so its lock is unsafe on this hardware.";
     EXPECT_EQ(result[2], result[3])
-        << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
-           "any consumer of cas4 returns is REQUIRED, not optional.";
+        << "noc_async_atomic_barrier did NOT order the CAS return-value write: EXTERNAL down() reads "
+           "the return slot right after the barrier, so its lock is unsafe on this hardware.";
 }
 
 }  // namespace tt::tt_metal

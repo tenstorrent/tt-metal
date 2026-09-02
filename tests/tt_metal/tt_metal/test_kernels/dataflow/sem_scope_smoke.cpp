@@ -16,10 +16,7 @@ void kernel_main() {
 
     // The mechanism comes from the binding token the host emitted.
     Semaphore s(sem::counter);
-#if defined(SEM_SCOPE_SENTINEL_DOWN)
-    // Sentinel collision: with the word at 0xFFFFFFFF, EXTERNAL down()'s pre-op return
-    // looks exactly like the CAS-return sentinel, so its bounded poll must give up
-    // instead of hanging. The second down(1) proves the ret slot and lock still work.
+#if defined(SEM_SCOPE_ALL_ONES_DOWN)
     (void)increment_times;
     s.set(0xFFFFFFFFu);
     s.down(1);

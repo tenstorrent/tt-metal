@@ -7,9 +7,11 @@
 #include <cstdint>
 
 /**
- * @brief Physical path a semaphore's accesses take. Picked by the host at build time from the
- *        kernels that bind the semaphore, and delivered to the kernel inside its binding token.
- *        The path chosen is the fastest one that keeps the semaphore's operations atomic.
+ * @brief Physical path a semaphore's accesses take. The host picks it automatically while
+ *        building the program, from where the semaphore's binder kernels run; there is no user
+ *        intervention needed. The kernel gets the pick inside its binding token. The pick is
+ *        the fastest path that keeps the semaphore's operations atomic.
+ *        Quasar (tt-2xx) only. Gen1 (Wormhole, Blackhole) always resolves to LOCAL_NONATOMIC.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
  *                     one binder instance exists.
@@ -19,9 +21,7 @@
  *                     write-back cannot clobber NoC-written data: see MEM_DM_CACHED_SEM_BASE
  *                     in dev_mem_map.h.
  *  - EXTERNAL:        Stored in L1 and accessed through atomic operations via the NOC. Picked
- *                     whenever the semaphore is reachable beyond a single node. An EXTERNAL
- *                     semaphore's value can never be 0xFFFFFFFF, it would look like a NoC
- *                     atomic's reply that has not yet arrived.
+ *                     whenever the semaphore is reachable beyond a single node.
  *
  * @note Never access a bound semaphore's word directly (get_semaphore(), the noc_semaphore_*
  *       free functions, raw pointers), always go through the Semaphore class. A raw access is

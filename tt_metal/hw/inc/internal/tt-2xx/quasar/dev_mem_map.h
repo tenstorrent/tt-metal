@@ -119,10 +119,10 @@
 #define MEM_TRISC3_FIRMWARE_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_DM_GLOBAL_BASE (MEM_TRISC3_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_TRISC0_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE * NUM_DM_CORES + MEM_DM_GLOBAL_SIZE)
-#define MEM_TRISC1_GLOBAL_BASE (MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
-#define MEM_TRISC2_GLOBAL_BASE (MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
-#define MEM_TRISC3_GLOBAL_BASE (MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
-#define MEM_DM_LOCAL_BASE (MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE*2)
+#define MEM_TRISC1_GLOBAL_BASE (MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * 2)
+#define MEM_TRISC2_GLOBAL_BASE (MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * 2)
+#define MEM_TRISC3_GLOBAL_BASE (MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * 2)
+#define MEM_DM_LOCAL_BASE (MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * 2)
 // kernels are loaded as part of kernel_config at MEM_MAP_END or after
 // linker needs an address that doesn't overlap any of the FW and data sections
 // so just give an address outside of physical memory
@@ -184,7 +184,7 @@
 #endif
 
 // Per-hart NoC-atomic return slots (EXTERNAL down()'s CAS readback): R_SRC_ADDR is per-hart, so each
-// hart gets a private word. Written only by NoC responses; every use pre-writes a sentinel and polls.
+// hart gets a private word. Written only by NoC responses and read after the atomic barrier.
 #define MEM_NOC_CAS_RET_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
 #define MEM_NOC_CAS_RET_SIZE 64
 

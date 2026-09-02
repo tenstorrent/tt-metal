@@ -65,7 +65,7 @@ protected:
     // observer on second_node() is added, since any off-node binder forces EXTERNAL
     // (callers must skip when there is no second node). Cached shapes cannot be built
     // here; that coverage lives in run_concurrent and the census tests.
-    uint32_t run_scope(SemScope want, bool with_down = false, bool sentinel_down = false) {
+    uint32_t run_scope(SemScope want, bool with_down = false, bool all_ones_down = false) {
         if (want == SemScope::DM_LOCAL_CACHED) {
             ADD_FAILURE() << "run_scope cannot build a cached shape (needs >= 2 unsynchronised writer threads)";
             return 0u;
@@ -86,8 +86,8 @@ protected:
         };
 
         std::map<std::string, std::string> defs;
-        if (sentinel_down) {
-            defs.emplace("SEM_SCOPE_SENTINEL_DOWN", "1");  // set(0xFFFFFFFF) then down(1) twice
+        if (all_ones_down) {
+            defs.emplace("SEM_SCOPE_ALL_ONES_DOWN", "1");  // set(0xFFFFFFFF) then down(1) twice
         }
         if (with_down) {
             defs.emplace("SEM_SCOPE_UPDOWN", "1");  // kernel also does down(N) after up(N)
@@ -584,15 +584,13 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
 }
 
-// EXTERNAL down() on a word holding 0xFFFFFFFF, the CAS-return sentinel.
-// Completing at all proves the bounded poll gave up instead of wedging.
-TEST_F(SemScopeFixture, TestExternalSentinelValueDoesNotWedgeDown) {
+TEST_F(SemScopeFixture, TestExternalDownFromAllOnes) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape binds an observer kernel off-node";
     }
-    const uint32_t observed = run_scope(SemScope::EXTERNAL, /*with_down=*/false, /*sentinel_down=*/true);
-    log_info(LogTest, "EXTERNAL sentinel-value down value(): {:#x} (expected 0xfffffffd)", observed);
-    EXPECT_EQ(observed, 0xFFFFFFFDu) << "down() from the sentinel value must complete and subtract exactly";
+    const uint32_t observed = run_scope(SemScope::EXTERNAL, /*with_down=*/false, /*all_ones_down=*/true);
+    log_info(LogTest, "EXTERNAL down() from 0xFFFFFFFF, value(): {:#x} (expected 0xfffffffd)", observed);
+    EXPECT_EQ(observed, 0xFFFFFFFDu) << "down() from 0xFFFFFFFF must subtract exactly";
 }
 
 // All num_dms DMs concurrently up(1) a shared Semaphore. An exact num_dms*iters count proves
