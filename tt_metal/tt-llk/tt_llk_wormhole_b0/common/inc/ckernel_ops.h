@@ -1208,19 +1208,19 @@ extern volatile std::uint32_t __instrn_buffer[];
 #undef TTI_REG2FLOP
 #define TTI_REG2FLOP(a0, a1, a2, a3, a4, a5) TT_REG2FLOP(a0, a1, a2, a3, a4, a5)
 #undef TT_RMWCIB0
-#define TT_RMWCIB0(a0, a1, a2) __builtin_rvtt_rmwciB0((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#define TT_RMWCIB0(a0, a1, a2) __instrn_buffer[0] = __builtin_rvtt_rmwciB0((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
 #undef TTI_RMWCIB0
 #define TTI_RMWCIB0(a0, a1, a2) TT_RMWCIB0(a0, a1, a2)
 #undef TT_RMWCIB1
-#define TT_RMWCIB1(a0, a1, a2) __builtin_rvtt_rmwciB1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#define TT_RMWCIB1(a0, a1, a2) __instrn_buffer[0] = __builtin_rvtt_rmwciB1((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
 #undef TTI_RMWCIB1
 #define TTI_RMWCIB1(a0, a1, a2) TT_RMWCIB1(a0, a1, a2)
 #undef TT_RMWCIB2
-#define TT_RMWCIB2(a0, a1, a2) __builtin_rvtt_rmwciB2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#define TT_RMWCIB2(a0, a1, a2) __instrn_buffer[0] = __builtin_rvtt_rmwciB2((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
 #undef TTI_RMWCIB2
 #define TTI_RMWCIB2(a0, a1, a2) TT_RMWCIB2(a0, a1, a2)
 #undef TT_RMWCIB3
-#define TT_RMWCIB3(a0, a1, a2) __builtin_rvtt_rmwciB3((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#define TT_RMWCIB3(a0, a1, a2) __instrn_buffer[0] = __builtin_rvtt_rmwciB3((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
 #undef TTI_RMWCIB3
 #define TTI_RMWCIB3(a0, a1, a2) TT_RMWCIB3(a0, a1, a2)
 #undef TT_SEMGET
@@ -1274,11 +1274,11 @@ extern volatile std::uint32_t __instrn_buffer[];
 #undef TTI_SETASHRMV
 #define TTI_SETASHRMV(a0) TT_SETASHRMV(a0)
 #undef TT_SETC16
-#define TT_SETC16(a0, a1) __builtin_rvtt_wh_setc16((unsigned)(a0), (unsigned)(a1))
+#define TT_SETC16(a0, a1) __instrn_buffer[0] = __builtin_rvtt_wh_setc16((unsigned)(a0), (unsigned)(a1))
 #undef TTI_SETC16
 #define TTI_SETC16(a0, a1) TT_SETC16(a0, a1)
 #undef TT_SETDMAREG
-#define TT_SETDMAREG(a0, a1, a2, a3) __builtin_rvtt_setdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
+#define TT_SETDMAREG(a0, a1, a2, a3) __instrn_buffer[0] = __builtin_rvtt_setdmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_SETDMAREG
 #define TTI_SETDMAREG(a0, a1, a2, a3) TT_SETDMAREG(a0, a1, a2, a3)
 #undef TT_SETDVALID
@@ -1468,7 +1468,7 @@ extern volatile std::uint32_t __instrn_buffer[];
 #undef TTI_SUBDMAREG
 #define TTI_SUBDMAREG(a0, a1, a2, a3) TT_SUBDMAREG(a0, a1, a2, a3)
 #undef TT_WRCFG
-#define TT_WRCFG(a0, a1, a2) __builtin_rvtt_wrcfg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
+#define TT_WRCFG(a0, a1, a2) __instrn_buffer[0] = __builtin_rvtt_wrcfg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2))
 #undef TTI_WRCFG
 #define TTI_WRCFG(a0, a1, a2) TT_WRCFG(a0, a1, a2)
 #undef TT_XMOV
