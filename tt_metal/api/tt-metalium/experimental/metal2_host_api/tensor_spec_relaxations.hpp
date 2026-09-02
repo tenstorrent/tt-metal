@@ -50,8 +50,13 @@ struct TensorSpecRelaxations {
 
     // Permit tensor arguments with dynamic logical shape.
     // The argument's logical_shape AND padded_shape may differ from the declared
-    // shape (the rank must remain constant). Strictly subsumes
-    // match_padded_shape_only -- when both are set, dynamic_tensor_shape wins.
+    // shape.
+    //
+    // Notes:
+    //  - This setting strictly subsumes match_padded_shape_only -- if both are set,
+    //    dynamic_tensor_shape wins.
+    //  - dynamic_tensor_shape requires that the logical rank remain constant. To
+    //    further relax the logical rank, additionally set relax_logical_rank.
     //
     // Effects:
     //  - Validation checks are relaxed.
@@ -67,6 +72,17 @@ struct TensorSpecRelaxations {
     //    The aligned_page_size becomes an implicit common runtime argument.
     //    (Your kernel can access this value via TensorAccessor::get_aligned_page_size().)
     bool dynamic_tensor_shape = false;
+
+    // Permit tensor arguments with a different logical rank than the declared shape.
+    // This is intended to be used in conjunction with dynamic_tensor_shape.
+    // (The flag is inert if dynamic_tensor_shape is not set.)
+    //
+    // Effects:
+    //  - Validation checks are relaxed.
+    //  - TensorAccessor configuration is completely unchanged.
+    //    (The "rank" carried by the TensorAccessor is not the logical rank, but the physical
+    //     "squeezed" rank of the memory layout.)
+    bool relax_logical_rank = false;
 };
 
 // Do two TensorSpecs "match" under a TensorSpecRelaxations?
