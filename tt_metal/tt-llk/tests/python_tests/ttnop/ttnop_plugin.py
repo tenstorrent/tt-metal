@@ -435,7 +435,11 @@ def pytest_runtest_call(item):
 
         # A test that was already red tells us nothing about timing.
         if outcome.excinfo is not None:
-            _hb().mark_done(item.nodeid)
+            error = outcome.excinfo[1]
+            if isinstance(error, TimeoutError):
+                _hang_closes_case(item.nodeid, str(error))
+            else:
+                _hb().mark_done(item.nodeid)
             return
         # Reconfig tests can be swept without a result buffer because the body
         # checks TensixState.

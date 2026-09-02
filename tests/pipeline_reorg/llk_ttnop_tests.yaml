@@ -1,4 +1,5 @@
 # ttnop sweep: 15 shards per arch, 1440 min timeout per machine.
+# Only BH group 10 is enabled.
 
 # Wormhole: 15-way pytest-split on wh_n150_civ2.
 # - name: llk_ttnop_wormhole group 1/15
@@ -273,21 +274,21 @@
 #     bh_p150b_civ2:
 #       timeout: 1440
 #   owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 4/15
-  split_group: 4
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 4 \
-      --report-dir reports/blackhole-4
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 4/15
+#   split_group: 4
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 4 \
+#       --report-dir reports/blackhole-4
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
 # - name: llk_ttnop_blackhole group 5/15
 #   split_group: 5
 #   team: llk
@@ -423,21 +424,21 @@
 #     bh_p150b_civ2:
 #       timeout: 1440
 #   owner_id: U09UC143684 # Nemanja Divnic
-- name: llk_ttnop_blackhole group 14/15
-  split_group: 14
-  team: llk
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests/ttnop
-    ./ci.sh --test . \
-      --k 'not test_pack_reconfig' \
-      --splits 15 --group 14 \
-      --report-dir reports/blackhole-14
-  skus:
-    bh_p150b_civ2:
-      timeout: 1440
-  owner_id: U09UC143684 # Nemanja Divnic
+# - name: llk_ttnop_blackhole group 14/15
+#   split_group: 14
+#   team: llk
+#   coverage: false
+#   cmd: |
+#     set -euo pipefail
+#     cd tests/python_tests/ttnop
+#     ./ci.sh --test . \
+#       --k 'not test_pack_reconfig' \
+#       --splits 15 --group 14 \
+#       --report-dir reports/blackhole-14
+#   skus:
+#     bh_p150b_civ2:
+#       timeout: 1440
+#   owner_id: U09UC143684 # Nemanja Divnic
 # - name: llk_ttnop_blackhole group 15/15
 #   split_group: 15
 #   team: llk

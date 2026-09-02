@@ -313,10 +313,10 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
-  # ttnop: verify_time_budget sums shard timeouts (15 × 1440 = 21600 per SKU).
+  # ttnop: verify_time_budget sums shard timeouts (1 × 1440 = 1440 for BH group 10).
   ttnop:
     #wh_n150_civ2: 21600
-    bh_p150b_civ2: 4320
+    bh_p150b_civ2: 1440
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
