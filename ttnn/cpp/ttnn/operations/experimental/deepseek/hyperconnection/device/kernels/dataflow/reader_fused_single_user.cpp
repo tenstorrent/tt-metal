@@ -71,7 +71,6 @@ void kernel_main() {
     const auto fused_w = TensorAccessor(fused_w_args, fused_w_addr);
     const auto pre_bias = TensorAccessor(pre_bias_args, pre_bias_addr);
     const auto post_bias = TensorAccessor(post_bias_args, post_bias_addr);
-    const auto hidden = TensorAccessor(hidden_args, hidden_addr);
     const auto comb_bias = TensorAccessor(comb_bias_args, comb_bias_addr);
 
     CircularBuffer cb_fw(cb_fused_w);
