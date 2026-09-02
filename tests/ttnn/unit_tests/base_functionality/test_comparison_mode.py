@@ -34,7 +34,7 @@ def test_ulp_comparison_policy_for_degenerate_output(expect_error):
     comparison_records = _compare_torch_tensors(golden, one_ulp_away)
 
     assert comparison_records[0]["matches"]
-    with expect_error(RuntimeError):
+    with expect_error(RuntimeError, r"Comparing output tensor 0 against CPU locally failed"):
         _compare_torch_tensors(golden, two_ulps_away)
 
 
@@ -92,7 +92,7 @@ def test_comparison_policy_masks_matching_nonfinite_positions(expect_error):
     comparison_records = _compare_torch_tensors(golden, output)
 
     assert comparison_records[0]["matches"]
-    with expect_error(RuntimeError):
+    with expect_error(RuntimeError, r"Comparing output tensor 0 against CPU locally failed"):
         _compare_torch_tensors(golden, torch.tensor([1.0, float("inf")]))
 
 
@@ -131,7 +131,7 @@ def test_scalar_output_comparison(monkeypatch, expect_error):
 
     assert integer_records[0]["matches"]
     assert float_records[0]["matches"]
-    with expect_error(RuntimeError):
+    with expect_error(RuntimeError, r"Comparing scalar output against CPU locally failed"):
         ttnn.decorators.compare_scalar_outputs(
             "ttnn.test_operation",
             7,
@@ -303,5 +303,5 @@ def test_failed_comparison(device, batch_size, h, w, dim, expect_error):
             run()
 
         with ttnn.manage_config("comparison_mode_should_raise_exception", True):
-            with expect_error(RuntimeError):
+            with expect_error(RuntimeError, r"ttnn\.softmax: Comparing output tensor 0 against CPU locally failed"):
                 run()
