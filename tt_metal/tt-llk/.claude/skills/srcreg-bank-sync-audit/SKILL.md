@@ -32,7 +32,10 @@ corrupts `ImpliedSrcBFmt`; the supported form is `UNPACR_NOP(...,SET_DVALID,...)
 lockstep-check. All are **candidates**, not verdicts. The tool only recalls the
 dvalid control points — it does NOT model bank-flip lockstep (the `MOV*2D` consume
 side), dvalid placement, single-thread ownership, the BH `DISABLE_IMPLIED_SRC?_FMT`
-bit, or the Quasar SrcS lane; **widen** with the method below for all of those. It
+bit, the Quasar SrcS lane, or **the `STALLWAIT` condition masks on either side of a
+Dest→Src move (check 5)** — it does not read those masks at all, so a `MOVD2A`/`MOVD2B`
+missing its FPU-pipeline drain, or a dummy publication waiting on the wrong bank, will
+**not** appear in its findings; **widen** with the method below for all of those. It
 never clears a site; you decide. If unbuilt, proceed manually.
 
 ## The bug class (precise)
@@ -50,6 +53,22 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 2. **Valid/clear placement (dvalid handshake).** Data-valid handed to the MatrixUnit only after the unpack of that bank completes; handed back to the unpackers only after the FPU has consumed it. Flag a set-valid before the fill is complete, or a clear/reuse before the FPU drains.
 3. **Single-thread ownership of the bank state.** The ISA requires "each relevant backend execution unit is only in use by one thread at a time." Two threads both driving the unpackers, or both issuing FPU ops, corrupt the shared bank-pointer bits. Flag any cross-thread contention on the unpacker or FPU bank state that isn't excluded by a handshake.
 4. **Dst/LReg overwrite outside the known primitives.** A raw FPU/SFPU/pack access to `Dst`, or cross-thread `LReg`, that is NOT ordered by `MATH_PACK` / `mutex::SFPU` → flag and hand the semaphore half to `semaphore-handshake-audit`; this audit confirms the data-register access itself.
+5. **Dest→Src reuse (`MOVD2A`/`MOVD2B`) — check BOTH sides of the handshake.** This is the one bank handoff where the Wait Gate does **not** protect you, and where fixing one side leaves the other broken. Treat the two as independent findings; never close one on the strength of the other.
+
+   **(a) Math side — source-valid alone is insufficient.** `MOVD2A`/`MOVD2B` *write* Src from Dest, so they sit outside the Wait Gate's automatic `AllowedClient` wait, which covers only FPU instructions that *read* Src (the ISA notes on the source-valid conditions say they are "rarely needed" for exactly that reason — these writes are the exception). `MOVD2A.md` / `MOVD2B.md` say outright that they do not auto-wait and direct software to `STALLWAIT`.
+
+   But a `STALLWAIT` selecting **only** the source-valid condition is still wrong. That condition indexes `MatrixUnit.Src?Bank` **live** at the Wait Gate, and that pointer is advanced in the *epilogue* of the preceding Matrix Unit instruction — see the `if (FlipSrcA)` / `if (FlipSrcB)` block at the end of `ELWMUL.md`'s functional model, and equivalently `SETRWC` with a `CLR_*` operand. With a bank-flipping op still in flight the condition tests the **pre-flip** bank, which the Matrix Unit still owns, is satisfied vacuously, and releases — by the time the move executes the flip has landed and it writes the **post-flip** bank the unpacker owns and may be filling.
+
+   So the wait must **also** select the "this thread has an instruction in any stage of the Matrix Unit (FPU) pipeline" condition (`p_stall::MATH`), draining the pipe so the source-valid test observes the post-flip pointer. That condition's documented precondition is that the block mask blocks new Matrix Unit instructions (`p_stall::STALL_MATH`) — verify that too. Flag any `STALLWAIT` gating a `MOVD2A`/`MOVD2B` whose condition mask carries `SRC?_VLD` without `MATH`. **Symptom is a silent wrong value, never a hang**, because every FPU instruction that *reads* Src does auto-wait — so absence of hangs is not evidence of safety here.
+
+   **(b) Unpack side — the dummy publication must wait on the bank it clears.** These moves depend on the unpacker publishing a dummy DVALID (a `UNPACR_NOP` doing ZEROSRC and/or SET_DVALID) to hand the bank over. That instruction clears/publishes `Unpackers[i].SrcBank` but, in its default form, *waits* on `MatrixUnit.Src?Bank` — a **different bank** once double-buffering reaches steady state — so it can clear a bank it never waited for. Correct forms, all present in-tree; accept any one:
+   - the "wait like UNPACR" control bit set, so the instruction gates on `Unpackers[i].SrcBank` (BH exposes it as a `STALLWAIT`-clear operand on `UNPACR_NOP`; WH as a distinct `UNP_ZEROSRC_*` encoding), or
+   - an explicit preceding `STALLWAIT` on the **unpacker-owned-bank** conditions (`p_stall::SRCA_CLR` / `SRCB_CLR` — `Src?[Unpackers[i].SrcBank].AllowedClient != Unpackers`), or
+   - a preceding `UNPACR`/`UNPACR_NOP ZEROSRC` that already performs the wait, which a following `SET_DVALID` inherits by sequencing (`UNPACR_NOP_SETDVALID.md`).
+
+   A bare `STALLWAIT` on the unpacker *pipeline* condition (`p_stall::UNPACK`) is **not** one of these — it drains the pipe, it does not establish bank ownership. Diff the arches here: one arch's version of a shared helper is often guarded while the other's is not.
+
+   **(c) The join.** Fixing the math side lengthens the math-thread wait and shifts inter-thread timing, which can *unmask* an unguarded publication on the unpack side. When you flag (a), always state whether (b) holds at the paired publisher, and vice versa.
 
 ## Method
 1. Enumerate the handshake primitives and bank bookkeeping. **Scan the KERNEL
@@ -69,10 +88,14 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 - **Bank pointers lockstep on every path, valid/clear correctly ordered, single owner per unit** → SAFE.
 - **Bank-flip desync reachable** (counts diverge on a branch) → CORRUPTION (FPU reads unfilled/over-written bank).
 - **dvalid set/cleared at the wrong point** → CORRUPTION or stall.
+- **`MOVD2A`/`MOVD2B` gated on source-valid without the FPU-pipeline drain** → CORRUPTION (the move writes the post-flip bank the unpacker owns). Silent wrong values, no hang.
+- **Dummy publication that waits on the Matrix-Unit bank rather than the unpacker's own** → CORRUPTION (a published bank can be cleared). Report separately from the math-side verdict even when both are present at the same op.
 - **Cross-thread contention on bank state / unmediated Dst|LReg sharing** → RACE (hand the semaphore half to `semaphore-handshake-audit`).
 - **Risk only on an experimental/unused path or value-invariant** → LATENT — say so.
 
 ## Architecture note
+**`STALLWAIT` condition/block bit *values* differ between WH and BH.** The `p_stall::` constants carry the same meanings, but their numeric encodings do not line up, so a condition number read from one arch's `STALLWAIT.md` must never be carried over to the other. Always reason with the named constants and re-derive the bit for the arch under audit from that arch's `ckernel_instr_params.h` plus its own `STALLWAIT.md`. Quoting one arch's condition numbering in a finding that spans both arches is a reporting error even when the fix is right.
+
 WH/BH share the bank model; BH adds per-bank implied data format (`ImpliedSrcAFmt/BFmt`) written by the unpacker — verify the implied-format and the data land in the same bank the FPU will read. **On BH a raw `SETDVALID` is ISA-unsupported** (it corrupts `ImpliedSrcBFmt` to an unpredictable value); the supported form is `UNPACR_NOP(...,SET_DVALID,...)`. Flag a raw `TTI_SETDVALID` on BH, and check the implied-format disable bit
 `DISABLE_IMPLIED_SRC?_FMT_Base` on the moves that touch that Src bank — grouped by
 **BANK, not by data direction**: **SRCA** for `MOVA2D` (SrcA→Dest) **and** `MOVD2A`
@@ -90,4 +113,4 @@ parameter list.) Quasar's unpack→dest path has its own semaphores (`UNPACK_TO_
 **Do NOT dismiss a Quasar-specific data lane by analogy to the WH/BH 2-bank SrcA/SrcB model.** Quasar adds a third unpacker / `SrcS` lane (`llk_srcs.h`, `UNPACKER2`): audit its dvalid lifecycle in full — both the **set** (producer, e.g. `UNPACR2`) **and** the **clear/consume** (consumer, e.g. `PACR1`) — and whether the lane's interlock fences (e.g. `*_SRCS_RDY` stall conditions) are actually *invoked*. A fence that is **defined but never used** is itself a finding (the lane is unprotected — safe only while it stays unwired/test-only), not grounds to call the lane SAFE. "It's a separate lane, so it doesn't participate in the SrcA/SrcB handshake" is a hypothesis to verify against the QSR ISA/Confluence and to trace in code — never a closure by analogy.
 
 ## Output
-For each op/site: `file:line` of the unpacker fill/flip and the FPU consume/flip, bank-pointer lockstep result (per branch), dvalid set/clear placement, single-owner check, Dst/LReg mediation, arch, verdict (SAFE / CORRUPTION / RACE / LATENT) + one-line fix. End with totals per arch.
+For each op/site: `file:line` of the unpacker fill/flip and the FPU consume/flip, bank-pointer lockstep result (per branch), dvalid set/clear placement, single-owner check, Dst/LReg mediation, arch, verdict (SAFE / CORRUPTION / RACE / LATENT) + one-line fix. For a Dest→Src move, report **both** halves of check 5 explicitly — the math-side wait mask and the paired unpack-side publication, each with its own `file:line` and verdict — so a half-fixed handshake is never reported as one finding. End with totals per arch.
