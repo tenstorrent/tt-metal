@@ -399,17 +399,42 @@ __attribute__((always_inline)) inline bool host_released(volatile tt_l1_ptr uint
 
 __attribute__((always_inline)) inline uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
 
-// A gather read on a command buffer already known to be ready: the caller polled it before writing the
-// coordinate and has sent nothing since, so the poll ncrisc_noc_read_with_state would repeat is redundant.
-__attribute__((always_inline)) inline void gather_read_ready(uint32_t src, uint32_t dst, uint32_t len_bytes) {
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_RET_ADDR_LO, dst);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_LO, src);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_AT_LEN_BE, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+// The gather command buffer's register block and its send word. Laundered through an empty asm: as constants
+// the allocator rematerialises both before every poll of the unrolled lane walk instead of keeping them in the
+// registers it has free.
+struct GatherRegs {
+    volatile uint32_t* base;
+    uint32_t send;
+};
+__attribute__((always_inline)) inline GatherRegs gather_regs() {
+    volatile uint32_t* base = reinterpret_cast<volatile uint32_t*>(
+        NOC_REGS_START_ADDR + NOC_CMD_BUF_INSTANCE_OFFSET(kReadNoc, read_cmd_buf));
+    uint32_t send = NOC_CTRL_SEND_REQ;
+    asm("" : "+r"(base), "+r"(send));
+    return {base, send};
+}
+__attribute__((always_inline)) inline void gather_reg(const GatherRegs& g, uint32_t reg, uint32_t val) {
+    g.base[(reg - NOC_REGS_START_ADDR) / 4u] = val;
+}
+__attribute__((always_inline)) inline bool gather_ready(const GatherRegs& g) {
+    return g.base[(NOC_CMD_CTRL - NOC_REGS_START_ADDR) / 4u] == NOC_CTRL_STATUS_READY;
 }
 
-__attribute__((always_inline)) inline void gather_read(uint32_t src, uint32_t dst, uint32_t len_bytes) {
-    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, src, dst, len_bytes);
+// A gather read on a command buffer already known to be ready: the caller polled it before writing the
+// coordinate and has sent nothing since, so the poll ncrisc_noc_read_with_state would repeat is redundant.
+__attribute__((always_inline)) inline void gather_read_ready(
+    const GatherRegs& g, uint32_t src, uint32_t dst, uint32_t len_bytes) {
+    gather_reg(g, NOC_RET_ADDR_LO, dst);
+    gather_reg(g, NOC_TARG_ADDR_LO, src);
+    gather_reg(g, NOC_AT_LEN_BE, len_bytes);
+    gather_reg(g, NOC_CMD_CTRL, g.send);
+}
+
+__attribute__((always_inline)) inline void gather_read(
+    const GatherRegs& g, uint32_t src, uint32_t dst, uint32_t len_bytes) {
+    while (!gather_ready(g)) {
+    }
+    gather_read_ready(g, src, dst, len_bytes);
 }
 __attribute__((always_inline)) inline uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
 
@@ -478,34 +503,31 @@ static uint32_t ring_base;  // lane 0's ring on every worker: the control block 
 __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t slot, uint32_t rb) {
     uint32_t min_peak = ~0u;
     const uint8_t* end = cores + n;
+    const GatherRegs g = gather_regs();
     do {
         const uint32_t c = *cores++;
-        const uint32_t rec = record(c);
-        const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(rec);
-        volatile tt_l1_ptr uint32_t* __restrict cv =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
         // The head advance hides behind the NIU's acceptance of the same lane's read; nothing reads the record
         // before the batch barrier.
-        volatile tt_l1_ptr uint32_t* __restrict head =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rec + kHeadWord * 4u);
+        volatile tt_l1_ptr uint32_t* __restrict rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(record(c));
+        volatile tt_l1_ptr uint32_t* __restrict frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
         uint32_t off = kPrefix + kWireCtrl;
         uint32_t peak = 0;
-        while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
+        while (!gather_ready(g)) {
         }
-        NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
+        gather_reg(g, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
         // Unrolled: the three induction pointers and the split +2048 stride were 5 of the lane's 29 instructions.
         // All three read shapes stay inline: at the knee most runs wrap (P ~ take/512), so none of them is rare.
 #pragma GCC unroll 5
         for (uint32_t r = 0; r < kNumRisc; r++) {
-            const uint32_t tail = tails[r];
-            const uint32_t start = head[r];
+            const uint32_t tail = rec[r];
+            const uint32_t start = rec[kHeadWord + r];
             const uint32_t take = tail - start;
-            head[r] = start + take;
+            rec[kHeadWord + r] = start + take;
             if (take > peak) {
                 peak = take;
             }
-            cv[kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
-            cv[kernel_profiler::SPSC_WIRE_TAIL_0 + r] = tail;
+            frame[kPrefix + kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
+            frame[kPrefix + kernel_profiler::SPSC_WIRE_TAIL_0 + r] = tail;
             if (take == 0) {
                 continue;
             }
@@ -517,9 +539,9 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
             if (hm + take <= kRingWords) {
                 off += kernel_profiler::spsc_span_pack_pad(start, off);
                 if (ready) {
-                    gather_read_ready(ring_src + hm * 4u, slot + off * 4u, take * 4u);
+                    gather_read_ready(g, ring_src + hm * 4u, slot + off * 4u, take * 4u);
                 } else {
-                    gather_read(ring_src + hm * 4u, slot + off * 4u, take * 4u);
+                    gather_read(g, ring_src + hm * 4u, slot + off * 4u, take * 4u);
                 }
                 off += take;
             } else if (take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS) {
@@ -527,28 +549,35 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
                 // Coalescing adjacent images into one read starves the producer's L1 port ~70x.
                 off += kernel_profiler::spsc_span_pack_pad(0u, off);
                 if (ready) {
-                    gather_read_ready(ring_src, slot + off * 4u, kRingWords * 4u);
+                    gather_read_ready(g, ring_src, slot + off * 4u, kRingWords * 4u);
                 } else {
-                    gather_read(ring_src, slot + off * 4u, kRingWords * 4u);
+                    gather_read(g, ring_src, slot + off * 4u, kRingWords * 4u);
                 }
                 off += kRingWords;
             } else {
                 // A small wrapping run ships as two byte-exact pieces: its dead remainder would be most of the ring.
                 off += kernel_profiler::spsc_span_pack_pad(start, off);
                 const uint32_t first = kRingWords - hm;
+                uint32_t dst = slot + off * 4u;
+                const uint32_t first_bytes = first * 4u;
                 if (ready) {
-                    gather_read_ready(ring_src + hm * 4u, slot + off * 4u, first * 4u);
+                    gather_read_ready(g, ring_src + hm * 4u, dst, first_bytes);
                 } else {
-                    gather_read(ring_src + hm * 4u, slot + off * 4u, first * 4u);
+                    gather_read(g, ring_src + hm * 4u, dst, first_bytes);
                 }
-                gather_read(ring_src, slot + (off + first) * 4u, (take - first) * 4u);
-                off += take;
+                // The second piece's operands are derived only after the first send: the poll that follows must
+                // trail the send by at least this much work, or it lands before the NIU has assigned the VC and
+                // costs a full extra spin per command.
+                uint32_t rest = take;
+                asm volatile("" : "+r"(dst), "+r"(rest), "+r"(off));
+                off += rest;
+                rest -= first;
+                gather_read(g, ring_src, dst + first_bytes, rest * 4u);
             }
         }
-        cv[kernel_profiler::SPSC_WIRE_XY] = tails[kXyWord];
-        // pfx[0] is staged once at init; only the payload word varies.
-        volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-        pfx[kLenWord] = off - kPrefix;
+        frame[kPrefix + kernel_profiler::SPSC_WIRE_XY] = rec[kXyWord];
+        // frame[0] is staged once at init; only the payload word varies.
+        frame[kLenWord] = off - kPrefix;
         if (peak < min_peak) {
             min_peak = peak;
         }
