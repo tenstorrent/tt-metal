@@ -23,10 +23,11 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     decode_hidden_width_memcfg,
     dram_sharded_program_config,
     find_grid_k_n,
+    sharded_hidden_width_memcfg,
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
-from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
+from models.demos.qwen3_tts.tt.model_config import N150_DRAM_PREFILL_SEQS, PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
 
 
@@ -536,6 +537,20 @@ class Attention(LightweightModule):
             {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in PREFILL_SEQS}
         )
 
+        # N150 prefill NLP + residual memcfgs per trace bucket (M varies; DRAM matmul stays M=32).
+        self._n150_prefill_nlp_by_m = {}
+        if self._n150 and self.tp_size == 1:
+            for _m in N150_DRAM_PREFILL_SEQS:
+                _nlp = _build_sharded_nlp_memcfgs(_m)
+                self._n150_prefill_nlp_by_m[_m] = {
+                    "qkv_split_in": _nlp["qkv_in"],
+                    "qkv_split_q_out": _nlp["q_out"],
+                    "qkv_split_k_out": _nlp["k_out"],
+                    "concat_in": _nlp["concat_in"],
+                    "concat_out": _nlp["concat_out"],
+                    "residual_memcfg": sharded_hidden_width_memcfg(device, hidden_size, m=_m),
+                }
+
         # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
         # For batch=1: tensor [1, 1, num_kv_heads, head_dim] padded to [1, 1, tile(kv_heads), head_dim].
@@ -618,12 +633,17 @@ class Attention(LightweightModule):
         else:
             wqkv_progcfg = wo_progcfg = None
 
-        # QKV: DRAM-sharded when M is one tile (decode / CP prefill / seq<=32).
-        # Larger prefill: 1D-mcast on L1 interleaved in0 (faster than width-sharded).
-        use_dram_shard_qkv = seq_len <= self.short_seq_limit
-        # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
-        # since wqkv was rearranged to KV-group-interleaved layout.
+        # QKV: DRAM-sharded M=32 (decode / seq<=32). Larger prefill: 1D-mcast on L1 interleaved in0.
+        _prefill_nlp = (
+            self._n150_prefill_nlp_by_m.get(seq_len)
+            if (self._n150 and not is_decode and seq_len in self._n150_prefill_nlp_by_m)
+            else None
+        )
+        use_dram_shard_qkv = (is_decode and seq_len == 1) or seq_len <= self.short_seq_limit
         sharded_qkv_split = use_dram_shard_qkv
+        _qkv_split_in_memcfg = self._decode_qkv_split_in_memcfg
+        _qkv_split_q_out_memcfg = self._decode_qkv_split_q_out_memcfg
+        _qkv_split_k_out_memcfg = self._decode_qkv_split_k_out_memcfg
         if use_dram_shard_qkv:
             # Skip the I→S if x is already in the matching width-sharded layout
             # (e.g. piped through from a sharded layernorm in decoder_layer).
@@ -643,14 +663,10 @@ class Attention(LightweightModule):
             if _own_x_sharded:
                 ttnn.deallocate(x_sharded)
             if sharded_qkv_split and self._decode_wqkv_n_padded == self._fused_qkv:
-                # Direct sharded→sharded reshard (64-core matmul out → 8-core nlp_create in).
-                # Skips the L1_INTERLEAVED intermediate (S→I + I→S = 2 ops, ~3.3 µs).
-                xqkv = ttnn.to_memory_config(xqkv_sharded, self._decode_qkv_split_in_memcfg)
+                xqkv = ttnn.to_memory_config(xqkv_sharded, _qkv_split_in_memcfg)
                 ttnn.deallocate(xqkv_sharded)
                 xqkv_already_sharded_for_split = True
             elif self._n150 and self._decode_wqkv_n_padded != self._fused_qkv:
-                # Slice padded N off the width-sharded matmul out into the nlp_create
-                # shard spec — no S2I.
                 xqkv = ttnn.slice(
                     xqkv_sharded,
                     [0, 0, 0, 0],
@@ -660,7 +676,7 @@ class Attention(LightweightModule):
                         xqkv_sharded.shape[2],
                         self._fused_qkv,
                     ],
-                    memory_config=self._decode_qkv_split_in_memcfg,
+                    memory_config=_qkv_split_in_memcfg,
                 )
                 ttnn.deallocate(xqkv_sharded)
                 xqkv_already_sharded_for_split = True
@@ -685,6 +701,10 @@ class Attention(LightweightModule):
                     xqkv = xqkv_padded
                     xqkv_already_sharded_for_split = False
         else:
+            if x.is_sharded():
+                x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x)
+                x = x_il
             xqkv = ttnn.linear(
                 x,
                 self.wqkv,
@@ -700,14 +720,14 @@ class Attention(LightweightModule):
             if xqkv_already_sharded_for_split:
                 xqkv_for_split = xqkv
             else:
-                xqkv_for_split = ttnn.to_memory_config(xqkv, self._decode_qkv_split_in_memcfg)
+                xqkv_for_split = ttnn.to_memory_config(xqkv, _qkv_split_in_memcfg)
                 ttnn.deallocate(xqkv)
             q_sharded, k_sharded, v_sharded = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv_for_split,
                 num_heads=self.num_heads,
                 num_kv_heads=self.num_kv_heads,
                 transpose_k_heads=False,
-                memory_config=self._decode_qkv_split_q_out_memcfg,
+                memory_config=_qkv_split_q_out_memcfg,
             )
             ttnn.deallocate(xqkv_for_split)
             # q_norm / k_norm / rotary_embedding_llama expect L1_INTERLEAVED
@@ -906,6 +926,7 @@ class Attention(LightweightModule):
             )
             _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
             _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)
+            _sdpa_out_memcfg = _prefill_nlp["concat_in"] if _prefill_nlp is not None else ttnn.L1_MEMORY_CONFIG
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k_for_attn,
@@ -915,7 +936,7 @@ class Attention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
                 program_config=self.sdpa_prefill_program_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_sdpa_out_memcfg,
             )
             ttnn.deallocate(q)
             if not k_is_cache_alias:
@@ -1008,8 +1029,11 @@ class Attention(LightweightModule):
                 attn_output = ttnn.typecast(attn_output_f32, dtype=ttnn.bfloat16)
                 ttnn.deallocate(attn_output_f32)
 
-        # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
-        use_dram_shard_o = is_decode and seq_len == 1
+        # Decode: all Wormhole cards. N150 prefill seq<=32 only (DRAM M=1 tile).
+        use_dram_shard_o = (is_decode and seq_len == 1) or (
+            self._n150 and not is_decode and seq_len <= self.short_seq_limit
+        )
+        _wo_in0_for_concat = self._decode_wo_in0_memcfg if use_dram_shard_o else None
         sharded_concat_decode = is_decode
         sharded_concat_prefill = (not is_decode) and (seq_len in self._prefill_concat_configs)
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
@@ -1032,10 +1056,8 @@ class Attention(LightweightModule):
             attn_concat_sharded = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=concat_out_memcfg)
             if _own_attn_sharded_pre:
                 ttnn.deallocate(attn_sharded)
-            # Direct sharded→sharded reshard into wo's in0 layout (K-width shard).
-            # Independent of N-padding: pad is on the wo *output*, not this in0.
-            if sharded_concat_decode and use_dram_shard_o:
-                attn_output = ttnn.to_memory_config(attn_concat_sharded, self._decode_wo_in0_memcfg)
+            if use_dram_shard_o and use_sharded_concat:
+                attn_output = ttnn.to_memory_config(attn_concat_sharded, _wo_in0_for_concat)
                 ttnn.deallocate(attn_concat_sharded)
                 _attn_already_in_wo_in0 = True
             else:
@@ -1048,15 +1070,12 @@ class Attention(LightweightModule):
 
         if use_dram_shard_o:
             if _attn_already_in_wo_in0:
-                attn_sharded = attn_output  # already 64-core width-sharded
+                attn_sharded = attn_output
                 _own_attn_sharded = False
             else:
                 attn_sharded = ttnn.to_memory_config(attn_output, self._decode_wo_in0_memcfg)
                 ttnn.deallocate(attn_output)
                 _own_attn_sharded = True
-            # When N is unpadded, return the width-sharded matmul output directly so the
-            # caller (decoder_layer) can do a sharded residual add — saves a S→I plus an
-            # op-dispatch.
             wo_n_unpadded = self._decode_wo_n_padded == self.hidden_size
             out_sharded = ttnn.linear(
                 attn_sharded,
@@ -1068,29 +1087,26 @@ class Attention(LightweightModule):
             if _own_attn_sharded:
                 ttnn.deallocate(attn_sharded)
             if wo_n_unpadded:
-                output = out_sharded  # caller does the S→I via residual add
+                output = out_sharded
             else:
                 output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(out_sharded)
-                if self._decode_wo_n_padded != self.hidden_size:
-                    output = ttnn.slice(
-                        output_padded,
-                        [0, 0, 0, 0],
-                        [
-                            output_padded.shape[0],
-                            output_padded.shape[1],
-                            output_padded.shape[2],
-                            self.hidden_size,
-                        ],
-                        memory_config=(
-                            self._decode_residual_memcfg
-                            if self._decode_residual_memcfg is not None
-                            else ttnn.L1_MEMORY_CONFIG
-                        ),
-                    )
-                    ttnn.deallocate(output_padded)
-                else:
-                    output = output_padded
+                output = ttnn.slice(
+                    output_padded,
+                    [0, 0, 0, 0],
+                    [
+                        output_padded.shape[0],
+                        output_padded.shape[1],
+                        output_padded.shape[2],
+                        self.hidden_size,
+                    ],
+                    memory_config=(
+                        self._decode_residual_memcfg
+                        if self._decode_residual_memcfg is not None
+                        else ttnn.L1_MEMORY_CONFIG
+                    ),
+                )
+                ttnn.deallocate(output_padded)
         else:
             output = ttnn.linear(
                 attn_output,

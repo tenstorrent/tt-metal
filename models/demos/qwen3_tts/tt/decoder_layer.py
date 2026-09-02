@@ -13,7 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.attention import Attention
 from models.demos.qwen3_tts.tt.mlp import MLP
-from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
+from models.demos.qwen3_tts.tt.model_config import N150_DRAM_PREFILL_SEQS, PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 
@@ -86,6 +86,9 @@ class DecoderLayer(LightweightModule):
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
+        from models.demos.qwen3_tts.tt.mesh_utils import is_n150
+
+        self._n150 = is_n150(device)
 
         full_prefix = f"{layer_prefix}.layers.{layer_idx}"
 
@@ -138,8 +141,8 @@ class DecoderLayer(LightweightModule):
 
         # Width-sharded RMSNorm: decode (m=32) and each prefill bucket.
         # Talker (hidden=2048): 64 cores (1 tile/core). CodePredictor: 32 cores.
-        # MLP gate/up consume this layout in place. Prefill QKV (M>1 tile)
-        # is S2I'd to L1 interleaved after the pre-attn LN.
+        # MLP gate/up consume this layout in place. Prefill M>32 S2I's before 1D QKV in attention;
+        # N150 buckets 64/128 keep sharded through LN for the MLP handoff; attention S2I's before 1D QKV.
         dim_tiles = hidden_size // 32
         ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
@@ -218,10 +221,8 @@ class DecoderLayer(LightweightModule):
                 memory_config=ln_in_memcfg,
             )
         elif prefill_path:
-            # Width-sharded LN. Skip I2S when the previous layer's residual add
-            # already wrote this shard spec. For M>1 tile, S2I so QKV runs L1
-            # interleaved (width-sharded QKV was slower). Seq<=32 stays
-            # sharded for the DRAM-sharded QKV path.
+            # Seq<=32 stays sharded for DRAM-sharded QKV. N150 buckets 64/128 stay sharded
+            # for the MLP LN handoff; attention S2I's to L1 before 1D QKV.
             if x.memory_config() == ln_in_memcfg:
                 x_sharded = x
                 _own_x_sharded = False
@@ -235,7 +236,10 @@ class DecoderLayer(LightweightModule):
             )
             if _own_x_sharded:
                 ttnn.deallocate(x_sharded)
-            if seq_len_at_entry > SHORT_SEQ_LIMIT:
+            _keep_sharded_qkv = seq_len_at_entry <= SHORT_SEQ_LIMIT or (
+                self._n150 and seq_len_at_entry in N150_DRAM_PREFILL_SEQS
+            )
+            if seq_len_at_entry > SHORT_SEQ_LIMIT and not _keep_sharded_qkv:
                 x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(x)
                 x = x_il

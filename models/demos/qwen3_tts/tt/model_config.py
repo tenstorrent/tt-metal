@@ -18,6 +18,8 @@ HF_ID_0_6B = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 # get width-sharded RMSNorm + 1D-mcast QKV/O/MLP configs.
 SHORT_SEQ_LIMIT = 32
 PREFILL_SEQS = (32, 64, 96, 128, 192, 256, 384, 512, 1024)
+# N150 Talker prefill trace buckets with per-bucket NLP/residual memcfgs.
+N150_DRAM_PREFILL_SEQS = (32, 64, 128)
 
 
 def is_0_6b(hf_id: str) -> bool:
