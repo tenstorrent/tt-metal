@@ -1,4 +1,4 @@
-2026-09-02 00:48:54.766 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 04:11:29.606 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
@@ -12,24 +12,24 @@ timeout method: signal
 timeout func_only: False
 collecting ... collected 3 items
 
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode 2026-09-02 00:48:56.453 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-02 00:48:56.453 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-02 00:48:56.453 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-02 00:48:56.453 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-02 00:48:56.467 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-02 00:48:56.467 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-02 00:48:56.502 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-02 00:48:56.502 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-02 00:48:56.502 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-02 00:48:56.502 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-02 00:48:56.503 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-02 00:48:56.761 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-02 00:48:56.865 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-02 00:48:56.865 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-02 00:48:56.865 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-02 00:48:56.865 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-02 00:48:56.865 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-02 00:48:56.905 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode 2026-09-02 04:11:31.294 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 04:11:31.294 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 04:11:31.294 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 04:11:31.294 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 04:11:31.307 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 04:11:31.307 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 04:11:31.366 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 04:11:31.366 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 04:11:31.367 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 04:11:31.367 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 04:11:31.368 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 04:11:31.558 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 04:11:31.663 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 04:11:31.663 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 04:11:31.663 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 04:11:31.663 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 04:11:31.663 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 04:11:31.703 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
 building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
   layer 0 (dense) built [1/47]
   layer 1 (moe) built [2/47]
@@ -81,11 +81,11 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
   decode rope tables (ROW_MAJOR) built
   embedding table uploaded
   lm head uploaded
-2026-09-02 00:51:53.221 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 00:51:53.221 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 00:51:53.381 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
-2026-09-02 00:51:53.382 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 00:51:53.382 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 04:14:28.601 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 04:14:28.601 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 04:14:28.742 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-02 04:14:28.742 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 04:14:28.742 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
   decode + sampling traces captured in 0.6s
   prefill layer 1/47 enqueued at     0.0s
   prefill layer 2/47 enqueued at    15.5s
@@ -94,20 +94,20 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
   prefill layer 5/47 enqueued at   175.0s
   prefill layer 6/47 enqueued at   223.7s
   prefill layer 7/47 enqueued at   272.0s
-  prefill layer 8/47 enqueued at   320.3s
+  prefill layer 8/47 enqueued at   320.4s
   prefill layer 9/47 enqueued at   368.4s
   prefill layer 10/47 enqueued at   416.4s
   prefill layer 11/47 enqueued at   464.4s
-  prefill layer 12/47 enqueued at   512.9s
+  prefill layer 12/47 enqueued at   513.0s
   prefill layer 13/47 enqueued at   561.0s
   prefill layer 14/47 enqueued at   609.8s
   prefill layer 15/47 enqueued at   657.6s
-  prefill layer 16/47 enqueued at   706.6s
+  prefill layer 16/47 enqueued at   706.7s
   prefill layer 17/47 enqueued at   755.1s
   prefill layer 18/47 enqueued at   802.7s
-  prefill layer 19/47 enqueued at   849.6s
-  prefill layer 20/47 enqueued at   896.9s
-  prefill layer 21/47 enqueued at   944.0s
+  prefill layer 19/47 enqueued at   849.7s
+  prefill layer 20/47 enqueued at   897.0s
+  prefill layer 21/47 enqueued at   944.1s
   prefill layer 22/47 enqueued at   990.3s
   prefill layer 23/47 enqueued at  1037.4s
   prefill layer 24/47 enqueued at  1084.5s
@@ -124,21 +124,27 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
   prefill layer 35/47 enqueued at  1606.9s
   prefill layer 36/47 enqueued at  1654.1s
   prefill layer 37/47 enqueued at  1701.2s
-  prefill layer 38/47 enqueued at  1747.9s
+  prefill layer 38/47 enqueued at  1748.0s
   prefill layer 39/47 enqueued at  1794.5s
   prefill layer 40/47 enqueued at  1841.5s
   prefill layer 41/47 enqueued at  1888.6s
   prefill layer 42/47 enqueued at  1935.4s
   prefill layer 43/47 enqueued at  1983.0s
-  prefill layer 44/47 enqueued at  2030.7s
+  prefill layer 44/47 enqueued at  2030.8s
   prefill layer 45/47 enqueued at  2079.0s
   prefill layer 46/47 enqueued at  2126.8s
   prefill layer 47/47 enqueued at  2175.2s
-  prefill enqueued in 2222.7s; waiting for the device to drain...
+  prefill enqueued in 2222.8s; waiting for the device to drain...
   prefill complete in 2236.4s (90.7 tok/s)
+2026-09-02 04:51:45.433 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-02 04:51:45.574 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 04:51:45.574 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 04:51:45.673 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 04:51:45.673 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+  post-prefill trace recapture: True
   last-position top5 [38627, 13274, 13, 38516, 14999] margin 27.35
-2026-09-02 01:29:10.240 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 01:29:10.240 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 04:51:45.681 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 04:51:45.681 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
   decode step 1/8 at position 202733
   decode step 2/8 at position 202734
   decode step 3/8 at position 202735
@@ -149,17 +155,18 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
   decode step 8/8 at position 202740
 {
   "source_manifest": {
-    "tt/model.py": "e12073e8820e4cd0",
-    "tt/generator.py": "97912ec08b6e8167",
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "271136535a97122f",
+    "tt/generator.py": "922a7ec9a5052e7d",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
-    "tests/test_full_context.py": "1309a1b692c6a710"
+    "tests/test_full_context.py": "ec23df5491386ce0"
   },
   "prompt_len": 202733,
   "physical_prefill_len": 202752,
   "period_tokens": 38,
-  "prefill_enqueue_s": 2222.7,
+  "prefill_enqueue_s": 2222.8,
   "prefill_total_s": 2236.4,
   "prefill_tokens_per_s": 90.7,
   "decode_steps": 8,
@@ -225,6 +232,7 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
     "expected_in_top5": true,
     "margin_over_mean": 19.98
   },
+  "post_prefill_trace_recapture": true,
   "counters": {
     "periodic_phase": {
       "model_trace_replays": 8,
@@ -238,7 +246,8 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
       "token_readbacks": 8,
       "full_logits_readbacks": 0,
       "host_argmax_calls": 0,
-      "kv_cache_resets": 0
+      "kv_cache_resets": 0,
+      "trace_recaptures": 0
     },
     "end_of_run": {
       "model_trace_replays": 18,
@@ -252,21 +261,22 @@ building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-o
       "token_readbacks": 8,
       "full_logits_readbacks": 0,
       "host_argmax_calls": 0,
-      "kv_cache_resets": 0
+      "kv_cache_resets": 0,
+      "trace_recaptures": 0
     }
   }
 }
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_decode_position_past_context_is_rejected 2026-09-02 01:29:13.049 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="decode positions must be in"
-2026-09-02 01:29:13.049 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="decode positions must be in"
-2026-09-02 01:29:13.050 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="decode positions must be in"
-2026-09-02 01:29:13.050 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="decode positions must be in"
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_decode_position_past_context_is_rejected 2026-09-02 04:51:48.484 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="decode positions must be in"
+2026-09-02 04:51:48.484 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="decode positions must be in"
+2026-09-02 04:51:48.484 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="decode positions must be in"
+2026-09-02 04:51:48.484 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="decode positions must be in"
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end 2026-09-02 01:29:13.240 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="step past the supported context"
-2026-09-02 01:29:13.241 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="step past the supported context"
-2026-09-02 01:29:13.241 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="step past the supported context"
-2026-09-02 01:29:13.241 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="step past the supported context"
-PASSED2026-09-02 01:29:13.244 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end 2026-09-02 04:51:48.680 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="step past the supported context"
+2026-09-02 04:51:48.680 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="step past the supported context"
+2026-09-02 04:51:48.680 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="step past the supported context"
+2026-09-02 04:51:48.680 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="step past the supported context"
+PASSED2026-09-02 04:51:48.867 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
 
 
 =============================== warnings summary ===============================
@@ -280,22 +290,22 @@ PASSED2026-09-02 01:29:13.244 | DEBUG    | models.common.sampling.generator:rese
 ==================================== PASSES ====================================
 - generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================= slowest 25 durations =============================
-2238.96s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode
-177.42s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode
-0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_decode_position_past_context_is_rejected
+2239.30s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode
+177.69s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_decode_position_past_context_is_rejected
 0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end
-0.18s teardown models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end
+0.18s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end
 
 (4 durations < 0.005s hidden.  Use -vv to show these durations.)
 =========================== short test summary info ============================
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_full_context_prefill_and_decode
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_decode_position_past_context_is_rejected
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py::test_traced_decode_loop_stops_at_context_end
-================== 3 passed, 2 warnings in 2417.98s (0:40:17) ==================
+================== 3 passed, 2 warnings in 2418.57s (0:40:18) ==================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 2 instances!
- - leaked instance 0x79f272e0b908 of type "ttnn._ttnn.tensor.MemoryConfig"
- - leaked instance 0x79f2733be928 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x702afe397908 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x702afe74a898 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 20 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -309,22 +319,22 @@ nanobind: leaked 20 types!
  - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
  - ... skipped remainder
 nanobind: leaked 253 functions!
- - leaked function "get_system_mesh_id"
+ - leaked function "__repr__"
  - leaked function "__init__"
- - leaked function "set_program_cache_misses_allowed"
  - leaked function ""
  - leaked function ""
- - leaked function "from_json"
  - leaked function "to_json"
- - leaked function "matmul_select_program_factory"
- - leaked function "tensor_topology"
- - leaked function "reshape"
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "device"
+ - leaked function "__repr__"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-02 01:29:15.138 | info     |    BuildKernels | JIT cache stats: 1241/1241 hits (100.0%) [1241 cached, 973 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-02 01:29:15.138 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-02 01:29:15.161 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-02 01:29:15.161 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-02 01:29:15.582 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-02 01:29:15.582 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-02 01:29:15.582 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-02 04:51:50.617 | info     |    BuildKernels | JIT cache stats: 1239/1239 hits (100.0%) [1239 cached, 972 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 04:51:50.617 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 04:51:50.640 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 04:51:50.640 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 04:51:51.171 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 04:51:51.171 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 04:51:51.171 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

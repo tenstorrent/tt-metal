@@ -238,13 +238,14 @@
   },
   "notes": [
    "Prefill lengths are bucketed to (128, 256, 512, 1024, 2048) and longer prompts to whole 2048-token chunks plus a bucketed tail; this only pads the physical prefill. The logical prompt length is unrestricted up to 202752 and padded positions are proven not to reach a real one (tests/test_prefill_padding.py: bit-identical logits and generated tokens under two different pad token values, single-chunk and multi-chunk).",
-   "Every layer shares one RoPE table set: 47 private copies would add 2.4 GiB of byte-identical data at this context. The decode RoPE index is derived from the current position on device, so there is one position state tensor and an inactive (-1) slot stays pinned at index 0."
+   "Every layer shares one RoPE table set: 47 private copies would add 2.4 GiB of byte-identical data at this context. The decode RoPE index is derived from the current position on device, so there is one position state tensor and an inactive (-1) slot stays pinned at index 0.",
+   "Prefill program shapes are bucketed, but two smaller families are not: chunk-offset-dependent programs for multi-chunk prompts, and the terminal 32-row tile slice, whose offset depends on the prompt length. warmup_terminal_shapes pre-compiles every offset for the five buckets before the decode traces are captured, so a prompt inside one chunk needs no first-use compile; a longer prompt compiles once and the generator re-captures its traces (175.3 ms) so no replay runs over a buffer allocated while a trace was live. See doc/full_model/trace_alloc.json."
   ],
   "provenance": {
    "stage": "full-model",
    "evidence": "doc/full_model/README.md, doc/full_model/accuracy.json, doc/full_model/perf.json, doc/full_model/logs/",
-   "source_commit": "84b11d86639",
-   "source_provenance": "every artifact carries a source_manifest block; doc/full_model/logs/sweep_provenance.log records HEAD and git status at the start and end of the sweep that produced them",
+   "source_commit": "13148176475",
+   "source_provenance": "every artifact carries a source_manifest block (sha256 prefixes of tt/*.py plus the producing script); doc/full_model/logs/sweep_provenance.log records HEAD and git status at the start and end of the sweep that produced them",
    "date": "2026-09-02"
   },
   "dram_budget_bytes": {

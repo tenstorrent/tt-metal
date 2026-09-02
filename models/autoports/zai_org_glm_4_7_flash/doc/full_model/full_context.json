@@ -1,16 +1,17 @@
 {
   "source_manifest": {
-    "tt/model.py": "e12073e8820e4cd0",
-    "tt/generator.py": "97912ec08b6e8167",
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "271136535a97122f",
+    "tt/generator.py": "922a7ec9a5052e7d",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
-    "tests/test_full_context.py": "1309a1b692c6a710"
+    "tests/test_full_context.py": "ec23df5491386ce0"
   },
   "prompt_len": 202733,
   "physical_prefill_len": 202752,
   "period_tokens": 38,
-  "prefill_enqueue_s": 2222.7,
+  "prefill_enqueue_s": 2222.8,
   "prefill_total_s": 2236.4,
   "prefill_tokens_per_s": 90.7,
   "per_layer_enqueue_marks_s": [
@@ -21,20 +22,20 @@
     175.0,
     223.7,
     272.0,
-    320.3,
+    320.4,
     368.4,
     416.4,
     464.4,
-    512.9,
+    513.0,
     561.0,
     609.8,
     657.6,
-    706.6,
+    706.7,
     755.1,
     802.7,
-    849.6,
-    896.9,
-    944.0,
+    849.7,
+    897.0,
+    944.1,
     990.3,
     1037.4,
     1084.5,
@@ -51,13 +52,13 @@
     1606.9,
     1654.1,
     1701.2,
-    1747.9,
+    1748.0,
     1794.5,
     1841.5,
     1888.6,
     1935.4,
     1983.0,
-    2030.7,
+    2030.8,
     2079.0,
     2126.8,
     2175.2
@@ -125,6 +126,7 @@
     "expected_in_top5": true,
     "margin_over_mean": 19.98
   },
+  "post_prefill_trace_recapture": true,
   "counters": {
     "periodic_phase": {
       "model_trace_replays": 8,
@@ -138,7 +140,8 @@
       "token_readbacks": 8,
       "full_logits_readbacks": 0,
       "host_argmax_calls": 0,
-      "kv_cache_resets": 0
+      "kv_cache_resets": 0,
+      "trace_recaptures": 0
     },
     "end_of_run": {
       "model_trace_replays": 18,
@@ -152,7 +155,8 @@
       "token_readbacks": 8,
       "full_logits_readbacks": 0,
       "host_argmax_calls": 0,
-      "kv_cache_resets": 0
+      "kv_cache_resets": 0,
+      "trace_recaptures": 0
     }
   }
 }

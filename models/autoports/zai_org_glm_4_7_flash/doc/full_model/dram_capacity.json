@@ -1,4 +1,13 @@
 {
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "271136535a97122f",
+    "tt/generator.py": "922a7ec9a5052e7d",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "probe/dram_capacity_probe.py": "6756766ac698bd5e"
+  },
   "device_id": 0,
   "chunk_mib": 512,
   "allocatable_mib": 32256,

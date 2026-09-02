@@ -1,0 +1,84 @@
+{
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "271136535a97122f",
+    "tt/generator.py": "922a7ec9a5052e7d",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "probe/trace_alloc_probe.py": "1a8170bce416ff76"
+  },
+  "tracking_enabled": true,
+  "tracking_note": "Without TT_METAL_TRACE_ALLOC_TRACKING=1 the tracker is a no-op, every id map is empty and the run proves nothing. Check tracking_enabled before reading the result.",
+  "layers": "0,1",
+  "context_allocated": 8192,
+  "verdict": "clean",
+  "shipped_paths_clean": true,
+  "untreated_hazard_reproduced": true,
+  "arms": [
+    {
+      "arm": "shipped_path_warmed_single_chunk",
+      "note": "warmup_prefill compiled every bucket shape before capture, so nothing is allocated in the unsafe window",
+      "unsafe_by_trace": {
+        "model:MeshTraceId(0)": 0,
+        "sampling:MeshTraceId(1)": 0
+      },
+      "unsafe_total": 0,
+      "program_cache_entries": 442,
+      "program_cache_entries_at_capture": 442,
+      "trace_recaptures": 0,
+      "allocating_ops": [],
+      "replay": "ok"
+    },
+    {
+      "arm": "shipped_path_first_use_multi_chunk",
+      "note": "the chunk-offset-dependent programs compile after capture; _maybe_recapture_after_compile must fire and leave nothing unsafe",
+      "unsafe_by_trace": {
+        "model:MeshTraceId(2)": 0,
+        "sampling:MeshTraceId(3)": 0
+      },
+      "unsafe_total": 0,
+      "program_cache_entries": 453,
+      "program_cache_entries_at_capture": 453,
+      "trace_recaptures": 1,
+      "allocating_ops": [],
+      "replay": "ok"
+    },
+    {
+      "arm": "hook_bypassed_first_use_multi_chunk",
+      "note": "the model-level prefill entry point has no hook, so this is the untreated hazard: one device buffer per newly cached program, alive for the process lifetime",
+      "unsafe_by_trace": {
+        "model:MeshTraceId(2)": 16,
+        "sampling:MeshTraceId(3)": 16
+      },
+      "unsafe_total": 32,
+      "program_cache_entries": 469,
+      "program_cache_entries_at_capture": 453,
+      "trace_recaptures": 1,
+      "allocating_ops": [
+        "EmbeddingsDeviceOperation",
+        "SDPAOperation",
+        "SliceDeviceOperation",
+        "SliceWriteDeviceOperation",
+        "TilizeDeviceOperation",
+        "UntilizeCodegenDeviceOperation"
+      ],
+      "replay": "REFUSED by the tracker",
+      "replay_error_head": "Found 16 device buffer(s) still alive before trace replay. These will be corrupted on replay."
+    },
+    {
+      "arm": "after_explicit_recapture",
+      "note": "recapture_decode_traces() puts the trace intermediates back on the safe side of those program buffers",
+      "unsafe_by_trace": {
+        "model:MeshTraceId(4)": 0,
+        "sampling:MeshTraceId(5)": 0
+      },
+      "unsafe_total": 0,
+      "program_cache_entries": 469,
+      "program_cache_entries_at_capture": 469,
+      "trace_recaptures": 2,
+      "allocating_ops": [],
+      "replay": "ok"
+    }
+  ]
+}

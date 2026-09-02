@@ -1,0 +1,36 @@
+{
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "271136535a97122f",
+    "tt/generator.py": "922a7ec9a5052e7d",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "probe/first_use_ttft_probe.py": "d68a34fa56670775"
+  },
+  "layers": "all",
+  "rows": [
+    {
+      "prompt_len": 154,
+      "physical_len": 256,
+      "first_request": {
+        "harness_style_ttft_ms": 758.4,
+        "reset_ms": 28.4,
+        "prefill_plus_first_token_ms": 555.6,
+        "trace_recapture_ms": 174.4,
+        "trace_recaptures": 1,
+        "wall_ms": 781.1
+      },
+      "second_request": {
+        "harness_style_ttft_ms": 583.4,
+        "reset_ms": 28.3,
+        "prefill_plus_first_token_ms": 555.1,
+        "trace_recapture_ms": 0.0,
+        "trace_recaptures": 0,
+        "wall_ms": 606.1
+      },
+      "first_use_penalty_ms": 175.0,
+      "note": "The penalty is one program compile for this exact prompt length plus one trace recapture; both are one-time per shape. build_generator(warmup_prefill_lens=[...]) pre-pays them before the traces are captured."
+    }
+  ]
+}
