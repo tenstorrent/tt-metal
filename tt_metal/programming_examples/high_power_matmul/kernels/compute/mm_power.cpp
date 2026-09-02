@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 using std::uint32_t;
 
@@ -17,13 +18,16 @@ void kernel_main() {
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
     constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
-    // Initialize the matmul operation
-    mm_init(cb_in0, cb_in1, cb_out);
+    // Initialize the matmul operation. compute_kernel_hw_startup configures the unpacker/packer
+    // for the input and output CBs (what the old 3-argument mm_init used to cover); matmul_init
+    // then sets up the FPU itself.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+    matmul_init(cb_in0, cb_in1);
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         if (iter % 10 == 0) {
             // Only print from TRISC0, otherwise we'll get three identical prints
-            DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL();
+            DPRINT("Iteration {} of {}\n", iter, num_iterations);
         }
         for (uint32_t i = 0; i < num_output_tiles; i++) {
             // TRISC1 Acquires the tile registers
@@ -33,8 +37,14 @@ void kernel_main() {
                 // populates them)
                 cb_wait_front(cb_in0, 1);
                 cb_wait_front(cb_in1, 1);
-                // TRISC0 tells the FPU to performs the matrix multiplication
+                // TRISC0 tells the FPU to performs the matrix multiplication.
+                // HIGH_POWER_DISABLE_COMPUTE skips the real FPU work while keeping every CB and
+                // tile-register handshake intact, so reader and writer are stimulated exactly as
+                // before and neither deadlocks. Output tiles then contain garbage, which is
+                // harmless: the app never verifies its output.
+#ifndef HIGH_POWER_DISABLE_COMPUTE
                 matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+#endif
                 // TRISC1 marks the input tiles as used by popping them from the front of the circular buffers
                 cb_pop_front(cb_in0, 1);
                 cb_pop_front(cb_in1, 1);
@@ -46,7 +56,9 @@ void kernel_main() {
             // TRISC2 reserves space in the output circular buffer for the result tile
             cb_reserve_back(cb_out, 1);
             // TRISC2 tells the packer to pack the result tile into the output circular buffer
+#ifndef HIGH_POWER_DISABLE_COMPUTE
             pack_tile(0, cb_out);
+#endif
             // TRISC2 marks the result tile as used by pushing it to the back of the output circular buffer (writer
             // kernel can read them now)
             cb_push_back(cb_out, 1);
