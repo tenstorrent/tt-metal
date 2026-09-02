@@ -615,9 +615,14 @@ FORCE_INLINE bool check_downstream_has_space(
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
-        constexpr auto compact = get_downstream_edm_interface_index<DIRECTION>();
-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        return get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0;
+        // FIX: this must read the credit counter of the VC the packet is actually sent on. The
+        // compact-keyed fast path below hardcoded VC0, but admit_2d_dispatch is also reached with
+        // the VC1 downstream array under FABRIC_2D_VC0_CROSSOVER_TO_VC1, so a landed intermesh
+        // packet was admitted against VC0's free slots and then sent on VC1 -- two counters that
+        // never agree. Asking the adapter reads whichever VC it belongs to.
+        //     was: get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0
+        constexpr auto edm_index = get_downstream_edm_interface_index<DIRECTION>();
+        return downstream_edm_interfaces[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
 }
 
@@ -636,9 +641,8 @@ FORCE_INLINE bool check_downstream_has_space(
             return true;
         }
     } else {
-        constexpr auto compact = get_downstream_edm_interface_index<DIRECTION>();
-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        return get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0;
+        constexpr auto edm_index = get_downstream_edm_interface_index<DIRECTION>();
+        return downstream_edm_interfaces[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
 }
 
