@@ -41,3 +41,17 @@ def test_guard_is_silent_when_arch_cannot_be_determined(monkeypatch):
 
     monkeypatch.setattr(uf, "is_blackhole", boom)
     assert Gemma4ModelArgs().disable_batched_prefill is False
+
+
+def test_hatch_env_bypasses_guard_on_wormhole(monkeypatch):
+    """G4_FORCE_BATCH_PREFILL=1 must reach the generator gates on Wormhole too:
+    the guard steps aside so the hatch means the same thing on both arches."""
+    monkeypatch.setattr(uf, "is_blackhole", lambda: False)
+    monkeypatch.setenv("G4_FORCE_BATCH_PREFILL", "1")
+    assert Gemma4ModelArgs().disable_batched_prefill is False
+
+
+def test_hatch_env_off_keeps_guard(monkeypatch):
+    monkeypatch.setattr(uf, "is_blackhole", lambda: False)
+    monkeypatch.setenv("G4_FORCE_BATCH_PREFILL", "0")
+    assert Gemma4ModelArgs().disable_batched_prefill is True

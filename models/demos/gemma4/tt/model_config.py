@@ -189,6 +189,12 @@ class Gemma4ModelArgs:
         """
         if self.disable_batched_prefill:
             return  # explicitly set by the caller; never override
+        import os as _os
+
+        if _os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1":
+            # Dev hatch (see generator_vllm will_batch): let the batched path
+            # engage on Wormhole too, so the debt-#1 fix can be cross-verified.
+            return
         try:
             from models.common.utility_functions import is_blackhole
 
