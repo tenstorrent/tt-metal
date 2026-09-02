@@ -222,10 +222,16 @@ inline void _llk_math_sub_bcast_cols_compensated_(
 
         // Seed DEST with anchor - mean. The split statistic tile stores the
         // upper and lower row halves in faces 1 and 3 respectively.
-        _compensated_move_broadcast_col_to_dest_(16, 0);
-        _compensated_move_broadcast_col_to_dest_(16, 16);
-        _compensated_move_broadcast_col_to_dest_(48, 32);
-        _compensated_move_broadcast_col_to_dest_(48, 48);
+        constexpr std::uint32_t upper_mean_row      = 16;
+        constexpr std::uint32_t lower_mean_row      = 48;
+        constexpr std::uint32_t upper_left_dst_row  = 0;
+        constexpr std::uint32_t upper_right_dst_row = 16;
+        constexpr std::uint32_t lower_left_dst_row  = 32;
+        constexpr std::uint32_t lower_right_dst_row = 48;
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_right_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_right_dst_row);
 
         // Accumulate x - anchor into the correction already in DEST.
         for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
