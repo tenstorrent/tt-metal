@@ -47,6 +47,8 @@ constexpr uint32_t TWO_BITS = 0x40000000u;  // 2.0f
 // CB flow-control (wait/reserve/push/pop) goes through Device 2.0 CircularBuffer objects; the
 // compute LLK ops (matmul_tiles/pack_tile/add_tiles/...) still take the raw CB index, so both
 // the index and the object are kept in scope. b_tile is a tile index within CB_CONSTS, not a CB.
+// The helpers below wrap the acquire/commit/pack/release LLK sequence every tile op repeats;
+// there is no shared eltwise-helper layer to call into yet, so they are local.
 
 // out <- a @ consts[b_tile].  Reads a[0] and consts[b_tile]; pops neither.
 FORCE_INLINE void mm(uint32_t a, uint32_t b_tile, uint32_t out) {

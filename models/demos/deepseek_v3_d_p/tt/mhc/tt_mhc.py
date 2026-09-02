@@ -116,10 +116,10 @@ def _upload(device, t, shape, dtype):
     return ttnn.from_torch(t.contiguous().reshape(shape), layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
 
-def _flatten_streams(x_streams):
+def _flatten_streams(x):
     """[1,T,n,C] -> [1,1,T,n*C] via a row-major reinterpret (n is sub-tile)."""
-    _, T, n, C = x_streams.shape
-    rm = ttnn.to_layout(x_streams, ttnn.ROW_MAJOR_LAYOUT)
+    _, T, n, C = x.shape
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     rm = ttnn.reshape(rm, [1, 1, T, n * C])
     return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
 
@@ -131,13 +131,13 @@ def _row_to_batch(t, shape):
     return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
 
 
-def _project(x_streams, fn_T, norm_eps, ckc):
+def _project(x, fn_T, norm_eps, ckc):
     """[1,T,n,C] -> [1,1,T,K] = RMSNorm(flatten(x)) @ fn_T.
 
     RMSNorm carries no learned weight, so its rsqrt commutes with the linear and is applied
     after it -- one [T,1] broadcast instead of a full [T,n*C] scale.
     """
-    xf = _flatten_streams(x_streams)
+    xf = _flatten_streams(x)
     mixes_un = ttnn.matmul(xf, fn_T, compute_kernel_config=ckc)
     ms = ttnn.mean(ttnn.multiply(xf, xf), dim=-1, keepdim=True)
     rsqrt = ttnn.rsqrt(ttnn.add(ms, norm_eps))
@@ -176,23 +176,23 @@ class TtMHCWrap(LightweightModule):
         self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
 
-    def project(self, x_streams):
+    def project(self, x):
         """[1,T,n,C] -> mixes [1,1,T,mix_hc], the fused kernel's input."""
-        return _project(x_streams, self.fn_T, self.norm_eps, self.ckc)
+        return _project(x, self.fn_T, self.norm_eps, self.ckc)
 
-    def hc_pre(self, x_streams):
+    def hc_pre(self, x):
         """[1,T,n,C] -> (y [1,T,1,C], post [T,n], comb [1,T,n,n]).
 
         y = sum_i pre_i * x_i is the single stream handed to F. The reduction uses the raw
         stream values; only the projection input is normalised.
         """
-        T = x_streams.shape[1]
-        mixes = self.project(x_streams)
+        T = x.shape[1]
+        mixes = self.project(x)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.consts, self.n, self.iters, self.eps
         )
         pre_row = _row_to_batch(pre, [1, T, 1, self.n])
-        y = ttnn.matmul(pre_row, x_streams, compute_kernel_config=self.ckc)
+        y = ttnn.matmul(pre_row, x, compute_kernel_config=self.ckc)
         return y, post, _row_to_batch(comb, [1, T, self.n, self.n])
 
     def hc_post(self, x, residual, post, comb):
@@ -235,10 +235,10 @@ class TtMHCHead(LightweightModule):
         self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
         self.base = _upload(device, base, (1, 1, 1, cfg.n), dtype)
 
-    def forward(self, x_streams):
+    def forward(self, x):
         """[1,T,n,C] -> [1,T,1,C]."""
-        T = x_streams.shape[1]
-        mixes = _project(x_streams, self.fn_T, self.norm_eps, self.ckc)
+        T = x.shape[1]
+        mixes = _project(x, self.fn_T, self.norm_eps, self.ckc)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.mul(mixes, self.a), self.base)), self.eps)
         pre_row = _row_to_batch(pre, [1, T, 1, self.n])
-        return ttnn.matmul(pre_row, x_streams, compute_kernel_config=self.ckc)
+        return ttnn.matmul(pre_row, x, compute_kernel_config=self.ckc)
