@@ -40,7 +40,7 @@ gated behind ``TTNN_RUN_ARGMAX_CROSSOVER_BENCH=1`` and skips without it. On a
 Blackhole host::
 
     export TTNN_RUN_ARGMAX_CROSSOVER_BENCH=1
-    pytest tests/ttnn/unit_tests/benchmarks/test_argmax_path_crossover_bench.py -s --timeout=7200
+    pytest tests/ttnn/unit_tests/operations/reduce/test_argmax_path_crossover_bench.py -s --timeout=7200
 
 Add ``-k core_scaling`` for the perf sweep alone, ``-k trace_safety`` for the
 replay-stability check alone. Then paste the markdown block it prints into the PR.

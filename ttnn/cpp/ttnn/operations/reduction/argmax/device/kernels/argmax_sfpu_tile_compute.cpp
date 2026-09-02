@@ -2,72 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// =============================================================================
-// argmax_sfpu_tile_compute.cpp — SFPU TILE-layout last-dim argmax, PHASE 1.
+// SFPU TILE-layout last-dim argmax, PHASE 1: for each 32-row tile-row pass,
+// reduce this core's `w_count` input tiles to ONE (max value, winning tile
+// index) pair per DST lane — i.e. per (row, column) — with the
+// argmax_nc_compute.cpp op chain below, five DST-wide ops per tile:
 //
-// Lane-parallel vertical reduce: for each 32-row tile-row pass, reduce this
-// core's `w_count` input tiles down to ONE (max value, winning tile index)
-// candidate pair per DST lane — i.e. per (row, column) position — using the
-// argmax_nc_compute.cpp op chain:
+//   DST 0: running max_val (fp32; bf16 inputs widen exactly)
+//   DST 1: running win_tile (uint32 = LOCAL index of the winning tile t; the
+//          lane's own column c is implicit, so the consumer reconstructs the
+//          element index as (w_start + t) * 32 + c)
+//   DST 2/3: scratch (new value / new tile index, gt mask)
 //
-//   DST slot 0: running max_val  (fp32; bf16 inputs widen exactly)
-//   DST slot 1: running win_tile (uint32 = LOCAL index of the winning tile t;
-//               the lane's own column c is implicit — the consumer
-//               reconstructs the element index as (w_start + t) * 32 + c)
-//   DST slots 2/3: scratch (new_val / new_tile-idx, gt mask)
+// Storing the winning TILE index (constant per step, like the NC kernel's k)
+// instead of the global element index removes a persistent column-ramp tile in
+// DST and an add_int32 step. The uint32-CB/SrcA corruption documented in
+// argmax_nc_compute.cpp cannot bite here: indices are materialized in DST by
+// fill_tile_int and only ever PACKED out.
 //
-//   per input tile t (5 DST-wide ops):
-//     copy_tile             new_val <- tile t
-//     gt_binary_tile        mask = (new_val > max_val)          [IEEE fp32 >]
-//     where<Float32>        max_val  = mask ? new_val : max_val
-//     fill_tile_int<UInt32> scratch  = t
-//     where<Int32>          win_tile = mask ? t : win_tile
+// PHASE 2 — the horizontal reduce of the 32 per-column candidates per row plus
+// the cross-core merge — is 32 scalar lexicographic compares per row on the
+// dataflow RISC (reader_argmax_sfpu_tile.cpp): O(32) per row against phase 1's
+// O(32 * w_count) per lane, so it amortizes to noise at large widths.
 //
-// Storing the winning TILE index (a constant per step, like the NC kernel's
-// k) instead of the global element index removes the need for a persistent
-// column-ramp tile in DST and an add_int32 step: lane c IS column c. The
-// uint32-CB/SrcA corruption documented in argmax_nc_compute.cpp is never in
-// play — indices are materialized in DST via fill_tile_int and only ever
-// PACKED out. A single where_tile_init() serves both the fp32 and int32
-// updates (the NC kernel's SFPCONFIG-macro-collision dodge, kept verbatim).
-//
-// The candidate pair is packed out once per pass (max values -> bf16 CB,
-// winning tile indices -> UInt32 CB); PHASE 2 — the horizontal reduce of the
-// 32 per-column candidates per row, plus the cross-core merge when running
-// multicore — is 32 scalar lexicographic compares per row on the dataflow
-// RISC (reader_argmax_sfpu_tile.cpp). Phase 2 is O(32) per row vs phase 1's
-// O(32 * w_count) per lane, so it amortizes to noise for large widths.
-//
-// SEMANTICS (documented divergence from the scalar TILE reader;
-// all silicon-measured on Blackhole, planted special-value probes):
-//   The pipeline is IEEE-compare-on-fp32 behind a bf16 special-value gasket:
-//   * NaN behaves as SAME-SIGNED INFINITY end-to-end. A qNaN anywhere in the
-//     row WINS the argmax (same index the scalar readers report for single-NaN
-//     rows) but the max-value output reads 0x7F80 (+inf), not the NaN
-//     payload; -NaN acts as -inf and never wins. A row holding both a +inf
-//     and a later NaN reports the +inf's index (they tie as +inf; the
-//     scalar readers' bit-pattern order picks the NaN).
-//   * -0 flushes to +0 in the value output; +0/-0 compare equal, so the
-//     FIRST zero's index is kept (the scalar readers' total order prefers a
-//     later +0 over an earlier -0).
+// SEMANTICS — the divergence from the scalar TILE reader that
+// exact_special_values is defined against. All silicon-measured on Blackhole
+// with planted special-value probes. Everything finite and normal, every exact
+// tie included, matches the scalar readers' bfloat16_greater + smallest-index
+// semantics bit-for-bit: strict-gt per lane keeps the lowest tile, and phase
+// 2's lexicographic rule keeps the lowest global index across columns and
+// cores. What diverges is a bf16 special-value gasket in front of an IEEE
+// fp32 compare:
+//   * qNaN behaves as SAME-SIGNED INFINITY end-to-end: it WINS the argmax (the
+//     index the scalar readers give for single-NaN rows) but the value output
+//     reads 0x7F80 (+inf), not the NaN payload; -NaN acts as -inf and never
+//     wins. A row holding a +inf and a later NaN reports the +inf's index —
+//     they tie as +inf, where the scalar bit-pattern order picks the NaN.
+//   * -0 flushes to +0 in the value output, and +0/-0 compare equal, so the
+//     FIRST zero's index is kept (the scalar order prefers a later +0 over an
+//     earlier -0).
 //   * Denormals flush to zero before the compare (the scalar readers rank them
-//     normally) — same family as the known Blackhole eltwise min-normal
-//     flush behavior.
-//   * The max-value output carries a +2^-127 additive pack bias, visible
-//     only when the winner's magnitude is below ~2^-118; compare order and
-//     the index are unaffected.
-//   Everything finite and normal — including every exact tie — matches the
-//   scalar readers' bfloat16_greater + smallest-index semantics bit-for-bit:
-//   strict-gt per lane keeps the lowest tile, and phase 2's lexicographic
-//   rule keeps the lowest global index across columns (and cores).
-//   PRECEDENT: ttnn.argmax already ships this divergence class between its
-//   own paths — the NC compute kernel (dim < rank-2) uses the same IEEE
-//   gt_binary_tile chain while the scalar readers use the bfloat16_greater
-//   bit order, so NaN/signed-zero corners already differ by dispatched dim.
+//     normally) — the known Blackhole eltwise min-normal flush.
+//   * The value output carries a +2^-127 additive pack bias, visible only when
+//     the winner's magnitude is below ~2^-118; compare order and the index are
+//     unaffected.
+// PRECEDENT: these corners already differ by dispatched dim — the NC compute
+// kernel (dim < rank-2) runs the same IEEE gt_binary_tile chain while the
+// scalar readers use the bfloat16_greater bit order.
 //
-// Compile-time args: cb_in, cb_res_val, cb_res_idx, num_passes.
-// Runtime args: [0] w_count — this core's tile count per pass (>= 1).
-// =============================================================================
+// Runtime arg 0 is w_count, this core's tile count per pass (>= 1).
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -98,14 +80,13 @@ void kernel_main() {
     DataflowBuffer dfb_val(cb_res_val);
     DataflowBuffer dfb_idx(cb_res_idx);
 
-    // One-time hardware config, then the copy-op pipeline init that feeds the
-    // SFPU chain below. (This pair is exactly what the deprecated
-    // init_sfpu(icb, ocb) forwarded to; same model as argmax_nc_compute.cpp.)
+    // One-time hardware config plus the copy-op pipeline init feeding the SFPU chain
+    // below — exactly what the deprecated init_sfpu(icb, ocb) forwarded to.
     compute_kernel_hw_startup(cb_in, cb_res_val);
     copy_init(cb_in);
-    // Single where_tile_init for BOTH updates (fp32 max / int32 argmax) —
-    // where_tile_init and binary_max_min_init both write SFPCONFIG macros 0
-    // and 1, so they cannot coexist; see argmax_nc_compute.cpp.
+    // One where_tile_init serves BOTH updates (fp32 max / int32 argmax): it and
+    // binary_max_min_init both write SFPCONFIG macros 0 and 1, so they cannot
+    // coexist. See argmax_nc_compute.cpp.
     gt_binary_tile_init();
     where_tile_init();
     fill_tile_init();

@@ -23,27 +23,22 @@ struct ArgMaxMultiCoreProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
-// TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
-// (Blackhole). Single- or multi-core (the reduction dim's tiles are split
+// ArgMaxPath::Rvv: TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f)
+// unit (Blackhole), single- or multi-core (the reduction dim's tiles are split
 // across cores); returns indices and (optionally) max values.
-// Selected by ArgMaxPath::Rvv -- see select_argmax_path in argmax.cpp.
 struct ArgMaxRvvTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
-// TILE-layout last-dim argmax on the SFPU (Blackhole). Lane-parallel
-// phase 1 reduces every tile of a 32-row tile-row to one (max value, winning
-// tile) candidate per column in DST; a scalar phase 2 on the dataflow RISC
-// finishes each row with 32 lexicographic compares. All 32 rows of a tile-row
-// are reduced in the same pass, so batch shapes cost the same as B == 1.
-// Multicore: the reduction dim's tiles are split across cores, each core
-// producing per-row candidates that a gather core merges (per-row scalar
-// compares — no cross-core tile reduce). Returns indices and (optionally)
-// max values. Semantics are IEEE-compare behind the SFPU's bf16
-// special-value gasket, documented in detail in
-// kernels/argmax_sfpu_tile_compute.cpp. Selected by ArgMaxPath::Sfpu -- see
-// select_argmax_path in argmax.cpp.
+// ArgMaxPath::Sfpu: TILE-layout last-dim argmax on the SFPU (Blackhole).
+// Lane-parallel phase 1 reduces every tile of a 32-row tile-row to one (max
+// value, winning tile) candidate per column in DST; a scalar phase 2 on the
+// dataflow RISC finishes each row with 32 lexicographic compares. Multicore
+// splits the reduction dim's tiles across cores, each producing per-row
+// candidates that a gather core merges by scalar compare. Returns indices and
+// (optionally) max values. Compare semantics: IEEE behind the SFPU's bf16
+// special-value gasket, detailed in kernels/argmax_sfpu_tile_compute.cpp.
 struct ArgMaxSfpuTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);

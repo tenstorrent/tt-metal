@@ -3,79 +3,53 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit — Blackhole
-// only, single- or multi-core. Selected by ArgMaxPath::Rvv; ttnn::argmax
-// decides that on its own (see select_argmax_path in argmax.cpp), and the
-// measurements behind that threshold live next to kSfpuMinRows there. See
-// kernels/argmax_rvv_tile_compute.cpp for the algorithm and semantics notes.
-// Unlike the other argmax paths, this one launches a compute kernel: the
-// unpack/math threads are no-ops and the pack thread does the whole scan, so
-// the dataflow RISC only streams tiles and writes results.
+// only, single- or multi-core, selected by ArgMaxPath::Rvv (select_argmax_path
+// in argmax.cpp, where the routing measurements sit next to kSfpuMinRows).
+// kernels/argmax_rvv_tile_compute.cpp has the algorithm and semantics. Unlike
+// the other argmax paths this one launches a compute kernel: unpack/math are
+// no-ops and the pack thread runs the whole scan, so the dataflow RISC only
+// streams tiles and writes results.
 //
-// Work split: the RVV scan visits every tile once PER VALID ROW, so a pass is
-// linear in both w_tiles and H — measured on one core over an 8192-tile row,
-// ~0.043 us/tile for the first row plus ~0.019 us/tile per further row — which
-// is why the core-count heuristic below is H-aware and the SFPU path's is not.
-// Multicore splits the REDUCTION dim's tiles across cores exactly the way the
-// SFPU path does: core j scans slice [w_start_j, w_start_j + w_count_j) of
-// every tile-row pass and produces one (global index, max value) candidate per
-// valid row, which the gather core (core 0) then merges. The cross-core
-// traffic is 256 B per core per pass — per-row scalar candidates, never tiles.
+// The RVV scan visits every tile once PER VALID ROW, so a pass is linear in
+// both w_tiles and H: one core over an 8192-tile row measures ~0.043 us/tile
+// for the first row plus ~0.019 us/tile per further row. The work split is the
+// SFPU path's (described in argmax_sfpu_tile_program_factory.cpp), except that
+// core j emits one (global index, max value) candidate per valid row instead
+// of a per-column candidate tile.
 //
-// The merge reuses the SFPU path's exchange PROTOCOL (per-core slots plus two
-// cumulative semaphores) but NOT its comparator: this path's whole reason for
-// existing is that it is bit-identical to the scalar readers, so the
-// cross-core merge runs bfloat16_greater's sign-magnitude BIT-PATTERN total
-// order with a smallest-global-index tie-break, not an IEEE compare (see
-// reader_argmax_rvv_tile.cpp).
-//
-// Core-count heuristic — AN EMPIRICAL FIT, and deliberately NOT the SFPU
-// path's. Both paths pay a per-core cost linear in the core count (a shared
-// ~0.44 us/core per-program dispatch floor), so both optima have the form
-// sqrt(per-core-work / floor); what differs is the work. The SFPU pass is flat
-// in H, so sqrt(1.5 * w_tiles) suits it, while this scan is per ROW and its
-// optimum must grow with H. That fixes the SHAPE of the rule and nothing more:
-// the constants come from a grid search over the sweep below, scored on the
-// worst per-shape ratio to the measured optimum, and the result is capped by
-// the grid and by w_tiles:
+// The merge reuses that path's exchange PROTOCOL (per-core slots plus two
+// cumulative semaphores) but NOT its comparator. This path exists to be
+// bit-identical to the scalar readers, so the merge runs bfloat16_greater's
+// sign-magnitude BIT-PATTERN total order with a smallest-global-index
+// tie-break, never an IEEE compare (reader_argmax_rvv_tile.cpp). Unifying the
+// two merges would silently break bit-exactness.
 //
 //     num_cores = ceil(sqrt(w_tiles * (h_logical + 2)) / 3)
 //
-// The 2 and the 3 are FITTED PARAMETERS. Do NOT "correct" them against the
-// per-tile constants quoted above: the closed form those imply,
-// sqrt(w_tiles * (H + 1.26)) / 4.81, differs in both constants AND does not
-// track the measurements — at H == 1 it asks for 4 / 11 / 21 cores at
-// V = 4096 / 32768 / 131072, where the sweep's optima are 6 / 24 / 40.
+// Both paths pay ~0.44 us/core of per-program dispatch, so both optima have
+// the form sqrt(per-core-work / floor); only the work differs. The SFPU pass
+// is flat in H, so sqrt(1.5 * w_tiles) suits it and is wrong for a per-row
+// scan. That fixes the rule's SHAPE and nothing else: the 2 and the 3 are
+// FITTED PARAMETERS from a grid search scored on the worst per-shape ratio to
+// the measured optimum over V = 4096..262144 x H = 1/8/32, core counts pinned
+// with sub_core_grids and swept 1..130.
+// Do NOT "correct" them against the per-tile costs above — the closed form
+// those imply, sqrt(w_tiles * (H + 1.26)) / 4.81, differs in both constants
+// and does not track the measurements: at H == 1, V == 32768 it asks for 11
+// cores where the swept optimum is 24.
 //
-// Core counts were pinned with sub_core_grids and swept 1..130 at every (V, H)
-// below; "opt" is the best of that sweep, "picked" what the formula lands on.
-// Every shape is within 8% of its own optimum, the worst points being at
-// H == 32, which the automatic route sends to the SFPU anyway:
+// tests/ttnn/unit_tests/operations/reduce/test_argmax_path_crossover_bench.py
+// re-measures those curves (V_SWEEP / H_SWEEP / CORE_SWEEP are the knobs).
+// Every swept shape lands within 8% of its own optimum, worst at H == 32,
+// which the automatic route sends to the SFPU anyway
+// (V == 32768, H == 32: 63 cores / 84.6 us against an optimum of 44 / 78.6).
+// The curves turn back upward well before the grid fills (V == 32768, H == 1:
+// 11.3 us on 24 cores, 50.7 us on 111), so "use the whole grid" is not a safe
+// default for either path.
 //
-//   V         H    opt cores / us    picked cores / us   picked/opt
-//   4096      1        6 /   4.4          7 /   4.5         1.02
-//   4096      8       12 /  11.8         12 /  11.8         1.00
-//   4096     32       16 /  38.6         22 /  39.9         1.03
-//   16384     1       12 /   7.9         14 /   8.2         1.04
-//   16384     8       28 /  18.6         24 /  19.2         1.03
-//   16384    32       28 /  60.5         44 /  63.2         1.05
-//   32768     1       24 /  11.3         19 /  11.5         1.02
-//   32768     8       53 /  25.2         34 /  25.5         1.01
-//   32768    32       44 /  78.6         63 /  84.6         1.08
-//   131072    1       40 /  26.3         37 /  26.9         1.02
-//   131072    8       80 /  54.8         68 /  56.6         1.03
-//   131072   32       80 / 148.0        125 / 158.0         1.07
-//   262144    1       28 /  47.3         53 /  48.2         1.02
-//   262144    8       48 /  80.5         96 /  84.1         1.05
-//   262144   32      130 / 215.2        130 / 215.2         1.00
-//
-// The optima themselves are worth reading: at H == 1, V == 4096 the best core
-// count is SIX, and every curve turns back upward well before the grid is full
-// (V = 32768, H = 1: 11.3 us on 24 cores, 50.7 us on 111) — "give it the whole
-// grid" is not a safe default for either path.
-//
-// An explicit sub_core_grids overrides the heuristic (capped by w_tiles only)
-// — pass a single-core grid to force the single-core variant, which skips the
-// exchange buffer entirely.
+// An explicit sub_core_grids overrides the heuristic (capped by w_tiles only);
+// a single-core grid forces the single-core variant, which skips the exchange
+// buffer entirely.
 
 #include "argmax_device_operation.hpp"
 
@@ -128,9 +102,7 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
         const auto grid = device->compute_with_storage_grid_size();
         const CoreRangeSet full_grid(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
         cores = corerange_to_cores(full_grid, std::nullopt, true);
-        // ceil(sqrt(w_tiles * (h_logical + 2)) / 3) — see the header comment for
-        // the measurements this was fitted to. Deliberately not the SFPU
-        // path's flat-in-H formula: this scan costs per ROW.
+        // Fitted, H-aware; see the header. Not the SFPU path's flat-in-H rule.
         const uint32_t want = static_cast<uint32_t>(
             std::ceil(std::sqrt(static_cast<double>(w_tiles) * (static_cast<double>(h_logical) + 2.0)) / 3.0));
         num_cores = std::min<uint32_t>({want, static_cast<uint32_t>(cores.size()), w_tiles});
@@ -145,18 +117,16 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     }
     const CoreRangeSet all_cores(core_ranges_vec);
 
-    // Contiguous slices of the reduction dim's tiles, remainder spread over
-    // the leading cores.
+    // Contiguous slices of the reduction dim's tiles, remainder over the leading cores.
     const uint32_t w_base = w_tiles / num_cores;
     const uint32_t w_rem = w_tiles % num_cores;
     auto slice_count = [&](uint32_t j) { return w_base + (j < w_rem ? 1u : 0u); };
     auto slice_start = [&](uint32_t j) { return j * w_base + std::min(j, w_rem); };
     const uint32_t w_count_max = slice_count(0);
 
-    // Chunked double-buffered input streaming: the compute-side scan of chunk
-    // k overlaps the NOC staging of chunk k+1. Uniform across cores so the CB
-    // layout (and therefore the exchange-buffer address) is identical
-    // everywhere.
+    // Chunked double-buffered input streaming: the compute-side scan of chunk k
+    // overlaps the NOC staging of chunk k+1. Uniform across cores so the CB layout
+    // (and therefore the exchange-buffer address) is identical everywhere.
     const uint32_t chunk_pages = std::min<uint32_t>(64, w_count_max);
     const uint32_t in_cb_pages = 2 * chunk_pages;
 
@@ -217,11 +187,9 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
             .page_size = val_page_size,
         }}},
     });
-    // Exchange buffer: one 256 B slot per core (u32 idx[32] + u32 val[32]).
-    // Allocated identically on every core so a worker's local address equals
-    // the gather core's. Single core needs no exchange at all, but the CB is
-    // declared unconditionally so both variants share one CB layout (and one
-    // reader kernel).
+    // Exchange buffer: one 256 B slot per core (u32 idx[32] + u32 val[32]), allocated
+    // identically everywhere so a worker's local address equals the gather core's, and
+    // declared even single-core (unused there) so both variants share one CB layout.
     constexpr uint32_t xchg_slot_bytes = 64 * sizeof(uint32_t);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cores * xchg_slot_bytes,
@@ -284,14 +252,12 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     if (has_maxval) {
         TensorAccessorArgs(tensor_args.optional_maxval_tensor->mesh_tensor()).append_to(reader_ct_args);
     } else {
-        // Placeholder — contract with reader_argmax_rvv_tile.cpp: the kernel
-        // unconditionally parses exactly THREE TensorAccessorArgs blocks at
-        // compile time (src, dst, val), because the constexpr offset chain
-        // (next_compile_time_args_offset) cannot be made conditional. When no
-        // maxval tensor is supplied, this copy of the output's accessor args
-        // fills the third slot so the arg counts line up; the has_maxval
-        // compile-time arg (== false) guards every use of the resulting
-        // accessor, so it is never dereferenced. Keep the two sides in sync.
+        // Contract with reader_argmax_rvv_tile.cpp: it parses exactly THREE
+        // TensorAccessorArgs blocks (src, dst, val) unconditionally, because the
+        // constexpr offset chain (next_compile_time_args_offset) cannot be made
+        // conditional. With no maxval tensor this duplicate of the output's args
+        // fills the third slot; the has_maxval compile-time arg (== false) guards
+        // every use of it, so it is never dereferenced. Keep the two sides in sync.
         TensorAccessorArgs(output).append_to(reader_ct_args);
     }
 
@@ -338,8 +304,8 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
         h_logical,
         outer_dim_units,
     };
-    // enable_trisc2_rvv: compile this kernel's TRISC2 (pack) TU with the Zve32f extension —
-    // the in-tree opt-in that makes the RVV scan compile in a stock build.
+    // enable_trisc2_rvv: compile TRISC2 (pack) with Zve32f — the in-tree opt-in that
+    // makes the RVV scan build in a stock tree.
     compute_desc.config = ComputeConfigDescriptor{.enable_trisc2_rvv = true};
     for (uint32_t j = 0; j < num_cores; ++j) {
         compute_desc.emplace_runtime_args(cores[j], {slice_count(j)});

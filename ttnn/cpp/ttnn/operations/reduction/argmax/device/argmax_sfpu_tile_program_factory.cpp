@@ -2,38 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// TILE-layout last-dim argmax on the SFPU — Blackhole, single- or multi-core.
-// Selected by ArgMaxPath::Sfpu; ttnn::argmax decides that on its own (see
-// select_argmax_path in argmax.cpp).
-// See kernels/argmax_sfpu_tile_compute.cpp for the algorithm and
-// the (documented, silicon-measured) special-value semantics.
-//
-// Measurements and the routing-threshold rationale live next to kSfpuMinRows
-// in argmax.cpp.
+// TILE-layout last-dim argmax on the SFPU — Blackhole, single- or multi-core,
+// selected by ArgMaxPath::Sfpu (select_argmax_path in argmax.cpp, where the
+// routing measurements sit next to kSfpuMinRows).
+// kernels/argmax_sfpu_tile_compute.cpp has the algorithm and the documented,
+// silicon-measured special-value semantics.
 //
 // Work split: phase 1 reduces all 32 rows of a tile-row lane-parallel, so a
-// tile-row pass costs the same whether 1 or 32 rows are valid — the batch-
-// shape win. Multicore splits the REDUCTION dim's tiles across cores: core j
-// reduces slice [w_start_j, w_start_j + w_count_j) of every tile-row pass
-// and finishes it with a per-row phase 2 on its dataflow RISC; the gather
-// core (core 0) then merges the per-core per-row candidates with the same
-// lexicographic rule. The cross-core traffic is 256 B per core per pass —
-// per-row scalar candidates, never tiles.
+// tile-row pass costs the same whether 1 or 32 rows are valid — the batch-shape
+// win. Multicore splits the REDUCTION dim's tiles across cores: core j reduces
+// slice [w_start_j, w_start_j + w_count_j) of every tile-row pass and finishes
+// it with a per-row phase 2 on its dataflow RISC; the gather core (core 0) then
+// merges the per-core per-row candidates with the same lexicographic rule. The
+// cross-core traffic is 256 B per core per pass — per-row scalar candidates,
+// never tiles.
 //
-// Core-count heuristic: per-core phase 1 is a fixed ~0.60 us/tile that does
-// NOT depend on H (the flat-in-H measurement in argmax.cpp), while every extra
-// core adds a gather-merge pass and ~0.44 us of per-program dispatch. The
-// optimum therefore sits near sqrt(w_tiles) and does not move with H; we use
-// ceil(sqrt(1.5 * w_tiles)) capped by the grid and by w_tiles, which lands
-// within 0.87x-1.04x of this path's own per-shape optimum at every point
-// swept.
+// Core count: ceil(sqrt(1.5 * w_tiles)), capped by the grid and by w_tiles.
+// Phase 1 costs a fixed ~0.60 us/tile that does NOT depend on H, while every
+// extra core adds a gather-merge pass and ~0.44 us of per-program dispatch, so
+// the optimum sits near sqrt(w_tiles) and does not move with H; this lands
+// within 0.87x-1.04x of this path's own per-shape optimum at every point swept.
+// Deliberately not the RVV path's rule, whose scan costs per ROW and whose
+// optimum therefore grows with H (see argmax_rvv_tile_program_factory.cpp).
 //
-// This is deliberately NOT the RVV path's formula: that scan costs per ROW,
-// so its optimum grows with H and it fits ceil(sqrt(w_tiles * (H + 2)) / 3)
-// instead (see argmax_rvv_tile_program_factory.cpp).
-//
-// An explicit sub_core_grids overrides the heuristic (capped by w_tiles
-// only) — pass a single-core grid to force the single-core variant.
+// An explicit sub_core_grids overrides the heuristic (capped by w_tiles only);
+// a single-core grid forces the single-core variant.
 
 #include "argmax_device_operation.hpp"
 
@@ -100,18 +93,16 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
     }
     const CoreRangeSet all_cores(core_ranges_vec);
 
-    // Contiguous slices of the reduction dim's tiles, remainder spread over
-    // the leading cores.
+    // Contiguous slices of the reduction dim's tiles, remainder over the leading cores.
     const uint32_t w_base = w_tiles / num_cores;
     const uint32_t w_rem = w_tiles % num_cores;
     auto slice_count = [&](uint32_t j) { return w_base + (j < w_rem ? 1u : 0u); };
     auto slice_start = [&](uint32_t j) { return j * w_base + std::min(j, w_rem); };
     const uint32_t w_count_max = slice_count(0);
 
-    // Chunked double-buffered input streaming: the SFPU scan of chunk k
-    // overlaps the NOC staging of chunk k+1. Uniform across cores so the CB
-    // layout (and therefore the exchange-buffer address) is identical
-    // everywhere.
+    // Chunked double-buffered input streaming: the SFPU scan of chunk k overlaps
+    // the NOC staging of chunk k+1. Uniform across cores so the CB layout (and
+    // therefore the exchange-buffer address) is identical everywhere.
     const uint32_t chunk_pages = std::min<uint32_t>(64, w_count_max);
     const uint32_t in_cb_pages = 2 * chunk_pages;
 
@@ -154,9 +145,8 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
             .page_size = res_idx_page,
         }}},
     });
-    // Exchange buffer: one 256 B slot per core (u32 idx[32] + u32 val[32]).
-    // Allocated identically on every core so a worker's local address equals
-    // the gather core's.
+    // Exchange buffer: one 256 B slot per core (u32 idx[32] + u32 val[32]), allocated
+    // identically everywhere so a worker's local address equals the gather core's.
     constexpr uint32_t xchg_slot_bytes = 64 * sizeof(uint32_t);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_cores * xchg_slot_bytes,
@@ -237,14 +227,12 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
     if (has_maxval) {
         TensorAccessorArgs(tensor_args.optional_maxval_tensor->mesh_tensor()).append_to(reader_ct_args);
     } else {
-        // Placeholder — contract with reader_argmax_sfpu_tile.cpp: the kernel
-        // unconditionally parses exactly THREE TensorAccessorArgs blocks at
-        // compile time (src, dst, val), because the constexpr offset chain
-        // (next_compile_time_args_offset) cannot be made conditional. When no
-        // maxval tensor is supplied, this copy of the output's accessor args
-        // fills the third slot so the arg counts line up; the has_maxval
-        // compile-time arg (== false) guards every use of the resulting
-        // accessor, so it is never dereferenced. Keep the two sides in sync.
+        // Contract with reader_argmax_sfpu_tile.cpp: it parses exactly THREE
+        // TensorAccessorArgs blocks (src, dst, val) unconditionally, because the
+        // constexpr offset chain (next_compile_time_args_offset) cannot be made
+        // conditional. With no maxval tensor this duplicate of the output's args
+        // fills the third slot; the has_maxval compile-time arg (== false) guards
+        // every use of it, so it is never dereferenced. Keep the two sides in sync.
         TensorAccessorArgs(output).append_to(reader_ct_args);
     }
 
@@ -289,8 +277,8 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
         static_cast<uint32_t>(cb_res_idx),
         num_passes,
     };
-    // fp32 DST accumulation: bf16 inputs widen exactly into fp32 DST slots,
-    // and the uint32 win-tile accumulator needs 32-bit DST.
+    // fp32 DST accumulation: bf16 inputs widen exactly, and the uint32 win-tile
+    // accumulator needs 32-bit DST.
     compute_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = true};
     for (uint32_t j = 0; j < num_cores; ++j) {
         compute_desc.emplace_runtime_args(cores[j], {slice_count(j)});
