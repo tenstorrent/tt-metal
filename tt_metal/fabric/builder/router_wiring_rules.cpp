@@ -42,13 +42,10 @@ enum class TurnRole : uint8_t {
     BOUNDARY,       // Z crossing a mesh boundary: carries no routing direction
 };
 
-// Total over both enums, deliberately: whether a pair describes a possible chip is a chip-level
-// fact, enforced once at establishment (classify_fabric_edge, validate_facing_role_consistency),
-// and re-checking it per turn would re-derive a decision made upstream, one layer below the node
-// context that makes a failure message useful. The fold is load-bearing, not cosmetic:
+// Total over both enums; establishment validates whether a pair can describe a real chip. Folding
+// impossible pairs here preserves their structurally implied roles without duplicating validation:
 // (Z, INTRAMESH_CARDINAL) folds into EXPRESS_CHORD and (E/W, INTRAMESH_EXPRESS) into X_RING_ONLY
-// because those reproduce the structurally implied answers; an IMPOSSIBLE-role mapping would be a
-// behaviour change, not a cleanup.
+// because those reproduce the implied wiring answers.
 TurnRole turn_role(RoutingDirection dir, EdgeCapability cap) {
     // Z carries a routing direction unless its edge crosses a mesh boundary.
     if (dir == RoutingDirection::Z) {
@@ -61,10 +58,8 @@ TurnRole turn_role(RoutingDirection dir, EdgeCapability cap) {
     return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
 }
 
-// Emit the flat-index prefix sums and enforce the capacity ceilings at the one construction
-// site. The ceiling checks are what turn the "express with VC2 reaches it exactly (5+4+1)"
-// comment into a guarantee: every family's shape passes through here, with zero margin on
-// senders and on the 32 stream registers the flat space maps onto.
+// Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
+// Express with VC2 reaches the sender ceiling exactly (5+4+1).
 void finalize_vc_shape_bases(RouterVcShape& shape) {
     uint32_t sender_base = 0;
     uint32_t receiver_base = 0;
@@ -152,11 +147,8 @@ bool wires_into(
             egress_is_z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL);
     };
 
-    // A boundary producer's feed is VC-shaped in either mode: its VC1 receiver fans out onto every
-    // non-self VC1 sender, while its VC0 receiver crosses over onto downstream VC1 senders and
-    // feeds nothing on VC0. A physical fact about the boundary's receivers, not an express-mode
-    // rule -- and the only VC-sensitive arm in this function: express_vc1_sender_count()'s
-    // max-commutes-with-subtraction argument holds exactly while that stays true.
+    // A boundary producer's VC1 receiver fans out to non-self VC1 senders; its VC0 receiver crosses
+    // over to downstream VC1 and feeds nothing on VC0. This is the only VC-sensitive producer role.
     if (producer_role == TurnRole::BOUNDARY) {
         return vc == 1;
     }
@@ -173,16 +165,8 @@ bool wires_into(
             // Any non-self egress, and Z only when the chip has a Z port.
             return !egress_is_z || chip_z_role != ZPortRole::NONE;
         case TurnRole::X_RING_ONLY:
-            // Dimension order, stated as the contract states it (section 4.4): a producer already in
-            // its X phase may not turn back into a protected Y egress. The role above is what
-            // decides the producer is in that phase, so only the egress side is read here.
-            //
-            // Keying that side on capability rather than on the compass letter is what keeps the
-            // mesh seam wired: an INTERMESH egress is the packet leaving the mesh, not a turn back
-            // into the Y rings the ordering protects. Spelling this as "only the opposite X"
-            // instead would drop it, leaving an exit chip's E/W routers with no downstream for the
-            // boundary and silently stranding every intermesh packet whose last intramesh leg is an
-            // X hop.
+            // X producers cannot re-enter protected Y. Capability matters: an intermesh egress
+            // leaves the mesh rather than entering Y, so E/W exit routers remain wired to it.
             return !is_protected_y_egress(egress_direction, resolve_egress_capability());
         case TurnRole::BOUNDARY: break;  // answered above
     }

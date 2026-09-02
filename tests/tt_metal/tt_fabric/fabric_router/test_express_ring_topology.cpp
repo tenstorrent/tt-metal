@@ -294,12 +294,10 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
     EXPECT_FALSE(control_plane->continuation_allowed(row(0), D::S, D::Z));
 }
 
-// --- Ported predicate regressions (formerly ProtectedRingModelTest) ---
+// --- ControlPlane predicate regressions ---
 //
-// These pin the ControlPlane ring predicates the builder consumes, over the same fixtures the old
-// builder-side model used (the descriptors' chord sets are identical). The derivation goldens live
-// in the Rings* tests above; what remains here is predicate behavior per (row, direction) and the
-// axis-level query semantics behind mesh_has_protected_ring_in_axis_of.
+// The Rings* tests above cover derivation; these cases pin the builder-facing predicates per
+// (row, direction) and the axis-level semantics of mesh_has_protected_ring_in_axis_of.
 
 TEST(AxisRouteTopologyTest, DoubleChordPerRowIsRejected) {
     // A row terminating two chords (span 4 and span 8 both landing on row 2) cannot be identified

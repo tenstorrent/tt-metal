@@ -1291,7 +1291,7 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 } __attribute__((packed, aligned(16)));
 
 // Validate expected sizes for max-capacity tiers only (one per header size)
-// Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
+// Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
 //              routing_fields:4 + dst_start:4 + mcast_params:8)
 //
 // is_mcast_active was retired with the legacy 2D codec: it had zero readers, only writes. Reclaiming

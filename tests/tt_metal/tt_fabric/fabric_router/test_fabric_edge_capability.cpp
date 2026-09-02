@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression for the edge-capability truth table in
-// GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 4.3.
+// Regression for the edge-capability truth table.
 //
 // The property under test is that a direction letter selects an output while capability selects
 // transport behaviour, and the two are independent: Z does not imply intermesh, and intermesh is not
@@ -59,8 +58,7 @@ TEST(FabricEdgeCapabilityTest, SameMeshZWithoutExpressIsRejected) {
 }
 
 TEST(FabricEdgeCapabilityTest, ExpressAndIntermeshAreDistinguishedOnTheSameChip) {
-    // The case the old "any active Z channel means intermesh" test could not represent: one chip with
-    // a same-mesh express chord on Z and an intermesh edge on a cardinal port.
+    // One chip may have a same-mesh express chord on Z and an intermesh edge on a cardinal port.
     const auto local = node(0, 2);
     EXPECT_EQ(
         classify_fabric_edge(local, node(0, 5), RoutingDirection::Z, k_express_on), EdgeCapability::INTRAMESH_EXPRESS);
