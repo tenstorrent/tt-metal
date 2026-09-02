@@ -1096,7 +1096,8 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        // Worker completion counter, incremented by workers with a NoC atomic.
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
             invalidate_l1_cache();
@@ -1130,7 +1131,8 @@ static void process_wait() {
     }
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = 0;
+        // Same counter as above; a cached store here would race the workers' atomics.
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
@@ -1168,7 +1170,7 @@ void process_go_signal_mcast_cmd() {
     // then reads the same physical location via the cached-form source address.
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached =
-        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
@@ -1261,6 +1263,7 @@ void process_notify_dispatch_s_go_signal_cmd() {
             num_go_signals_safe_to_send[set_index]++;
             noc_inline_dw_write(dispatch_s_notify_addr, num_go_signals_safe_to_send[set_index]);
         } else {
+            // dispatch_s polls this word cached too; the NoC branch above would need the uncached view.
             volatile tt_l1_ptr uint32_t* notify_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_addr);
             *notify_ptr = (*notify_ptr) + 1;
@@ -1276,11 +1279,16 @@ void set_go_signal_noc_data() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t num_words = load_aligned<uint32_t>(&cmd->set_go_signal_noc_data.num_words);
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_words * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
@@ -1433,6 +1441,11 @@ re_run_command:
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
+            // These offsets fit the window process_cmd_d already invalidated, so unlike the other
+            // variable-length payloads this one needs no invalidate of its own. Raising the max would.
+            static_assert(
+                sizeof(CQDispatchCmd) + sizeof(uint32_t) * CQ_DISPATCH_MAX_WRITE_OFFSETS <= sizeof(CQDispatchCmdLarge),
+                "offsets are read past the header window process_cmd_d invalidates in the worst cmd_ptr alignment");
             volatile uint32_t tt_l1_ptr* cmd_write_offset =
                 reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd));
 
@@ -1474,6 +1487,10 @@ re_run_command:
 
 static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     bool done = false;
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // As in process_cmd_d: upstream relays this command by NoC write, which does not snoop.
+    invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmdLarge));
+#endif
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
 

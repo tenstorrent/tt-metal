@@ -64,12 +64,12 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// Choosing the view for a sync word on Quasar: match the transport that publishes it, and use the same
-// view on both sides -- a cached store can sit dirty while an uncached poll reads TL1 and never sees it.
-//   Local CPU store (same-tile DM to DM): cached. DM caches are coherent with each other.
-//   NoC atomic: uncached. Whether the NIU's atomic port raises a snoop is unconfirmed and FD sends every
-//   packet snoop-off, so a cached poll may never observe the update.
-// No-op on BH/WH.
+// Choosing the view on Quasar; both sides of a word must agree. No-op on BH/WH.
+//   Local CPU store, same-tile DM to DM: cached. DM caches are coherent with each other.
+//   NoC atomic: uncached unless the increment sets the snoop bit, which FD leaves off because empherical
+//   experiments snooping was some cycles more expensive than uncached poll.
+//   With it off a cached poll never sees the update.
+//   Read back by the NIU as a transfer source: uncached. The NIU reads TL1, outside DM coherence.
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr + MEM_L1_UNCACHED_BASE;
@@ -98,7 +98,8 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
 // into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
 // selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
-// is the index of the first stream used by this CQ.
+// is the index of the first stream used by this CQ. Workers increment it with a NoC atomic, so every
+// access to it uses the uncached view.
 FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
     uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
     return uncached_l1_ptr<uint32_t>(
@@ -758,10 +759,15 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
     uintptr_t dispatch_telemetry_base) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_sub_devices * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
 
     static uint32_t local_sub_device_worker_counts_update = 0;
 

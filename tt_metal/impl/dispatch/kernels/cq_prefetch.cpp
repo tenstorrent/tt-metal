@@ -2052,7 +2052,7 @@ void* copy_into_l1_cache(
     uint32_t& stride) {
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = (exec_buf_state.length - cmd_header_size);
-    volatile uint32_t tt_l1_ptr* l1_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + cmd_header_size);
+    volatile uint32_t tt_l1_ptr* l1_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + cmd_header_size);
     uint32_t* l1_cache_pos = l1_cache;
     while (sub_cmds_length > remaining) {
         uint32_t amt = remaining / sizeof(uint32_t);
@@ -2396,7 +2396,7 @@ uint32_t process_relay_linear_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream
                        l1_to_local_cache_copy_chunk -
                    l1_cache) < l1_cache_elements_rounded);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-        uncached_l1_ptr<uint32_t>(data_ptr), amt, l1_cache_pos);
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr), amt, l1_cache_pos);
 
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
