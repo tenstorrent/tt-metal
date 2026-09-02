@@ -258,4 +258,10 @@ void kernel_main() {
 #endif
         }
     }
+
+    // Flush every outstanding NOC transaction before the kernel exits: an
+    // unflushed multicast/semaphore write or non-posted atomic can land after the
+    // next dispatch re-initialises semaphores and strand a counted wait forever.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
