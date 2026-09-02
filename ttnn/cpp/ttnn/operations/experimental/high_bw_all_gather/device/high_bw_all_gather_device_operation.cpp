@@ -353,6 +353,12 @@ HighBwAllGatherDeviceOperation::spec_return_value_t HighBwAllGatherDeviceOperati
 
 HighBwAllGatherDeviceOperation::topology_return_value_t HighBwAllGatherDeviceOperation::compute_output_topologies(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    // A paged KV pool is replicated and its physical page dimension is unrelated to
+    // the logical gather dimension.  The caller-provided persistent output already
+    // carries the authoritative (replicated) topology for the depaged result.
+    if (tensor_args.has_paged_input()) {
+        return {tensor_args.output_tensor.tensor_topology()};
+    }
     return {derive_output_topology(
         tensor_args.input_tensor,
         args.linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{args.cluster_axis},
