@@ -46,7 +46,7 @@ What it deliberately does NOT claim
   into slots nothing else uses does not.
 * **Mid-slab chunk starts.** All three chunks start at a multiple of the global chunk size, so
   ``rotated_chip_positions``' KV-pad-aware rotation is degenerate. A non-aligned boundary is a
-  placement question, so it belongs to ``test_mtp_device_transport.py``.
+  placement question, and nothing covers it today.
 * **Multi-rank.** ``TtPrefillTransformer`` asserts MTP needs an embedding table on the rank that
   runs the tail, which today means single-galaxy (``is_first_rank == is_last_rank``).
 * **A checkpoint-free run.** Every weight is a real GLM-5.2 one: the 78-layer trunk, the embedding
