@@ -29,6 +29,7 @@ from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
 from ttexalens.util import FirmwareVersion
+from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 
 from run_checks import run as get_run_checks
 from triage import (
@@ -79,33 +80,27 @@ def dram_endpoints_by_channel(device: Device) -> list[list[OnChipCoordinate]]:
     return [[loc for _, loc in sorted(by_channel.get(ch, []))] for ch in range(max(by_channel) + 1)]
 
 
-# TODO: drop read_tag once the ttexalens bump lands; tt_exalens_lib.read_arc_telemetry_entry
-# rejects tags 40-51 (every GDDR tag) against its stale telemetry_tags_map.
-def read_tag(device: Device, noc_id, tag: int) -> int:
-    return device.read_arc_telemetry_entry(noc_id, tag)
-
-
-def check_dram_telemetry(device: Device, context: Context) -> list[DramHealthRow] | None:
+def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
     if not device.is_blackhole():
         # Wormhole does not provide GDDR telemetry.
         return None
 
-    noc_id = context.init_noc_id
+    device_id = device.id
     fw = device.firmware_version
     endpoints = dram_endpoints_by_channel(device)
     modules = len(endpoints)
 
     try:
-        speed = read_tag(device, noc_id, TAG_DDR_SPEED)
-        status_word = read_tag(device, noc_id, TAG_DDR_STATUS)
-        uncorr_bitmask = read_tag(device, noc_id, TAG_GDDR_UNCORR)
-        temp_words = [read_tag(device, noc_id, TAG_GDDR_TEMP_BASE + p) for p in range(modules // 2)]
-        corr_words = [read_tag(device, noc_id, TAG_GDDR_CORR_BASE + p) for p in range(modules // 2)]
+        speed = read_arc_telemetry_entry(device_id, TAG_DDR_SPEED)
+        status_word = read_arc_telemetry_entry(device_id, TAG_DDR_STATUS)
+        uncorr_bitmask = read_arc_telemetry_entry(device_id, TAG_GDDR_UNCORR)
+        temp_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_TEMP_BASE + p) for p in range(modules // 2)]
+        corr_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_CORR_BASE + p) for p in range(modules // 2)]
     except RuntimeError as e:
         log_warning_device(device, f"no GDDR telemetry on FW {fw}: {e}")
         return None
 
-    check_bist = device.is_blackhole() and fw >= BIST_MIN_FW
+    check_bist = fw >= BIST_MIN_FW
     statuses = decode_ddr_status(status_word, modules, check_bist)
 
     rows: list[DramHealthRow] = []
@@ -147,7 +142,7 @@ def check_dram_telemetry(device: Device, context: Context) -> list[DramHealthRow
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
-    return run_checks.run_per_device_check(lambda device: check_dram_telemetry(device, context))
+    return run_checks.run_per_device_check(lambda device: check_dram_telemetry(device))
 
 
 if __name__ == "__main__":
