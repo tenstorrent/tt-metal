@@ -314,6 +314,10 @@ struct SpoolPump {
         }
     }
 
+    // One out-of-line copy of the pass for the two sites that never run inside a loaded sweep (the
+    // idle gap and the exit drain); the inlined copies at the other sites are worth 15% of d1 stalls.
+    __attribute__((noinline)) void pass_cold() { pass(); }
+
     // The batched bytes_sent notify for pump ships: once per sweep instead of once per chunk.
     __attribute__((always_inline)) void notify() {
         if (notify_pending) {
