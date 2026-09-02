@@ -13,7 +13,7 @@ maximum length; each decode step slices the single position row(s) it needs.
 The test has two deployment variants:
 
 * ``pp8_tp1``: eight single-chip pipeline stages (the existing 8-chip path).
-* ``pp8_tp4``: eight 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
+* ``pp2_tp4``: two 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
   uses unfused q_a/kv, each N-sharded across the 4 ranks then all-gathered,
   with those weights left in L1; head-sharded SDPA, sequential local-group
   O_A and row-parallel O_B. MoE shards the intermediate dimension and
@@ -246,7 +246,7 @@ def _build_and_prefill(
     "mesh_device,tp_size",
     [
         pytest.param((8, 1), 1, id="pp8_tp1_8chip"),
-        pytest.param((8, 4), 4, id="pp8_tp4_32chip"),
+        pytest.param((8, 4), 4, id="pp2_tp4_32chip"),
     ],
     indirect=["mesh_device"],
 )
@@ -264,7 +264,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         traced, next_id = state["traced"], state["next_id"]
         generated: list[int] = [next_id]
         assert model.tp_size == tp_size
-        assert model.num_submeshes == 8
+        assert model.num_submeshes == (2 if tp_size == 4 else 8)
         assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
