@@ -85,21 +85,19 @@ struct p_unpacr
     constexpr static std::uint32_t UNP_CLRSRC_ONE_INT8        = 0x2;
 };
 
-// TODO: RT Review this struct, bits do not match for UNPACR_NOP
+// Values here are PER-OPERAND: Blackhole's UNPACR_NOP takes each control as its own
+// operand, unlike Wormhole's single packed NoOp immediate. See TT_OP_UNPACR_NOP.
 struct p_unpacr_nop
 {
     constexpr static std::uint32_t UNP_POP = 0b000;
     constexpr static std::uint32_t CLR_SRC = 0b01;
     constexpr static std::uint32_t UNP_NOP = 0b010;
 
-    constexpr static std::uint32_t UNP_ZEROSRC   = 0b001;
+    constexpr static std::uint32_t UNP_ZEROSRC = 0b001;
+    // Spans Src_ClrVal_Ctrl|Unpack_Pop; equals CLR_SRC_NEGINF|CLR_SRC.
     constexpr static std::uint32_t UNP_NEGINFSRC = 0b101;
 
     constexpr static std::uint32_t SET_DVALID = 0x1;
-
-    constexpr static std::uint32_t UNP_ZEROSRC_RESET_ALL_BANKS    = 0b1001; // default is clear current bank
-    constexpr static std::uint32_t UNP_ZEROSRC_STALL_RESET_WR_RDY = 0b10001;
-    constexpr static std::uint32_t UNP_ZEROSRC_SET_DVALID         = 0b1000001;
 
     constexpr static std::uint32_t UNP0 = 0x0;
     constexpr static std::uint32_t UNP1 = 0x1;
