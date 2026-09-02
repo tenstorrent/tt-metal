@@ -827,7 +827,7 @@ cb_scaled.wait_front(...);
 #endif
 ```
 
-The full discussion (file-scope ternaries, preprocessor-stage parsing) is in [Pattern: Conditional / optional DFB bindings](port_patterns.md#pattern-conditional--optional-dfb-bindings). The "always bind and gate only the uses" alternative — wrapper declared unconditionally — is wrong on two counts: it pays L1 unnecessarily for an unused buffer, *and* `if constexpr` doesn't gate name lookup in a non-template kernel even if you reached for it.
+The full discussion (file-scope ternaries, preprocessor-stage parsing) is in [Pattern: Conditional / optional resource bindings](port_patterns.md#pattern-conditional--optional-resource-bindings). The "always bind and gate only the uses" alternative — wrapper declared unconditionally — is wrong on two counts: it pays L1 unnecessarily for an unused buffer, *and* `if constexpr` doesn't gate name lookup in a non-template kernel even if you reached for it.
 
 ---
 
