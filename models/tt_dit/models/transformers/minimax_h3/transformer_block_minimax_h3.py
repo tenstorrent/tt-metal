@@ -226,7 +226,7 @@ class MiniMaxH3TransformerBlock(Module):
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
-        N: int,
+        logical_n: ttnn.Tensor,
         temb: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
@@ -237,7 +237,7 @@ class MiniMaxH3TransformerBlock(Module):
         temb: [1, 1, num_timesteps, time_embed_dim], replicated, float32
         adaln_indices: [1, 1, 1, N_local] integer row indices, fractured N on SP
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
-        N: logical (unfractured) packed sequence length
+        logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
@@ -265,7 +265,7 @@ class MiniMaxH3TransformerBlock(Module):
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
         spatial_1BND = self.attn(
             normed,
-            N=N,
+            logical_n=logical_n,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             addcmul_residual=residual,
