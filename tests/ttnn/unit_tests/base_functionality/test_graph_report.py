@@ -4998,6 +4998,55 @@ class TestReportConfigDoesNotEnableLegacyTracer:
             assert ttnn.torch_tracer.GRAPH_STACK is None
 
 
+class TestTracerStateSurvivesFailure:
+    """
+    A raising operation used to leave its graph on GRAPH_STACK, a failing torch side used to leave
+    ENABLE_TRACER set, and an error escaping ttnn.tracer.trace() used to leave tracing on, so the
+    next trace started from corrupted state.
+    """
+
+    def test_graph_stack_is_popped_when_a_ttnn_operation_raises(self, expect_error):
+        def boom():
+            raise RuntimeError("boom")
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                depth = len(ttnn.torch_tracer.GRAPH_STACK)
+                with expect_error(RuntimeError, "boom"):
+                    ttnn.tracer.trace_ttnn_operation("boom", boom)()
+                assert len(ttnn.torch_tracer.GRAPH_STACK) == depth
+
+    def test_graph_stack_is_popped_when_a_torch_module_raises(self, expect_error):
+        class Boom(torch.nn.Module):
+            def forward(self, tensor):
+                raise RuntimeError("boom")
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                depth = len(ttnn.torch_tracer.GRAPH_STACK)
+                with expect_error(RuntimeError, "boom"):
+                    Boom()(torch.rand((8, 8)))
+                assert len(ttnn.torch_tracer.GRAPH_STACK) == depth
+
+    def test_tracer_is_disabled_when_the_traced_block_raises(self, expect_error):
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with expect_error(RuntimeError, "boom"):
+                with ttnn.tracer.trace():
+                    raise RuntimeError("boom")
+            assert not ttnn.tracer.ENABLE_TRACER
+            assert ttnn.torch_tracer.GRAPH_STACK is None
+
+    def test_enable_tracer_stays_false_when_the_torch_side_fails(self, monkeypatch, expect_error):
+        def boom():
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(ttnn.torch_tracer, "enable_tracing", boom)
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with expect_error(RuntimeError, "boom"):
+                ttnn.tracer.enable_tracing()
+            assert not ttnn.tracer.ENABLE_TRACER
+
+
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
@@ -5014,6 +5063,7 @@ class TestLoggingDuringTraceCapture:
             assert ttnn.is_trace_capture_active(device)
         finally:
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            ttnn.release_trace(device, trace_id)
         assert not ttnn.is_trace_capture_active(device)
 
     def test_op_inside_trace_capture_with_logging(self, device):
@@ -5024,4 +5074,5 @@ class TestLoggingDuringTraceCapture:
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
             ttnn.add(a, a)
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)

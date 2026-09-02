@@ -84,13 +84,15 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     report_path = getattr(ttnn.CONFIG, "report_path", None)
     report_name = getattr(ttnn.CONFIG, "report_name", None)
     if report_path is None or not report_name or str(report_name).strip() == "":
-        global _warned_about_missing_report_name
-        if not _warned_about_missing_report_name:
-            _warned_about_missing_report_name = True
-            logger.warning(
-                "enable_graph_report/enable_comparison_mode is set but report_name is not, so no report will be "
-                "written. Set report_name in TTNN_CONFIG_OVERRIDES or TTNN_CONFIG_PATH to generate one."
-            )
+        # Only a run that asked for a report is missing anything; no report_name is the default state.
+        if getattr(ttnn.CONFIG, "enable_graph_report", False) or getattr(ttnn.CONFIG, "enable_comparison_mode", False):
+            global _warned_about_missing_report_name
+            if not _warned_about_missing_report_name:
+                _warned_about_missing_report_name = True
+                logger.warning(
+                    "enable_graph_report/enable_comparison_mode is set but report_name is not, so no report will be "
+                    "written. Set report_name in TTNN_CONFIG_OVERRIDES or TTNN_CONFIG_PATH to generate one."
+                )
         yield
         return
 

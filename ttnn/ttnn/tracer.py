@@ -486,8 +486,11 @@ def is_tracing_enabled():
 @contextmanager
 def trace():
     enable_tracing()
-    yield
-    disable_tracing()
+    try:
+        yield
+    finally:
+        # Without this, an error escaping the block leaves the tracer enabled process-wide.
+        disable_tracing()
 
 
 def get_module_input_nodes(module_operation):
