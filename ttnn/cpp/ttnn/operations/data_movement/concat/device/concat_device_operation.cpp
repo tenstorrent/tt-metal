@@ -43,6 +43,9 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
     if (!input_nd_sharded && !output_nd_sharded) {
         const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+        const uint32_t rank = input_tensors[0].logical_shape().rank();
+        const bool is_width_concat = rank >= 2 && args.dim == rank - 1;
+        const bool is_height_concat = rank >= 2 && args.dim == rank - 2;
 
         if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             return ConcatBlockShardedProgramFactory{};
@@ -51,7 +54,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
         // specific cases for 2 tensors
         if (input_tensors.size() == 2) {
             if (input_tensors[0].layout() == input_tensors[1].layout()) {
-                if (3 == args.dim) {
+                if (is_width_concat) {
                     if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
                         0 == input_tensors[0].padded_shape()[-1] % args.groups &&
                         0 == input_tensors[1].padded_shape()[-1] % args.groups) {
@@ -64,8 +67,9 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
             }
         }
 
-        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
-        if (2 == args.dim || 3 == args.dim) {
+        // Sharded-to-sharded on the last two dims (no ND sharding). Rank-relative:
+        // rank-3 width concat is dim 2, not dim 3.
+        if (is_width_concat || is_height_concat) {
             return ConcatS2SMultiProgramFactory{};
         }
     }

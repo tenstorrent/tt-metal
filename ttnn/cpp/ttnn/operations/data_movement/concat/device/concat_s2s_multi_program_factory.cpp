@@ -35,7 +35,9 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
-    const bool is_height_concat = 2 == operation_attributes.dim;
+    const uint32_t rank = input_tensors[0].logical_shape().rank();
+    // Height is always rank-2 (not the literal dim 2). Rank-3 width concat is dim 2 == rank-1.
+    const bool is_height_concat = rank >= 2 && operation_attributes.dim == rank - 2;
     ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
