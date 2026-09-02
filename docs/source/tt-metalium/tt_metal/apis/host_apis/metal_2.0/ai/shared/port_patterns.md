@@ -28,7 +28,7 @@ Optional fields, used when the entry's substance requires them:
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
 - [Sync-free and single-ended CBs → self-loop DFB](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb)
 - [Two-toucher DFB → assign 1P+1C (dual-instance work-split)](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split)
-- [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
+- [Conditional / optional resource bindings](#pattern-conditional--optional-resource-bindings)
 - [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
 - [Same-FIFO aliasing (one DFB, multiple kernel-side names)](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names)
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers)
@@ -185,7 +185,7 @@ Per node this is exactly 1 PRODUCER + 1 CONSUMER, so the SPSC validator passes w
 
 ---
 
-## Pattern: Conditional / optional DFB bindings
+## Pattern: Conditional / optional resource bindings
 
 **Category**: Pattern
 
@@ -302,7 +302,7 @@ DataflowBuffer dfb_in(dfb::cb_in);    // a SINGLE object for the FIFO
 - **Don't add a second `DFBBinding`** to the same DFB under a different `accessor_name` to manufacture a `dfb::cb_x` token. A kernel binds a given DFB under exactly one accessor name (the [self-loop pair](#pattern-self-loop-dfb-binding) — one name, PRODUCER+CONSUMER — is the only "twice" form), and the spec validator rejects a second name for the same DFB.
 - **Don't construct two `DataflowBuffer` objects from the same `DFBAccessor`** (`DataflowBuffer a(dfb::cb_in); DataflowBuffer b(dfb::cb_in);`). It compiles and runs, but two objects aliasing one FIFO break the object↔DFB identity that device-side debug tooling depends on. Alias the *handle*, keep *one* object.
 
-**Path-dependent variant.** When the aliased name resolves to *different* DFBs on different compile-time paths (`cb_x` is `dfb::cb_fusion` when fused, `dfb::cb_out` otherwise), gate the handle alias under the matching `#ifdef` so each path names only DFBs bound on it — the [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings) pattern applied to the *name→DFB mapping*:
+**Path-dependent variant.** When the aliased name resolves to *different* DFBs on different compile-time paths (`cb_x` is `dfb::cb_fusion` when fused, `dfb::cb_out` otherwise), gate the handle alias under the matching `#ifdef` so each path names only DFBs bound on it — the [Conditional / optional resource bindings](#pattern-conditional--optional-resource-bindings) pattern applied to the *name→DFB mapping*:
 
 ```cpp
 #ifdef FUSE
@@ -312,7 +312,7 @@ constexpr auto cb_x = dfb::cb_out;
 #endif
 ```
 
-**See also**: [Aliased DFBs](#pattern-aliased-dfbs-legacy-aliased-cbs) (the distinct-buffers / shared-memory kind); [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings); [Self-loop DFB binding](#pattern-self-loop-dfb-binding).
+**See also**: [Aliased DFBs](#pattern-aliased-dfbs-legacy-aliased-cbs) (the distinct-buffers / shared-memory kind); [Conditional / optional resource bindings](#pattern-conditional--optional-resource-bindings); [Self-loop DFB binding](#pattern-self-loop-dfb-binding).
 
 ---
 
