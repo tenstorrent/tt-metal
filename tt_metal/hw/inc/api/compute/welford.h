@@ -403,10 +403,12 @@ ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_
  * @param mean_dst_idx Index of the mean state tile; M2 is stored in the following tile.
  * @param save_group_id Group slot that receives the active state.
  * @param restore_group_id Group slot to load into the SFPU accumulators.
+ * @tparam dual_accumulator Must be false: group switching preserves only the LREG4/LREG5 accumulator state.
  */
+template <bool dual_accumulator>
 ALWI void two_pass_stats_switch_group(
     std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
-    MATH((llk_math_two_pass_sfpu_switch_group(mean_dst_idx, save_group_id, restore_group_id)));
+    MATH((llk_math_two_pass_sfpu_switch_group<dual_accumulator>(mean_dst_idx, save_group_id, restore_group_id)));
 }
 
 template <std::size_t reciprocal_size>

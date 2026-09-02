@@ -273,7 +273,7 @@ void kernel_main() {
         for (uint32_t mt = 0; mt < block_h; ++mt) {
             if constexpr (num_groups > 1) {
                 if (mt > 0) {
-                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    two_pass_stats_switch_group<false>(mean_dst, active_group, 0);
                     active_group = 0;
                 }
             }
@@ -316,7 +316,7 @@ void kernel_main() {
 
                     ++min_group;
                     if (min_group < num_groups) {
-                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
+                        two_pass_stats_switch_group<false>(mean_dst, active_group, min_group);
                         active_group = min_group;
                     }
                     channels_left = num_channels_per_group;
@@ -354,7 +354,7 @@ void kernel_main() {
         for (uint32_t mt = 0; mt < block_h; ++mt) {
             if constexpr (num_groups > 1) {
                 if (mt > 0) {
-                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    two_pass_stats_switch_group<false>(mean_dst, active_group, 0);
                     active_group = 0;
                 }
             }
@@ -385,7 +385,7 @@ void kernel_main() {
                     }
                     ++min_group;
                     if (min_group < num_groups) {
-                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
+                        two_pass_stats_switch_group<false>(mean_dst, active_group, min_group);
                         active_group = min_group;
                     }
                     channels_left = num_channels_per_group;
