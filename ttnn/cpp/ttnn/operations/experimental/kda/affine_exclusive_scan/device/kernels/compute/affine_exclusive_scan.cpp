@@ -150,8 +150,6 @@ template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
-    DataflowBuffer initial_a(dfb::initial_a);
-    DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
     DataflowBuffer local_b(dfb::local_b);
     DataflowBuffer to_remote_a(dfb::to_remote_a);
@@ -161,18 +159,14 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer final(dfb::final);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
-    initial_a.wait_front(affine_a_tiles);
-    initial_b.wait_front(affine_b_tiles);
     ckl::copy<
-        ckl::input(dfb::initial_a, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::input(dfb::initial_a, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::output(dfb::to_remote_a, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
         ckl::IterationShape::tiles(affine_a_tiles));
     ckl::copy<
-        ckl::input(dfb::initial_b, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::input(dfb::initial_b, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::output(dfb::to_remote_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
         ckl::IterationShape::tiles(affine_b_tiles));
-    initial_a.pop_front(affine_a_tiles);
-    initial_b.pop_front(affine_b_tiles);
 
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < distance) {
@@ -187,16 +181,17 @@ TT_KERNEL void compute(uint32_t group) {
         from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
     }
 
-    initial_state.wait_front(affine_b_tiles);
     if (group == 0) {
         ckl::copy<
-            ckl::input(dfb::initial_state, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+            ckl::input(
+                dfb::initial_state, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::output(dfb::final, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
             ckl::IterationShape::tiles(affine_b_tiles));
     } else {
+        initial_state.wait_front(affine_b_tiles);
         from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
         matmul_add_affine_b<Kt, Kt, Vt>(from_remote_affine, initial_state, final);
         from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
+        initial_state.pop_front(affine_b_tiles);
     }
-    initial_state.pop_front(affine_b_tiles);
 }

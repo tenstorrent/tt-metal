@@ -16,7 +16,6 @@ TT_KERNEL void compute(uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;
     compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::output);
-    DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer weights(dfb::weights);
 
     if constexpr (num_blocks == 1) {
@@ -28,7 +27,6 @@ TT_KERNEL void compute(uint32_t wi_count) {
         }
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             compute_kernel_lib::tilize<block_ct, dfb::act_rm, dfb::act_tile>(1);
-            activation.wait_front(block_ct);
 
             if (tap == 0) {
                 // First tap: activation * weight -> partial.
@@ -37,7 +35,10 @@ TT_KERNEL void compute(uint32_t wi_count) {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
-                            dfb::act_tile, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                            dfb::act_tile,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb::weights,
                             ckl::BroadcastDim::Row,
@@ -54,7 +55,10 @@ TT_KERNEL void compute(uint32_t wi_count) {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
-                            dfb::act_tile, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                            dfb::act_tile,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb::weights,
                             ckl::BroadcastDim::Row,
@@ -80,7 +84,10 @@ TT_KERNEL void compute(uint32_t wi_count) {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
-                            dfb::act_tile, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                            dfb::act_tile,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb::weights,
                             ckl::BroadcastDim::Row,
@@ -99,7 +106,6 @@ TT_KERNEL void compute(uint32_t wi_count) {
                         ckl::DestReuseType::DEST_TO_SRCB>{},
                     ckl::PackTile<ckl::output(dfb::partial, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{});
             }
-            activation.pop_front(block_ct);
         }
         if constexpr (num_blocks > 1) {
             weights.pop_front(tap_count * block_ct);
