@@ -25,8 +25,11 @@ void kernel_main() {
     const uint32_t chunk_size = get_arg_val<uint32_t>(10);
     const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(11);
     const uint32_t last_chunk_size = get_arg_val<uint32_t>(12);
+    // Byte offset of the slice's W-begin within a row, rounded down to the source buffer's alignment;
+    // the leftover `misalignment` bytes are trimmed on-device by the tt_memmove below.
+    const uint32_t src_offset_bytes = get_arg_val<uint32_t>(13);
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(13));
+    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(14));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
@@ -35,6 +38,8 @@ void kernel_main() {
 
     // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
     // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
+    // The accessor base stays the unshifted buffer base: Metal 2.0 supplies it from the tensor binding
+    // and offers no seam for a pre-offset base. The W-begin shift rides each read as `src_offset_bytes`.
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
     constexpr uint32_t dfb_id_in0 = 0;
@@ -59,7 +64,7 @@ void kernel_main() {
                 uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
                 for (uint32_t k = 0; k < batch; ++k) {
                     const uint32_t cur = c + k;
-                    const uint32_t offset = cur * chunk_size;
+                    const uint32_t offset = src_offset_bytes + cur * chunk_size;
                     const uint32_t sz = (cur == num_chunks_per_stick - 1) ? last_chunk_size : chunk_size;
                     tt::data_movement::common::noc_async_read_sharded(
                         noc, src_buffer_l1_addr, s0, src_stick_id, offset, sz);
@@ -93,7 +98,7 @@ void kernel_main() {
             // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
             // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
             tt::data_movement::common::noc_async_read_sharded(
-                noc, src_buffer_l1_addr, s0, src_stick_id, /*offset=*/0, /*size=*/read_size);
+                noc, src_buffer_l1_addr, s0, src_stick_id, /*offset=*/src_offset_bytes, /*size=*/read_size);
             if (misalignment != 0) {
                 noc.async_read_barrier();
                 tt::data_movement::common::tt_memmove<false, false, false, 0>(
