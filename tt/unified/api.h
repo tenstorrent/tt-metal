@@ -241,7 +241,7 @@ struct Storage {
     // Evaluate a compute fusion into this buffer. The loop shape is chosen by the
     // fusion's kind; see Strategy in tt/unified/math.hpp.
     template <typename Node>
-    Block<S> store(const Node& node);
+    Block<S> store(const Node& node) const;
 
     uint32_t dfb_id;
     // PAGES, which is what the dataflow-buffer protocol counts -- reserve, push,
@@ -1345,6 +1345,13 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits = kRed
 template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx);
 
+// The congruent form: lead with the Storage, as noc_load does, and pass the expression
+// rather than wrapping it in a store(). By const reference because Storage has copy and
+// move both deleted.
+template <int thread, typename S, typename Accessor, typename Node>
+NocAsyncWriteTx<thread, S> noc_store(
+    const Storage<S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx);
+
 // Custom store: the mirror of the custom noc_load. `fn` is called as
 // fn(L1Entries pages) over `block`'s pages -- pages.count is the number the handle
 // pops.
@@ -1356,6 +1363,12 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32
 // they are still being sourced.
 template <int thread, typename S, typename Fn>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn);
+
+// The same for the custom form. Disjoint from noc_store(Block, Accessor, idx) -- also three
+// arguments -- by the FIRST parameter: a Storage and a Block are both deduced, and neither
+// converts to the other, so exactly one candidate is ever viable.
+template <int thread, typename S, typename Node, typename Fn>
+NocAsyncWriteTx<thread, S> noc_store(const Storage<S>& storage, const Node& node, Fn fn);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage

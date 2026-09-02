@@ -224,7 +224,7 @@ Semaphore<thread>& Semaphore<thread>::set_mcast(LogicalMcast mcast) {
 // need the two counts separated here.
 template <typename S>
 template <typename Node>
-Block<S> Storage<S>::store(const Node& node) {
+Block<S> Storage<S>::store(const Node& node) const {
     // The destination must be exactly the shape the expression produces. This is the
     // check that replaces every hand-derived page count: a reduction's output, a
     // matmul's output block, a gather's stacked extent.
@@ -866,6 +866,17 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn) {
     (void)fn;
 #endif
     return NocAsyncWriteTx<thread, S>(block.dfb_id);
+}
+
+template <int thread, typename S, typename Accessor, typename Node>
+NocAsyncWriteTx<thread, S> noc_store(
+    const Storage<S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx) {
+    return noc_store<thread>(storage.store(node), acc, block_idx);
+}
+
+template <int thread, typename S, typename Node, typename Fn>
+NocAsyncWriteTx<thread, S> noc_store(const Storage<S>& storage, const Node& node, Fn fn) {
+    return noc_store<thread>(storage.store(node), fn);
 }
 
 template <int thread, typename S, typename Fn>
