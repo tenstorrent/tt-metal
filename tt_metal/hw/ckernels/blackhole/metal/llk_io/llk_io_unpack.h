@@ -11,6 +11,7 @@
 #include "stream_io_map.h"
 #include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 using namespace ckernel;
 
@@ -24,15 +25,22 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     uint16_t num_tiles_recv;
-    do {
-        tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
-        num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
-    } while (num_tiles_recv < num_tiles_u);
+    // The UNPACK thread starved on an empty CB. The hook is HERE and not in cb_api.h's
+    // cb_wait_front because the DataflowBuffer API calls llk_wait_tiles directly on TRISC
+    // (internal/tt-1xx/dataflow_buffer.inl) -- this is the common bottom of both paths.
+    {
+        SYNC_WAIT("SYNC-CB-WAIT", operand);
+        do {
+            tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
+            num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
+        } while (num_tiles_recv < num_tiles_u);
+    }
 }
 
 // Pop N tiles from the incoming stream
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
     std::uint32_t input = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
