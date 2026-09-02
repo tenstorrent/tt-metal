@@ -97,6 +97,9 @@ ttnn:
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
     bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
     wh_galaxy: 0
