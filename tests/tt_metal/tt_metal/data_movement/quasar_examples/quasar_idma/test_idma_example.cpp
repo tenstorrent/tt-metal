@@ -30,9 +30,9 @@ constexpr auto kIdma1DStrided =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp";
 constexpr auto kNocVsIdmaCopyBench =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/noc_vs_idma_copy_bench.cpp";
-constexpr uint32_t kNocVsIdmaSweepSizes = 6;
+constexpr uint32_t kNocVsIdmaSweepSizes = 11;
 constexpr uint32_t kNocVsIdmaConfigs = 2;
-constexpr uint32_t kNocVsIdmaRepeats = 5;
+constexpr uint32_t kNocVsIdmaRepeats = 10;
 constexpr uint32_t kNocVsIdmaResultWordsPerSample = 4;
 constexpr uint32_t kNocVsIdmaResultSamples = kNocVsIdmaSweepSizes * kNocVsIdmaConfigs;
 constexpr uint32_t kNocVsIdmaResultBytes = kNocVsIdmaResultSamples * kNocVsIdmaResultWordsPerSample * sizeof(uint32_t);

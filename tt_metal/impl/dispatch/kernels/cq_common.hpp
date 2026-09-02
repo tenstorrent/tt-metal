@@ -795,7 +795,6 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
-<<<<<<< HEAD
 // first_line_invalidated says the caller already invalidated the line holding l1_ptr, so this skips it. Set it
 // only when the source cannot have wrapped away from the command header whose invalidate covers that line.
 template <
@@ -803,14 +802,10 @@ template <
     uint32_t l1_cache_elements_rounded,
     bool invalidate_source = false,
     bool first_line_invalidated = false>
-=======
-template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded, bool invalidate_source = false>
->>>>>>> 0219f39d96e (optimizations)
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     if constexpr (invalidate_source) {
-<<<<<<< HEAD
         // The source arrived over the NoC, which does not snoop, so a cached copy left over from an earlier
         // ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
         uintptr_t start = reinterpret_cast<uintptr_t>(l1_ptr);
@@ -823,13 +818,6 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
             size = skipped < size ? size - skipped : 0;
         }
         invalidate_l2_cache_range(start, size);
-=======
-        // Upstream relayed the source by NoC write, which does not snoop, so a cached copy left over from an
-        // earlier ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
-        // Prefetcher callers leave this off: both of its fetch paths already invalidate the extent they read.
-        invalidate_l2_cache_range(
-            reinterpret_cast<uintptr_t>(l1_ptr), sizeof(uint32_t) * (count + l1_to_local_cache_copy_chunk - 1));
->>>>>>> 0219f39d96e (optimizations)
     }
 #endif
     uint32_t n = 0;
