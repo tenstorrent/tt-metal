@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -14,6 +15,44 @@
 
 namespace ttnn::prim {
 
+struct WelfordReducePlan {
+    std::uint32_t W = 0;
+    std::uint32_t H = 0;
+    std::uint32_t W_padded = 0;
+    std::uint32_t H_padded = 0;
+    std::uint32_t Wt = 0;
+    std::uint32_t Ht = 0;
+    std::uint32_t HtWt = 0;
+    std::uint32_t NC = 0;
+    std::uint32_t tile_height = 0;
+    std::uint32_t tile_width = 0;
+    std::uint32_t input_tile_size = 0;
+    std::uint32_t output_tile_size = 0;
+    std::uint32_t num_work_units = 0;
+    std::uint32_t num_cores = 0;
+    std::uint32_t work_group_1 = 0;
+    std::uint32_t work_group_2 = 0;
+    std::uint32_t reduce_batch_size = 0;
+    std::uint32_t post_mul_scaler_bits = 0;
+    tt::DataFormat input_format = tt::DataFormat::Float16_b;
+    tt::DataFormat output_format = tt::DataFormat::Float16_b;
+    tt::DataFormat scratch_format = tt::DataFormat::Float16_b;
+    tt::DataFormat combined_format = tt::DataFormat::Float32;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    bool reduce_w = false;
+    bool reduce_h = false;
+    bool reduce_hw = false;
+    bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
+    bool is_std = false;
+    bool use_post_mul = false;
+    bool narrow_scratch_to_bf16 = false;
+    bool use_sfpu_leaf_combine = false;
+    bool use_l1_replay = false;
+};
+
 struct WelfordReduceDeviceOperation {
     using operation_attributes_t = WelfordReduceParams;
     using tensor_args_t = Tensor;
@@ -21,7 +60,8 @@ struct WelfordReduceDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct WelfordReduceProgramFactory {
-        static bool use_l1_replay(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        static WelfordReducePlan select_plan(
+            const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
