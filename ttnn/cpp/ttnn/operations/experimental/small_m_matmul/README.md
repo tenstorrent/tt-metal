@@ -12,8 +12,8 @@ split reads across both NoCs. This op width-shards `in1` across the 8 DRAM banks
 per bank per slice, alternating NOC0/NOC1, so the in1 read sustains ~500 GB/s. `in0` (small) is
 delivered by an 8-wide **ring all-gather**; split-K partial sums are reduced up a linear chain.
 
-On the target shapes it reaches **79–94% of peak DRAM bandwidth** and reproduces the tuned C++
-prototype's kernel time within **1%**, verified by a golden-parity suite kept in the development branch.
+On the target shapes it reaches **79–94% of peak DRAM bandwidth** (measured on Blackhole p150 with the
+device profiler).
 
 ## API
 
@@ -30,7 +30,7 @@ out = ttnn.experimental.small_m_matmul(in0, in1, config=cfg)   # config optional
 
 Config knobs (all in tiles / slice counts): `k_slices` (Pk, split-K depth), `n_slices` (Ns),
 `m_slices` (Sm), `k_block_tiles` (kb), `n_subblock_tiles` (nsb). The grid is `8 × Pk × Ns × Sm` cores.
-`config=None` (recommended) selects via the ported FLUX/LTX picker (lookup table + cost-model fallback).
+`config=None` (recommended) selects via a measured lookup table with a cost-model fallback.
 A manual `SmallMMatmulConfig` must set **all five** fields explicitly and is immutable (there is no
 zero-argument constructor — the old all-ones default builds only 8 workers, which is invalid for most shapes).
 
@@ -43,7 +43,6 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
 - `device/small_m_matmul_plan.hpp` — **pure host planner** (no tt_metal deps): given tile dims + a
   config + the device's bank-adjacent core assignments, produces one canonical `ExecutionPlan`
   (padded geometry, per-core bank/NoC/ring/reduction assignment, CB/L1 sizing, kernel-arg values).
-  Unit-tested offline by a standalone planner test (273 checks, no hardware) kept in the development branch.
 - `device/small_m_matmul_config.{hpp,cpp}` — public `SmallMMatmulConfig`, the device adapter
   (`make_and_build_plan`), the auto-selector (`auto_select_config`), and the in1 weight-sharding helper.
 - `device/small_m_matmul_program_factory.cpp` — translates the plan into circular buffers, semaphores,
@@ -56,7 +55,8 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
 
 ## Constraints (v1)
 
-- Blackhole only; `Mt = ceil(M/32)` in 1..8 is the tuned range (works beyond, less optimal).
+- Blackhole only (validated in the op; other architectures are rejected); `Mt = ceil(M/32)` in 1..16 is the
+  tuned range (works beyond, less optimal).
 - bf16 in/out, HiFi2, fp32 accumulation. No transpose / batching.
 - **Fused epilogues (single-chip, implemented):** optional row-broadcast `bias` (bf16, `[.., 1, N]`/`[.., N]`);
   optional unary `fused_activation` (`Y = act(A@B + bias)`); optional `addcmul`
@@ -80,6 +80,12 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
 
 ## Tests
 
-`tests/ttnn/unit_tests/operations/matmul/test_small_m_matmul.py` — random BF16 vs Torch, PCC ≥ 0.999:
-Pk=1, split-K reduction, Ns>1, Sm>1, golden Mt=1/2/4/8, non-divisible, program-cache replay,
-column-dependent layout, and `config=None` auto-selection.
+- `tests/ttnn/unit_tests/operations/matmul/test_small_m_matmul.py` (post-commit) — random BF16 vs Torch,
+  PCC ≥ 0.999: Pk=1, split-K reduction, Ns>1, Sm>1, Mt=1/2/4/8, non-divisible tails, fused epilogues,
+  output split, program-cache replay, validation errors, and `config=None` auto-selection.
+- `tests/ttnn/nightly/unit_tests/operations/matmul/test_small_m_matmul_audit.py` (nightly) — reduce-scatter,
+  mesh / M-split placements, program-cache discrimination between distinct programs, L1 accounting.
+- `tests/ttnn/nightly/unit_tests/operations/matmul/test_small_m_matmul_corpus.py` (nightly) — `config=None`
+  correctness over the ~60-shape production corpus.
+
+To see which reduction / placement path a shape takes, run with `TT_LOGGER_LEVEL=Debug` and grep `small_m_cfg`.

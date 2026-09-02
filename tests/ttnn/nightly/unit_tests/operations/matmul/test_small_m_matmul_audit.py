@@ -4,7 +4,7 @@
 """Coverage audit for ttnn.experimental.small_m_matmul: paths the main suite does not reach.
 
 WHY THIS FILE EXISTS. Running the main 111-test suite with the factory's own config log
-(TT_SMALL_M_LOG_CFG=1) showed which production paths it actually reaches:
+(TT_LOGGER_LEVEL=Debug, grep small_m_cfg) showed which production paths it actually reaches:
 
     99 programs  reduction=chain  placement=bank-local
     10 programs  reduction=chain  placement=in1-near
@@ -28,7 +28,7 @@ another path, the tests still pass but stop covering the path they were written 
 re-checked deliberately rather than continuously -- run the suite with the factory's config log and read off
 which paths were actually taken:
 
-    TT_SMALL_M_LOG_CFG=1 pytest tests/ttnn/unit_tests/operations/matmul/test_small_m_matmul_audit.py \
+    TT_LOGGER_LEVEL=Debug pytest tests/ttnn/nightly/unit_tests/operations/matmul/test_small_m_matmul_audit.py \
         | grep -o 'reduction=\S* placement=\S*' | sort | uniq -c
 
 When this file was written that reported 19 reduce-scatter programs (11 in1-near, 5 bank-local, 3 mesh) and 17
@@ -201,20 +201,17 @@ def test_audit_cache_reduction_strategies_interleaved(device):
 def test_audit_cache_explicit_vs_auto_same_shape(device):
     """config=None and an explicit config are different attribute values -> different cache entries.
 
-    Interleaved on one shape, both must stay correct; and the explicit config equal to the picker's own
-    choice must agree with config=None BIT FOR BIT, since it is the same program modulo the attribute.
+    Interleaved on one shape, both must stay correct and config=None must replay deterministically. The
+    explicit config is deliberately NOT asserted equal to the picker's choice: that is tuning policy, and
+    pinning it here would turn every table update into a test failure.
     """
     M, K, N = 256, 6144, 768
     auto1, ref = _mm(device, M, K, N, None, seed=40)
     assert_with_pcc(ref, auto1, PCC)
-    expl, ref2 = _mm(device, M, K, N, (12, 1, 1, 2, 1), seed=40)  # the picker's own choice for this shape
+    expl, ref2 = _mm(device, M, K, N, (12, 1, 1, 2, 1), seed=40)
     assert_with_pcc(ref2, expl, PCC)
     auto2, _ = _mm(device, M, K, N, None, seed=40)
     assert torch.equal(auto1, auto2), "config=None became non-deterministic across cache hits"
-    assert torch.equal(expl, auto1), (
-        "explicit config equal to the auto pick produced a different result than config=None; "
-        "the two should be the same program"
-    )
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")
@@ -304,7 +301,7 @@ def test_audit_picker_large_mt_deep_k_rescue(device, M, K, N):
 
 
 # ---------------------------------------------------------------------------------------------------
-# 9. REGRESSION cases for the reduce-scatter c_2 WRAP-ALIGNMENT bug (fixed 2026-08-03).
+# 9. REGRESSION cases for the reduce-scatter c_2 WRAP-ALIGNMENT bug.
 #
 #    ROOT CAUSE: c_2 (out_cb) was sized 2*out_blk_tiles, but under reduce-scatter both producer and consumer
 #    move max_chunk = ceil(out_blk_tiles/Pk) tiles per sub-block. When 2*rs_T is not a multiple of max_chunk a

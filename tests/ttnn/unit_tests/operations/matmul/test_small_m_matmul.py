@@ -61,7 +61,7 @@ def test_small_m_matmul_correctness(device, label, M, K, N, Ns, Pk, Sm, kb, nsb)
     ids=["mt1", "mt2", "mt4", "mt1-big"],
 )
 def test_small_m_matmul_auto_config(device, M, K, N):
-    # config=None -> the op auto-selects (Pk,Ns,Sm,kb,nsb) via the ported FLUX/LTX picker.
+    # config=None -> the op auto-selects (Pk,Ns,Sm,kb,nsb) via auto_select_config (table + cost model).
     torch.manual_seed(0)
     t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
     t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
@@ -137,7 +137,7 @@ def _run_small_m_auto(device, M, K, N, Ns=None, Pk=None, Sm=None, kb=None, nsb=N
     assert_with_pcc(ref, got.float(), pcc)
 
 
-# Balanced-tail corner cases (LOGICAL inputs, config=None auto-select). Covers the BT-4 matrix:
+# Balanced-tail corner cases (LOGICAL inputs, config=None auto-select). Covers the matrix:
 # Kt%Pk!=0 / valid_k%kb!=0 (6080=190t), Nt%8!=0 (4640=145t), Mt%Sm!=0 (M=96 Mt=3),
 # non-tile-aligned element dims (48/6100/4600), and combinations.
 NONDIV = [

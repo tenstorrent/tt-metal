@@ -4,8 +4,6 @@
 
 #include "small_m_matmul_device_operation.hpp"
 
-#include <cstdlib>
-
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -28,6 +26,13 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         act.buffer() != nullptr && weight.buffer() != nullptr,
         "small_m_matmul inputs must be allocated in device buffers");
+
+    // Blackhole only (v1). The planner's L1 budget, the 8-bank in1 width-shard and the core-count limits are
+    // Blackhole constants; reject other architectures here rather than failing later in CB allocation.
+    TT_FATAL(
+        act.device()->arch() == tt::ARCH::BLACKHOLE,
+        "small_m_matmul is supported only on Blackhole (got arch {})",
+        act.device()->arch());
 
     // Layout.
     TT_FATAL(
@@ -81,6 +86,15 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
         shard->grid.num_cores() == 8u,
         "small_m_matmul weight shard must span exactly 8 DRAM banks, got {}",
         shard->grid.num_cores());
+    // The in1 reader addresses DRAM bank `b` for shard `b`, so the shard grid must be exactly the bank-id range
+    // {0..7} x {0} that create_small_m_weight_memory_config builds -- 8 cores anywhere else would read the
+    // wrong banks.
+    const CoreRangeSet expected_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{7, 0}));
+    TT_FATAL(
+        shard->grid == expected_grid,
+        "small_m_matmul weight shard grid must be the DRAM bank range {} (shard index == bank id), got {}",
+        expected_grid.str(),
+        shard->grid.str());
     TT_FATAL(shard->orientation == ShardOrientation::ROW_MAJOR, "small_m_matmul weight shard must be ROW_MAJOR");
     TT_FATAL(
         shard->shape[1] == exp_shard_cols,
@@ -94,8 +108,8 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
         Kt * 32u,
         shard->shape[0]);
 
-    // config is optional: nullopt -> the program factory auto-selects via auto_select_config (ported
-    // FLUX/LTX picker). An explicit SmallMMatmulConfig overrides for reproducibility.
+    // config is optional: nullopt -> the program factory auto-selects via auto_select_config (measured lookup
+    // table + cost-model fallback). An explicit SmallMMatmulConfig overrides for reproducibility.
 
     // ---- Fusion validation (bias / activation / addcmul / output-split). ----
     const uint32_t N = w_logical[-1];

@@ -2,15 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mask-0 (no-fusion, config=None Picker v3) correctness smoke over the full ~60-shape production corpus.
-# This is the regression net for the auto-picker + planner + kernels across the whole shape set; run it before and
-# after any change to the picker/planner/kernels (e.g. the diagnostic cleanup) to confirm nothing moved.
-# Correctness only (random BF16 vs CPU FP32, PCC >= 0.999) — device-profiler PERF over the same corpus is
-# the campaign's own perf sweep. Slower than the unit suite (~60 compiles); kept in its own file
-# so the fast unit tests stay fast.
+# Correctness smoke for ttnn.experimental.small_m_matmul with config=None over the ~60-shape production
+# corpus (FLUX / LTX transformer projections at Mt = 1..16). Each shape runs once against a Torch reference
+# at PCC >= 0.999. Slower than the unit suite (~60 program compiles), so it lives in nightly; run it after
+# any change to the picker, planner or kernels.
 #
-# The corpus mirrors the measurement campaign's shape set (REPORT_MT8 + TAIL + M x KN matrix),
-# deduped. Keep in sync if the campaign corpus changes.
+# The corpus is the shape set the lookup table in small_m_matmul_config.cpp was measured on, deduped.
 
 import pytest
 import torch
@@ -18,8 +15,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# --- corpus sources (mirror the campaign shape set) -------------------------------------------------------
-_REPORT_MT8 = [
+# --- corpus sources -------------------------------------------------------
+_MT8_SHAPES = [
     (32, 2048, 512),
     (32, 2048, 1536),
     (32, 2048, 2048),
@@ -76,7 +73,7 @@ _MATRIX_KN = [
 
 
 def _corpus():
-    shapes = set(_REPORT_MT8) | set(_TAIL)
+    shapes = set(_MT8_SHAPES) | set(_TAIL)
     for m in _MATRIX_M:
         for k, n in _MATRIX_KN:
             shapes.add((m, k, n))
@@ -89,7 +86,7 @@ _CORPUS = _corpus()
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")
 @pytest.mark.parametrize("M,K,N", _CORPUS, ids=[f"{m}x{k}x{n}" for (m, k, n) in _CORPUS])
 def test_small_m_maskzero_corpus_smoke(device, M, K, N):
-    # config=None -> auto-picker (Picker v3) + planner. LOGICAL inputs (no manual padding).
+    # config=None -> auto_select_config + planner. LOGICAL inputs (no manual padding).
     torch.manual_seed(0)
     t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
     t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)

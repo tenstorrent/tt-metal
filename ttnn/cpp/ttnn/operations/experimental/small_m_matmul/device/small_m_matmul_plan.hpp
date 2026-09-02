@@ -17,9 +17,6 @@
 // It is deliberately FREE of tt_metal/device dependencies (uses a plain PlanXY coord and injected
 // grid/bank data) so it can be unit-tested exhaustively WITHOUT hardware. The device operation maps
 // PlanXY <-> tt::tt_metal::CoreCoord and fetches the bank assignments from the device.
-//
-// Derived from the frozen prototype blueprint and validated against its parity oracle; both are kept in
-// the development branch rather than shipped.
 
 #pragma once
 
@@ -85,7 +82,7 @@ struct FusionInputs {
 // reduction strategy, and compute_cb_sizes() below calls it to decide whether to charge L1 for the chain's
 // c_7 or for the ring's c_8/c_9/c_10. If the two ever disagreed, a config could pass feasibility and then
 // be built with a different, larger set of buffers.
-// Rationale for the terms (measured, see the campaign log): reduce-scatter trades reduction data movement
+// Rationale for the terms (measured): reduce-scatter trades reduction data movement
 // for per-round compute setup, so it only pays when each slice carries >= 2 tiles and, on deep K, when the
 // chain depth is small enough that the setup is amortised.
 inline bool rscatter_selected(uint32_t Pk, uint32_t Kt, uint32_t M_block_capacity, uint32_t N_sub) {
@@ -164,7 +161,7 @@ struct Geometry {
     double waste_k{}, waste_n{};
 };
 
-// Circular-buffer sizing (spec §5). AUTHORITATIVE: every CB the program factory allocates must be
+// Circular-buffer sizing. AUTHORITATIVE: every CB the program factory allocates must be
 // represented here, because l1_bytes is what feasibility is judged on. A buffer that is allocated but not
 // counted is silent L1 overcommit; the op then either fails to create the CBs or corrupts a neighbouring
 // buffer. When adding a CB (e.g. all-gather staging), add a field AND include it in l1_bytes below.
@@ -268,13 +265,13 @@ struct CorePlan {
     uint32_t valid_n{};  // N tiles this core owns (<= N_slice_capacity)
     uint32_t n_local{};  // n_start - bank*N_band: column offset WITHIN this core's DRAM-bank shard (in1 addr)
 
-    // in0 ring (spec §3): position and cyclic neighbours (physical coords filled by the device op;
+    // in0 ring: position and cyclic neighbours (physical coords filled by the device op;
     // here we store the ring member core INDICES so the op can translate to physical coords).
     uint32_t ring_pos{};
     uint32_t ring_next_idx{};  // core index of (pos+1)%8 in this ring
     uint32_t ring_prev_idx{};  // core index of (pos+7)%8 in this ring
 
-    // split-K reduction chain (spec §4).
+    // split-K reduction chain.
     bool is_bottom{};         // kk == 0
     bool is_top{};            // kk == Pk-1
     uint32_t red_next_idx{};  // core index of the next band in the chain; self if is_top
@@ -415,7 +412,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
         return res;
     }
 
-    // --- CB sizing + L1 check (spec §5) ---
+    // --- CB sizing + L1 check ---
     // Sized by the shared authoritative sizer so this check covers EVERY buffer the factory allocates,
     // including the fused-epilogue operands (c_4..c_6) and the reduce-scatter ring (c_8..c_10).
     const CbSizes cb =
@@ -426,7 +423,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
         return res;
     }
 
-    // --- Placement (spec §2): find_near spiral over the injected grid ---
+    // --- Placement: find_near spiral over the injected grid ---
     std::set<PlanXY> used = in.holes;
     auto in_grid = [&](int x, int y) { return x >= 0 && y >= 0 && (uint32_t)x < in.grid_x && (uint32_t)y < in.grid_y; };
     auto find_near = [&](PlanXY t) -> std::optional<PlanXY> {
@@ -473,7 +470,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
             }
             cp.coord = *placed;
 
-            // decode (spec §2)
+            // decode
             const uint32_t kk = p / g.mfac;
             const uint32_t sub = p % g.mfac;
             cp.kk = kk;
@@ -502,7 +499,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
                 return res;
             }
 
-            // Linear split-K reduction chain (spec §4): band kk forwards its running sum up to kk+1; the
+            // Linear split-K reduction chain: band kk forwards its running sum up to kk+1; the
             // top band (kk == Pk-1) is the root and writes the output. Pk==1 => every core is its own root.
             cp.is_top = (kk == Pk - 1u);
             cp.is_bottom = (kk == 0u);
@@ -522,7 +519,7 @@ inline PlanResult build_plan(const PlanInputs& in) {
         }
     }
 
-    // --- Ring membership + ordering (spec §3) ---
+    // --- Ring membership + ordering ---
     // For each slice index j, the ring is the 8 cores {pos*preaders + j} in BANK ORDER [0..7]. This is the
     // canonical plan output (unit-tested offline); the program factory re-derives the physical PARETO ring
     // order at runtime (optimize_in0_ring_order) from the device's NoC hop distances.

@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/untilize.h"
-#include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
@@ -351,8 +349,6 @@ void add_bias_and_addcmul_block(
     }
 
     // Pop input and push output ONCE at the end
-    // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
-    // cb_pop_front(intermediate_cb, out_block_num_tiles);
     cb_pop_front(bias_cb, N_block_tiles);
 
     cb_pop_front(intermediate_cb, out_block_num_tiles);

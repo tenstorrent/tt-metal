@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -48,6 +50,42 @@ uint32_t largest_div(uint32_t v, uint32_t cap) {
         }
     }
     return 1u;
+}
+
+// Compute subblock geometry (subblock_h, subblock_w) in tiles. fp32_dest_acc_en gives 4 DST tiles, so the hard
+// limit is sbh*sbw <= 4 (exceeding it silently corrupts output - there is a known precedent, hence the assert).
+// The historical sizer caps subblock_h at 2, so when N_sub == 1 it yields 2x1 = 2 tiles and leaves HALF the DST
+// idle. We ENLARGE such subblocks to the biggest area that still fits (4x1 when N_sub==1 and M_block%4==0), which
+// halves the matmul_block call count for identical math - verified BIT-EXACT. Measured on the 63-shape corpus:
+// +2.56% on 512x6144x4608, +2.25% on 512x6144x2304, and within noise everywhere else.
+//
+// Only ever ENLARGE: where the historical sizer already reaches the 4-tile limit, keep its exact shape.
+// Re-shaping an already-maximal subblock (e.g. 2x2 -> 1x4) is not free - it measured -2.22% on 256x2048x1024 -
+// so the rule is a strict Pareto improvement by construction.
+std::pair<uint32_t, uint32_t> choose_subblock(uint32_t M_block_capacity, uint32_t N_sub) {
+    uint32_t sbh = largest_div(M_block_capacity, 2u);
+    uint32_t sbw = largest_div(N_sub, 4u / sbh);
+    if (sbh * sbw < 4u) {
+        uint32_t bh = sbh, bw = sbw;
+        for (uint32_t h = 1u; h <= 4u; ++h) {
+            if (M_block_capacity % h != 0u) {
+                continue;
+            }
+            for (uint32_t w = 1u; h * w <= 4u; ++w) {
+                if (N_sub % w != 0u) {
+                    continue;
+                }
+                if (h * w > bh * bw || (h * w == bh * bw && w > bw)) {
+                    bh = h;
+                    bw = w;
+                }
+            }
+        }
+        sbh = bh;
+        sbw = bw;
+    }
+    TT_FATAL(sbh * sbw <= 4u, "small_m_matmul subblock {}x{} exceeds the 4-tile fp32 DST limit", sbh, sbw);
+    return {sbh, sbw};
 }
 
 // mkcb: single-format circular buffer over a core range set (matches the harness form).
@@ -253,7 +291,7 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
     }
 }
 
-// TEST-ONLY (diag bit13 PLACE_MESH): 2D (bank x slice) MESH placement, aimed at in0 ring traffic.
+// 2D (bank x slice) MESH placement, aimed at in0 ring traffic. Selected by the mesh gate in create().
 // Host-only and correctness-preserving - writes only P.cores[i].coord.
 //
 // The structural point: two traffic classes want opposite groupings of the same 8 x preaders core array.
@@ -263,10 +301,9 @@ void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan
 // reduction, long ring). A 2D EMBEDDING escapes the tension: put banks along x and slices along y, and then a
 // ring step (bank -> bank) and a reduction step (kk -> kk+1) are each ONE hop, in different dimensions.
 //
-// Offline (in0_ring_place_search.py, exact route model): ring hops -70% AND reduction hops -19..-40%
-// simultaneously, whole-op peak link load -11..-15%, total link traffic -20..-36%. in1 read distance is
-// ~unchanged (+3%), which is acceptable because the in1 read was measured to be DRAM-bound (76-98% of peak
-// in isolation) and insensitive to distance - see IN1_PLACEMENT_AB.md.
+// Offline route modelling: ring hops -70% AND reduction hops -19..-40% simultaneously, whole-op peak link
+// load -11..-15%, total link traffic -20..-36%. in1 read distance is ~unchanged (+3%), which is acceptable
+// because the in1 read was measured to be DRAM-bound (76-98% of peak in isolation) and insensitive to distance.
 //
 // Layout: cores (bank b, slice p) -> (x=b, y=p) for p < grid.y; overflow slices each take their own column at
 // x >= 8 with the 8 banks down rows 0..7. Collision-free by construction. mm-siblings are consecutive in p,
@@ -290,6 +327,84 @@ void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoo
             } else {
                 P.cores[i].coord.x = 8u + (p - grid.y);  // one spare column per overflow slice
                 P.cores[i].coord.y = b;
+            }
+        }
+    }
+}
+
+// REDUCE-SCATTER cyclic order over each group's Pk cores (runs AFTER placement + ring ordering, so it
+// sees the final coords). For each (bank b, within-bank sub) group, order the Pk k-slice cores into a
+// Hamiltonian CYCLE minimizing the worst DIRECTED NoC hop: one bad wraparound edge would serialize every
+// round of the ring, so the max edge matters more than the total. The edge cost a->c is measured on the
+// SENDER's writer NoC (writer runs opposite the core's in1-reader NoC), which is asymmetric on the torus
+// and therefore cannot be approximated by a coordinate distance. Pk==4 searches all 3! orders exactly;
+// larger Pk uses greedy nearest-neighbour (P! is infeasible). Mutates only the rs_* fields.
+void optimize_reduce_scatter_order(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Pk) {
+    namespace expdev = tt::tt_metal::experimental::Device;
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
+            std::vector<uint32_t> idx(Pk);
+            for (uint32_t kk = 0; kk < Pk; ++kk) {
+                idx[kk] = b * geo.preaders + kk * geo.mfac + sub;
+            }
+            auto lc = [&](uint32_t li) {
+                const auto& c = P.cores[idx[li]].coord;
+                return CoreCoord{c.x, c.y};
+            };
+            auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
+                if (a == c) {
+                    return 0u;
+                }
+                const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+                return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
+            };
+            std::vector<uint32_t> ord(Pk);
+            if (Pk == 4u) {
+                // exact min-(maxedge, total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
+                const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
+                uint32_t best_max = ~0u, best_tot = ~0u;
+                for (const auto& pm : perms) {
+                    const uint32_t o[4] = {0u, pm[0], pm[1], pm[2]};
+                    uint32_t mx = 0, tot = 0;
+                    for (uint32_t p = 0; p < 4u; ++p) {
+                        const uint32_t e = dist(o[p], o[(p + 1u) % 4u]);
+                        mx = std::max(mx, e);
+                        tot += e;
+                    }
+                    if (mx < best_max || (mx == best_max && tot < best_tot)) {
+                        best_max = mx;
+                        best_tot = tot;
+                        for (uint32_t p = 0; p < 4u; ++p) {
+                            ord[p] = o[p];
+                        }
+                    }
+                }
+            } else {
+                std::vector<bool> vis(Pk, false);
+                ord[0] = 0u;
+                vis[0] = true;
+                for (uint32_t p = 1; p < Pk; ++p) {
+                    uint32_t best = 0, bestd = ~0u;
+                    for (uint32_t cand = 0; cand < Pk; ++cand) {
+                        if (vis[cand]) {
+                            continue;
+                        }
+                        const uint32_t dd = dist(ord[p - 1], cand);
+                        if (dd < bestd) {
+                            bestd = dd;
+                            best = cand;
+                        }
+                    }
+                    ord[p] = best;
+                    vis[best] = true;
+                }
+            }
+            for (uint32_t p = 0; p < Pk; ++p) {
+                auto& cp = P.cores[idx[ord[p]]];
+                cp.rs_pos = p;
+                cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
+                cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
+                cp.rs_own_chunk = (p + 1u) % Pk;
             }
         }
     }
@@ -384,15 +499,14 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     // bottom-to-top), so it is PCC-preserving but NOT bit-identical to the chain. Every add stays in FP32 and
     // no operand narrows, so this is a different summation ORDER, not a precision reduction.
     //
-    // bit22 = FORCE_CHAIN (A/B the chain baseline), bit23 = FORCE_RSCATTER (test it outside the gate). Any
-    // kernel-behaviour diagnostic (ablations, meet) keeps the chain so the ablation floors stay comparable.
     // The partition does NOT need to divide evenly: chunk sizes differ by at most one tile, so the only
     // structural requirement is rs_T >= Pk (every core must own at least one tile to write). Requiring
     // divisibility locked out 41 of the 62 corpus shapes for no reason.
     const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles per output sub-block
-    // No N-WIDTH requirement. The original gate also demanded Nt>=32; measuring the declined shapes with bit23
-    // showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter. Every shallow-K Pk>=4
-    // shape with N_sub>=2 won (6/6, 5.5-14.7%) regardless of N width, and N_sub==1 was neutral (+0.4%).
+    // No N-WIDTH requirement. The original gate also demanded Nt>=32; measuring the declined shapes with
+    // reduce-scatter forced on showed that was wrong - 128x2048x512 (Nt=16) is 8.9% FASTER with reduce-scatter.
+    // Every shallow-K Pk>=4 shape with N_sub>=2 won (6/6, 5.5-14.7%) regardless of N width, and N_sub==1 was
+    // neutral (+0.4%).
     //
     // DEEP K is admitted only under two extra conditions, because reduce-scatter trades data movement for
     // per-round compute SETUP cost (each round pays an add_tiles_init + data-format reconfig no matter how few
@@ -445,29 +559,33 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     // topology (512x6144x2304 +16.4%, 256x6144x768 +23.9%).
     const bool mesh_gate = geo.Mt >= 8u && (((Pk * Ns_gate >= 10u) && (Sm == 1u) && (Ns_gate == 1u || Pk >= 4u)) ||
                                             (ring_bytes >= 2u * in1_bytes));
-    const bool use_mesh = mesh_gate;
-    // OBSERVABILITY ONLY (TT_SMALL_M_LOG_CFG): report what the picker and the internal gates actually chose.
-    // Runs once per program-cache miss and changes NOTHING about behaviour -- there is no way to read the
-    // auto-selected config from Python otherwise, and reporting a host-side mirror of the picker risks silently
-    // misreporting if the mirror drifts from auto_select_config.
-    if (std::getenv("TT_SMALL_M_LOG_CFG") != nullptr) {
-        log_info(
-            tt::LogOp,
-            "small_m_cfg M={} K={} N={} pick=({},{},{},{},{}) cores={} reduction={} placement={}",
-            Mt_r * 32u,
-            Kt_r * 32u,
-            Nt_r * 32u,
-            Pk,
-            cfg.n_slices ? cfg.n_slices : 1u,
-            Sm,
-            kb,
-            cfg.n_subblock_tiles,
-            geo.num_cores,
-            rscatter ? "reduce-scatter" : "chain",
-            use_mesh ? "mesh" : (Sm > 1u ? "in1-near" : "bank-local"));
-    }
+    // The mesh needs 8 columns plus one row (or one spare column) per slice group. On a smaller (e.g. harvested)
+    // grid fall back to the default placement instead of failing at program build; place_mesh re-asserts the fit.
+    const CoreCoord full_grid = device->compute_with_storage_grid_size();
+    const uint32_t grid_x = static_cast<uint32_t>(full_grid.x);
+    const uint32_t grid_y = static_cast<uint32_t>(full_grid.y);
+    const uint32_t mesh_slices = geo.num_cores / 8u;
+    const bool mesh_fits = grid_x >= 8u && mesh_slices <= grid_y + (grid_x - std::min(grid_x, 8u));
+    const bool use_mesh = mesh_gate && mesh_fits;
+    // Observability: report what the picker and the internal gates actually chose. Runs once per program-cache
+    // miss (enable with TT_LOGGER_LEVEL=Debug). There is no other way to read the auto-selected config from
+    // Python, and a host-side mirror of the picker could silently drift from auto_select_config.
+    log_debug(
+        tt::LogOp,
+        "small_m_cfg M={} K={} N={} pick=({},{},{},{},{}) cores={} reduction={} placement={}",
+        Mt_r * 32u,
+        Kt_r * 32u,
+        Nt_r * 32u,
+        Pk,
+        cfg.n_slices ? cfg.n_slices : 1u,
+        Sm,
+        kb,
+        cfg.n_subblock_tiles,
+        geo.num_cores,
+        rscatter ? "reduce-scatter" : "chain",
+        use_mesh ? "mesh" : (Sm > 1u ? "in1-near" : "bank-local"));
     if (use_mesh) {
-        place_mesh(P, geo, device->compute_with_storage_grid_size());
+        place_mesh(P, geo, full_grid);
     } else if (Sm > 1u) {
         place_m_split_workers(P, device, geo);
     }
@@ -475,82 +593,9 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     // ---- Physical-topology-aware in0 ring ordering (PARETO) over each (kk,nn) group's Sm mm-rings. ----
     optimize_in0_ring_order(P, device, geo, Sm);
 
-    // ---- REDUCE-SCATTER cyclic order over each group's Pk cores (runs AFTER placement + ring ordering, so it
-    // sees the final coords). For each (bank b, within-bank sub) group, order the Pk k-slice cores into a
-    // Hamiltonian CYCLE minimizing the worst DIRECTED NoC hop: one bad wraparound edge would serialize every
-    // round of the ring, so the max edge matters more than the total. The edge cost a->c is measured on the
-    // SENDER's writer NoC (writer runs opposite the core's in1-reader NoC), which is asymmetric on the torus
-    // and therefore cannot be approximated by a coordinate distance. Pk==4 searches all 3! orders exactly;
-    // larger Pk uses greedy nearest-neighbour (P! is infeasible). Mutates only the rs_* fields. ----
+    // ---- Reduce-scatter cyclic order over each group's Pk cores (after placement + ring ordering). ----
     if (rscatter) {
-        namespace expdev = tt::tt_metal::experimental::Device;
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t sub = 0; sub < geo.mfac; ++sub) {
-                std::vector<uint32_t> idx(Pk);
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    idx[kk] = b * geo.preaders + kk * geo.mfac + sub;
-                }
-                auto lc = [&](uint32_t li) {
-                    const auto& c = P.cores[idx[li]].coord;
-                    return CoreCoord{c.x, c.y};
-                };
-                auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
-                    if (a == c) {
-                        return 0u;
-                    }
-                    const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-                    return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
-                };
-                std::vector<uint32_t> ord(Pk);
-                if (Pk == 4u) {
-                    // exact min-(maxedge, total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
-                    const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
-                    uint32_t best_max = ~0u, best_tot = ~0u;
-                    for (const auto& pm : perms) {
-                        const uint32_t o[4] = {0u, pm[0], pm[1], pm[2]};
-                        uint32_t mx = 0, tot = 0;
-                        for (uint32_t p = 0; p < 4u; ++p) {
-                            const uint32_t e = dist(o[p], o[(p + 1u) % 4u]);
-                            mx = std::max(mx, e);
-                            tot += e;
-                        }
-                        if (mx < best_max || (mx == best_max && tot < best_tot)) {
-                            best_max = mx;
-                            best_tot = tot;
-                            for (uint32_t p = 0; p < 4u; ++p) {
-                                ord[p] = o[p];
-                            }
-                        }
-                    }
-                } else {
-                    std::vector<bool> vis(Pk, false);
-                    ord[0] = 0u;
-                    vis[0] = true;
-                    for (uint32_t p = 1; p < Pk; ++p) {
-                        uint32_t best = 0, bestd = ~0u;
-                        for (uint32_t cand = 0; cand < Pk; ++cand) {
-                            if (vis[cand]) {
-                                continue;
-                            }
-                            const uint32_t dd = dist(ord[p - 1], cand);
-                            if (dd < bestd) {
-                                bestd = dd;
-                                best = cand;
-                            }
-                        }
-                        ord[p] = best;
-                        vis[best] = true;
-                    }
-                }
-                for (uint32_t p = 0; p < Pk; ++p) {
-                    auto& cp = P.cores[idx[ord[p]]];
-                    cp.rs_pos = p;
-                    cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
-                    cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
-                    cp.rs_own_chunk = (p + 1u) % Pk;
-                }
-            }
-        }
+        optimize_reduce_scatter_order(P, device, geo, Pk);
     }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
@@ -598,7 +643,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     CoreRangeSet g0(g0_set);
     CoreRangeSet g1(g1_set);
 
-    // ---- Circular buffers (spec §5) on all cores ----
+    // ---- Circular buffers on all cores ----
     mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
     mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
@@ -711,39 +756,8 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
     KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);
     KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct, wdefs);
 
-    // compute (spec §6c). fp32 DST limit: subblock_h * subblock_w <= 4.
-    // Subblock geometry. fp32_dest_acc_en gives 4 DST tiles, so the hard limit is sbh*sbw <= 4 (exceeding it
-    // silently corrupts output - there is a known precedent, hence the assert below). The historical sizer
-    // caps subblock_h at 2, so when N_sub == 1 it yields 2x1 = 2 tiles and leaves HALF the DST idle. We now
-    // ENLARGE such subblocks to the biggest area that still fits (4x1 when N_sub==1 and M_block%4==0), which
-    // halves the matmul_block call count for identical math - verified BIT-EXACT. Measured on the 63-shape
-    // corpus: +2.56% on 512x6144x4608, +2.25% on 512x6144x2304, and within noise everywhere else.
-    // diag bit16 restores the legacy sizer for A/B.
-    uint32_t sbh = largest_div(geo.M_block_capacity, 2u);
-    uint32_t sbw = largest_div(geo.N_sub, 4u / sbh);
-    // Only ever ENLARGE the subblock: where the historical sizer already reaches the 4-tile limit, keep its
-    // exact shape. Re-shaping an already-maximal subblock (e.g. 2x2 -> 1x4) is not free - it measured -2.22%
-    // on 256x2048x1024 - so the rule is a strict Pareto improvement by construction.
-    if (sbh * sbw < 4u) {
-        uint32_t bh = sbh, bw = sbw;
-        for (uint32_t h = 1u; h <= 4u; ++h) {
-            if (geo.M_block_capacity % h != 0u) {
-                continue;
-            }
-            for (uint32_t w = 1u; h * w <= 4u; ++w) {
-                if (geo.N_sub % w != 0u) {
-                    continue;
-                }
-                if (h * w > bh * bw || (h * w == bh * bw && w > bw)) {
-                    bh = h;
-                    bw = w;
-                }
-            }
-        }
-        sbh = bh;
-        sbw = bw;
-    }
-    TT_FATAL(sbh * sbw <= 4u, "small_m_matmul subblock {}x{} exceeds the 4-tile fp32 DST limit", sbh, sbw);
+    // compute kernel.
+    const auto [sbh, sbw] = choose_subblock(geo.M_block_capacity, geo.N_sub);
     std::vector<uint32_t> cct = {
         geo.K_num_blocks_eff,  // 0 K_num_blocks
         geo.M_block_capacity,  // 1 M_block_tiles
@@ -793,8 +807,8 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
             cp.valid_k,   // 5 valid K tiles (rest of capacity zero-filled)
             cp.valid_n};  // 6 valid N tiles this core owns
         if (Sm == 1u) {
-            ra.push_back(2u);  // 5 mrole = solo
-            ra.push_back(0u);  // 6 mpeers
+            ra.push_back(2u);  // 7 mrole = solo
+            ra.push_back(0u);  // 8 mpeers
         } else if (cp.mm == 0u) {
             // reader (mm==0 of this (bank,kk,nn) group): read from DRAM + forward to the Sm-1 slaves.
             ra.push_back(1u);       // mrole = reader
@@ -868,7 +882,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
-        // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
+        // N_bpc sub-blocks; zero-filled tail positions contribute zero. When a fusion is active the
         // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
         if (rscatter) {
@@ -881,7 +895,7 @@ SmallMMatmulProgramFactory::cached_program_t SmallMMatmulProgramFactory::create(
         }
         if (has_ternary) {
             const float sc = *operation_attributes.fused_ternary_scalar;
-            ca.push_back(*reinterpret_cast<const uint32_t*>(&sc));
+            ca.push_back(std::bit_cast<uint32_t>(sc));
             ca.push_back(broadcast_gate);
         }
         SetRuntimeArgs(program, compute, cores[i], ca);

@@ -14,8 +14,8 @@
 // (REDUCE_K) adds it; the top band writes the final [M,N] block to DRAM. When Pk==1 every core is bottom AND
 // top, so it writes its own block directly with no reduction traffic (and cb_reduce is never touched).
 //
-// Production port of the prototype in0_ring_writer.cpp: ring all-gather + linear split-K reduction chain +
-// output write. Write sync is pipelined (per-block source-lifetime flush + one deferred completion barrier).
+// Ring all-gather + linear split-K reduction chain + output write. Write sync is pipelined (per-block
+// source-lifetime flush + one deferred completion barrier).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -119,7 +119,6 @@ void kernel_main() {
             q[i] = 0;
         }
     };
-    (void)zero_bytes;
 
     // Feed the fused-epilogue operands for output sub-block `nb` into c_4/c_5/c_6, matching the consumption
     // order/shape of compute's add_bias_block / add_bias_and_addcmul_block. Operands are indexed by GLOBAL

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
-
 #include "small_m_matmul_config.hpp"
 
 #include <array>
@@ -34,14 +32,14 @@ using plan::kTileBytesFp32;
 inline uint32_t cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rup(uint32_t x, uint32_t y) { return cdiv(x, y) * y; }
 
-// ---- Auto-selector (ported from tools/mm_sweep/picker_{table,cost-model}.py) ----
-// Cost-model params (grid-search best on the 3262-config oracle: geomean 96.8%).
+// ---- Auto-selector: measured lookup table + cost-model fallback ----
+// Cost-model params (grid-search best on a 3262-config on-device sweep: geomean 96.8% of the measured optimum).
 constexpr uint32_t kCsat = 24, kAcap = 6, kKbcap = 2;
 constexpr double kKk = 0.5, kAa = 2.0, kOvl = 1.0, kStart = 0.0, kWst = 0.5;
-// v3 M-split fallback (trained on the Mt<=8 measurement campaign): the deployed Sm=1
+// M-split fallback (fitted on Mt<=8 measurements): the Sm=1
 // ranking is the ANCHOR; an Sm>1 candidate is chosen only for NARROW-N shapes (Nband<=kNbandMax, where
 // N-split cannot supply parallelism) when its reduction-aware cost beats the anchor's by kMSplitMargin.
-// kRk penalises split-K reduction (rk*(Pk-1)*out-tiles/core). Zero-regression on all 60 campaign shapes.
+// kRk penalises split-K reduction (rk*(Pk-1)*out-tiles/core). Zero regression on the 60 measured shapes.
 constexpr double kRk = 0.8, kMSplitMargin = 0.03;
 constexpr uint32_t kNbandMax = 2u;
 
@@ -147,75 +145,63 @@ double best_msplit_config(
 }  // namespace
 
 SmallMMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, const plan::FusionInputs& fu) {
-    // Oracle lookup table (100% on the 20 FLUX/LTX production shapes), keyed by TILE dims (Mt,Kt,Nt).
-    // value = {k_slices(Pk), n_slices(Ns), m_slices(Sm), k_block_tiles(kb), n_subblock_tiles(nsb)}.
+    // Lookup table of measured winners (exhaustive on-device sweeps, Blackhole p150, unfused), keyed by TILE
+    // dims (Mt,Kt,Nt). value = {k_slices(Pk), n_slices(Ns), m_slices(Sm), k_block_tiles(kb), n_subblock_tiles(nsb)}.
+    // Trailing comment = logical M x K x N. Shapes not listed fall through to the cost model below.
     static const std::map<std::tuple<uint32_t, uint32_t, uint32_t>, SmallMMatmulConfig> kTable = {
-        {{1, 64, 16}, {4, 2, 1, 2, 1}},
-        {{1, 64, 48}, {2, 2, 1, 4, 3}},
-        {{1, 192, 48}, {6, 1, 1, 4, 2}},
-        {{1, 64, 64}, {2, 2, 1, 4, 4}},
-        {{1, 192, 72}, {3, 1, 1, 4, 5}},  // 32x6144x2304: LTX/FLUX campaign -3.8% (Pk3/kb4/nsb5 vs Pk4/kb2/nsb9)
-        {{1, 192, 96}, {3, 1, 1, 4, 6}},
-        {{1, 8, 192}, {1, 5, 1, 1, 5}},  // 32x256x6144  FULLSWEEP -2.2% (was 1,3,1,1,8)
-        {{1, 192, 192}, {6, 1, 1, 4, 2}},
-        {{1, 192, 288}, {3, 1, 1, 4, 6}},
-        {{2, 192, 48}, {3, 1, 1, 8, 2}},  // 64x6144x1536: LTX/FLUX campaign -3.5% (Pk3/kb8 vs Pk12/kb2)
-        {{2, 480, 48}, {6, 1, 1, 2, 3}},  // 64x15360x1536: LTX/FLUX campaign -2.3% (Pk6/kb2 vs Pk12/kb1)
-        {{2, 192, 144}, {6, 1, 1, 4, 2}},
-        {{2, 144, 192}, {3, 2, 1, 2, 3}},  // 64x4608x6144: LTX/FLUX campaign sweep winner, -2.8% vs {6,1,1,1,8}
-        {{2, 192, 288}, {6, 1, 1, 4, 2}},
-        {{4, 192, 24}, {6, 1, 2, 4, 3}},  // 128x6144x768  AUTOTUNE -2.1% (was 12,1,1,2,1)
-        // (128,15360,768): ring-order corpus re-sweep found (Pk6,kb2,nsb3) a stable +6.5% over the old
-        // (Pk12,kb1,nsb3) under the current pipelined-drain + pareto-ring stack (PCC 0.99999 fresh+cached).
-        {{4, 480, 24}, {6, 1, 1, 2, 3}},
-        {{4, 192, 72}, {12, 1, 1, 2, 1}},
-        {{4, 192, 144}, {12, 1, 1, 2, 1}},
-        {{4, 72, 192}, {3, 2, 1, 1, 6}},
-        {{16, 192, 48}, {6, 1, 2, 2, 3}},  // 512x6144x1536  RESWEEP -11.1% (was 12,1,1,2,1)
-        // Mt=8 low-AI shape: the cost-model fallback picks N-split (Ns2) which is ~15% slower here than
-        // M-split. Exhaustive op-side sweep (788 configs) winner; overhead/reduction-tail-bound at ~37%.
-        // Mt<=8 re-baseline campaign (2026-07): measured
-        // winners for the M-scaling shapes, +3..+32% vs the old fallback, all zero-regression (stability /
-        // exhaustive-expand / validate confirmed; single-run entries re-validated by the gated corpus re-run).
-        {{8, 64, 32}, {4, 1, 2, 2, 4}},  // 256x2048x1024 +5% (was {4,1,2,2,2})
-        // 256x2048x6144: the fallback picks nsb=1; nsb=2 measured 5.4% faster post-mesh (80.8 -> 76.4 us),
-        // because a 1-tile-wide sub-block makes every output write a lone page. nsb=4 is 2% worse than 2 and
-        // nsb=8 is 25% worse, so 2 is a genuine optimum rather than "bigger is better".
-        {{8, 64, 192}, {4, 3, 1, 2, 2}},   // 256x2048x6144 +5.4%
-        {{8, 480, 48}, {10, 1, 1, 2, 2}},  // 256x15360x1536  TIER1 -2.4% (was 6,1,2,2,6)
-        {{8, 64, 16}, {4, 1, 2, 2, 2}},    // 256x2048x512  RESWEEP -10.3% (was 4,1,3,2,2)
-        {{1, 480, 24}, {6, 1, 1, 2, 3}},   // 32x15360x768 +24%
-        {{8, 72, 192}, {3, 2, 2, 1, 6}},   // 256x2304x6144  TIER1 -4.8% (was 3,4,1,1,3)
-        {{4, 64, 16}, {4, 1, 2, 2, 2}},    // 128x2048x512 +21%
-        {{4, 480, 48}, {12, 1, 1, 1, 3}},  // 128x15360x1536 +21%
-        {{2, 64, 16}, {4, 1, 1, 2, 2}},    // 64x2048x512  RESWEEP -6.0% (was 4,2,1,2,1)
-        {{8, 64, 48}, {4, 1, 2, 2, 6}},    // 256x2048x1536  RESWEEP -12.9% (was 4,1,3,2,3)
-        {{1, 64, 32}, {2, 4, 1, 4, 1}},    // 32x2048x1024 +19%
-        {{2, 64, 32}, {4, 2, 1, 2, 2}},    // 64x2048x1024 +14%
-        {{8, 480, 24}, {5, 1, 2, 4, 3}},   // 256x15360x768  RESWEEP -5.3% (was 6,1,2,2,3)
-        {{8, 64, 64}, {4, 1, 2, 2, 8}},    // 256x2048x2048  RESWEEP -14.1% (was 4,1,3,2,4)
-        {{4, 64, 32}, {4, 1, 2, 2, 4}},    // 128x2048x1024 +9%
-        {{8, 192, 48}, {12, 1, 1, 2, 1}},  // 256x6144x1536  RESWEEP -5.0% (was 6,1,2,4,2)
-        {{1, 72, 192}, {3, 2, 1, 1, 6}},   // 32x2304x6144 +7%
-        {{2, 64, 64}, {2, 3, 1, 2, 3}},    // 64x2048x2048 +5%
-        {{1, 480, 48}, {6, 1, 1, 2, 3}},   // 32x15360x1536 +5%
-        {{8, 192, 192}, {6, 1, 2, 2, 6}},  // 256x6144x6144  TIER1 -5.0% (was 6,1,2,4,2)
-        {{4, 64, 64}, {4, 1, 2, 2, 8}},    // 128x2048x2048  TIER1 -3.8% (was 4,3,1,2,3)
-        {{2, 480, 24}, {6, 1, 1, 2, 3}},   // 64x15360x768  TIER1 -4.0% (was 10,1,1,2,3)
-        {{1, 192, 24}, {3, 1, 1, 4, 3}},   // 32x6144x768  TIER1 -3.3% (was 6,1,1,2,3)
-        {{8, 192, 144}, {6, 1, 2, 2, 6}},  // 256x6144x4608  TIER1 -3.0% (was 6,1,2,4,2)
-        // 2026-07-31 exhaustive-resweep additions (3544 configs over the 25 worst-utilisation shapes;
-        // every entry re-confirmed on two fresh relaunches). Mt=16 was never covered by the Mt<=8 campaign
-        // and the cost-model fallback cannot reach Sm>1 there (kNbandMax=2 gates it on Nband<=2).
-        {{16, 192, 24}, {6, 1, 2, 2, 3}},   // 512x6144x768  RESWEEP -19.5%
-        {{16, 96, 192}, {6, 1, 2, 2, 6}},   // 512x3072x6144  RESWEEP -12.5%
-        {{16, 72, 192}, {3, 2, 2, 1, 3}},   // 512x2304x6144  RESWEEP -7.2%
-        {{16, 128, 160}, {4, 1, 3, 4, 5}},  // 512x4096x5120  FULLSWEEP -3.1% (was 4,3,1,4,1)
-        {{4, 64, 48}, {4, 2, 1, 2, 3}},     // 128x2048x1536  RESWEEP -12.6%
-        {{2, 64, 48}, {4, 2, 1, 2, 3}},     // 64x2048x1536  TIER1 -5.3%
-        {{2, 192, 72}, {6, 1, 1, 4, 2}},    // 64x6144x2304  TIER1 -3.6%
-        {{2, 192, 24}, {3, 1, 1, 8, 3}},    // 64x6144x768  FULLSWEEP -1.8% (was 6,1,1,4,1)
-        {{1, 160, 40}, {5, 1, 1, 4, 3}},    // 32x5120x1280  TIER1 -1.9%
+        {{1, 64, 16}, {4, 2, 1, 2, 1}},     // 32x2048x512
+        {{1, 64, 48}, {2, 2, 1, 4, 3}},     // 32x2048x1536
+        {{1, 192, 48}, {6, 1, 1, 4, 2}},    // 32x6144x1536
+        {{1, 64, 64}, {2, 2, 1, 4, 4}},     // 32x2048x2048
+        {{1, 192, 72}, {3, 1, 1, 4, 5}},    // 32x6144x2304
+        {{1, 192, 96}, {3, 1, 1, 4, 6}},    // 32x6144x3072
+        {{1, 8, 192}, {1, 5, 1, 1, 5}},     // 32x256x6144
+        {{1, 192, 192}, {6, 1, 1, 4, 2}},   // 32x6144x6144
+        {{1, 192, 288}, {3, 1, 1, 4, 6}},   // 32x6144x9216
+        {{2, 192, 48}, {3, 1, 1, 8, 2}},    // 64x6144x1536
+        {{2, 480, 48}, {6, 1, 1, 2, 3}},    // 64x15360x1536
+        {{2, 192, 144}, {6, 1, 1, 4, 2}},   // 64x6144x4608
+        {{2, 144, 192}, {3, 2, 1, 2, 3}},   // 64x4608x6144
+        {{2, 192, 288}, {6, 1, 1, 4, 2}},   // 64x6144x9216
+        {{4, 192, 24}, {6, 1, 2, 4, 3}},    // 128x6144x768
+        {{4, 480, 24}, {6, 1, 1, 2, 3}},    // 128x15360x768
+        {{4, 192, 72}, {12, 1, 1, 2, 1}},   // 128x6144x2304
+        {{4, 192, 144}, {12, 1, 1, 2, 1}},  // 128x6144x4608
+        {{4, 72, 192}, {3, 2, 1, 1, 6}},    // 128x2304x6144
+        {{16, 192, 48}, {6, 1, 2, 2, 3}},   // 512x6144x1536
+        {{8, 64, 32}, {4, 1, 2, 2, 4}},     // 256x2048x1024
+        {{8, 64, 192}, {4, 3, 1, 2, 2}},    // 256x2048x6144
+        {{8, 480, 48}, {10, 1, 1, 2, 2}},   // 256x15360x1536
+        {{8, 64, 16}, {4, 1, 2, 2, 2}},     // 256x2048x512
+        {{1, 480, 24}, {6, 1, 1, 2, 3}},    // 32x15360x768
+        {{8, 72, 192}, {3, 2, 2, 1, 6}},    // 256x2304x6144
+        {{4, 64, 16}, {4, 1, 2, 2, 2}},     // 128x2048x512
+        {{4, 480, 48}, {12, 1, 1, 1, 3}},   // 128x15360x1536
+        {{2, 64, 16}, {4, 1, 1, 2, 2}},     // 64x2048x512
+        {{8, 64, 48}, {4, 1, 2, 2, 6}},     // 256x2048x1536
+        {{1, 64, 32}, {2, 4, 1, 4, 1}},     // 32x2048x1024
+        {{2, 64, 32}, {4, 2, 1, 2, 2}},     // 64x2048x1024
+        {{8, 480, 24}, {5, 1, 2, 4, 3}},    // 256x15360x768
+        {{8, 64, 64}, {4, 1, 2, 2, 8}},     // 256x2048x2048
+        {{4, 64, 32}, {4, 1, 2, 2, 4}},     // 128x2048x1024
+        {{8, 192, 48}, {12, 1, 1, 2, 1}},   // 256x6144x1536
+        {{1, 72, 192}, {3, 2, 1, 1, 6}},    // 32x2304x6144
+        {{2, 64, 64}, {2, 3, 1, 2, 3}},     // 64x2048x2048
+        {{1, 480, 48}, {6, 1, 1, 2, 3}},    // 32x15360x1536
+        {{8, 192, 192}, {6, 1, 2, 2, 6}},   // 256x6144x6144
+        {{4, 64, 64}, {4, 1, 2, 2, 8}},     // 128x2048x2048
+        {{2, 480, 24}, {6, 1, 1, 2, 3}},    // 64x15360x768
+        {{1, 192, 24}, {3, 1, 1, 4, 3}},    // 32x6144x768
+        {{8, 192, 144}, {6, 1, 2, 2, 6}},   // 256x6144x4608
+        {{16, 192, 24}, {6, 1, 2, 2, 3}},   // 512x6144x768
+        {{16, 96, 192}, {6, 1, 2, 2, 6}},   // 512x3072x6144
+        {{16, 72, 192}, {3, 2, 2, 1, 3}},   // 512x2304x6144
+        {{16, 128, 160}, {4, 1, 3, 4, 5}},  // 512x4096x5120
+        {{4, 64, 48}, {4, 2, 1, 2, 3}},     // 128x2048x1536
+        {{2, 64, 48}, {4, 2, 1, 2, 3}},     // 64x2048x1536
+        {{2, 192, 72}, {6, 1, 1, 4, 2}},    // 64x6144x2304
+        {{2, 192, 24}, {3, 1, 1, 8, 3}},    // 64x6144x768
+        {{1, 160, 40}, {5, 1, 1, 4, 3}},    // 32x5120x1280
     };
     if (auto it = kTable.find({Mt, Kt, Nt}); it != kTable.end()) {
         // Every table entry is a MEASURED unfused winner, so an unfused lookup is returned unconditionally --
@@ -387,7 +373,7 @@ plan::PlanResult make_and_build_plan(
     in.opt1 = opt1;
     in.holes = {};       // v1: no explicit grid holes; find_near just walks to the next free logical core.
     in.fusion = fusion;  // fused operand CBs are real L1 -> the feasibility check must see them
-    // BH usable L1 ~1440 KB; matches the validated prototype/sweep budget used by the picker.
+    // Blackhole usable L1 ~1440 KB; the same budget the picker's feasibility check uses.
     in.l1_budget_bytes = kL1BudgetBytes;
     in.tb = kTileBytesBf16;  // bf16 tile bytes
     in.tf = kTileBytesFp32;  // fp32 tile bytes

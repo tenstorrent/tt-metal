@@ -148,7 +148,7 @@ void kernel_main() {
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
         // valid N columns within this subblock (0 => whole subblock is beyond the owned N range)
-        [[maybe_unused]] const uint32_t vcols =
+        const uint32_t vcols =
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
         for (uint32_t step = 0; step < G; ++step) {
             // Shard read order MUST match the in0 cb0 order. Ring: block `step` = shard (rp-step).
