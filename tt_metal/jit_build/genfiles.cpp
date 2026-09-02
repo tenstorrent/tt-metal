@@ -275,9 +275,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // the return type, so those types must be in scope for any Metal 2.0 kernel.
     content << "#include \"internal/template_string.h\"\n";
     content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-    // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
-    // so it is safe on compute builds too.
-    content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    if (!sem_entries.empty()) {
+        // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
+        // so it is safe on compute builds too.
+        content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    }
     if (has_cached_sem) {
         // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
         // guarded exactly like those bodies (the pool is DM-only).
@@ -313,10 +315,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
-    content << "namespace sem {\n";
-    emit_programmatic_binding_token_getter(
-        content, sem_entries, "::SemaphoreBindingToken<0u, ::SemScope::LOCAL_NONATOMIC>");
-    content << "}  // namespace sem\n";
     if (has_cached_sem) {
         // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
         // with its init value once per program, by exactly one hart, before anyone

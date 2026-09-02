@@ -4029,7 +4029,7 @@ static_assert(tensor::get_token_if_present<"not_a_tensor">() == nullptr);
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsJITSmoke) {
     // The lookup is emitted even when a kernel has no bindings of a given kind, so a kernel can
     // probe for an optional resource without the host having to inject a dummy token. This is the
-    // empty-namespace path (no DFB / tensor / scratchpad / semaphore bindings at all); the
+    // empty-namespace path (no DFB / tensor / scratchpad bindings at all); the
     // present-plus-absent case is covered by the per-category JIT smokes above.
     NodeCoord node{0, 0};
 
@@ -4042,7 +4042,6 @@ void kernel_main() {
     static_assert(dfb::get_token_if_present<"missing">() == nullptr);
     static_assert(tensor::get_token_if_present<"missing">() == nullptr);
     static_assert(scratch::get_token_if_present<"missing">() == nullptr);
-    static_assert(sem::get_token_if_present<"missing">() == nullptr);
 }
 )"};
 
@@ -4083,8 +4082,6 @@ void kernel_main() {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
     }
-
-    static_assert(sem::get_token_if_present<"missing">() == nullptr);
 }
 )"};
 
@@ -4106,7 +4103,6 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsWhenNoBindingsJITSmok
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
-#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/local_tensor_accessor.h"
 
 void kernel_main() {
@@ -4128,12 +4124,6 @@ void kernel_main() {
     if (const auto* token = scratch::get_token_if_present<"missing">()) {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
-    }
-
-    static_assert(sem::get_token_if_present<"missing">() == nullptr);
-    if (const auto* token = sem::get_token_if_present<"missing">()) {
-        Semaphore s(*token);
-        (void)s;
     }
 }
 )"};
@@ -4306,38 +4296,6 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsSemaphoreJITSmoke) {
-    // sem_present is bound; sem_absent is not. Semaphore is constructed from the looked-up id (*token).
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-
-    SemaphoreSpec sem;
-    sem.unique_id = SemaphoreSpecName{"sem_0"};
-    sem.target_nodes = NodeCoord{0, 0};
-    spec.semaphores = {sem};
-    spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_present"}};
-
-    spec.kernels[0].source = KernelSpec::SourceCode{R"(
-#include "api/dataflow/noc_semaphore.h"
-void kernel_main() {
-    static_assert(sem::get_token_if_present<"sem_present">() == &sem::sem_present);
-    if (const auto* token = sem::get_token_if_present<"sem_present">()) {
-        Semaphore s(*token);
-        (void)s;
-    }
-
-    static_assert(sem::get_token_if_present<"sem_absent">() == nullptr);
-    if (const auto* token = sem::get_token_if_present<"sem_absent">()) {
-        Semaphore s(*token);
-        (void)s;
-    }
-}
-)"};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
-}
-
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJITSmoke) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -4367,20 +4325,7 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJI
             .scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "scratch_b"},
     };
 
-    SemaphoreSpec sem_0;
-    sem_0.unique_id = SemaphoreSpecName{"sem_0"};
-    sem_0.target_nodes = NodeCoord{0, 0};
-    SemaphoreSpec sem_1;
-    sem_1.unique_id = SemaphoreSpecName{"sem_1"};
-    sem_1.target_nodes = NodeCoord{0, 0};
-    spec.semaphores = {sem_0, sem_1};
-    spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_a"},
-        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "sem_b"},
-    };
-
     spec.kernels[0].source = KernelSpec::SourceCode{R"(
-#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/local_tensor_accessor.h"
 
 void kernel_main() {
@@ -4423,18 +4368,6 @@ void kernel_main() {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
     }
-
-    static_assert(sem::get_token_if_present<"sem_a">() == &sem::sem_a);
-    if (const auto* token = sem::get_token_if_present<"sem_a">()) {
-        Semaphore s(*token);
-        (void)s;
-    }
-
-    static_assert(sem::get_token_if_present<"sem_b">() == &sem::sem_b);
-    if (const auto* token = sem::get_token_if_present<"sem_b">()) {
-        Semaphore s(*token);
-        (void)s;
-    }
 }
 )"};
 
@@ -4475,20 +4408,7 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstantExpressionBigSmoke) {
             .scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "scratch_b"},
     };
 
-    SemaphoreSpec sem_0;
-    sem_0.unique_id = SemaphoreSpecName{"sem_0"};
-    sem_0.target_nodes = NodeCoord{0, 0};
-    SemaphoreSpec sem_1;
-    sem_1.unique_id = SemaphoreSpecName{"sem_1"};
-    sem_1.target_nodes = NodeCoord{0, 0};
-    spec.semaphores = {sem_0, sem_1};
-    spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_a"},
-        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "sem_b"},
-    };
-
     spec.kernels[0].source = KernelSpec::SourceCode{R"(
-#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/local_tensor_accessor.h"
 
 void kernel_main() {
@@ -4553,25 +4473,6 @@ void kernel_main() {
         constexpr const auto* token = scratch::get_token_if_present<"scratch_b">();
         Scratchpad<int32_t> pad(*token);
         (void)pad;
-    }
-
-    static_assert(sem::get_token_if_present<"sem_a">() == &sem::sem_a);
-    if constexpr (sem::get_token_if_present<"sem_a">() == &sem::sem_a) {
-        constexpr const auto* token = sem::get_token_if_present<"sem_a">();
-        Semaphore s(*token);
-        (void)s;
-    }
-    static_assert(sem::get_token_if_present<"sem_absent">() == nullptr);
-    if constexpr (constexpr const auto* token = sem::get_token_if_present<"sem_absent">()) {
-        Semaphore s(*token);
-        (void)s;
-    }
-
-    static_assert(sem::get_token_if_present<"sem_b">() == &sem::sem_b);
-    if constexpr (sem::get_token_if_present<"sem_b">() == &sem::sem_b) {
-        constexpr const auto* token = sem::get_token_if_present<"sem_b">();
-        Semaphore s(*token);
-        (void)s;
     }
 }
 )"};
