@@ -6,8 +6,8 @@
 
 T-parallel decode works: ``test_audio_decode_t_parallel`` at the bottom of this file is resurrected from
 git history, as the previous version of this docstring asked for. The 8-way shard layout it called
-known-broken was `Vocoder.conv_pre` returning uninitialized memory when sharded, plus
-``_forward_tap_matmul`` padding shard boundaries locally instead of through the halo; both are fixed, and
+known-broken was `Vocoder.conv_pre` returning uninitialized memory when sharded (plus a halo bug in the
+since-retired tap-matmul path); both were fixed, and
 the test's PSNR assert is enforced for every factor rather than excused. ``test_neighbor_pad_t_minimax_h3.py``
 is still in git history if the halo itself ever needs its own gate again -- it was verified correct here
 (exact at pad 1/3/25) while hunting the conv_pre bug."""
@@ -103,8 +103,8 @@ def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
 def test_decode(mesh_device, num_latent_frames):
     """The whole decode path against the reference, at a production duration, stereo.
 
-    Constructor defaults are accurate mode (split_mode='full', tap_matmul, prefer_mac), so the bars
-    are the accurate-mode ones: measured 0.0045 rel RMSE / 99.9990% PCC / 67.5 dB PSNR.
+    Constructor defaults are accurate mode (split_mode='full'), so the bars are the
+    accurate-mode ones: measured 0.0045 rel RMSE / 99.9990% PCC / 67.5 dB PSNR.
     """
     reference, config = _build_reference()
     torch.manual_seed(1)
@@ -116,9 +116,7 @@ def test_decode(mesh_device, num_latent_frames):
     tt_decoder = _tt_decoder(config, mesh_device)
     # The precision levers are the constructed defaults; assert they landed where they matter.
     assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
-    assert tt_decoder.dec_in_proj.tap_matmul, "tap_matmul=True did not land on dec_in_proj"
     assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
-    assert tt_decoder.decoder.act_post.downsample.lowpass.prefer_mac, "prefer_mac=True did not land on act_post"
 
     tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 
@@ -144,9 +142,8 @@ def test_decode(mesh_device, num_latent_frames):
 def test_depthwise_chunked_conv1d_matches_torch(mesh_device):
     """`depthwise_tap_filter`'s C-chunked `ttnn.conv1d` recovery, against a torch depthwise reference.
 
-    Nothing else covers it: H3 defaults to `prefer_mac=True`, which returns before the conv1d fallback,
-    so no decode test touches the slicing, the per-chunk weight, or the concat. Shape is the one the
-    decode really chunks (T_pad=166, C=512, K=7, stride=1), where the activation block is C*K wide and
+    Covers the slicing, the per-chunk weight, and the concat in isolation, at the shape the decode
+    really chunks (T_pad=166, C=512, K=7, stride=1) -- the activation block is C*K wide there and
     the slicer runs out of L1 at full C.
     """
     torch.manual_seed(0)
@@ -164,7 +161,6 @@ def test_depthwise_chunked_conv1d_matches_torch(mesh_device):
         mesh_device=mesh_device,
         dtype=ttnn.float32,
         cache=cache,
-        prefer_mac=False,
     )
     actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
 
@@ -493,9 +489,9 @@ def _build(mesh_device, config, converted, parallel_config, ccl_manager):
     """The decoder at this file's shared defaults, plus a shard layout.
 
     Goes through `build_audio_decoder` rather than constructing directly so the precision levers
-    (`split_mode`, `tap_matmul`, `prefer_mac`, `max_c_in_block`) stay at whatever the shipping default
-    is -- a sharded run must measure the same configuration the unsharded gates do, or a divergence
-    could be a lever difference rather than a sharding bug.
+    (`split_mode`, `max_c_in_block`) stay at whatever the shipping default is -- a
+    sharded run must measure the same configuration the unsharded gates do, or a divergence could
+    be a lever difference rather than a sharding bug.
     """
     decoder = build_audio_decoder(
         config,

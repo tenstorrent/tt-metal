@@ -25,7 +25,14 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_x_device_params,
     torus_xy_device_params,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    MlaKvCacheFormat,
+    create_sequence_cache_mesh_composer,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
 # gathered cache slot must byte-match the input we sent (read back through the same dtype
@@ -272,6 +279,149 @@ def _update_kv(
     )
     ttnn.deallocate(slot_t)
     ttnn.deallocate(kv_t)
+
+
+def _full_mesh_update_cases():
+    num_devices = detect_num_devices()
+    mesh = {4: (2, 2), 8: (2, 4), 32: (8, 4)}.get(num_devices)
+    if mesh is None:
+        return [
+            pytest.param(
+                (1, max(num_devices, 1)),
+                marks=pytest.mark.skip(reason=f"no supported 2D full-mesh case for {num_devices} devices"),
+                id=f"unsupported-{num_devices}dev",
+            )
+        ]
+    return [pytest.param(mesh, id=f"{mesh[0]}x{mesh[1]}")]
+
+
+def _stamp_full_mesh_sequence_topology(tensor, mesh_device):
+    full_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(full_shape)
+    ]
+    tensor.update_tensor_topology(
+        ttnn.TensorTopology(full_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+    )
+
+
+@pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_full_mesh_rotated(mesh_device, use_metadata_tensor):
+    """A rotated write preserves canonical row-major sequence order across the complete 2D mesh."""
+    if not is_blackhole():
+        pytest.skip("full-mesh cache update coverage is currently Blackhole-only")
+
+    mesh_factor = mesh_device.get_num_devices()
+    tile = ttnn.TILE_SIZE
+    chunk_local = 2 * tile
+    chunk_global = mesh_factor * chunk_local
+    cache_tokens_local = 4 * chunk_local
+    cache_global = mesh_factor * cache_tokens_local
+    actual_start = chunk_local + tile  # chip 1, one tile into its local slab
+
+    cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=cache_global,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        full_mesh=True,
+    )
+    torch.manual_seed(31)
+    source = torch.randn(1, 1, chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    tt_input = _make_input(
+        source,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    _stamp_full_mesh_sequence_topology(tt_input, mesh_device)
+
+    if use_metadata_tensor:
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=actual_start, slot_idx=0)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=None
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+    else:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            tt_input,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=actual_start,
+            cluster_axis=None,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    composer = create_sequence_cache_mesh_composer(mesh_device, full_mesh=True)
+    input_host = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    expected = torch.zeros(cache_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    boundary_slab = actual_start // chunk_global
+    boundary_chip = (actual_start // chunk_local) % mesh_factor
+    boundary_offset = actual_start % chunk_local
+    for chip in range(mesh_factor):
+        if chip < boundary_chip:
+            local_start = (boundary_slab + 1) * chunk_local
+        elif chip == boundary_chip:
+            local_start = boundary_slab * chunk_local + boundary_offset
+        else:
+            local_start = boundary_slab * chunk_local
+        cache_start = chip * cache_tokens_local + local_start
+        input_start = chip * chunk_local
+        expected[cache_start : cache_start + chunk_local] = input_host[input_start : input_start + chunk_local]
+
+    cache_host = ttnn.to_torch(cache, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    assert torch.equal(cache_host, expected)
+
+
+@pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, expect_error):
+    """cluster_axis=None rejects the legacy cache topology instead of silently mis-addressing it."""
+    if not is_blackhole():
+        pytest.skip("full-mesh cache update coverage is currently Blackhole-only")
+
+    mesh_factor = mesh_device.get_num_devices()
+    chunk_local = 2 * ttnn.TILE_SIZE
+    input_global = mesh_factor * chunk_local
+    input_tensor = _make_input(
+        torch.zeros(1, 1, input_global, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    _stamp_full_mesh_sequence_topology(input_tensor, mesh_device)
+    axis_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=input_global * 4,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    with expect_error(RuntimeError, "cluster_axis=None requires cache and input"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            axis_cache,
+            input_tensor,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=0,
+            cluster_axis=None,
+        )
 
 
 @pytest.mark.parametrize(
@@ -831,3 +981,127 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
         f"{mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")
+
+
+def _alloc_multihead_cache(mesh_device, *, batch, heads, seq_local, head_dim, dtype, layout):
+    """Cache with a per-chip HEAD dim > 1, ND-sharded exactly like the model caches (32-token bank
+    chunks, round-robin over the DRAM grid). ``init_kvpe_cache`` is fixed at one head, so this is its
+    multi-head sibling -- the layout ``allocate_dflash_kv_cache`` produces when
+    ``num_key_value_heads > tp``."""
+    from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
+    grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
+            for bank_id in range(get_num_dram_banks(mesh_device))
+        ]
+    )
+    mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+            grid=grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    return ttnn.from_torch(
+        torch.zeros(batch, heads, seq_local, head_dim, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
+    """A per-chip head dim > 1 must not smear rows across heads.
+
+    The cache's head stride (cache_HtWt) is larger than the input's (input_Ht * Wt) whenever the cache is
+    deeper than one chunk, so a core holding blocks either side of a head boundary must address each
+    block from its own (head, row) -- 64 heads x 7 page-rows over ~110 cores puts several cores across a
+    boundary."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    heads, head_dim = 64, 64
+    chunk_local = 7 * tile  # 7 page-rows/head: blocks (64*7=448) >> cores, boundaries every 7 blocks
+    chunk_global = chunk_local * sp
+    seq_local = 2 * chunk_local  # deeper than one chunk -> cache head stride != input head stride
+    num_layers = 2
+    layer_idx, slot_id = 0, 0
+    write_end = chunk_global
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+
+    mesh_device.enable_program_cache()
+    cache = _alloc_multihead_cache(
+        mesh_device,
+        batch=num_layers,
+        heads=heads,
+        seq_local=seq_local,
+        head_dim=head_dim,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    torch.manual_seed(3)
+    src = torch.randn(1, heads, chunk_global, head_dim, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        src,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+    )
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache,
+        tt_input,
+        slot_idx=slot_id,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=0,
+        cluster_axis=sp_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Chunk 0 at offset 0: chip c holds global positions [c*chunk_local, (c+1)*chunk_local) in its first
+    # chunk_local rows, so concatenating the chips' slabs on the seq dim gives natural order directly.
+    host = ttnn.to_torch(
+        cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[:num_layers, :, :, :head_dim]
+    written = torch.cat([host[layer_idx, :, c * seq_local : c * seq_local + chunk_local, :] for c in range(sp)], dim=1)
+
+    # Spill first, placement second: a misaddressed block shows up as a write past the real rows, and
+    # that is the more specific signal. This must read `host`, not `written` -- `written` is assembled
+    # from exactly chunk_local rows per chip, so slicing it past write_end yields nothing at all. Each
+    # chip's slab is seq_local deep with only its first chunk_local written, so the spill lands in the
+    # unwritten half.
+    for c in range(sp):
+        tail = host[layer_idx, :, c * seq_local + chunk_local : (c + 1) * seq_local, :]
+        assert torch.count_nonzero(tail) == 0, f"chip {c}: wrote past its {chunk_local} real rows"
+    assert torch.count_nonzero(host[1 - layer_idx]) == 0, "wrote into the neighbouring layer slot"
+    for h in range(heads):
+        assert torch.equal(
+            written[h, :write_end], src[0, h, :write_end].to(torch.float32)
+        ), f"head {h}: rows [0, {write_end}) do not match what was sent -- a block landed in another head"
+    logger.success(f"{heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")
