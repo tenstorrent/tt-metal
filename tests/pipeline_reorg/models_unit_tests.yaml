@@ -1087,24 +1087,32 @@
     # leg down with it under `bash -e` on run 33655962297. utils/test.py already carries a
     # TODO about these 1x1 parametrizations. Deselecting here rather than adding
     # require_exact_physical_num_devices to the test keeps 1x1 and 1x8 runnable locally.
-    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py -k "not 1x1"
+    pytest --timeout 1200 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py -k "not 1x1"
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
-    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
-    # Last on purpose. The step runs under `bash -e`, and the 2x2 PCC case fails (~0.32%)
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    # The two layer-skip parametrizations get one pytest invocation each so the process frees
+    # the host memory in between. Both in one process is an OOM kill (exit 137, run
+    # 33667518970, died at checkpoint shard 6/7): each cache-missing config loads the full 32B
+    # torch transformer, and single_blocks has a different cache key than all_blocks -- the
+    # layer counts differ -- so it reloads rather than reusing what all_blocks just built.
+    #
+    # Both are last on purpose. The step runs under `bash -e`, and the 2x2 PCC case fails
     # until the Linear-topology correctness fix lands -- FLUX.2 drops the attention residual
-    # off the non-Ring path in ColParallelLinear. Fix is on branch stisi/flux2-qb2, commit
-    # 92919ba7f5d. Ordering this last keeps that known failure, which `bash -e` turns into an
-    # early exit, from suppressing the two tests above.
-    pytest --timeout 4800 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
+    # off the non-Ring path in ColParallelLinear, giving noise (PCC -3.71%, RMSE/sigma 179%
+    # on run 33667518970). Fix is on branch stisi/flux2-qb2, commit 92919ba7f5d. Ordering
+    # these last keeps that known failure, which `bash -e` turns into an early exit, from
+    # suppressing the two tests above.
+    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
+    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      # 3h for the first, cold run: it downloads ~106 GB of FLUX.2-dev and writes a ~105 GB
-      # converted-weight cache. Recalibrate to the measured warm-cache time before merge.
-      # Keep this above the sum of the pytest --timeouts above (170 min) so a hang fails
-      # cleanly rather than being killed by the job timeout.
+      # Still 3h: the HF weights are staged now, but the single_blocks converted-weight cache
+      # has never been built. Recalibrate to the measured warm time before merge, and walk the
+      # budget back down with it. Keep this above the sum of the pytest --timeouts above
+      # (160 min) so a hang fails cleanly rather than being killed by the job timeout.
       timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
