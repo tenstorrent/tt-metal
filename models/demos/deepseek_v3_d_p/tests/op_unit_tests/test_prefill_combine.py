@@ -53,10 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-
-# Launches of the op per test, for sampling its time. 1 keeps a test run a single launch.
-def perf_iterations():
-    return int(os.environ.get("CMBF2D_PERF_ITERS", "1"))
+_PERF_ITERATIONS = 10
 
 
 def run_combine(
@@ -73,7 +70,6 @@ def run_combine(
     use_fp8_output,
     num_links=2,
     cmb_version=1,
-    iterations=1,
     hot_expert=None,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
@@ -299,27 +295,22 @@ def run_combine(
             tt_expert_offsets,
         )
 
-    tt_output = tt_combine(*combine_inputs)
-    # Sampling the op's time needs many launches, not many test runs: everything above this line — the
-    # torch reference included — is setup that a second launch does not repeat. The profiler reports one
-    # record per launch, so `iterations` samples cost a launch each rather than a process each. When the
-    # output is checked it is the LAST launch that gets checked, which is also what proves a launch leaves
-    # the op's counters fit for the next one.
+    # One capture, then _PERF_ITERATIONS replays. Timing and checking now share a single test case, so
+    # they must share a single execution path: what the PCC check validates is the very trace the numbers
+    # come from, not a separate eager launch that could differ from it.
     #
-    # Gated on > 1 so the default really is one launch: capture does not execute, so the block below costs
-    # 1 eager + `iterations` replays. Ungated it would double the device time of every PCC case in the
-    # collected matrix to sample a number nobody asked for.
-    if iterations > 1:
+    # Capture does NOT execute -- the op first runs on the replays below, and `tt_output` ends up holding
+    # the LAST replay's result, which is what the check further down reads. Checking the last launch
+    # rather than the first is deliberate: it proves a launch leaves the op's counters fit for the next
+    # one, which a check placed between capture and replays would silently stop testing.
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_output = tt_combine(*combine_inputs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(_PERF_ITERATIONS):
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(tt_output)
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_output = tt_combine(*combine_inputs)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        for _ in range(iterations):
-            ttnn.synchronize_device(mesh_device)
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
 
     # A single test run leaves its tensors to teardown, but the sweep below launches the op a hundred-odd
     # times against one open mesh, and inputs that outlive their phase exhaust the device. Freeing them
@@ -477,17 +468,6 @@ def _mesh_id(mesh, fabric_cfg):
     return f"{profile}-{mesh[0]}x{mesh[1]}"
 
 
-# The two operating points every combine test runs at: a short sequence for checking the output, and
-# the production length for timing it. Named here because the collected matrix, the combine_fabric2d
-# entrypoint and the sweep all walk them, and a scenario that drifted between them would silently stop
-# being comparable.
-_CMB_TEST_SCENARIOS = (
-    # (id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc)
-    ("pcc", 128, 4, True),
-    ("perf_no_pcc", 640, 8, False),
-)
-
-
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, test_meshes in COMBINE_MODELS:
@@ -495,7 +475,11 @@ def _cross_product_conflated_cmb_test_dimensions():
             device_params = fabric_to_device_params(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             marks = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
+            test_scenarios = [
+                ("pcc", 128, 4, True),
+                ("perf_no_pcc", 640, 8, False),
+            ]
+            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
                 model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
@@ -713,7 +697,10 @@ def _cmb_fabric2d_dimensions():
     marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
 
     params = []
-    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
+    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
+        ("pcc", 128, 4, True),
+        ("perf_no_pcc", 640, 8, False),
+    ):
         model_config = _model_scaledown(
             DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
         )
@@ -938,7 +925,6 @@ def test_ttnn_combine_sweep(mesh_device, device_params):
     topology = per_axis_topology(device_params["fabric_config"])[0]
 
     models = _sweep_axis("CMB_SWEEP_MODELS", COMBINE_MODELS)
-    scenarios = _sweep_axis("CMB_SWEEP_SCENARIOS", _CMB_TEST_SCENARIOS)
     traffic_shapes = _sweep_axis("CMB_SWEEP_TRAFFIC", _CMB_SWEEP_TRAFFIC)
     layouts = _sweep_axis("CMB_SWEEP_LAYOUTS", _CMB_SWEEP_LAYOUTS)
     versions = _sweep_axis("CMB_SWEEP_VERSIONS", _CMB_SWEEP_VERSIONS, key=lambda version: version)
@@ -950,58 +936,58 @@ def test_ttnn_combine_sweep(mesh_device, device_params):
         _sweep_state_record("HANG", name, "process died during this phase")
         finished[name] = ("HANG", "process died during this phase")
 
+    # The sweep's single operating point: the production sequence length, timed over _PERF_ITERATIONS
+    # replays, with the last replay's output checked. pcc_only stays False because that scaledown is
+    # explicitly not perf-representative and these phases are timed.
+    seq_len_per_chip, capacity_factor, run_pcc = 640, 8, True
+
     attempted = 0
     for model_name, model_config_class, test_meshes in models:
-        for scenario_id, seq_len_per_chip, capacity_factor, run_pcc in scenarios:
-            # _model_scaledown mutates the config it is handed, so each scenario gets a fresh one.
-            model_config = _model_scaledown(
-                model_config_class(), test_meshes.full_model_mesh, _CMB_SWEEP_MESH, pcc_only=run_pcc
-            )
-            # Timing wants many launches of one program; checking the output wants exactly one.
-            iterations = 1 if run_pcc else perf_iterations()
-
-            for traffic_id, hot_expert in traffic_shapes:
-                for layout_id, layout in layouts:
-                    for version in versions:
-                        name = f"{model_name}-{scenario_id}-{traffic_id}-{layout_id}-cmb_v{version}"
-                        if name in finished:
-                            continue
-                        logger.info(f"[sweep] === {name} === seq_len={seq_len_per_chip} {iterations=}")
-                        _sweep_state_record("BEGIN", name)
-                        attempted += 1
-                        try:
-                            run_combine(
-                                mesh_device,
-                                seq_len_per_chip,
-                                model_config.EMB_SIZE,
-                                model_config.NUM_ROUTED_EXPERTS,
-                                model_config.NUM_EXPERTS_PER_TOKEN,
-                                capacity_factor,
-                                topology,
-                                False,  # use_predictable_data -- both traffic shapes supply their own data
-                                run_pcc,
-                                layout,
-                                False,  # use_fp8_output -- neither router shape is an fp8 case
-                                cmb_version=version,
-                                iterations=iterations,
-                                hot_expert=hot_expert,
-                            )
-                        # A phase the op does not support yet raises pytest's Skipped, which derives from
-                        # BaseException and so needs its own clause ahead of the failure one.
-                        except pytest.skip.Exception as e:
-                            logger.info(f"[sweep] {name} unsup: {e}")
-                            _sweep_state_record("unsup", name, str(e))
-                        except Exception as e:  # noqa: BLE001 - a phase's outcome is data here, not control flow
-                            outcome = _classify_phase_failure(e)
-                            logger.exception(f"[sweep] {name} {outcome}")
-                            _sweep_state_record(outcome, name, str(e))
-                            if outcome == "HANG":
-                                # The device is gone; every phase after this one would fail the same way.
-                                # End the process so the driver can reset and resume at the next phase.
-                                logger.error(f"[sweep] {name} left the device unusable, ending this process")
-                                pytest.exit(f"device hang in {name}", returncode=3)
-                        else:
-                            _sweep_state_record("pass", name, "")
+        # _model_scaledown mutates the config it is handed, so each model gets a fresh one.
+        model_config = _model_scaledown(
+            model_config_class(), test_meshes.full_model_mesh, _CMB_SWEEP_MESH, pcc_only=False
+        )
+        for traffic_id, hot_expert in traffic_shapes:
+            for layout_id, layout in layouts:
+                for version in versions:
+                    name = f"{model_name}-{traffic_id}-{layout_id}-cmb_v{version}"
+                    if name in finished:
+                        continue
+                    logger.info(f"[sweep] === {name} === seq_len={seq_len_per_chip} replays={_PERF_ITERATIONS}")
+                    _sweep_state_record("BEGIN", name)
+                    attempted += 1
+                    try:
+                        run_combine(
+                            mesh_device,
+                            seq_len_per_chip,
+                            model_config.EMB_SIZE,
+                            model_config.NUM_ROUTED_EXPERTS,
+                            model_config.NUM_EXPERTS_PER_TOKEN,
+                            capacity_factor,
+                            topology,
+                            False,  # use_predictable_data -- both traffic shapes supply their own data
+                            run_pcc,
+                            layout,
+                            False,  # use_fp8_output -- neither router shape is an fp8 case
+                            cmb_version=version,
+                            hot_expert=hot_expert,
+                        )
+                    # A phase the op does not support yet raises pytest's Skipped, which derives from
+                    # BaseException and so needs its own clause ahead of the failure one.
+                    except pytest.skip.Exception as e:
+                        logger.info(f"[sweep] {name} unsup: {e}")
+                        _sweep_state_record("unsup", name, str(e))
+                    except Exception as e:  # noqa: BLE001 - a phase's outcome is data here, not control flow
+                        outcome = _classify_phase_failure(e)
+                        logger.exception(f"[sweep] {name} {outcome}")
+                        _sweep_state_record(outcome, name, str(e))
+                        if outcome == "HANG":
+                            # The device is gone; every phase after this one would fail the same way.
+                            # End the process so the driver can reset and resume at the next phase.
+                            logger.error(f"[sweep] {name} left the device unusable, ending this process")
+                            pytest.exit(f"device hang in {name}", returncode=3)
+                    else:
+                        _sweep_state_record("pass", name, "")
 
         # The device profiler buffer holds a bounded number of records and drops the rest silently, so
         # it is drained per model rather than at the end of a sweep that launches the op hundreds of times.
