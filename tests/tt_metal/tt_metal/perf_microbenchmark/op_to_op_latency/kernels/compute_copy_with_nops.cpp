@@ -12,9 +12,9 @@
 //   5. PACK stamps the pack-finish marker once at kernel exit (TRISC_2 only), outside the tile loop.
 //
 // In lean mode (PROFILE_PER_TILE == 0, the CI path) the tile-0 first-math and the pack-finish
-// markers are emitted with DeviceRecordEvent (event id only, no data payload) to minimize profiler
-// perturbation of the op2op gap; op_to_op_postprocess.py maps event ids 12/13 back to the
-// TILE_IDX / FINISH_LAST_PUSH names. In detail mode they are DeviceTimestampedData markers.
+// markers are emitted as DeviceTimestampedData("OP2OP-EVENT", <EV_* id>) -- see the note at the
+// emission site; op_to_op_postprocess.py maps event ids 12/13 back to the TILE_IDX /
+// FINISH_LAST_PUSH names. In detail mode they are named DeviceTimestampedData markers.
 //
 // Compile-time args:
 //   0: input  CB id
@@ -63,19 +63,17 @@ void kernel_main() {
     CircularBuffer in_cb(cb_in);
     CircularBuffer out_cb(cb_out);
 
-    // Lean-mode markers use DeviceRecordEvent (event id only, no data payload) instead of
-    // DeviceTimestampedData: it writes fewer words to the L1 profiler buffer (less op2op
-    // perturbation) AND, crucially, DeviceRecordEvent survives TT_METAL_PROFILER_ACCUMULATE=1
-    // whereas DeviceTimestampedData is compiled out under accumulate. PROG_ID must survive
-    // accumulate or the pack_to_unpack metric cannot associate the tile-0 / pack-finish markers
-    // with a program, so it is emitted as an event id that ENCODES the program: EV_PROG_BASE +
-    // program_id. Host-side (op_to_op_postprocess.py) recovers the event id as (timer_id & 0xFFFF)
-    // and maps 12/13 -> TILE_IDX / FINISH_LAST_PUSH and [EV_PROG_BASE, ..) -> PROG_ID with
-    // data = id - EV_PROG_BASE. Keep the EV_* constants here in sync with that module.
+    // Lean-mode markers were DeviceRecordEvent (runtime event id, no payload) in the DRAM-backend
+    // era, where the id rode in the marker's timer_id field and op_to_op_postprocess.py recovered it
+    // as (timer_id & 0xFFFF). That marker type is gone: on the streaming wire a runtime value is
+    // ordinary DeviceTimestampedData PAYLOAD (and nothing on this backend is compiled out under
+    // TT_METAL_PROFILER_ACCUMULATE, so the old survives-accumulate motivation is moot). The EV_*
+    // encoding is preserved verbatim as the payload; op_to_op_postprocess.py must read it from the
+    // marker's data word instead of timer_id when this benchmark next runs on the streaming wire.
     constexpr uint16_t EV_UNPACK_TILE0 = 12, EV_PACK_FINISH = 13, EV_PROG_BASE = 64;
 
-    // Program id as a payload-free event so it survives accumulate mode (see above).
-    DeviceRecordEvent(static_cast<uint16_t>(EV_PROG_BASE + program_id));
+    // Program id, encoded exactly as before (EV_PROG_BASE + program_id), now as payload.
+    DeviceTimestampedData("OP2OP-EVENT", static_cast<uint16_t>(EV_PROG_BASE + program_id));
 
     // The actual per-tile consumer work: copy CB_in -> dst regs (+ NOP spin) -> CB_out.
     // Kept identical across profiling modes so lean mode changes only instrumentation.
@@ -106,7 +104,7 @@ void kernel_main() {
                 UNPACK(DeviceTimestampedData("TILE_IDX", i));
             } else {
                 if (rep == 0 && i == 0) {
-                    UNPACK(DeviceRecordEvent(EV_UNPACK_TILE0));  // lean: payload-free first-math (rep0 tile0)
+                    UNPACK(DeviceTimestampedData("OP2OP-EVENT", EV_UNPACK_TILE0));  // lean first-math (rep0 tile0)
                 }
             }
 
@@ -122,6 +120,6 @@ void kernel_main() {
         }
     }
 
-    // Payload-free pack-finish; the owning program is recovered from the PROG_ID marker above.
-    PACK(DeviceRecordEvent(EV_PACK_FINISH));
+    // Pack-finish; the owning program is recovered from the PROG_ID marker above.
+    PACK(DeviceTimestampedData("OP2OP-EVENT", EV_PACK_FINISH));
 }
