@@ -61,9 +61,11 @@ when fed a **kernel fact base** (the committed kernel tier's capture — see
 empty, and without a capture run their kernel surface stays LLM-driven (each
 skill's ttnn-widened grep).
 `srcreg-bank` recalls the dvalid control points, the raw-`SETDVALID`-on-BH flag and
-both halves of the Dest->Src gate (`DEST2SRC_*` flags the math side;
-`DUMMY_PUBLISH_UNGUARDED` recalls the unpack side) — but not the bank-flip lockstep
-verdict — and `mailbox-sync` recalls only the
+both halves of the Dest->Src gate (`DEST2SRC_*` flags the math side, which is the
+corruption half; on the unpack side `DUMMY_PUBLISH_SERIALIZING` is a
+throughput/parity candidate, while `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` and
+`DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` are real encoding defects) — but not the
+bank-flip lockstep verdict — and `mailbox-sync` recalls only the
 IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
 and fan-outs) is covered by the skill's ttnn-widened grep unless a kernel capture
 is run — so both still need heavy LLM widening per their `blind_spots`. The tool
