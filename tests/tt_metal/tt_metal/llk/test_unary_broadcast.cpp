@@ -44,11 +44,13 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include "single_core_compute_runners.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -63,7 +65,7 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::unary_broadcast {
 
-enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
+enum BroadcastDim : std::uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
 const map<BroadcastDim, std::string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},
@@ -79,7 +81,7 @@ struct UnaryBroadcastConfig {
 
 // Assume 1Xn tiles.
 template <class T>
-std::vector<T> get_broadcasted_vec(std::vector<T>& src, const std::vector<uint32_t>& shape, BroadcastDim dim) {
+std::vector<T> get_broadcasted_vec(std::vector<T>& src, const std::vector<std::uint32_t>& shape, BroadcastDim dim) {
     int num_tiles = shape.at(0);
     int num_rows = shape.at(1);
     int num_cols = shape.at(2);
@@ -127,16 +129,16 @@ std::vector<T> get_broadcasted_vec(std::vector<T>& src, const std::vector<uint32
 // T_out : type of data the packer will pack out
 // Assume nx1 tiles, row major data layout.
 template <class T_in>
-std::vector<uint32_t> get_tilized_packed_golden_broadcast(
-    std::vector<T_in>& src, const std::vector<uint32_t>& shape, BroadcastDim dim, tt::DataFormat T_out) {
+std::vector<std::uint32_t> get_tilized_packed_golden_broadcast(
+    std::vector<T_in>& src, const std::vector<std::uint32_t>& shape, BroadcastDim dim, tt::DataFormat T_out) {
     static_assert(
         std::is_same_v<bfloat16, T_in> || std::is_same_v<float, T_in>, "Only float & Float_16b type as input allowed");
-    std::vector<uint32_t> tilized_packed_res;
+    std::vector<std::uint32_t> tilized_packed_res;
     ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = shape.at(0), .num_tiles_c_dim = 1};
     std::vector<T_in> vBroadcast = get_broadcasted_vec(src, shape, dim);
     if constexpr (std::is_same_v<bfloat16, T_in>) {
         if (T_out == tt::DataFormat::Float16_b) {
-            auto packed_vec = pack_vector<uint32_t, bfloat16>(vBroadcast);
+            auto packed_vec = pack_vector<std::uint32_t, bfloat16>(vBroadcast);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             std::vector<float> tempfp32v;
@@ -155,7 +157,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp16bv[i] = vBroadcast[i];
             }
-            auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
+            auto packed_vec = pack_vector<std::uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(vBroadcast), true, false);
@@ -195,16 +197,16 @@ void log_unpacked_vectors_for_mismatch(
 }  // namespace
 
 bool check_is_close(
-    std::vector<uint32_t>& packed_golden,
-    std::vector<uint32_t>& device_res,
+    std::vector<std::uint32_t>& packed_golden,
+    std::vector<std::uint32_t>& device_res,
     tt::DataFormat T_out,
     std::string_view result_label) {
     if (T_out == tt::DataFormat::Float16_b) {
         if (packed_golden.size() != device_res.size()) {
             TT_THROW("{} mismatch: size golden={} device={}", result_label, packed_golden.size(), device_res.size());
         }
-        auto gold_bf16 = unpack_vector<bfloat16, uint32_t>(packed_golden);
-        auto res_bf16 = unpack_vector<bfloat16, uint32_t>(device_res);
+        auto gold_bf16 = unpack_vector<bfloat16, std::uint32_t>(packed_golden);
+        auto res_bf16 = unpack_vector<bfloat16, std::uint32_t>(device_res);
         auto it = std::mismatch(gold_bf16.begin(), gold_bf16.end(), res_bf16.begin(), [](bfloat16 a, bfloat16 b) {
             return is_close(a, b, 0.0f);
         });
@@ -242,29 +244,33 @@ bool check_is_close(
     TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
 }
 
-auto CreateDramBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
+auto CreateDramBuffer(distributed::MeshDevice& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
     uint32_t single_tile_size = tile_size(dformat);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    return distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 }
 
 CBHandle CreateCircularBufferHelper(
-    distributed::MeshWorkload& workload, CoreCoord& core, uint32_t num_pages, tt::DataFormat dformat, uint32_t id) {
+    distributed::MeshWorkload& workload,
+    CoreCoord& core,
+    std::uint32_t num_pages,
+    tt::DataFormat dformat,
+    std::uint32_t id) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    uint32_t page_size = tile_size(dformat);
+    std::uint32_t page_size = tile_size(dformat);
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(num_pages * page_size, {{id, dformat}}).set_page_size(id, page_size);
     return tt_metal::CreateCircularBuffer(workload.get_programs().at(device_range), core, l1_cb_config);
 }
 
-static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
-    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
+    std::uint32_t entry_size, std::uint32_t total_entries) {
+    const std::uint32_t entry_size_words = entry_size / sizeof(std::uint32_t);
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -275,27 +281,26 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
 void get_packed_tilized_input_output_pair(
     tt::DataFormat in_t,
     tt::DataFormat out_t,
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastDim bcast_dim,
-    std::vector<uint32_t>& packed_tilized_input,
-    std::vector<uint32_t>& packed_tilized_output);
+    std::vector<std::uint32_t>& packed_tilized_input,
+    std::vector<std::uint32_t>& packed_tilized_output);
 
 void run_single_core_unary_broadcast_quasar(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
+    distributed::MeshDevice& mesh_device, const UnaryBroadcastConfig& test_config) {
     const experimental::NodeCoord node{0, 0};
 
-    constexpr uint32_t num_tiles = 32;
-    constexpr uint32_t num_blocks = 4;
-    constexpr uint32_t block_size = num_tiles / num_blocks;
+    constexpr std::uint32_t num_tiles = 32;
+    constexpr std::uint32_t num_blocks = 4;
+    constexpr std::uint32_t block_size = num_tiles / num_blocks;
     const tt::DataFormat in_t = test_config.in_t;
     const tt::DataFormat out_t = test_config.out_t;
-    const uint32_t in_tile_size = tile_size(in_t);
-    const uint32_t out_tile_size = tile_size(out_t);
-    const uint32_t dfb_num_entries = block_size * 2;
+    const std::uint32_t in_tile_size = tile_size(in_t);
+    const std::uint32_t out_tile_size = tile_size(out_t);
+    const std::uint32_t dfb_num_entries = block_size * 2;
 
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
-    auto out_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
 
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
@@ -318,7 +323,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -335,7 +340,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -390,9 +395,9 @@ void run_single_core_unary_broadcast_quasar(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.mesh_buffer().get_reference_buffer()->address());
+    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.address());
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -414,16 +419,16 @@ void run_single_core_unary_broadcast_quasar(
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
-    std::vector<uint32_t> packed_tilized_input;
-    std::vector<uint32_t> golden_packed_tilized_output;
+    std::vector<std::uint32_t> packed_tilized_input;
+    std::vector<std::uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
-    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), packed_tilized_input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), dest_buffer_data);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }
@@ -431,19 +436,19 @@ void run_single_core_unary_broadcast_quasar(
 void get_packed_tilized_input_output_pair(
     tt::DataFormat in_t,
     tt::DataFormat out_t,
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastDim bcast_dim,
-    std::vector<uint32_t>& packed_tilized_input,
-    std::vector<uint32_t>& packed_tilized_output) {
-    constexpr uint32_t tile_width = 32;
-    constexpr uint32_t tile_height = 32;
-    constexpr uint32_t num_single_tile_elem = tile_width * tile_height;
+    std::vector<std::uint32_t>& packed_tilized_input,
+    std::vector<std::uint32_t>& packed_tilized_output) {
+    constexpr std::uint32_t tile_width = 32;
+    constexpr std::uint32_t tile_height = 32;
+    constexpr std::uint32_t num_single_tile_elem = tile_width * tile_height;
     if (in_t == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
             1.0f, 2.0f, num_tiles * num_single_tile_elem, std::chrono::system_clock::now().time_since_epoch().count());
 
         ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = num_tiles, .num_tiles_c_dim = 1};
-        auto packed_input = pack_vector<uint32_t, bfloat16>(input);
+        auto packed_input = pack_vector<std::uint32_t, bfloat16>(input);
         packed_tilized_input = ::unit_tests::compute::gold_standard_tilize(packed_input, config);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
@@ -455,14 +460,13 @@ void get_packed_tilized_input_output_pair(
     }
 }
 
-void run_single_core_unary_broadcast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
+void run_single_core_unary_broadcast(distributed::MeshDevice& mesh_device, const UnaryBroadcastConfig& test_config) {
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         run_single_core_unary_broadcast_quasar(mesh_device, test_config);
         return;
     }
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -471,28 +475,28 @@ void run_single_core_unary_broadcast(
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
 
-    constexpr uint32_t num_tiles = 32;
-    constexpr uint32_t num_blocks = 4;
-    constexpr uint32_t block_size = num_tiles / num_blocks;
+    constexpr std::uint32_t num_tiles = 32;
+    constexpr std::uint32_t num_blocks = 4;
+    constexpr std::uint32_t block_size = num_tiles / num_blocks;
     const tt::DataFormat in_t = test_config.in_t;
     const tt::DataFormat out_t = test_config.out_t;
 
     auto src_dram_buffer = CreateDramBuffer(mesh_device, in_t, num_tiles);
     auto dst_dram_buffer = CreateDramBuffer(mesh_device, out_t, num_tiles);
 
-    const uint32_t dfb_num_entries = block_size * 2;
+    const std::uint32_t dfb_num_entries = block_size * 2;
 
     KernelHandle reader_kernel;
     KernelHandle writer_kernel;
 
     // Mesh DRAM: TensorAccessorArgs + reader_unary_8bank / writer_unary_8bank.
-    std::vector<uint32_t> reader_compile_args;
+    std::vector<std::uint32_t> reader_compile_args;
     TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
 
     CreateCircularBufferHelper(workload, core, dfb_num_entries, in_t, 0);
     CreateCircularBufferHelper(workload, core, dfb_num_entries, out_t, 16);
 
-    std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(tt::CBIndex::c_16)};
+    std::vector<std::uint32_t> writer_compile_args = {static_cast<std::uint32_t>(tt::CBIndex::c_16)};
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
     reader_kernel = tt_metal::CreateKernel(
@@ -527,10 +531,10 @@ void run_single_core_unary_broadcast(
         reader_kernel,
         core,
         {
-            (uint32_t)(src_dram_buffer->address()),
-            (uint32_t)0,  // dram bank id
-            (uint32_t)0,  // unused; keeps num_tiles at index 3
-            (uint32_t)num_tiles,
+            (std::uint32_t)(src_dram_buffer->address()),
+            (std::uint32_t)0,  // dram bank id
+            (std::uint32_t)0,  // unused; keeps num_tiles at index 3
+            (std::uint32_t)num_tiles,
         });
 
     // writer_unary_8bank: arg 0 = base addr, arg 2 = num_tiles
@@ -539,13 +543,13 @@ void run_single_core_unary_broadcast(
         writer_kernel,
         core,
         {
-            (uint32_t)(dst_dram_buffer->address()),
-            (uint32_t)0,  // unused
-            (uint32_t)num_tiles,
+            (std::uint32_t)(dst_dram_buffer->address()),
+            (std::uint32_t)0,  // unused
+            (std::uint32_t)num_tiles,
         });
 
-    std::vector<uint32_t> packed_tilized_input;
-    std::vector<uint32_t> golden_packed_tilized_output;
+    std::vector<std::uint32_t> packed_tilized_input;
+    std::vector<std::uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
     distributed::WriteShard(cq, src_dram_buffer, packed_tilized_input, zero_coord);
@@ -553,7 +557,7 @@ void run_single_core_unary_broadcast(
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> dest_buffer_data;
+    std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
@@ -576,7 +580,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     broadcast_dim_to_type.at(test_config.broadcast_dim),
                     test_config.in_t,
                     test_config.out_t);
-                run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+                run_single_core_unary_broadcast(*this->devices_.at(0), test_config);
             }
         }
     }
@@ -610,9 +614,37 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) 
                 broadcast_dim_to_type.at(test_config.broadcast_dim),
                 test_config.in_t,
                 test_config.out_t);
-            run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+            run_single_core_unary_broadcast(this->device(), test_config);
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) unary_bcast (BroadcastType::ROW): broadcasts row 0 across all rows of a tile. The device reads
+// a TILED tile, so we feed it gold_standard_tilize(raw) and validate against gold_standard_tilize(broadcast(raw))
+// -- both operate on the same tilized data. Single Float16_b tile, exact compare. Runs on Blackhole (BH-only).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixUnaryBcastRowIdFreeGolden) {
+    auto raw = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto raw_bf16 = unpack_vector<bfloat16, std::uint32_t>(raw);
+    auto bcast_bf16 = get_broadcasted_vec<bfloat16>(raw_bf16, {1, 32, 32}, BroadcastDim::ROW);
+    auto bcast_packed = pack_vector<std::uint32_t, bfloat16>(bcast_bf16);
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto device_input = ::unit_tests::compute::gold_standard_tilize(raw, config);
+    auto golden = ::unit_tests::compute::gold_standard_tilize(bcast_packed, config);
+
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        device_input,
+        /*num_tiles=*/1,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast_2_0.cpp");
+    EXPECT_EQ(golden, result);
 }
 
 }  // namespace tt::tt_metal

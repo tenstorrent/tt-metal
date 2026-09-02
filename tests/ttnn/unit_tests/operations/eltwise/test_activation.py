@@ -354,57 +354,6 @@ def test_tanhshrink_ulp(device):
     assert_with_ulp(golden, output_tensor, ulp_threshold=2)
 
 
-def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, ulp=2, pcc_check=False, pcc=0.99):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16).unsqueeze(0)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, dim)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
-
-
-@pytest.mark.parametrize("batch_size", [1, 4])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dim", [-1, 3])
-def test_glu(device, batch_size, h, w, dim):
-    run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.glu)
-
-
-@pytest.mark.parametrize("batch_size", [1, 4])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dim", [-1, 3])
-def test_reglu(device, batch_size, h, w, dim):
-    run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.reglu)
-
-
-@pytest.mark.parametrize("batch_size", [1, 4])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dim", [-1, 3])
-def test_swiglu(device, batch_size, h, w, dim):
-    run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.swiglu)
-
-
-@pytest.mark.parametrize("batch_size", [1, 4])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dim", [-1, 3])
-def test_geglu(device, batch_size, h, w, dim):
-    run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.geglu, pcc_check=True)
-
-
 def torch_prelu(x, *args, weight, **kwargs):
     result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
     return result

@@ -36,7 +36,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -64,6 +64,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include "tools/profiler/noc_event_profiler_utils.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -814,8 +815,8 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        profiler.dumpRoutingInfo();
-        profiler.dumpClusterCoordinates();
+        tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }
@@ -1231,9 +1232,12 @@ void ReadMeshDeviceProfilerResults(
         if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
             noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            // Only print when called by the user (state == normal) to avoid duplicate printing
             if (state != ProfilerReadState::LAST_FD_READ) {
+                // User-initiated read: print the full aggregated summary.
                 noc_debug_state->print_aggregated_errors();
+            } else {
+                // Device close / final read: no full summary.
+                noc_debug_state->report_new_issues();
             }
         }
         return;
