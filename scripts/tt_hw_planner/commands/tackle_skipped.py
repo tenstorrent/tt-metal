@@ -45,6 +45,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from ..capture_inputs import CAPTURE_ARTIFACT_FILES
+
 
 _REASON_PATTERNS: List[Tuple[str, List[str]]] = [
     ("MODULELIST", [r"ModuleList no forward", r"Module \[ModuleList\]"]),
@@ -109,7 +111,7 @@ def _drop_component_files(demo_dir: Path, comp: str, *, dry_run: bool) -> List[s
     return msgs
 
 
-_CAPTURE_ARTIFACT_FILES: Tuple[str, ...] = ("args.pt", "kwargs.pt", "output.pt")
+_CAPTURE_ARTIFACT_FILES: Tuple[str, ...] = CAPTURE_ARTIFACT_FILES
 
 
 def _verify_capture_artifacts(demo_dir: Path, comp: str) -> Tuple[bool, str]:

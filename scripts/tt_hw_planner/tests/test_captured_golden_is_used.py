@@ -423,3 +423,29 @@ def test_no_driver_means_no_extra_rounds() -> None:
         )
         == {}
     )
+
+
+def test_the_reader_and_the_writer_agree_on_where_a_sample_lives() -> None:
+    """The generated test cannot import these, so a mismatch would be silent.
+
+    The loader source is injected into a standalone test file and has to spell the filenames and
+    the samples/ directory itself. If the capture side ever renamed one, the reader would not
+    error -- it would find nothing, report no captured inputs, and quietly fall back to synthetic
+    ones with a PCC that still looked fine.
+    """
+    from scripts.tt_hw_planner import capture_inputs as ci
+
+    ns = _loader_ns()
+    assert tuple(ns["_ARTIFACT_FILES"]) == tuple(ci.CAPTURE_ARTIFACT_FILES)
+    assert ns["_SAMPLES_SUBDIR"] == ci._SAMPLES_DIRNAME
+
+
+def test_one_place_derives_a_components_capture_directory() -> None:
+    """Three functions used to work this out independently; readers must not be able to disagree."""
+    src = _loader_ns.__globals__["CAPTURE_LOADER_SOURCE"]
+    assert src.count('"_captured" / safe') == 1, "the path rule must be written once"
+    assert src.count("def _component_dir(") == 1
+    for fn in ("_captured_submodule_path", "_maybe_load_captured", "_captured_sample_dirs"):
+        start = src.find(f"def {fn}(")
+        body = src[start : src.find("\ndef ", start + 1)]
+        assert "_component_dir(" in body, f"{fn} must go through the shared helper"

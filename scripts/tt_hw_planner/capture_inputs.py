@@ -302,6 +302,21 @@ def _resolve_submodule(model: Any, component_name: str, *, demo_dir: Path) -> Op
 _SAMPLES_ENV = "TT_PLANNER_CAPTURE_SAMPLES"
 _SAMPLES_DIRNAME = "samples"
 
+# The three files that make up one captured set, in the order they are written and read. Named
+# once here because the reader and the writer disagreeing is a silent failure: the set is simply
+# treated as absent and the test drops back to synthetic inputs with nothing said.
+CAPTURE_ARTIFACT_FILES: Tuple[str, ...] = ("args.pt", "kwargs.pt", "output.pt")
+
+
+def _save_capture_triple(dest: Path, capture: Dict[str, Any]) -> None:
+    """Write one captured `(args, kwargs, output)` set. One writer for the primary and the extras."""
+    import torch
+
+    dest.mkdir(parents=True, exist_ok=True)
+    values = (capture.get("args", ()), capture.get("kwargs", {}), capture["output"])
+    for name, value in zip(CAPTURE_ARTIFACT_FILES, values):
+        torch.save(value, dest / name)
+
 
 def _extra_sample_rounds() -> int:
     """How many EXTRA input sets to capture beyond the first (total = 1 + this).
@@ -801,19 +816,13 @@ def capture_real_inputs(
         comp_dir = captured_root / safe
         comp_dir.mkdir(parents=True, exist_ok=True)
         try:
-            torch.save(capture.get("args", ()), comp_dir / "args.pt")
-            torch.save(capture.get("kwargs", {}), comp_dir / "kwargs.pt")
-            torch.save(capture["output"], comp_dir / "output.pt")
+            _save_capture_triple(comp_dir, capture)
             # Extra input sets live beside the primary rather than replacing it, so everything that
             # reads args.pt next to manifest.json keeps working and only the PCC test, which knows
             # to look, gains the additional coverage.
             extras = extra_samples.get(comp_name, [])
             for idx, extra in enumerate(extras, start=1):
-                sample_dir = comp_dir / _SAMPLES_DIRNAME / f"{idx:02d}"
-                sample_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(extra.get("args", ()), sample_dir / "args.pt")
-                torch.save(extra.get("kwargs", {}), sample_dir / "kwargs.pt")
-                torch.save(extra["output"], sample_dir / "output.pt")
+                _save_capture_triple(comp_dir / _SAMPLES_DIRNAME / f"{idx:02d}", extra)
             manifest = {
                 "component": comp_name,
                 "submodule_path": path,
@@ -849,6 +858,25 @@ def capture_real_inputs(
 
 
 CAPTURE_LOADER_SOURCE = '''
+_ARTIFACT_FILES = ("args.pt", "kwargs.pt", "output.pt")
+_SAMPLES_SUBDIR = "samples"
+
+
+def _component_dir(component_name):
+    """`<demo_dir>/_captured/<safe>` for a component.
+
+    One place derives it. It was worked out independently in three functions here, each repeating
+    the same safe-id rule and the same parents[2] walk from `tests/pcc/test_X.py`, so a change to
+    either would have moved some readers and not others -- and a reader looking in the wrong place
+    does not fail, it silently reports no captured inputs and drops back to synthetic ones.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
+    return _Path(__file__).resolve().parents[2] / "_captured" / safe
+
+
 def _captured_submodule_path(component_name):
     """Read the submodule_path the capture step hooked when it saved
     inputs for this component. Returns the path string or ``None``.
@@ -861,12 +889,7 @@ def _captured_submodule_path(component_name):
     the manifest's recorded path and using it as the FIRST candidate
     keeps capture's resolution and test's resolution aligned."""
     import json as _json
-    import re as _re
-    from pathlib import Path as _Path
-    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
-    here = _Path(__file__).resolve()
-    demo_dir = here.parents[2]
-    manifest_p = demo_dir / "_captured" / safe / "manifest.json"
+    manifest_p = _component_dir(component_name) / "manifest.json"
     if not manifest_p.is_file():
         return None
     try:
@@ -884,31 +907,13 @@ def _maybe_load_captured(component_name):
     if the planner's capture-inputs step produced them; return `None`
     otherwise. Lets the test bypass the synthetic-input path when we have
     REAL intermediate tensors from a live HF forward pass."""
-    import os as _os
-    import re as _re
-    from pathlib import Path as _Path
-    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
-    here = _Path(__file__).resolve()
-    # tests/pcc/test_X.py -> demo_dir = parents[2]
-    demo_dir = here.parents[2]
-    comp_dir = demo_dir / "_captured" / safe
+    comp_dir = _component_dir(component_name)
     if not comp_dir.is_dir():
         return None
-    args_p = comp_dir / "args.pt"
-    kwargs_p = comp_dir / "kwargs.pt"
-    output_p = comp_dir / "output.pt"
-    if not (args_p.is_file() and kwargs_p.is_file() and output_p.is_file()):
-        return None
-    try:
-        import torch as _torch
-        args = _torch.load(args_p, map_location="cpu", weights_only=False)
-        kwargs = _torch.load(kwargs_p, map_location="cpu", weights_only=False)
-        output = _torch.load(output_p, map_location="cpu", weights_only=False)
+    loaded = _load_sample(comp_dir)
+    if loaded is not None:
         print(f"[bringup] using captured inputs from {comp_dir}", flush=True)
-        return args, kwargs, output
-    except Exception as _e:
-        print(f"[bringup] captured-inputs load failed for {component_name}: {_e}", flush=True)
-        return None
+    return loaded
 
 
 # What the captured short-circuit learned, for the forward stage to use. A dict rather than
@@ -938,25 +943,25 @@ def _captured_sample_dirs(component_name):
     The primary stays exactly where it always was, so everything that reads `args.pt` next to
     `manifest.json` is untouched; extra samples live under `samples/<n>/`.
     """
-    import re as _re
-    from pathlib import Path as _Path
-
-    safe = _re.sub(r"[^A-Za-z0-9_]+", "_", component_name).strip("_").lower() or "component"
-    comp_dir = _Path(__file__).resolve().parents[2] / "_captured" / safe
+    comp_dir = _component_dir(component_name)
     if not comp_dir.is_dir():
         return []
     dirs = [comp_dir]
-    extra_root = comp_dir / "samples"
+    extra_root = comp_dir / _SAMPLES_SUBDIR
     if extra_root.is_dir():
         dirs.extend(sorted((d for d in extra_root.iterdir() if d.is_dir()), key=lambda d: d.name))
     return dirs
 
 
 def _load_sample(sample_dir):
-    """`(args, kwargs, output)` from one captured sample directory, or None if it is incomplete."""
+    """`(args, kwargs, output)` from one captured sample directory, or None if it is incomplete.
+
+    The one reader of a captured set: the primary and every extra come through here, so a set that
+    loads for one cannot fail to load for the other.
+    """
     import torch as _torch
 
-    paths = [sample_dir / n for n in ("args.pt", "kwargs.pt", "output.pt")]
+    paths = [sample_dir / n for n in _ARTIFACT_FILES]
     if not all(p.is_file() for p in paths):
         return None
     try:
