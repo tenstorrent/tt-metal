@@ -280,26 +280,26 @@ def test_talker_layer_decode(device, talker_layer):
     print(f"[talker_layer_decode] seq_len={DEMO_TALKER_DECODE_SEQ} hidden={cfg.hidden_size} kv_max={kv_max}")
 
 
-def _cp_prefill_mask(device, num_heads, seq_len, max_seq):
+def _cp_prefill_mask(device, num_heads, seq_len, max_seq, dtype=ttnn.float32):
     mh = torch.full((1, num_heads, seq_len, max_seq), float("-inf"), dtype=torch.float32)
     for i in range(seq_len):
         mh[0, :, i, : i + 1] = 0.0
     return ttnn.from_torch(
         mh,
         device=device,
-        dtype=ttnn.float32,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
-def _cp_decode_mask(device, num_heads, max_seq, valid):
+def _cp_decode_mask(device, num_heads, max_seq, valid, dtype=ttnn.float32):
     mh = torch.full((1, num_heads, 1, max_seq), float("-inf"), dtype=torch.float32)
     mh[0, :, 0, :valid] = 0.0
     return ttnn.from_torch(
         mh,
         device=device,
-        dtype=ttnn.float32,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -316,7 +316,9 @@ def test_cp_layer_prefill(device, code_predictor):
     cos, sin, trans = _rope(device, seq_len, cfg.head_dim, cfg.rope_theta)
     kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=DEMO_CP_KV_MAX)
     # Per-chip head count (TP=1: full heads; TP=2: heads/2). Must match scores.
-    mask = _cp_prefill_mask(device, code_predictor.num_heads, seq_len, DEMO_CP_KV_MAX)
+    # N150 fused SDPA wants bf16 DRAM; create it that way so the layer does not typecast.
+    _mask_dt = ttnn.bfloat16 if code_predictor._n150 else ttnn.float32
+    mask = _cp_prefill_mask(device, code_predictor.num_heads, seq_len, DEMO_CP_KV_MAX, dtype=_mask_dt)
     lw = code_predictor.layers_w[0]
 
     def _fwd():
@@ -352,7 +354,8 @@ def test_cp_layer_decode(device, code_predictor):
         device, DEMO_CP_DECODE_SEQ, cfg.head_dim, cfg.rope_theta, positions=torch.tensor([start_pos])
     )
     kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=DEMO_CP_KV_MAX)
-    mask = _cp_decode_mask(device, code_predictor.num_heads, DEMO_CP_KV_MAX, valid=start_pos + 1)
+    _mask_dt = ttnn.bfloat16 if code_predictor._n150 else ttnn.float32
+    mask = _cp_decode_mask(device, code_predictor.num_heads, DEMO_CP_KV_MAX, valid=start_pos + 1, dtype=_mask_dt)
     lw = code_predictor.layers_w[0]
 
     def _fwd():
