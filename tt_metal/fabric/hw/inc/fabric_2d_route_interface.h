@@ -94,7 +94,7 @@ FORCE_INLINE std::uint32_t widen_x_packed_byte(std::uint8_t packed) {
 
 // Streams widened action bytes into the packet's contiguous [Y | X] map. Full words start at the
 // naturally aligned route_buffer base; the final 1-3 bytes use narrow stores so they cannot overwrite
-// dst_start_node_id on the 67-byte header tier.
+// dst_start_node_id when the action-map size is not word-aligned.
 class Route2DWordWriter {
 public:
     explicit FORCE_INLINE Route2DWordWriter(volatile tt_l1_ptr std::uint8_t* output) :
