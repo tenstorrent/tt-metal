@@ -328,7 +328,7 @@ def flush_deferred_bounded_fills(layers):
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
             k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
             v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
-            ttnn.experimental.paged_fill_cache(
+            paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
                 pending["page_table"],
@@ -1215,7 +1215,7 @@ def prefill_forward(
                         if _t is not _orig:
                             _t.deallocate(True)
                     continue
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     k_cache,
                     _k_merged,
                     page_table,
