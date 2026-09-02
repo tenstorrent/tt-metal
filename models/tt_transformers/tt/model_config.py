@@ -176,6 +176,20 @@ def create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim: int, mesh_rows: int,
     # the validated demo does otherwise -- its 30-core layout pads 896 up to 960.
     shard_width = math.ceil(per_device_width / num_cores / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
+    # LAYOUT HISTORY -- start here if Galaxy decode perf or L1 usage regresses (PR #53838).
+    #
+    #   Llama-70B (hidden_dim 28672):  [32, 128] over 28 cores  ->  [32, 32] over 28 cores
+    #                                   3584 columns                 896 columns
+    #
+    # 3584 is the pre-scatter per-device width (28672 // 8); 896 is what
+    # reduce_scatter_minimal_async actually emits (28672 // 8 // 4). Same 7x4 grid,
+    # 4x less L1 for this buffer.
+    #
+    # The collective tolerates an over-provisioned output shard spec -- the old value
+    # was oversized, not wrong -- so a regression here would show up as perf or L1
+    # pressure, never as a failed assertion. If Galaxy decode slows down or starts
+    # hitting L1 limits, revert this shard width to `per_device_width // num_cores`
+    # with `per_device_width = hidden_dim // mesh_rows` and see if it recovers.
     return ttnn.create_sharded_memory_config(
         shape=(32, shard_width),
         core_grid=core_grid,
@@ -1012,9 +1026,12 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
+            # Sized to the reduce-scatter output width, not the pre-scatter width. See the
+            # LAYOUT HISTORY note in create_galaxy_ff1_out_reduce_scatter_memcfg if Galaxy
+            # decode perf or L1 usage regresses -- Llama-70B went [32, 128] -> [32, 32].
             self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = create_galaxy_ff1_out_reduce_scatter_memcfg(
                 self.hidden_dim, self.cluster_shape[0], self.cluster_shape[1]
-            )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
+            )
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32 * 4, self.hidden_dim // 8 // 8),
