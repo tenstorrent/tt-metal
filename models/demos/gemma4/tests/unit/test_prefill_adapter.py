@@ -29,3 +29,4 @@ def test_gemma4_prefill_manifest_matches_supported_runtime():
     assert int(env["PREFILL_MAX_SEQ_LEN"]) == 262144
     assert int(env["PREFILL_NUM_USERS"]) == 2
     assert env["PREFILL_USE_TRACE"] == "1"
+    assert env["PREFILL_LAYER_ACK_D2H"] == "1"

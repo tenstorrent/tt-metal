@@ -8,6 +8,7 @@
     "PREFILL_MAX_SEQ_LEN": "262144",
     "PREFILL_NUM_USERS": "2",
     "PREFILL_USE_TRACE": "1",
+    "PREFILL_LAYER_ACK_D2H": "1",
     "PREFILL_H2D_SERVICE_ID": "gemma4_prefill"
   }
 }
