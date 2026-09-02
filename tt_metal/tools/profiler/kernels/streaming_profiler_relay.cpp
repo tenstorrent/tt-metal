@@ -447,8 +447,9 @@ static uint32_t ring_base;  // lane 0's ring on every worker: the control block 
 // every piece, wrap continuations included. Returns the smallest per-core peak lane take.
 __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t slot, uint32_t rb) {
     uint32_t min_peak = ~0u;
-    for (uint32_t i = 0; i < n; i++) {
-        const uint32_t c = cores[i];
+    const uint8_t* end = cores + n;
+    do {
+        const uint32_t c = *cores++;
         const uint32_t rec = record(c);
         const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(rec);
         volatile tt_l1_ptr uint32_t* __restrict cv =
@@ -509,7 +510,7 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
             min_peak = peak;
         }
         slot += kSlotBytes;
-    }
+    } while (cores != end);
     return min_peak;
 }
 
