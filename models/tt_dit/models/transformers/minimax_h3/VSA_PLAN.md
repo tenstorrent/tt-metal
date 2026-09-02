@@ -182,6 +182,18 @@ after v5: leader-as-worker (+13% peak basis), conditional rescale, pack trims.
 | v11 | group-major compute: buffer window visits, phase-major chunks, batched max/corr acquires, one s1/s2/s3 per chunk, chunk-deferred PV w/ stashed credits | 18.0/17.0 @21.9-23.2%; max 707->380, corr+rescale 1268->545 cyc/visit; PV-sync wait grew (chunk exp backlog) |
 | v12 | blocked packs (rescale O width-4, full probs batches) | 17.9/16.8 @22.0-23.5% (best) |
 
+| v13a | paired leader pump (1 gate/kreq/mcast per 2 blocks) | 17.7/16.5 |
+| v14 | cross-visit QK DEST batching | 17.5/16.3 (phase-5 analog reverted: reinit cost) |
+| v15 | PV same-width init skip | 17.5/16.4 (kRowChunk=8 reverted: shard imbalance) |
+| v16 | intra-chunk PV interleave (REVERTED: per-visit sync+init) | -- |
+| v17 | leader-as-worker + role-split binaries + NUDGE msg | 16.2/16.0 @ 24.3/24.6%, worst 25.6 |
+
+After v17 (probe 9): worker compute busy ~14.5 ms (waits 11.5%), leader ~14.5 ms (waits 22%);
+three TRISCs balanced within 7%. Ceiling of this design (lossless exp on SFPU + pack work +
+no-MOP issue + delivery bandwidth) is ~28-32%; the 60% goal needs either coarser VSA selection
+granularity (256-token blocks -- amortizes every per-visit cost 4x, projected ~2x util; model-level
+quality tradeoff) or exp/fidelity relaxation (excluded as lossy).
+
 Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 1/3/5/7):
 - SFPU exp (lossless, pack-thread): ~6.5 ms -- sets util ceiling ~60% ALONE if everything else hides under it
 - PACK thread total (exp + ~30 packs/visit): ~10 ms
