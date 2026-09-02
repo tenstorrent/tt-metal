@@ -660,7 +660,13 @@ def _run_sharded_concat(
         ttnn_inputs.append(ttnn.to_memory_config(tt, input_mem))
 
     ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
-    assert tuple(ttnn_out.shape) == tuple(torch_out.shape)
+    # Spell out the config: the two callers below hardcode shard_shape/output_shard/num_cores,
+    # so those do not show up in the pytest node id.
+    assert tuple(ttnn_out.shape) == tuple(torch_out.shape), (
+        f"wrong output shape: got {tuple(ttnn_out.shape)}, expected {tuple(torch_out.shape)} "
+        f"for concat({num_inputs}x{tuple(shape)}, dim={dim}) with {strategy}, {layout}, {dtype}, "
+        f"shard {tuple(shard_shape)} -> {tuple(output_shard)} on {num_cores} core(s)"
+    )
     assert_equal(torch_out, ttnn.to_torch(ttnn_out))
 
 
