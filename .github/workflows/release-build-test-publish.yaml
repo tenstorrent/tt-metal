@@ -145,7 +145,7 @@ jobs:
 
   ttnn-ops-unit-tests:
     needs: [build-artifact]
-    if: ${{ inputs.tag-version != '' }}
+    if: ${{ inputs.tag-version != '' && inputs.platform == inputs.main-platform }}
     permissions:
       contents: read
       packages: read
