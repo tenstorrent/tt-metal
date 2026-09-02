@@ -64,11 +64,12 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// Choosing the view on Quasar; both sides of a word must agree. No-op on BH/WH.
-//   Local CPU store, same-tile DM to DM: cached. DM caches are coherent with each other.
-//   NoC atomic: uncached unless the increment sets the snoop bit, which FD leaves off because empherical
-//   experiments snooping was some cycles more expensive than uncached poll.
-//   With it off a cached poll never sees the update.
+// Choosing the view on Quasar; both sides of a word must agree. No-op on BH/WH. A credit travels the
+// same transport as the payload it publishes, so the payload picks the view:
+//   Consumer to producer (free pages back to the prefetcher): cached local store. No payload crosses and
+//   DM caches are coherent. Valid only while both stages share one L1.
+//   Producer to consumer (payload pushed over the NoC) and worker completion counts: uncached. FD leaves
+//   the snoop bit off on NoC atomics, so a cached poll never sees the increment.
 //   Read back by the NIU as a transfer source: uncached. The NIU reads TL1, outside DM coherence.
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR

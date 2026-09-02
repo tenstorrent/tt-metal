@@ -633,7 +633,8 @@ void kernel_main() {
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
-        // it is read cached. Arrays past the header stay uncached.
+        // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
+        // the NIU needs none.
         invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmd));
 #endif
         volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
