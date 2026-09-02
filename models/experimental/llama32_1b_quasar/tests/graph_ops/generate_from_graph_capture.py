@@ -396,6 +396,8 @@ DROP_KWARGS = {"compute_kernel_config"}
 OP_EXPR: dict[str, str] = {
     "ttnn.transformer.scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode",
     "ttnn.transformer.paged_scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode",
+    "ttnn.transformer.scaled_dot_product_attention": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+    "ttnn.transformer.chunked_scaled_dot_product_attention": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
 }
 
 FILE_NAME = {"ttnn.Tensor.__getitem__": "test_tensor_getitem"}
