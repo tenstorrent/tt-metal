@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 import torch
 
@@ -61,6 +64,7 @@ def _run_offset_case(
     golden_state: KDAReferenceState,
     actual_start: int,
     tensor_parallel_axis: int,
+    offset_prototype: str,
 ) -> None:
     sequence_parallel_axis = 1 - tensor_parallel_axis
     sp_size = tuple(mesh_device.shape)[sequence_parallel_axis]
@@ -71,7 +75,19 @@ def _run_offset_case(
     initial_state = layer.allocate_state()
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output_tt, state = layer.forward(hidden_tt, initial_state, actual_start=actual_start)
+        ttnn.synchronize_device(mesh_device)
+        started = time.perf_counter()
+        output_tt, state = layer.forward(
+            hidden_tt,
+            initial_state,
+            actual_start=actual_start,
+            offset_prototype=offset_prototype,
+        )
+        ttnn.synchronize_device(mesh_device)
+        elapsed = time.perf_counter() - started
+    print(
+        "KDA_OFFSET_PROTOTYPE=" + json.dumps({"strategy": offset_prototype, "offset": actual_start, "seconds": elapsed})
+    )
 
     actual_output = reconstruct_sp_tp_tensor(
         output_tt,
@@ -87,7 +103,7 @@ def _run_offset_case(
     assert_accurate(
         expected_physical_output,
         actual_output,
-        name=f"offset={actual_start} physical output",
+        name=f"{offset_prototype} offset={actual_start} physical output",
         pcc_threshold=0.999,
     )
     boundary_rank = (actual_start // local_sequence) % sp_size
@@ -101,7 +117,7 @@ def _run_offset_case(
                 tensor_parallel_axis,
                 sp_rank,
             ),
-            name=f"offset={actual_start} SP{sp_rank} recurrent state",
+            name=f"{offset_prototype} offset={actual_start} SP{sp_rank} recurrent state",
             pcc_threshold=0.999,
         )
         assert_accurate(
@@ -114,7 +130,7 @@ def _run_offset_case(
                 sp_rank,
                 local_width=layer.config.num_heads * layer.config.head_k_dim,
             ),
-            name=f"offset={actual_start} SP{sp_rank} convolution state",
+            name=f"{offset_prototype} offset={actual_start} SP{sp_rank} convolution state",
             pcc_threshold=0.999,
         )
 
@@ -128,10 +144,12 @@ def _run_offset_case(
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("offset_prototype", ["full_reshard", "sequential_tail"])
 def test_offset_full_reshard_matches_natural_kda(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    offset_prototype: str,
 ) -> None:
     del device_params
     config = KDAConfig(
@@ -174,4 +192,5 @@ def test_offset_full_reshard_matches_natural_kda(
             golden_state,
             actual_start,
             tensor_parallel_axis,
+            offset_prototype,
         )

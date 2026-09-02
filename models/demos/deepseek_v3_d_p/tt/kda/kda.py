@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 import torch
 
@@ -19,8 +20,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.offset_prototype import mla_to_temporal_sp, temporal_to_mla_sp
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import (
+    exchange_convolution_carry,
+    exchange_rotated_convolution_carry_prototype,
+    exchange_split_convolution_carries_prototype,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.offset_prototype import mla_to_temporal_sp, offset_segments, temporal_to_mla_sp
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -261,6 +266,73 @@ class ttKDA:
         )
         return q, k, v, new_state
 
+    def _convolve_qkv_sequential_tail_prototype(
+        self,
+        qkv: ttnn.Tensor,
+        convolution_state: ttnn.Tensor,
+        *,
+        actual_start: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Convolve physical rows in head/full-rank/tail causal order."""
+        config = self.config
+        channels = self._convolution_width
+        sequence = qkv.shape[1]
+        qkv_row_major = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        state_row_major = ttnn.to_layout(
+            convolution_state,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        def convolve(segment: ttnn.Tensor, carry: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+            return ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                segment,
+                carry,
+                *self.weights.convolution_taps,
+                config.q_dim,
+                config.k_dim,
+                config.v_dim,
+                program_config=self.qkv_convolution_program_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        if actual_start % sequence == 0:
+            entry, new_state = exchange_rotated_convolution_carry_prototype(
+                qkv_row_major,
+                state_row_major,
+                actual_start=actual_start,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+            )
+            q, k, v = convolve(qkv_row_major, entry)
+            return q, k, v, new_state
+
+        head_carry, tail_carry, new_state, head_length = exchange_split_convolution_carries_prototype(
+            qkv_row_major,
+            state_row_major,
+            actual_start=actual_start,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+        )
+        head = ttnn.slice(
+            qkv_row_major,
+            (0, 0, 0),
+            (qkv_row_major.shape[0], head_length, channels),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tail = ttnn.slice(
+            qkv_row_major,
+            (0, head_length, 0),
+            (qkv_row_major.shape[0], sequence, channels),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        head_q, head_k, head_v = convolve(head, head_carry)
+        tail_q, tail_k, tail_v = convolve(tail, tail_carry)
+        return (
+            ttnn.concat([head_q, tail_q], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.concat([head_k, tail_k], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.concat([head_v, tail_v], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            new_state,
+        )
+
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
@@ -383,9 +455,12 @@ class ttKDA:
         state: KdaState,
         *,
         actual_start: int = 0,
+        offset_prototype: Literal["full_reshard", "sequential_tail"] = "full_reshard",
     ) -> tuple[ttnn.Tensor, KdaState]:
-        """Run prefill KDA, with a throwaway host-orchestrated offset reshard.
+        """Run prefill KDA with one of two throwaway offset experiments.
 
+        ``full_reshard`` is the correctness/benchmark baseline. ``sequential_tail``
+        keeps token rows in MLA placement and exchanges only halos and summaries.
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
@@ -393,29 +468,46 @@ class ttKDA:
         """
         self._validate_forward(hidden_states, state)
         temporal_hidden = hidden_states
-        if actual_start:
+        if offset_prototype not in ("full_reshard", "sequential_tail"):
+            raise ValueError(f"unknown offset prototype {offset_prototype!r}")
+        if actual_start or offset_prototype == "sequential_tail":
+            if hidden_states.shape[1] * self.sequence_parallel_size != 5120:
+                raise ValueError("offset prototypes require exactly 5120 global tokens")
+            offset_segments(
+                actual_start,
+                sp_size=self.sequence_parallel_size,
+                local_sequence=hidden_states.shape[1],
+            )
+        if offset_prototype == "full_reshard" and actual_start:
             temporal_hidden = mla_to_temporal_sp(
                 hidden_states,
                 actual_start=actual_start,
                 sequence_parallel_axis=self.sequence_parallel_axis,
             )
         projected = self._project_inputs(temporal_hidden)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        if offset_prototype == "sequential_tail" and self.sequence_parallel_size > 1:
+            q, k, v, new_convolution = self._convolve_qkv_sequential_tail_prototype(
+                projected.qkv,
+                state.convolution,
+                actual_start=actual_start,
+            )
+        else:
+            q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        new_recurrent, output = self.recurrence(
-            q=q,
-            k=k,
-            v=v,
-            gate=gate,
-            beta=beta,
-            initial_state=state.recurrent,
-        )
+        recurrence_args = dict(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state.recurrent)
+        if offset_prototype == "sequential_tail" and self.sequence_parallel_size > 1:
+            new_recurrent, output = self.recurrence.offset_sequential_tail_prototype(
+                **recurrence_args,
+                actual_start=actual_start,
+            )
+        else:
+            new_recurrent, output = self.recurrence(**recurrence_args)
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
-        if actual_start:
+        if offset_prototype == "full_reshard" and actual_start:
             output = temporal_to_mla_sp(
                 output,
                 actual_start=actual_start,
