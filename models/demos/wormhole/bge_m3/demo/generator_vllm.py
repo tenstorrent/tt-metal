@@ -93,7 +93,7 @@ class BgeM3ForEmbedding:
         tt_data_parallel=1,
         optimizations: Optional[str] = None,
         vllm_config=None,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         **kwargs,
     ) -> "BgeM3ForEmbedding":
         if optimizations is not None:
