@@ -30,15 +30,27 @@ constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);  // tiles per chunk
 constexpr uint32_t cb_id = get_compile_time_arg_val(6);                 // staging CB
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(7);
-constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(8);  // forward-neighbour dst_mesh_id
-constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(9);  // forward-neighbour dst_chip_id
-// Input/output TensorAccessorArgs follow (base index 10); output addrgen used for the fabric write target.
-constexpr uint32_t tensor_args_base = 10;
+constexpr uint32_t fwd_route_arg0 = get_compile_time_arg_val(8);   // to idx+1 (forward neighbour) dst_mesh_id
+constexpr uint32_t fwd_route_arg1 = get_compile_time_arg_val(9);   // to idx+1 dst_chip_id
+constexpr uint32_t bwd_route_arg0 = get_compile_time_arg_val(10);  // to idx-1 (backward neighbour) dst_mesh_id
+constexpr uint32_t bwd_route_arg1 = get_compile_time_arg_val(11);  // to idx-1 dst_chip_id
+// Input/output TensorAccessorArgs follow (base index 12); output addrgen names the fabric-write target.
+constexpr uint32_t tensor_args_base = 12;
 
-constexpr uint32_t hops_from_sender = (my_ring_index + ring_size - sender_ring_index) % ring_size;
-constexpr bool is_sender = (hops_from_sender == 0);
-constexpr bool is_last = (hops_from_sender == ring_size - 1);
-constexpr bool forwards = !is_last;
+// Bidirectional broadcast: the sender sends both ways; the ring splits into a forward arc (HF hops) and a
+// backward arc (HB hops) so no device is more than ~ring_size/2 hops away. Each non-sender relays in the
+// one direction pointing away from the sender, until the arc's far end.
+constexpr uint32_t fwd_hops = (my_ring_index + ring_size - sender_ring_index) % ring_size;  // 0 = sender
+constexpr uint32_t bwd_hops = (ring_size - fwd_hops) % ring_size;                           // 0 = sender
+constexpr uint32_t HF = ring_size / 2;        // forward-arc length (ceil((P-1)/2) for even P)
+constexpr uint32_t HB = (ring_size - 1) / 2;  // backward-arc length (floor((P-1)/2))
+constexpr bool is_sender = (fwd_hops == 0);
+constexpr bool on_fwd_arc = !is_sender && (fwd_hops <= HF);
+constexpr bool on_bwd_arc = !is_sender && !on_fwd_arc;
+// Send to idx+1 if sender or a non-terminal forward-arc device; to idx-1 if sender or non-terminal backward.
+constexpr bool send_fwd = is_sender || (on_fwd_arc && fwd_hops < HF);
+constexpr bool send_bwd = is_sender || (on_bwd_arc && bwd_hops < HB);
+constexpr bool forwards = send_fwd || send_bwd;
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -62,25 +74,41 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* recv_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_addr);
     CircularBuffer cb(cb_id);
 
-    // Fabric connection + packet headers (payload + sem-inc), only when we forward.
+    constexpr ccl_routing_utils::line_unicast_route_info_t fwd_route = {
+        .dst_mesh_id = static_cast<uint16_t>(fwd_route_arg0), .dst_chip_id = static_cast<uint16_t>(fwd_route_arg1)};
+    constexpr ccl_routing_utils::line_unicast_route_info_t bwd_route = {
+        .dst_mesh_id = static_cast<uint16_t>(bwd_route_arg0), .dst_chip_id = static_cast<uint16_t>(bwd_route_arg1)};
+
+    // One connection manager holds both directions (build_from_args reads a forward flag then a backward
+    // flag). The sender opens both; an arc-relay opens only its own direction.
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_arg);
-    volatile PACKET_HEADER_TYPE* pkt_hdr = nullptr;
-    volatile PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
-    constexpr ccl_routing_utils::line_unicast_route_info_t route = {
-        .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
-        .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
+    // Payload + sem-inc packet headers, one pair per active direction (up to 4 total).
+    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd_sem = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd_sem = nullptr;
     if constexpr (forwards) {
         CircularBuffer cb_hdr(reserved_packet_header_cb_id);
-        cb_hdr.reserve_back(1);
-        pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_hdr.get_write_ptr());
-        cb_hdr.push_back(1);
-        cb_hdr.reserve_back(1);
-        pkt_hdr_sem = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_hdr.get_write_ptr());
-        cb_hdr.push_back(1);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, route);
+        auto next_hdr = [&]() {
+            cb_hdr.reserve_back(1);
+            auto* p = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_hdr.get_write_ptr());
+            cb_hdr.push_back(1);
+            return p;
+        };
+        if constexpr (send_fwd) {
+            pkt_hdr_fwd = next_hdr();
+            pkt_hdr_fwd_sem = next_hdr();
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fwd, fwd_route);
+        }
+        if constexpr (send_bwd) {
+            pkt_hdr_bwd = next_hdr();
+            pkt_hdr_bwd_sem = next_hdr();
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_bwd, bwd_route);
+        }
         fabric_connection.open();
     }
-    auto* fwd_conn = forwards ? &fabric_connection.get_forward_connection() : nullptr;
+    auto* fwd_conn = send_fwd ? &fabric_connection.get_forward_connection() : nullptr;
+    auto* bwd_conn = send_bwd ? &fabric_connection.get_backward_connection() : nullptr;
 
     (void)num_tiles;  // per-core range now comes from RT tile_start/tile_count (payload split across links)
     const uint32_t tile_end = tile_start + tile_count;
@@ -121,18 +149,33 @@ void kernel_main() {
             noc_async_write_barrier();
         }
 
-        // 3) Forward each tile of the chunk to the downstream device's OUTPUT, then bump its recv-sem.
-        if constexpr (forwards) {
+        // 3) Forward the chunk to each active neighbour's OUTPUT, then bump its recv-sem. The downstream
+        //    worker core is the same logical core on every device, so the sem noc coords are shared; only
+        //    the fabric route (and connection) differ per direction.
+        const uint64_t ds_sem_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, 0);
+        if constexpr (send_fwd) {
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                fabric_write_unidir(tiles_done + t, out_addrgen, pkt_hdr, *fwd_conn, cb_rd + t * page_size, page_size);
+                fabric_write_unidir(
+                    tiles_done + t, out_addrgen, pkt_hdr_fwd, *fwd_conn, cb_rd + t * page_size, page_size);
             }
-            const uint64_t ds_sem_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, 0);
-            pkt_hdr_sem->to_noc_unicast_atomic_inc(
+            pkt_hdr_fwd_sem->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_sem_noc, static_cast<uint32_t>(1)});
             fwd_conn->wait_for_empty_write_slot();
-            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem, route);
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fwd_sem, fwd_route);
             fwd_conn->send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(pkt_hdr_sem), sizeof(PACKET_HEADER_TYPE));
+                reinterpret_cast<uint32_t>(pkt_hdr_fwd_sem), sizeof(PACKET_HEADER_TYPE));
+        }
+        if constexpr (send_bwd) {
+            for (uint32_t t = 0; t < chunk_tiles; ++t) {
+                fabric_write_unidir(
+                    tiles_done + t, out_addrgen, pkt_hdr_bwd, *bwd_conn, cb_rd + t * page_size, page_size);
+            }
+            pkt_hdr_bwd_sem->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_sem_noc, static_cast<uint32_t>(1)});
+            bwd_conn->wait_for_empty_write_slot();
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_bwd_sem, bwd_route);
+            bwd_conn->send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(pkt_hdr_bwd_sem), sizeof(PACKET_HEADER_TYPE));
         }
 
         cb.pop_front(chunk_tiles);

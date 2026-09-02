@@ -70,14 +70,22 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         input_tensor, coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value(), "broadcast_ring needs a forward neighbour (Ring topology)");
 
-    // 1-hop line-unicast route args to the forward neighbour (dst_mesh_id, dst_chip_id).
+    // 1-hop line-unicast route args to the forward (idx+1) and backward (idx-1) neighbours.
     auto [unicast_forward_args, unicast_backward_args] =
         ::ttnn::ccl::get_forward_backward_line_unicast_configuration(coord, forward_coord, backward_coord, mesh_device);
-    (void)unicast_backward_args;
 
-    // Role: sender reads local input; the final recipient (ring_size-1 hops from sender) does not forward.
-    const uint32_t hops_from_sender = (ring_index + ring_size - operation_attributes.sender_ring_index) % ring_size;
-    const bool is_last = hops_from_sender == ring_size - 1;
+    // Bidirectional role (mirrors broadcast_ring_relay.cpp): sender sends both ways; the ring splits into a
+    // forward arc (HF hops) and a backward arc (HB hops). Each non-sender relays away from the sender until
+    // its arc's far end. send_fwd -> forwards to idx+1; send_bwd -> forwards to idx-1.
+    const uint32_t fwd_hops = (ring_index + ring_size - operation_attributes.sender_ring_index) % ring_size;
+    const uint32_t bwd_hops = (ring_size - fwd_hops) % ring_size;
+    const uint32_t HF = ring_size / 2;
+    const uint32_t HB = (ring_size - 1) / 2;
+    const bool is_sender = (fwd_hops == 0);
+    const bool on_fwd_arc = !is_sender && (fwd_hops <= HF);
+    const bool on_bwd_arc = !is_sender && !on_fwd_arc;
+    const bool send_fwd = is_sender || (on_fwd_arc && fwd_hops < HF);
+    const bool send_bwd = is_sender || (on_bwd_arc && bwd_hops < HB);
 
     // Worker cores (1 per link).
     const uint32_t num_workers_per_link = 1;
@@ -104,11 +112,11 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         tt::tt_metal::CircularBufferConfig(cb_depth_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, worker_core_range, cb_config);
 
-    // Packet-header CB: two headers (payload write + semaphore inc), like the all-gather writer.
+    // Packet-header CB: up to 4 headers (payload + sem-inc, per direction).
     const uint32_t packet_header_cb_id = tt::CB::c_in1;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     auto packet_header_cb_config =
-        tt::tt_metal::CircularBufferConfig(2 * packet_header_size, {{packet_header_cb_id, tt::DataFormat::UInt32}})
+        tt::tt_metal::CircularBufferConfig(4 * packet_header_size, {{packet_header_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size);
     CreateCircularBuffer(program, worker_core_range, packet_header_cb_config);
 
@@ -122,8 +130,10 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         chunk_num_pages,  // packet_size_in_pages (tiles per chunk)
         cb_id,
         packet_header_cb_id,
-        unicast_forward_args[0],  // unicast_route_arg0 (dst_mesh_id)
-        unicast_forward_args[1],  // unicast_route_arg1 (dst_chip_id)
+        unicast_forward_args[0],   // fwd_route_arg0 (to idx+1)
+        unicast_forward_args[1],   // fwd_route_arg1
+        unicast_backward_args[0],  // bwd_route_arg0 (to idx-1)
+        unicast_backward_args[1],  // bwd_route_arg1
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
@@ -146,11 +156,13 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     // own recv-semaphore counter (the global sem has an independent copy per core).
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
     const auto fwd_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+    const auto bwd_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
     const uint32_t tiles_per_link =
         (input_num_pages + operation_attributes.num_links - 1) / operation_attributes.num_links;
     for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
         const CoreCoord core = worker_cores[link];
-        // Downstream same-index worker core: its noc coords (target of this link's completion atomic-inc).
+        // Downstream same-index worker core: its noc coords (target of both directions' completion atomic-inc;
+        // the same logical core on every device, so the coords are shared and only the route differs).
         const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(core);
         const uint32_t tile_start = std::min(link * tiles_per_link, input_num_pages);
         const uint32_t tile_count = std::min(tiles_per_link, input_num_pages - tile_start);
@@ -166,13 +178,17 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         };
         // Fabric connection args, in the exact layout FabricConnectionManager::build_from_args expects:
         //   [forward_flag] [forward sender args if flag] [backward_flag] [backward args if flag].
-        // v1 forwards only; the final recipient opens no connection (both flags 0).
-        rt.push_back(is_last ? 0u : 1u);  // forward connection flag
-        if (!is_last) {
+        // Bidirectional: open the forward connection iff this device sends to idx+1, backward iff to idx-1.
+        rt.push_back(send_fwd ? 1u : 0u);  // forward connection flag
+        if (send_fwd) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id, fwd_fabric_node_id, link, program, core, rt);
         }
-        rt.push_back(0u);  // backward connection flag (unused in v1)
+        rt.push_back(send_bwd ? 1u : 0u);  // backward connection flag
+        if (send_bwd) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fabric_node_id, bwd_fabric_node_id, link, program, core, rt);
+        }
         tt::tt_metal::SetRuntimeArgs(program, relay_kernel_id, core, rt);
     }
 
