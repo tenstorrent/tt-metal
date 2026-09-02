@@ -162,7 +162,7 @@ def _build_and_prefill(
     max_layers = min(
         int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
     )
-    top_cache = WeightCache(os.path.join(_CACHE_DIR, "full_decode", "ttnn")) if _CACHE_DIR else None
+    top_cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
 
     # --- build the full model + lm_head once -------------------------------- #
     model = DeepSeekV4Model(

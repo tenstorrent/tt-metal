@@ -286,6 +286,7 @@ class ChatEngine:
         from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
         loader = DeepseekV4WeightLoader(args.model_dir)
+        model_name = os.path.basename(args.model_dir)
         config = DeepseekV4Config.from_pretrained(loader.snapshot_dir)
         config._attn_implementation = "eager"
         self.config = config
@@ -306,7 +307,7 @@ class ChatEngine:
 
         max_layers = min(args.num_layers or config.num_hidden_layers, config.num_hidden_layers)
         cache_dir = args.cache_dir
-        top_cache = WeightCache(os.path.join(cache_dir, "full_decode", "ttnn")) if cache_dir else None
+        top_cache = WeightCache(os.path.join(cache_dir, model_name)) if cache_dir else None
 
         self.model = DeepSeekV4Model(
             config,
