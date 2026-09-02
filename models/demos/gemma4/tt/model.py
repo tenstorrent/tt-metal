@@ -332,6 +332,7 @@ class Gemma4Model:
         # than one chunk: it sets the RoPE cache's chunk-major row order and sizes the
         # ring KV cache slabs. None means single-chunk prefill.
         prefill_chunk_size=None,
+        ring_kv_caches=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
@@ -543,6 +544,8 @@ class Gemma4Model:
         # Decoder layers (each creates its own KV cache if requested)
         self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
         self.layers = []
+        if ring_kv_caches is not None and len(ring_kv_caches) != n_layers:
+            raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
                 mesh_device=mesh_device,
@@ -561,6 +564,7 @@ class Gemma4Model:
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
                 ring_prefill_chunk_size=prefill_chunk_size,
+                ring_kv_cache=(ring_kv_caches[i] if ring_kv_caches is not None else None),
             )
             # Create a paged cache for paths that consume one. CP global prefill
             # uses its full-history ring cache as durable storage; global layers pack
