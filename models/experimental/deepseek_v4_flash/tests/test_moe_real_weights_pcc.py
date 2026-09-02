@@ -71,7 +71,7 @@ PCC_THRESHOLD = 0.99
 WEIGHT_DTYPE = ttnn.bfloat4_b
 
 # On-disk cache for the converted ttnn weight tiles. Same root, namespace and dtype
-# :class:`DeepSeekV4Model` uses (``<root>/ttnn`` + ``layers.N`` + ``mlp``), so entries written by the
+# :class:`DeepSeekV4Model` uses (``<root>/<checkpoint dir name>`` + ``layers.N`` + ``mlp``), so entries written by the
 # model or by ``test_decoder_layer_pcc`` for this layer are reused here and vice versa — turning the
 # expensive dequantize-and-upload of the layer's experts into a straight tile read. Override the root
 # with ``DEEPSEEK_V4_CACHE_DIR``, or set it empty to disable caching and always reconvert.
@@ -104,7 +104,7 @@ def _expert_weight_cache() -> WeightCache | None:
     """
     if not _CACHE_DIR:
         return None
-    return WeightCache(os.path.join(_CACHE_DIR, "ttnn")).sub(f"layers.{MOE_LAYER}").sub("mlp")
+    return WeightCache(os.path.join(_CACHE_DIR, DEFAULT_MODEL_DIR.name)).sub(f"layers.{MOE_LAYER}").sub("mlp")
 
 
 def _load_config(loader: DeepseekV4WeightLoader) -> types.SimpleNamespace:
