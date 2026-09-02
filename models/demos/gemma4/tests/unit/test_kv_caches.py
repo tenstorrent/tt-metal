@@ -39,3 +39,38 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
     assert calls[0][1][2:] == (4, 256, 262144)
     assert calls[1][1][2:] == (1, 262144)
     assert all(call[2]["num_users"] == 8 for call in calls)
+
+
+def test_chunk_locations_match_user_head_major_nd_shards():
+    from models.demos.gemma4.tt.runners.kv_chunk_table import iter_cache_chunk_locations
+
+    locations = list(
+        iter_cache_chunk_locations(
+            seq_len=1024,
+            chunk_size=256,
+            sp=2,
+            num_users=2,
+            heads_per_device=4,
+            local_head=3,
+            num_banks=8,
+            chunk_size_bytes=8704,
+        )
+    )
+    assert len(locations) == 64
+    # CP rows name different global positions but point at the same local physical shard.
+    assert locations[0][2:] == (0, 0, 52224)
+    assert locations[32][2:] == (128, 0, 52224)
+    # Slot 1 starts after all four heads of slot 0: 4 * 16 local blocks = 64 shards.
+    assert locations[16][1:] == (1, 0, 0, 121856)
+
+
+def test_migration_config_ids_are_decode_stream_order():
+    from models.demos.gemma4.tt.runners.kv_chunk_table import CONFIG_NAMES
+
+    assert len(CONFIG_NAMES) == 36
+    assert CONFIG_NAMES[0] == "00_global_h0"
+    assert CONFIG_NAMES[3] == "03_global_h3"
+    assert CONFIG_NAMES[4] == "04_sliding_k_h0"
+    assert CONFIG_NAMES[19] == "19_sliding_k_h15"
+    assert CONFIG_NAMES[20] == "20_sliding_v_h0"
+    assert CONFIG_NAMES[-1] == "35_sliding_v_h15"
