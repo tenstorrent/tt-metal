@@ -243,7 +243,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
 
         ``pool_compressor`` is fixed at capture time: the traced path captures one
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
-        # return ttnn.assign(hidden_streams, memory_config=hidden_streams.memory_config())
         post, comb, collapsed = self.attn_hc(hidden_streams)
         normed = self.input_layernorm(collapsed)
         attn_out = self.self_attn.decode_static(

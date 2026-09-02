@@ -66,10 +66,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             b_grid.num_cores());
         return create_descriptor_ring_gather_partial(operation_attributes, tensor_args, tensor_return_value);
     }
-    log_info(
-        tt::LogOp,
-        "matmul_decode PartialWidthSharded: in0 gather = hub{}",
-        operation_attributes.global_cb.has_value() ? " (global_cb / prefetcher path)" : "");
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
