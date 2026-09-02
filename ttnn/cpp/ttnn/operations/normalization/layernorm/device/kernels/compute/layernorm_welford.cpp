@@ -347,9 +347,9 @@ void kernel_main() {
         if constexpr (compact_fp32_finalizer) {
             dfb_ex2pe_fp32_obj.push_back(onetile);
 
-            // The SFPU broadcast helper consumes a dense tile. The inactive
-            // variance lanes contain zero, whose rsqrt is inf, so materialise
-            // the column broadcast once before reusing it for every input tile.
+            // The two-pass finaliser writes only the statistics row; other lanes may still hold retained input, and
+            // rsqrt can turn negative scratch values into NaNs. Materialise the valid statistics column through the
+            // FPU before the SFPU normaliser, whose mask multiplication cannot safely suppress NaN lanes.
             dfb_ex2pe_obj.wait_front(onetile);
             dfb_ex2pe_fp32_obj.wait_front(onetile);
             tile_regs_acquire();
