@@ -20,6 +20,15 @@ from scripts.tt_hw_planner.capture_inputs import _CAPTURED_SHORT_CIRCUIT_BLOCK, 
 requires_torch = pytest.mark.skipif(importlib.util.find_spec("torch") is None, reason="needs torch")
 
 
+@pytest.fixture(autouse=True)
+def _deterministic():
+    """These assert on PCC thresholds, so an unseeded draw makes them pass or fail by luck."""
+    if importlib.util.find_spec("torch") is not None:
+        import torch
+
+        torch.manual_seed(0)
+
+
 def _loader_ns(**extra):
     """Exec the injected loader source, standing in for the generated test module around it."""
     ns = dict(extra)
@@ -79,8 +88,8 @@ def test_captured_cache_is_not_filtered_out_by_a_name_list() -> None:
     block = _CAPTURED_SHORT_CIRCUIT_BLOCK
     for name in ("past_key_values", "past_key_value", "cache_position", "use_cache"):
         assert f'"{name}"' not in block, f"{name} must not be dropped by name any more"
-    assert '_CAPTURED_STATE["stateful_keys"]' in block, "live state must be recorded for the retry"
     assert '_CAPTURED_STATE["golden_out"]' in block, "the captured golden must be handed on"
+    assert "_captured_kwargs_and_primary(" in block, "inputs must be prepared by the shared helper"
 
 
 def test_the_captured_golden_is_no_longer_discarded() -> None:
@@ -148,13 +157,13 @@ def test_fidelity_is_held_to_the_components_own_bar(expect_error) -> None:
     import torch
 
     golden = torch.randn(64)
-    nudged = golden + torch.randn(64) * 0.05  # close, but not exact
+    nudged = golden + torch.randn(64) * 0.05  # close, but not exact: lands well inside 0.5..0.9999
 
     lenient = _fidelity_ns(target=0.5)
     lenient["_CAPTURED_STATE"]["golden_out"] = golden.clone()
     lenient["_check_captured_fidelity"](nudged.clone())  # passes a low bar
 
-    strict = _fidelity_ns(target=0.999)
+    strict = _fidelity_ns(target=0.9999)
     strict["_CAPTURED_STATE"]["golden_out"] = golden.clone()
     with expect_error(pytest.fail.Exception, "fidelity pcc"):
         strict["_check_captured_fidelity"](nudged.clone())
@@ -192,7 +201,6 @@ def test_captured_state_is_offered_to_the_reference_first() -> None:
     import torch
 
     ns = _loader_ns()
-    ns["_CAPTURED_STATE"]["stateful_keys"] = ("past_key_values",)
     seen = {}
 
     def module(**kwargs):
@@ -210,7 +218,6 @@ def test_a_module_that_rejects_the_state_is_retried_without_it() -> None:
     import torch
 
     ns = _loader_ns()
-    ns["_CAPTURED_STATE"]["stateful_keys"] = ("past_key_values",)
     calls = []
 
     def picky(**kwargs):
@@ -230,7 +237,6 @@ def test_a_forward_that_fails_both_ways_reports_the_real_error(expect_error) -> 
     import torch
 
     ns = _loader_ns()
-    ns["_CAPTURED_STATE"]["stateful_keys"] = ("past_key_values",)
 
     def broken(**kwargs):
         raise RuntimeError("shape mismatch somewhere")
@@ -254,3 +260,166 @@ def test_no_captured_state_means_a_single_attempt() -> None:
     with pytest.raises(ValueError):  # allow-pytest.raises: asserting the raw error propagates
         ns["_reference_forward"](module, {"x": torch.zeros(2)})
     assert len(calls) == 1, "nothing stateful to drop, so there is nothing to retry"
+
+
+# --- more than one input set -------------------------------------------------------------------
+# A component can be right for the shape it was captured at and wrong for the next one. Gating on a
+# single input cannot tell those apart, so every captured set is now held to the same target.
+
+
+def _demo_with_samples(tmp_path, component, count):
+    """A demo tree with `count` captured sets: the primary in place, extras under samples/."""
+    import torch
+
+    safe = component.replace(".", "_").lower()
+    comp = tmp_path / "_captured" / safe
+    for idx in range(count):
+        d = comp if idx == 0 else comp / "samples" / f"{idx:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        torch.save((torch.full((4,), float(idx)),), d / "args.pt")
+        torch.save({}, d / "kwargs.pt")
+        torch.save(torch.full((4,), float(idx)), d / "output.pt")
+    test_file = tmp_path / "tests" / "pcc" / "test_x.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text("")
+    return test_file
+
+
+@requires_torch
+def test_the_primary_sample_stays_exactly_where_it_was(tmp_path) -> None:
+    """Extras must not move the primary: everything else in the tree reads it in place."""
+    test_file = _demo_with_samples(tmp_path, "enc.blk", 3)
+    ns = _loader_ns(__file__=str(test_file))
+    dirs = ns["_captured_sample_dirs"]("enc.blk")
+    assert len(dirs) == 3
+    assert dirs[0] == tmp_path / "_captured" / "enc_blk", "the primary must come first, in place"
+    assert all(d.parent.name == "samples" for d in dirs[1:])
+
+
+@requires_torch
+def test_every_captured_set_is_offered_to_the_gate(tmp_path) -> None:
+    import torch
+
+    test_file = _demo_with_samples(tmp_path, "enc.blk", 3)
+    ns = _loader_ns(__file__=str(test_file))
+
+    class _Mod(torch.nn.Module):
+        def forward(self, hidden):  # noqa: D401 -- name is what the mapping uses
+            return hidden
+
+    extras = ns["_captured_extra_samples"]("enc.blk", _Mod())
+    assert len(extras) == 2, "the two sets beyond the gating one must be returned"
+    for name, kwargs, primary, golden in extras:
+        assert primary[0] == "hidden", "prepared through the same mapping as the gating sample"
+        assert isinstance(golden, torch.Tensor)
+
+
+@requires_torch
+def test_a_single_captured_set_behaves_exactly_as_before(tmp_path) -> None:
+    """No samples/ directory must mean no extra work and no extra requirements."""
+    import torch
+
+    test_file = _demo_with_samples(tmp_path, "enc.blk", 1)
+    ns = _loader_ns(__file__=str(test_file))
+    assert ns["_captured_sample_dirs"]("enc.blk") == [tmp_path / "_captured" / "enc_blk"]
+    assert ns["_captured_extra_samples"]("enc.blk", torch.nn.Identity()) == []
+
+
+@requires_torch
+def test_an_incomplete_sample_is_skipped_not_crashed_on(tmp_path) -> None:
+    test_file = _demo_with_samples(tmp_path, "enc.blk", 2)
+    (tmp_path / "_captured" / "enc_blk" / "samples" / "01" / "output.pt").unlink()
+    ns = _loader_ns(__file__=str(test_file))
+    assert ns["_load_sample"](tmp_path / "_captured" / "enc_blk" / "samples" / "01") is None
+    assert ns["_captured_extra_samples"]("enc.blk", None) == []
+
+
+def test_the_generated_test_gates_on_every_sample() -> None:
+    """The extra samples must be asserted on, not merely printed."""
+    import scripts.tt_hw_planner.bringup_loop as bl
+
+    body = bl._PCC_TEST_TEMPLATE
+    assert "_captured_extra_samples(COMPONENT_NAME" in body, "the test must look for extra samples"
+    tail = body[body.find("_captured_extra_samples(COMPONENT_NAME") :]
+    assert "assert not _failures" in tail, "a failing extra sample must fail the test"
+
+
+# --- the capture side has to produce them ------------------------------------------------------
+
+
+def test_extra_rounds_default_to_more_than_one_sample(monkeypatch) -> None:
+    from scripts.tt_hw_planner import capture_inputs as ci
+
+    monkeypatch.delenv(ci._SAMPLES_ENV, raising=False)
+    assert ci._extra_sample_rounds() >= 1, "the default must actually exercise generalisation"
+    monkeypatch.setenv(ci._SAMPLES_ENV, "1")
+    assert ci._extra_sample_rounds() == 0, "single-sample capture must remain available"
+    monkeypatch.setenv(ci._SAMPLES_ENV, "not-a-number")
+    assert ci._extra_sample_rounds() >= 1, "a bad value must not disable capture"
+
+
+@requires_torch
+def test_extra_capture_rounds_never_endanger_the_primary_set() -> None:
+    """A failed extra round must leave capture exactly as it would have been without the feature."""
+    import torch
+
+    from scripts.tt_hw_planner import capture_inputs as ci
+
+    state = {"enc.blk": {"args": (), "kwargs": {}, "output": torch.zeros(2)}}
+    resolved = [("enc.blk", None, "enc.blk")]
+
+    def exploding_driver(_model, _inputs):
+        raise RuntimeError("driver blew up on the extra round")
+
+    extras = ci._capture_extra_samples(
+        model=None,
+        pixel_values=torch.zeros(1, 3, 4, 4),
+        resolved=resolved,
+        state=state,
+        seed=0,
+        rounds=2,
+        driver=exploding_driver,
+        verbose=False,
+    )
+    assert extras == {}
+    assert "enc.blk" in state and "output" in state["enc.blk"], "the primary capture must survive"
+
+
+@requires_torch
+def test_extra_rounds_collect_a_set_per_round_and_restore_the_primary() -> None:
+    import torch
+
+    from scripts.tt_hw_planner import capture_inputs as ci
+
+    primary = {"args": (), "kwargs": {}, "output": torch.zeros(2)}
+    state = {"enc.blk": dict(primary)}
+    rounds_seen = []
+
+    def driver(_model, inputs):
+        rounds_seen.append(inputs)
+        state["enc.blk"] = {"args": (), "kwargs": {}, "output": torch.full((2,), float(len(rounds_seen)))}
+        return True, []
+
+    extras = ci._capture_extra_samples(
+        model=None,
+        pixel_values=torch.zeros(1, 3, 4, 4),
+        resolved=[("enc.blk", None, "enc.blk")],
+        state=state,
+        seed=0,
+        rounds=2,
+        driver=driver,
+        verbose=False,
+    )
+    assert len(extras["enc.blk"]) == 2, "one set per round"
+    assert torch.equal(state["enc.blk"]["output"], primary["output"]), "primary restored afterwards"
+
+
+def test_no_driver_means_no_extra_rounds() -> None:
+    from scripts.tt_hw_planner import capture_inputs as ci
+
+    assert (
+        ci._capture_extra_samples(
+            model=None, pixel_values=None, resolved=[], state={}, seed=0, rounds=3, driver=None, verbose=False
+        )
+        == {}
+    )

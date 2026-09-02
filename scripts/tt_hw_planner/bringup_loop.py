@@ -357,6 +357,29 @@ def _forward_param(torch_module, arg_name):
         return None
 
 
+def _declared_dtype(param):
+    """The element dtype a module DECLARES for one forward parameter, or None if it says nothing.
+
+    The alternative was guessing from the argument's name -- "ends with _id, so it must be an
+    integer" -- which only ever worked for the names someone had already met, and silently handed
+    a float tensor to anything spelled differently. Modules annotate their forward args
+    (`Optional[torch.LongTensor]`, `bool`), so in most cases the module states this outright and
+    the test can stop guessing. Read from the annotation the module carries, not from a table.
+    """
+    if param is None:
+        return None
+    annotation = getattr(param, "annotation", inspect.Parameter.empty)
+    if annotation is inspect.Parameter.empty:
+        return None
+    text = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", "") or str(annotation)
+    text = text.lower()
+    if "bool" in text:
+        return torch.bool
+    if "long" in text or "int" in text:
+        return torch.long
+    return None
+
+
 def _make_arg_for(arg_name, *, model, torch_module):
     """Return a plausible tensor/value for one forward-arg, based on its name.
 
@@ -441,12 +464,15 @@ def _make_arg_for(arg_name, *, model, torch_module):
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
         ):
-            # Heuristic: if the arg name suggests an integer ID
-            # (ends with "_id" / "_ids" / contains "spkr"/"lang"),
-            # generate a small int. Otherwise, generate a tensor
-            # shaped by _detect_hidden_shape (which handles
-            # per-component channel introspection — see Tier-1b
-            # enhancement to that function).
+            # Ask the module what this argument IS before falling back to guessing from its name.
+            # The name heuristic below stays for modules that annotate nothing, but it no longer
+            # decides for the ones that do -- a declared `bool` or `LongTensor` is not a guess.
+            _declared = _declared_dtype(param)
+            if _declared is not None:
+                return torch.zeros(1, dtype=_declared)
+            # Nothing declared: if the arg name suggests an integer ID (ends with "_id" / "_ids"
+            # / contains "spkr"/"lang"), generate a small int. Otherwise, generate a tensor
+            # shaped by _detect_hidden_shape (which handles per-component channel introspection).
             _lc = arg_name.lower()
             if _lc.endswith("_id") or _lc.endswith("_ids") or "spkr" in _lc or "lang" in _lc:
                 return torch.zeros(1, dtype=torch.long)
@@ -578,6 +604,24 @@ def _normalize_out(out):
     if isinstance(out, (list, tuple)) and out:
         out = out[0]
     return out
+
+
+def _ttnn_module_call(ttnn_module, primary_tensor, kwargs, primary_name, device):
+    """Run the TT module on one prepared input set; float32 torch tensor back, or None.
+
+    Chains the same primitives the gating comparison uses, so an extra sample cannot be fed to the
+    port differently from the one it is meant to back up. The gating path drives those primitives
+    under separate stage timeouts instead of calling this, so that a hang can still be pinned to
+    the exact step that stalled.
+    """
+    ttnn_input = _ttnn_from_torch_mesh_safe(primary_tensor, device)
+    extra = {{k: v for k, v in kwargs.items() if k != primary_name}}
+    out = ttnn_module(ttnn_input, **extra)
+    if isinstance(out, tuple) and out:
+        out = out[0]
+    if out is None:
+        return None
+    return _ttnn_to_torch_mesh_safe(out, device).to(torch.float32)
 
 
 class _StageTimeout(Exception):
@@ -834,6 +878,35 @@ def test_{component_safe}(device_params, device):
     assert ok, (
         f"PCC {{pcc}} below target {{PCC_TARGET}} for {{COMPONENT_NAME}} of "
         f"{{HF_MODEL_ID}} (primary arg `{{primary_name}}`)"
+    )
+
+    # One input proves the port lines up for ONE input. A component can be right for the shape it
+    # was captured at and wrong for the next; every additional captured set is held to the same
+    # target so passing means the port generalises, not that it matched once.
+    _failures = []
+    for _name, _kw, _prim, _golden in _captured_extra_samples(COMPONENT_NAME, torch_module):
+        _set_stage_timeout(stage_budget_s)
+        try:
+            _ref, _kw = _reference_forward(torch_module, _kw)
+        except Exception as exc:
+            print(f"[bringup] sample {{_name}}: reference forward raised {{exc}}; not counted", flush=True)
+            continue
+        finally:
+            _clear_stage_timeout()
+        _ref = _normalize_out(_ref)
+        _pname, _ptensor = _prim
+        _tt = _ttnn_module_call(ttnn_module, _ptensor, _kw, _pname, device)
+        if _tt is None:
+            print(f"[bringup] sample {{_name}}: TT call did not return a tensor; not counted", flush=True)
+            continue
+        _sok, _spcc = comp_pcc(_ref.to(torch.float32), _tt, PCC_TARGET)
+        print(f"[bringup] sample {{_name}} PCC={{_spcc}} target={{PCC_TARGET}}", flush=True)
+        if not _sok:
+            _failures.append(f"{{_name}}={{_spcc}}")
+    assert not _failures, (
+        f"{{COMPONENT_NAME}} met PCC {{pcc}} on the captured sample it was gated on but failed "
+        f"other captured inputs ({{', '.join(_failures)}}), so the port matches one input rather "
+        f"than the component -- target {{PCC_TARGET}}"
     )
 '''
 

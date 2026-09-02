@@ -233,3 +233,45 @@ def test_defaulted_args_are_left_to_the_module_not_a_typed_list() -> None:
         "labels",
     ):
         assert f'"{name}"' not in make_arg, f"{name} is decided by the signature now, not by name"
+
+
+def test_argument_type_comes_from_what_the_module_declares() -> None:
+    """The module's own annotation decides the dtype, before any guess from the argument's name.
+
+    Guessing from the name ("ends with _id, so integer") only worked for the spellings someone had
+    already met: a required integer argument named anything else got a float tensor and the module
+    raised on it. Modules annotate their forward args, so for most of them this is stated outright.
+    """
+    body = _template_body()
+    assert "def _declared_dtype(param):" in body, "the test must be able to read declared types"
+
+    make_arg_start = body.find("def _make_arg_for(arg_name")
+    make_arg = body[make_arg_start : body.find("class _Omit", make_arg_start)]
+    declared_idx = make_arg.find("_declared_dtype(param)")
+    name_guess_idx = make_arg.find('_lc.endswith("_id")')
+    assert declared_idx != -1, "_make_arg_for must consult the declared type"
+    assert name_guess_idx != -1, "the name heuristic stays for modules that annotate nothing"
+    assert declared_idx < name_guess_idx, "what the module declares must win over guessing by name"
+
+
+def test_declared_dtype_reads_annotations_rather_than_a_name_table() -> None:
+    """Exercised for real: the helper is pulled out of the template and run."""
+    import inspect as _inspect
+
+    import torch
+
+    body = _template_body()
+    start = body.find("def _declared_dtype(param):")
+    end = body.find("\ndef ", start + 1)
+    ns = {"inspect": _inspect, "torch": torch}
+    exec(body[start:end], ns)  # noqa: S102 -- this source is what lands in the generated test
+    declared = ns["_declared_dtype"]
+
+    def _param(annotation):
+        return _inspect.Parameter("x", _inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation)
+
+    assert declared(_param("Optional[torch.LongTensor]")) is torch.long
+    assert declared(_param("bool")) is torch.bool
+    assert declared(_param("torch.FloatTensor")) is None, "floats fall through to shape detection"
+    assert declared(_param(_inspect.Parameter.empty)) is None, "no annotation means no claim"
+    assert declared(None) is None
