@@ -251,7 +251,7 @@ class CCLManager:
             )
             ttnn.copy_host_to_device_tensor(host, tensor)
 
-    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype):
+    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA.
 
         Allocated once and reused across every layer and chunk. The op treats it as
@@ -278,13 +278,14 @@ class CCLManager:
         """
         rows, cols = tuple(self.mesh_device.shape)
         n_kv_global = n_kv_local * cols
-        cache_key = (key, n_kv_global, seq, head_dim, str(dtype))
+        cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.from_torch(
                 torch.zeros(1, n_kv_global, seq, head_dim),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
+                memory_config=memory_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
             )
         return self._ring_gather_buffers[cache_key]

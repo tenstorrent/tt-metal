@@ -53,6 +53,26 @@ from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_D
 
 TILE_HEIGHT = 32
 
+
+def migration_ring_memory_config(mesh_device, row_dim):
+    """One migratable 32-token row per round-robin DRAM shard."""
+    banks = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0))
+            for bank in range(mesh_device.dram_grid_size().x)
+        ]
+    )
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, TILE_HEIGHT, row_dim],
+            grid=banks,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
 # Counts ring_joint history reads. The long-context test asserts this advances:
 # without it, a silent fallback to the mask path would still produce finite,
 # stable-looking output (each chunk attending only within itself), so every
@@ -108,7 +128,7 @@ def init_ring_kv_cache(
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=cache_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=migration_ring_memory_config(mesh_device, head_dim),
             # Every rank holds an identically shaped slab; content is per-rank.
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -141,7 +161,7 @@ def init_packed_ring_kv_cache(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=migration_ring_memory_config(mesh_device, GLOBAL_PACKED_DIM),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     return PackedRingKVCache(cache)
@@ -367,8 +387,12 @@ def ring_prefill_attention(
         gather_seq = max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
-    buffer_k = ccl_manager.get_ring_gather_buffer("ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype)
-    buffer_v = ccl_manager.get_ring_gather_buffer("ring_v", num_local_kv_heads, gather_seq, head_dim, cache_v.dtype)
+    buffer_k = ccl_manager.get_ring_gather_buffer(
+        "ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+    )
+    buffer_v = ccl_manager.get_ring_gather_buffer(
+        "ring_v", num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+    )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
