@@ -234,11 +234,8 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), w_barrier_wait);
             }
         }
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
-    // Always zero barrier_sem, even when the startup barrier itself was skipped
-    // (persistent output): Phase 2 (H->W) signaling reuses this same address, so a
-    // stale non-zero value here would corrupt the Phase 2 handshake.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
     // Per-row processing body shared between H writer sequential loop and W writer two-pass loop.
     uint32_t outer_dim_offset = outer_dim_offset_start_id;

@@ -499,7 +499,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             std::vector<uint32_t> writer_rt_args = {
                 (operation_attributes.dim > 0)
                     ? writer_link_offset_start_id * output_halo_dim_size + t_front_pad_stick_offset
-                    : outer_dim_size - 1,  // outer_dim_offset_start_id
+                    : outer_dim_size - 1,                                             // outer_dim_offset_start_id
                 h_writer_stick_start,                                                 // stick_start_id
                 input_halo_dim_size,                                                  // input_halo_dim_size
                 output_halo_dim_size,                                                 // output_halo_dim_size
@@ -510,9 +510,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 h_writer_num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
                 virtual_core.x,                    // neighbor_sem_noc0_x
                 virtual_core.y,                    // neighbor_sem_noc0_y
-                // Match AG: skip fabric startup barrier when the output is preallocated.
-                // Phase 2 still uses barrier_sem (CRTA[3]) for H→W signaling.
-                !operation_attributes.using_persistent_buffers,  // use_barrier_semaphore
+                true,                              // use_barrier_semaphore
                 virtual_opposite_core.x,           // barrier_sem_noc0_x
                 virtual_opposite_core.y};          // barrier_sem_noc0_y
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
@@ -815,18 +813,18 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 // outer_dim_offset_start_id is unused for W writer two-pass path but kept for
                 // arg index compatibility with the H writer path in the same kernel binary.
                 std::vector<uint32_t> w_writer_rt_args = {
-                    0,                              // outer_dim_offset_start_id (unused by W two-pass)
-                    0,                              // stick_start_id
-                    input_halo_dim_size,            // input_halo_dim_size (unused by W writer)
-                    output_num_sticks_per_halo_dim, // output_halo_dim_size = W'
+                    0,                                 // outer_dim_offset_start_id (unused by W two-pass)
+                    0,                                 // stick_start_id
+                    input_halo_dim_size,               // input_halo_dim_size (unused by W writer)
+                    output_num_sticks_per_halo_dim,    // output_halo_dim_size = W'
                     w_t_count * output_halo_dim_size,  // outer_dim_size (unused by W two-pass, kept for compat)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
-                    operation_attributes.pad2_left,  // padding_left
-                    1,                               // num_sticks_to_read
-                    1,                               // num_sticks_per_halo_dim
-                    w_virtual_core.x,                // neighbor_sem_noc0_x
-                    w_virtual_core.y,                // neighbor_sem_noc0_y
-                    !operation_attributes.using_persistent_buffers,  // use_barrier_semaphore (W-axis startup)
+                    operation_attributes.pad2_left,                                                  // padding_left
+                    1,                 // num_sticks_to_read
+                    1,                 // num_sticks_per_halo_dim
+                    w_virtual_core.x,  // neighbor_sem_noc0_x
+                    w_virtual_core.y,  // neighbor_sem_noc0_y
+                    true,              // use_barrier_semaphore (W-axis startup barrier)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y
                 // No Phase 2 signal targets (W writers don't signal further)
