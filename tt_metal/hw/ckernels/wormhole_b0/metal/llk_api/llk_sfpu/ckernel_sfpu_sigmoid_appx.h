@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -63,10 +65,15 @@ sfpi_inline void _sigmoid_appx_lut6_step_() {
     TTI_SFPNOP;
 
     TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_3, 2 * K);
+}
 
-    if constexpr (K + 1 < ITERATIONS) {
-        _sigmoid_appx_lut6_step_<K + 1, ITERATIONS>();
-    }
+// The unroll: a fold over the datum indices instead of a self-call at the end of every step. Same
+// instruction stream -- every offset is still an immediate, which they have to be because TTI_*
+// assembles the instruction word under an "n" asm constraint -- but each step is now a leaf and
+// the template nesting depth no longer tracks ITERATIONS.
+template <int ITERATIONS, int... K>
+sfpi_inline void _sigmoid_appx_lut6_unroll_(std::integer_sequence<int, K...>) {
+    (_sigmoid_appx_lut6_step_<K, ITERATIONS>(), ...);
 }
 
 // 5 issue slots per datum against the sfpi three-segment body's 7 (LOAD, LUT, NOP, ADDI, NOP,
@@ -76,7 +83,7 @@ template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_3, 0);
-    _sigmoid_appx_lut6_step_<0, ITERATIONS>();
+    _sigmoid_appx_lut6_unroll_<ITERATIONS>(std::make_integer_sequence<int, ITERATIONS>{});
 }
 
 inline void sigmoid_appx_init() {
