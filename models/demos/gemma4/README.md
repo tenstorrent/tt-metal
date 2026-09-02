@@ -176,6 +176,63 @@ HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 \
 HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_single_layer
 ```
 
+### 31B prefill KV migration loopback on Blackhole Galaxy
+
+This bring-up test exercises the common prefill runner's mixed global/sliding KV chunk
+table through the real migration data mover. It prefills source slot 0 through the 64K
+cache, loops the bytes back through endpoint 1 into slot 1 on the same galaxy, and
+byte-compares every migrated chunk. It needs no golden KV; the checked-in token-only trace
+is padded to the configured input length.
+
+Prerequisites:
+
+- One Blackhole Galaxy available as a single CP8/TP4 rank.
+- Gemma 4 31B weights and TTNN weight cache accessible through `GEMMA4_MODEL_PATH`.
+- A tt-llm-engine checkout with the migration endpoint and Python client built under
+  `disaggregation/migration/build_RelWithDebInfo`.
+
+Set paths once in all three terminals:
+
+```bash
+export TT_METAL_HOME=/path/to/tt-metal
+export ENGINE=/path/to/tt-llm-engine
+export HOST=$(hostname)
+export GEMMA4_MODEL_PATH=/path/to/gemma-4-31b-it
+export PREFILL_MIGRATION_CLIENT_DIR="$ENGINE/disaggregation/migration/build_RelWithDebInfo/python"
+```
+
+Start the endpoint first:
+
+```bash
+cd "$ENGINE/disaggregation/migration"
+./launch_migration_endpoints.sh \
+  --name_server_host "$HOST" --prefill_hosts "$HOST" --prefill_endpoint_id 1
+```
+
+Start the runner next:
+
+```bash
+cd "$TT_METAL_HOME"
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/gemma4/tt/runners/manifests/gemma4_binding_loopback_migration_1rank.yaml \
+  "$HOST:1"
+```
+
+Wait for `[migration] WORKER_READY`, then run the prefill and migration driver:
+
+```bash
+cd "$TT_METAL_HOME"
+./models/demos/common/prefill/runners/run_migration_driver.sh \
+  models/demos/gemma4/tt/runners/manifests/gemma4_producer_loopback_migration.yaml
+```
+
+The test passes when the driver prints `verify bytes PASSED` and exits with status 0.
+The driver then sends the shutdown sentinel so the runner exits cleanly.
+
+This proves that the published 36-config address table resolves the mixed global/sliding
+cache correctly and that the local DRAM-to-DRAM migration preserves its bytes. It does
+not establish model accuracy against a golden cache or exercise cross-host transport.
+
 ## Details
 
 - **Entry points:**
