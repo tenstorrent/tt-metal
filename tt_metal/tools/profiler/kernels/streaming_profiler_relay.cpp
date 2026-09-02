@@ -679,7 +679,8 @@ void kernel_main() {
     constexpr uint32_t kHeadRefreshSweeps = 64;
     static_assert((kHeadRefreshSweeps & (kHeadRefreshSweeps - 1u)) == 0, "the refresh cadence is a mask");
     // Persists across sweeps so a sweep's final ship drains under the pace gap, not on its own critical path.
-    bool gen_shipped[kNGens] = {};
+    uint32_t gen_shipped = 0;  // bit g: generation g's last frame may still be leaving staging
+    static_assert(kNGens <= 32, "gen_shipped is a bit mask");
 
     uint32_t gen_dma_mark[kNGens] = {};
     SpoolPump pump(sender);
@@ -705,7 +706,7 @@ void kernel_main() {
                     killed = true;
                     return;
                 }
-                pump.pass();
+                pump.pass_cold();
             }
             // Blackhole stores can reach SRAM out of order, and the DMA engine reads the words the scalar core staged.
             asm volatile("fence" ::: "memory");
@@ -757,10 +758,8 @@ void kernel_main() {
         // at the saturation boundary.
         uint32_t gen = 0;
         uint32_t gen_base = kStageBase;
-        uint32_t pend_n = 0;
+        uint32_t pend_n = 0;  // frames staged for gen pend_gen and not yet shipped; 0 = none pending
         uint32_t pend_gen = 0;
-        uint32_t pend_base = kStageBase;
-        bool have_pend = false;
         uint32_t n_ship = 0;
         uint32_t min_peak = ~0u;
 
@@ -776,7 +775,7 @@ void kernel_main() {
         // Generation g's previous frame must be out of staging before its slots refill; gen_shipped persists so a
         // sweep never waits on its own last ship.
         auto retire_gen = [&](uint32_t g) __attribute__((always_inline)) {
-            if (gen_shipped[g]) {
+            if ((gen_shipped >> g) & 1u) {
                 // Both predicates complete on this device alone, so no consumer state can hang them.
                 if constexpr (kSpool) {
                     // Stream completion is FIFO, so outstanding <= later-issues means this generation retired.
@@ -789,7 +788,7 @@ void kernel_main() {
                     while (!ncrisc_noc_nonposted_writes_sent(NOC_INDEX)) {
                     }
                 }
-                gen_shipped[g] = false;
+                gen_shipped &= ~(1u << g);
             }
         };
 
@@ -895,20 +894,20 @@ void kernel_main() {
                 }
             }
 
-            if (have_pend) {
-                emit_slots(pend_base, pend_n);
+            if (pend_n != 0) {
+                emit_slots(kStageBase + pend_gen * (kGenSlots * kSlotBytes), pend_n);
                 if constexpr (kSpool) {
                     gen_dma_mark[pend_gen] = pump.dma_issued;
                 }
-                gen_shipped[pend_gen] = true;
-                have_pend = false;
+                gen_shipped |= 1u << pend_gen;
+                pend_n = 0;
             }
             if (!more) {
                 break;
             }
             if constexpr (kSpool) {
                 if (pump.level >= SpoolPump::kLevelInline) {
-                    pump.pass_cold();
+                    pump.pass();
                 }
             }
 
@@ -919,7 +918,7 @@ void kernel_main() {
                 if constexpr (kSpool) {
                     // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                     if (pump.level >= SpoolPump::kLevelInline) {
-                        pump.pass_cold();
+                        pump.pass();
                     }
                 }
             }
@@ -928,8 +927,6 @@ void kernel_main() {
 
             pend_n = n;
             pend_gen = gen;
-            pend_base = gen_base;
-            have_pend = true;
             gen = gen + 1u == kNGens ? 0u : gen + 1u;
             gen_base = gen == 0u ? kStageBase : gen_base + kGenSlots * kSlotBytes;
         }
