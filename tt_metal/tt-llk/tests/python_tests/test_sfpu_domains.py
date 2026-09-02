@@ -27,22 +27,28 @@ from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
     ReducePool,
+    format_dict,
 )
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
+    _is_negative_zero,
     edge_pair_values,
     edge_values,
+    extremes_safe,
     for_op,
     generated_nan_sign_is_asserted,
     nan_sign_is_unspecified,
     nan_survives_to_l1,
+    narrowest_range_format,
+    op_edge_points,
     ops_with_singularity,
     probe_spacing_format,
     sfpu_unary_ops,
     specials_safe,
     specials_safe_formats,
 )
+from helpers.stimuli_generator import StimuliSpec
 
 # The formats the measurement covered: the 5x5 matrix driven over the isinf / isposinf /
 # isneginf / isnan / isfinite predicates on Wormhole n150. Integer and Fp8/MX *output*
@@ -235,10 +241,12 @@ def test_generated_nan_sign_gate_is_the_narrowing_cells_on_wormhole_only():
 def test_binary_golden_dest_format_matches_the_domains_rule():
     """BinarySFPUGolden._dest_format and nan_survives_to_l1 must derive the same Dest.
 
-    Three places state this rule -- the unary golden, the binary golden, and sfpu_domains'
-    internal derivation -- and a silent disagreement would put the golden's NaN substitution on
-    a different set of cells than the gate that decides where the probe may be asserted. Checked
-    rather than commented, since the two live in different modules.
+    Two places state this rule -- golden_generators.sfpu_dest_format(), which every golden
+    delegates to, and sfpu_domains' internal derivation -- and a silent disagreement would put
+    the golden's NaN substitution on a different set of cells than the gate that decides where
+    the probe may be asserted. Checked rather than commented, since the two live in different
+    modules. This enters through BinarySFPUGolden._dest_format, its caller; the ternary half
+    below pins the shared function directly.
     """
     from helpers.golden_generators import BinarySFPUGolden
 
@@ -474,13 +482,17 @@ def test_every_float_binary_op_is_classified_for_cat_b():
     import test_eltwise_binary_sfpu
     from helpers.sfpu_domains import (
         _BINARY_SPECIALS_NOT_READY,
+        _SFPU_BINARY_OPS,
         BINARY_SPECIALS_READY_OPS,
     )
 
+    # _SFPU_BINARY_OPS as well as the ops reaching sfpu_binary(): SfpuAddTopRow is a registered
+    # float binary op that the shared driver does not carry, so it was escaping this check by
+    # being in neither set. The int-driven ops still come out -- an integer op has no IEEE
+    # specials to have a verdict about.
     candidates = (
-        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS
-        - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
-    )
+        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS | _SFPU_BINARY_OPS
+    ) - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
     classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
     unclassified = sorted(op.name for op in candidates - classified)
     assert not unclassified, (
@@ -495,6 +507,1057 @@ def test_every_float_binary_op_is_classified_for_cat_b():
 
     for op, reason in BINARY_SPECIALS_READY_OPS.items():
         assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_exact_at_zero_ops_all_contain_zero_in_their_domain():
+    """Zero must be inside every enrolled op's registered domain, or the probe is out of bounds.
+
+    This is what keeps the gamma family out without a second list. Digamma, Lgamma and Polygamma
+    have poles at zero and domains starting at 0.1, 1.0 and 0.5, so adding one here would drive
+    a value the kernel never promised anything about -- the same mistake the note above
+    _OP_SINGULARITIES warns against for their poles. Asserted rather than trusted, because the
+    membership tuple is hand-written and the domains are not.
+    """
+    from helpers.sfpu_domains import _EXACT_AT_ZERO_OPS, for_op
+
+    out_of_domain = []
+    for op in _EXACT_AT_ZERO_OPS:
+        spec = for_op(op, DataFormat.Float32).spec_A
+        if spec.intervals is not None or not (spec.low <= 0.0 <= spec.high):
+            out_of_domain.append(
+                f"{op.name} (domain {spec.intervals or [spec.low, spec.high]})"
+            )
+    assert not out_of_domain, (
+        "these ops are enrolled for the exact-value-at-zero probe but zero is outside their "
+        f"registered domain: {out_of_domain}"
+    )
+
+
+def test_exact_at_zero_probe_reaches_the_edge_sweep():
+    """The enrolment has to actually produce a probe, not just sit in a tuple.
+
+    op_edge_points() is what the edge sweep reads, and an op joins by appearing in
+    _OP_EDGE_POINTS -- this checks the two are wired together rather than the tuple being
+    declared and never merged in.
+    """
+    from helpers.sfpu_domains import _EXACT_AT_ZERO_OPS
+
+    for op in _EXACT_AT_ZERO_OPS:
+        knees = op_edge_points(op)
+        assert 0.0 in knees, f"{op.name} has no zero probe: {knees}"
+
+
+def test_every_sweepable_op_is_classified_for_cat_f():
+    """Enrolled or recorded-as-not-ready, for every op a cat-F sweep can actually reach.
+
+    The last of the four totality checks, and the one that took two tranches: the first was
+    hand-picked as the ops that cannot overflow, the second measured the remaining 74 and split
+    55 / 19. Scoped to what a sweep can reach, because an op with no sweep to be enrolled into
+    is a different problem from an undecided one.
+    """
+    import test_eltwise_binary_sfpu as binary
+    import test_eltwise_unary_sfpu as unary
+    from helpers.sfpu_domains import _EXTREMES_NOT_READY, EXTREMES_READY_OPS
+
+    # The saturation ops are covered by their own sweep rather than by EXTREMES_READY_OPS --
+    # cat F has two halves, and a check that knew only about the enrolment half would demand a
+    # verdict for ops that already have one.
+    candidates = set(unary._EDGE_SWEEP_OPS)
+    classified = (
+        set(EXTREMES_READY_OPS)
+        | set(_EXTREMES_NOT_READY)
+        | set(unary._SATURATION_PROBES)
+        | set(binary._BINARY_SATURATION_PAIRS)
+    )
+    unclassified = sorted(op.name for op in candidates - classified)
+    assert not unclassified, (
+        "these ops are reachable by the cat-F sweep but appear in neither EXTREMES_READY_OPS "
+        f"nor _EXTREMES_NOT_READY: {unclassified}"
+    )
+    for op, reason in _EXTREMES_NOT_READY.items():
+        assert len(reason) > 20, f"{op.name}'s cat-F reason is too short to be a claim"
+
+
+def test_every_unary_op_is_classified_for_cat_b():
+    """Enrolled or recorded-as-not-ready, for every unary op the sweep drives.
+
+    The unary family had only the first half of this partition for as long as cat B has
+    existed: 67 ops enrolled, 28 outside it, and nothing saying whether that was a decision or
+    an omission. The binary and ternary families have had the check since they were written --
+    this is the same one, and it is what stops a newly registered unary op quietly defaulting
+    to "no specials" while looking, to a reader, as though it had been considered.
+    """
+    from helpers.sfpu_domains import (
+        _UNARY_OPS_NOT_SWEPT,
+        _UNARY_SPECIALS_NOT_READY,
+        SPECIALS_READY_OPS,
+        sfpu_unary_ops,
+    )
+
+    candidates = sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT)
+    classified = set(SPECIALS_READY_OPS) | set(_UNARY_SPECIALS_NOT_READY)
+    unclassified = sorted(op.name for op in candidates - classified)
+    assert not unclassified, (
+        "these unary ops are swept but appear in neither SPECIALS_READY_OPS nor "
+        "_UNARY_SPECIALS_NOT_READY, so nothing records whether cat B is off for them by "
+        f"decision or by omission: {unclassified}"
+    )
+    stale = sorted(op.name for op in set(_UNARY_SPECIALS_NOT_READY) - candidates)
+    assert (
+        not stale
+    ), f"these ops carry a not-ready verdict but are no longer swept: {stale}"
+
+    for op, reason in _UNARY_SPECIALS_NOT_READY.items():
+        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_every_ternary_op_is_classified_for_cat_b():
+    """Enrolled or recorded-as-not-ready, for every op in the ternary family.
+
+    Totality, the same check test_every_float_binary_op_is_classified_for_cat_b makes: an op in
+    neither dict keeps cat B switched off while looking, to a reader, as though it had been
+    considered. The candidate set is _SFPU_TERNARY_OPS itself rather than a list here, so adding
+    a ternary op is a one-line decision and not a test edit.
+    """
+    from helpers.sfpu_domains import (
+        _SFPU_TERNARY_OPS,
+        _TERNARY_SPECIALS_NOT_READY,
+        TERNARY_SPECIALS_READY_OPS,
+    )
+
+    classified = set(TERNARY_SPECIALS_READY_OPS) | set(_TERNARY_SPECIALS_NOT_READY)
+    unclassified = sorted(op.name for op in _SFPU_TERNARY_OPS - classified)
+    assert not unclassified, (
+        "these ternary ops appear in neither TERNARY_SPECIALS_READY_OPS nor "
+        "_TERNARY_SPECIALS_NOT_READY, so nothing records whether cat B is off for them by "
+        f"decision or by omission: {unclassified}"
+    )
+    stale = sorted(op.name for op in classified - _SFPU_TERNARY_OPS)
+    assert (
+        not stale
+    ), f"these ops carry a cat-B verdict but are not in the ternary family: {stale}"
+
+    for op, reason in TERNARY_SPECIALS_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_ternary_golden_dest_format_matches_the_domains_rule():
+    """The shared sfpu_dest_format() and nan_survives_to_l1 must derive the same Dest.
+
+    The ternary half of test_binary_golden_dest_format_matches_the_domains_rule. Both goldens
+    now delegate to one function, so this pins the *function* rather than a third copy of the
+    rule -- and it is worth pinning separately because the ternary suite passes it the input
+    format where the binary one passes data_format, and a transposed pair would put the NaN
+    substitution on the wrong cells without failing anything else.
+    """
+    from helpers.golden_generators import sfpu_dest_format
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        dst = sfpu_dest_format(input_format, output_format, dest_acc)
+        preserves = (dst, output_format) in {
+            (DataFormat.Float16, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float32),
+        }
+        assert preserves == nan_survives_to_l1(input_format, output_format, dest_acc), (
+            f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: "
+            f"sfpu_dest_format derives Dest={dst.name}, which disagrees with "
+            "nan_survives_to_l1"
+        )
+
+
+def test_ternary_goldens_require_their_format_arguments_together():
+    """Supplying part of the Dest/pack contract is rejected rather than half-modelled.
+
+    Same reasoning as test_binary_golden_requires_dest_acc_and_output_format_together: half the
+    contract is worse than none of it, because the golden would then be wrong in a new way
+    rather than in the documented old one.
+    """
+    import torch
+    from helpers.golden_generators import TernarySFPUGolden, WhereGolden
+
+    tile = torch.zeros(1024, dtype=torch.float32)
+
+    for missing in ("input_format", "dest_acc"):
+        kwargs = {
+            "input_format": DataFormat.Float32,
+            "dest_acc": DestAccumulation.Yes,
+        }
+        del kwargs[missing]
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="must be supplied together"
+        ):
+            TernarySFPUGolden()(
+                MathOperation.SfpuAddcmul,
+                tile.clone(),
+                tile.clone(),
+                tile.clone(),
+                0,
+                DataFormat.Float32,
+                **kwargs,
+            )
+
+    for missing in ("input_format", "output_format", "dest_acc"):
+        kwargs = {
+            "input_format": DataFormat.Float32,
+            "output_format": DataFormat.Float32,
+            "dest_acc": DestAccumulation.Yes,
+        }
+        del kwargs[missing]
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="must be supplied together"
+        ):
+            WhereGolden()(tile.clone(), tile.clone(), tile.clone(), **kwargs)
+
+
+def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
+    """The NaN a ternary op emits reaches L1 as a NaN, or as an infinity, per the gate.
+
+    This is the modelling that made the specials_in class assertable: without it, a probe on a
+    narrowing pipeline read the packer's substituted infinity as the kernel having computed one.
+    Pinned on both sides so a change to either the golden or nan_survives_to_l1 fails here
+    rather than turning a green cell into a wall of xfails.
+
+    lerp(inf, b, 1) is `inf + 1*(b - inf)` = inf - inf = NaN for a finite b, so this drives an
+    emitted NaN rather than one that arrived on an operand.
+    """
+    import torch
+    from helpers.golden_generators import TernarySFPUGolden
+
+    a = torch.tensor([float("inf")] * 1024, dtype=torch.float32)
+    b = torch.zeros(1024, dtype=torch.float32)
+    c = torch.ones(1024, dtype=torch.float32)
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        out = TernarySFPUGolden()(
+            MathOperation.SfpuLerp,
+            a,
+            b,
+            c,
+            0,
+            output_format,
+            input_format=input_format,
+            dest_acc=dest_acc,
+        )
+        survives = nan_survives_to_l1(input_format, output_format, dest_acc)
+        got_nan = bool(torch.isnan(out[0]))
+        assert got_nan == survives, (
+            f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: golden returns "
+            f"{'NaN' if got_nan else float(out[0])}, but nan_survives_to_l1 says "
+            f"{survives}"
+        )
+        if not survives:
+            # The substituted infinity is positive: the golden clears the sign of every NaN it
+            # emits, because SFPMAD promises the canonical 0x7fc00000 on Blackhole and leaves
+            # the sign open on Wormhole -- so exporting one would be inventing it.
+            assert float(out[0]) == float("inf"), (
+                f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: an emitted "
+                f"NaN packed to {float(out[0])}, not +inf"
+            )
+
+
+@pytest.mark.parametrize(
+    "op,operand",
+    [
+        (MathOperation.SfpuElwdiv, Operand.B),
+        (MathOperation.SfpuAtan2, Operand.B),
+        (MathOperation.Reciprocal, Operand.A),
+        (MathOperation.SfpuAddcdiv, Operand.C),
+        (MathOperation.SfpuSnakeBeta, Operand.C),
+        (MathOperation.SfpuBinaryFmod, Operand.B),
+    ],
+)
+def test_zero_poles_are_probed_with_both_signs(op, operand):
+    """A zero pole is two probes, not one: 1/+0 and 1/-0 differ in the result's sign.
+
+    The whole of cat G. Before this, boundary_probes() emitted only the +0.0 the table records,
+    and the other zero arrived only through FLOAT_SPECIALS -- which is gated on
+    *_SPECIALS_READY_OPS, and every op with a zero pole was outside it. So `div(x, -0.0)`, which
+    must be the opposite sign from `div(x, +0.0)`, was driven nowhere in the suite.
+    """
+    values = edge_values(
+        op,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        operand=operand,
+        dest_acc=DestAccumulation.Yes,
+    )
+    signs = {math.copysign(1.0, v) for v in values if v == 0.0}
+    assert signs == {1.0, -1.0}, f"{op.name} operand {operand.name} probes {values}"
+
+
+def test_negative_zero_pole_probe_is_dropped_where_it_cannot_be_delivered():
+    """Not sent on the datacopy path -- the LREG holds +0.0 there, so the probe is vacuous.
+
+    The same gate cat B and cat D go through, and the reason Signbit's six former xfails were
+    retired rather than kept: an xfail on a pipeline that flattens the datum blames the kernel
+    for something it never received, and no kernel change could ever clear it.
+    """
+    values = edge_values(
+        MathOperation.SfpuElwdiv,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        operand=Operand.B,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert not any(_is_negative_zero(v) for v in values), values
+
+
+def test_signed_zero_probe_survives_the_dedup():
+    """_dedup_representable keys zeros by sign, so both survive a list that holds them.
+
+    Load-bearing and easy to break: the two zeros are numerically equal and zero ULPs apart, so
+    any dedup written on `==` or on a distance threshold would silently drop one of them and
+    take the whole of cat G with it.
+    """
+    from helpers.sfpu_domains import _dedup_representable
+
+    kept = _dedup_representable([0.0, -0.0, 1.0], DataFormat.Float32)
+    signs = {math.copysign(1.0, v) for v in kept if v == 0.0}
+    assert signs == {1.0, -1.0}, kept
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The coverage ratchet
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Floors, not exact counts: gaining coverage must not need a test edit, losing it must not pass
+# silently. A, B, D, F and G come from sfpu_domains' own tables; C, E and the saturation half of
+# cat F are lists in the suites, so they are floored here against those lists directly -- which
+# also catches the rename that would otherwise empty one of them without a failure.
+#
+# Raising a floor is the last step of enrolling an op. `python -m helpers.sfpu_domains` prints
+# the five it derives.
+#
+# The counts are net of SWEEP_SKIPPED_OPS, so B, D and F each sit one below their table size
+# while ReluMin waits on tt-llk#1120: an op every sweep skips is enrolled but not driven, and
+# a floor that counted it would be a floor under nothing.
+_COVERAGE_FLOORS = {
+    "A": 23,
+    "B": 91,
+    "D": 65,
+    "F": 68,
+    "G": 17,
+}
+_SUITE_FLOORS = {
+    "C integer extremes": 30,
+    "E operand parameters": 7,
+    "F saturation sweeps": 9,
+}
+
+
+def _suite_coverage_counts():
+    """The three classes whose delivery machinery lives in the test modules, not in helpers."""
+    import test_eltwise_binary_sfpu as binary
+    import test_eltwise_unary_sfpu as unary
+    import test_sfpu_ternary as ternary
+
+    return {
+        "C integer extremes": len(
+            set(binary._INT_EXTREME_OPS)
+            | set(binary._SHIFT_EDGE_OPS)
+            | set(binary._UINT32_BINARY_OPS)
+            | set(unary._INT_UNARY_OPS)
+        ),
+        "E operand parameters": len(
+            set(unary._UNARY_SHIFT_OPS)
+            | set(binary._SHIFT_EDGE_OPS)
+            | set(ternary._SCALAR_OPS)
+        ),
+        "F saturation sweeps": len(
+            set(unary._SATURATION_PROBES) | set(binary._BINARY_SATURATION_PAIRS)
+        ),
+    }
+
+
+def test_coverage_does_not_regress():
+    """Per class, at least as many ops are driven at it as the last time it was measured.
+
+    The one thing the sweeps cannot do for themselves: coverage loss here is silent. Drop an op
+    from an enrolment table and no test fails -- the sweep collects fewer variants and the run is
+    green. Measured, removing three ops from the cat-F enrolment took 24 device variants out of
+    the unary sweep without a single failure.
+    """
+    from helpers.sfpu_domains import coverage_counts
+
+    counts = {**coverage_counts(), **_suite_coverage_counts()}
+    floors = {**_COVERAGE_FLOORS, **_SUITE_FLOORS}
+    shortfalls = {
+        name: (counts[name], floor)
+        for name, floor in floors.items()
+        if counts[name] < floor
+    }
+    assert not shortfalls, (
+        "coverage went backwards (class: got, floor): "
+        f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
+    )
+
+
+def test_edge_classes_partition_every_probe_a_variant_can_drive():
+    """No probe value falls out of every class, and none is driven by two.
+
+    A per-failure-class runtime axis only holds a sweep's coverage while the classes *partition*
+    the probe list. A value matched by no class leaves the sweep with nothing failing -- the
+    silent loss the ratchet exists to catch, arriving through a predicate instead of a table --
+    and one matched by two is driven under two markers, so a divergence on it can be excused by
+    either.
+
+    Both split sweeps are checked here rather than in their own modules, because the property is
+    about the classifier and not about a device: the ternary three-way split of an operand probe
+    (finite / NaN / infinity) and the logsigmoid two-way split of a derived pair (NaN golden /
+    the rest).
+    """
+    import test_eltwise_binary_sfpu as binary
+    import test_sfpu_ternary as ternary
+    from helpers.sfpu_domains import edge_values
+
+    total_probes = 0
+    for op in ternary._TERNARY_EDGE_OPS:
+        for operand in ternary._TERNARY_OPERANDS:
+            probes = edge_values(
+                op,
+                DataFormat.Float32,
+                DataFormat.Float32,
+                operand=operand,
+                specials=True,
+                dest_acc=DestAccumulation.Yes,
+            )
+            by_class = [
+                ternary._ternary_edge_class_values(
+                    op,
+                    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+                    operand,
+                    edge_class,
+                    DestAccumulation.Yes,
+                    True,
+                )
+                for edge_class in ternary._TERNARY_EDGE_CLASSES
+            ]
+            partitioned = [v for vals in by_class for v in vals]
+            assert len(partitioned) == len(probes), (
+                f"{op.name} operand {operand.name}: the three edge classes deliver "
+                f"{len(partitioned)} of {len(probes)} probes -- a value matched by no class is "
+                "coverage lost without a failure, and one matched by two is excused twice"
+            )
+            total_probes += len(probes)
+    # Not vacuous: an equality between two empty lists holds for every op.
+    assert total_probes > 0, "no ternary op has a probe on this cell any more"
+
+    pairs = binary._logsigmoid_derived_pairs(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32), DestAccumulation.Yes
+    )
+    split = [
+        pair
+        for edge_class in (
+            binary._LOGSIGMOID_CLASS_NAN,
+            binary._LOGSIGMOID_CLASS_NON_NAN,
+        )
+        for pair in binary._logsigmoid_derived_pairs(
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            DestAccumulation.Yes,
+            edge_class=edge_class,
+        )
+    ]
+    assert len(split) == len(
+        pairs
+    ), f"the two logsigmoid classes deliver {len(split)} of {len(pairs)} derived pairs"
+    # And the NaN really is on its own side, since that is the whole point of the split: the
+    # four agreeing pairs must not share a tile with the pair that carries the marker.
+    nan_pairs = binary._logsigmoid_derived_pairs(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        edge_class=binary._LOGSIGMOID_CLASS_NAN,
+    )
+    assert nan_pairs and all(math.isnan(a) for a, _b in nan_pairs)
+
+
+def test_coverage_counts_exclude_the_ops_no_sweep_can_drive():
+    """An op every sweep skips is not coverage, however completely its golden is enrolled.
+
+    The ratchet counts enrolment tables, and an op can be enrolled and still undrivable: ReluMin
+    carries a measured cat-B verdict and cat-D and cat-F entries, and all four unary sweeps skip
+    it for tt-llk#1120. Counted, the floors would claim three classes of coverage that no
+    collected device variant delivers -- and would stay green if a *fourth* op were skipped the
+    same way, which is the failure the ratchet exists to catch.
+
+    Both halves are pinned here, because either alone is satisfiable while the other is false:
+    the count really subtracts the table, and the sweeps really skip what the table names.
+    """
+    import test_eltwise_unary_sfpu as unary
+    from _pytest.outcomes import Skipped
+    from helpers.sfpu_domains import (
+        EXTREMES_READY_OPS,
+        SWEEP_SKIPPED_OPS,
+        coverage_counts,
+    )
+
+    assert SWEEP_SKIPPED_OPS, (
+        "with the table empty this test asserts nothing -- if the last issue closed, delete "
+        "the test with the entry"
+    )
+    for op in SWEEP_SKIPPED_OPS:
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            Skipped
+        ):
+            unary._skip_sweep_blocked_op(op)
+
+    # Cat F specifically, because EXTREMES_READY_OPS is one flat table and the subtraction is
+    # therefore checkable against it: the other classes union several.
+    assert coverage_counts()["F"] == len(
+        EXTREMES_READY_OPS.keys() - SWEEP_SKIPPED_OPS.keys()
+    )
+    assert SWEEP_SKIPPED_OPS.keys() & EXTREMES_READY_OPS.keys(), (
+        "no skipped op is enrolled for cat F any more, so the assertion above passes "
+        "trivially -- move it to a class the table still overlaps"
+    )
+
+
+def test_shift_ops_really_do_drive_the_integer_extremes():
+    """The shift sweeps are counted for cat C, so their value list has to contain an extreme.
+
+    Counting them is only honest while the values are still there, so the claim is checked
+    against the list rather than against the memory of having checked it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    from helpers.sfpu_domains import integer_specials
+
+    extremes = set(integer_specials(DataFormat.Int32))
+    driven = set(binary._SHIFT_EDGE_VALUES)
+    assert extremes & driven, (
+        "_SHIFT_EDGE_VALUES no longer contains an int32 extreme, so the shift ops must come "
+        "out of the cat-C count"
+    )
+    # INT32_MAX specifically: INT32_MIN is filtered per-op (sign-magnitude Dst cannot hold it)
+    # and has its own xfail, so it is present in the list but never actually driven.
+    assert 2**31 - 1 in driven
+
+
+def test_every_int_binary_op_drives_zero_or_records_why_not():
+    """Zero reaches every int binary op, on both operands, or the exclusion is written down.
+
+    `_INT_BINARY_STIMULI` gives each of these a single positive uniform range -- all but max/min
+    starting at 1 -- so before the zero probe existed, gcd(0, x) = x and lcm(0, x) = 0 were
+    simply never driven, and nothing recorded whether that was a decision or an omission. This
+    converts "nobody got to it" into "here is why not".
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    for op in binary._INT_BINARY_STIMULI:
+        pairs = binary._int_zero_pairs(op)
+        assert any(a == 0 for a, _ in pairs), (
+            f"{op.name}: a zero dividend is never driven, and 0 op x is defined for every op "
+            "in this table"
+        )
+        drives_zero_divisor = any(b == 0 for _, b in pairs)
+        excluded = op in binary._INT_ZERO_UNDEFINED_DIVISOR
+        assert drives_zero_divisor != excluded, (
+            f"{op.name}: a zero divisor is neither driven nor recorded in "
+            "_INT_ZERO_UNDEFINED_DIVISOR (or it is both)"
+        )
+        if excluded:
+            assert (
+                len(binary._INT_ZERO_UNDEFINED_DIVISOR[op]) > 20
+            ), f"{op.name}'s zero-divisor exclusion reason is too short to be a claim"
+
+
+def test_every_int_binary_op_is_driven_at_the_extremes_or_recorded():
+    """Cat C totality: driven at the integer extremes, or the exclusion is written down.
+
+    The same shape as the zero-operand check above, and it exists for the same reason: reading
+    _INT_BINARY_STIMULI's sub-range comments as "cannot be driven at an extreme" is how twelve
+    of these thirteen ops came to look excluded when measurement showed them fine. Those ranges
+    are accuracy bounds for the random sweep; whether an extreme *value* round-trips is a
+    different question, and this is what makes the suite answer it per op.
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    driven = set(binary._INT_EXTREME_OPS) | set(binary._UINT32_BINARY_OPS)
+    for op in binary._INT_BINARY_STIMULI:
+        excluded = op in binary._INT_EXTREMES_OUT_OF_RANGE
+        assert (op in driven) != excluded, (
+            f"{op.name}: an int binary op must be either driven at the extremes or recorded "
+            "in _INT_EXTREMES_OUT_OF_RANGE with a reason — not both, and not neither"
+        )
+        if excluded:
+            assert (
+                len(binary._INT_EXTREMES_OUT_OF_RANGE[op]) > 20
+            ), f"{op.name}'s out-of-range reason is too short to be a claim"
+    stale = sorted(
+        op.name
+        for op in set(binary._INT_EXTREMES_OUT_OF_RANGE)
+        - set(binary._INT_BINARY_STIMULI)
+    )
+    assert (
+        not stale
+    ), f"these ops carry an out-of-range verdict but are not swept: {stale}"
+
+
+def test_uint32_probe_reaches_the_actual_ceiling():
+    """The uint32 sweep must drive integer_specials(UInt32), not merely approach it.
+
+    It stopped at 2**32 - 2 for a while -- one value short -- so those ops were driven near the
+    top of the range and never at it. All bits set is the pattern a sign-magnitude Dst is most
+    likely to misread, so it is the one value in the list worth being exact about, and the
+    ledger counts these ops for cat C on the strength of it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    from helpers.sfpu_domains import integer_specials
+
+    driven = {v for pair in binary._UINT32_HIGH_PAIRS for v in pair}
+    missing = sorted(set(integer_specials(DataFormat.UInt32)) - driven)
+    assert not missing, f"the uint32 sweep never drives {missing}"
+
+
+def test_signed_division_probe_separates_trunc_from_floor():
+    """The signed-division pairs must contain inputs where the two conventions disagree.
+
+    Truncating and flooring division differ only when the operands have opposite signs, so a
+    probe list that happened to be all same-sign would drive both ops on stimuli that cannot
+    tell them apart -- which is exactly the state the positive-only table left them in, and a
+    green variant would look like it had fixed it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    golden = BinarySFPUGolden()
+    separating = [
+        (a, b)
+        for a, b in binary._SIGNED_DIVISION_PAIRS
+        if int(golden.ops[MathOperation.SfpuDivInt32](torch.tensor(a), torch.tensor(b)))
+        != int(
+            golden.ops[MathOperation.SfpuDivInt32Floor](
+                torch.tensor(a), torch.tensor(b)
+            )
+        )
+    ]
+    assert separating, (
+        "no pair in _SIGNED_DIVISION_PAIRS has trunc != floor, so the two ops are still "
+        "driven on stimuli that cannot distinguish them"
+    )
+
+
+def test_uint32_probe_reaches_above_the_signed_boundary_on_both_sides():
+    """The uint32 pairs must cross 2**31, and must order a large operand against a small one.
+
+    Below 2**31 an unsigned op and its signed twin agree on every input, so this list is the
+    only thing that can tell MaxUint32 from MaxInt32. Both halves of the claim are asserted:
+    that large values are present at all, and that they are *paired against* small ones -- a
+    random spec over two intervals gets the first and silently loses the second, because
+    interval selection is proportional to length and the upper half is ~2000x longer.
+
+    2**31 itself is excluded: it is the sign-magnitude "negative zero" pattern that cannot
+    round-trip, which has its own xfail.
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    pairs = binary._UINT32_HIGH_PAIRS
+    boundary = 2**31
+
+    def as_signed(v):
+        return v - 2**32 if v >= boundary else v
+
+    assert any(
+        a >= boundary or b >= boundary for a, b in pairs
+    ), "no pair reaches above 2**31, where the unsigned ops differ from the signed ones"
+    crossed = [(a, b) for a, b in pairs if (a >= boundary) != (b >= boundary)]
+    assert crossed, (
+        "every pair sits on one side of 2**31, so no comparison ever orders a large operand "
+        "against a small one -- the case a signed reading of the bits gets backwards"
+    )
+    separating = [
+        (a, b) for a, b in pairs if max(as_signed(a), as_signed(b)) != max(a, b)
+    ]
+    assert len(separating) > len(pairs) // 4, (
+        f"only {len(separating)} of {len(pairs)} pairs distinguish an unsigned maximum from a "
+        "signed one"
+    )
+    assert boundary not in {v for pair in pairs for v in pair}, (
+        "2**31 is the sign-magnitude negative-zero pattern and cannot round-trip; use "
+        "2**31 + 1 as INT32_MIN + 1 stands in on the signed side"
+    )
+
+
+def test_logsigmoid_exp_branch_is_a_logsigmoid():
+    """-exp(-x) has to *be* logsigmoid(x) above the threshold, or modelling it proves nothing.
+
+    BinarySFPUGolden._logsigmoid returns -t2 above 4.0, which makes the device test assert that
+    the kernel selected the right branch and used the operand it was handed -- and stops it
+    asserting anything about the mathematics. This is the other half: that the kernel's
+    approximation is a good one on the interval it is used on, and in particular that the
+    threshold sits where the approximation has already become good.
+
+    The bound is loose on purpose. It is not a tolerance the device test uses; it is a guard
+    that fails if the branch threshold ever moves down to where -exp(-x) is not a logsigmoid,
+    which is the change that would make the modelled golden quietly vacuous.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    threshold = BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH
+    x = torch.linspace(threshold, 40.0, 512, dtype=torch.float64)
+    approximation = -torch.exp(-x)
+    exact = torch.nn.functional.logsigmoid(x)
+    worst = float(((approximation - exact).abs() / exact.abs()).max())
+    assert worst < 0.02, (
+        f"-exp(-x) is {worst:.2%} off logsigmoid(x) at its worst on [{threshold}, 40]; the "
+        "golden models the kernel's branch verbatim, so this is the only thing asserting that "
+        "the branch computes a logsigmoid at all"
+    )
+    # And that the error is worst at the threshold and decays, which is what makes a single
+    # bound meaningful over an unbounded interval.
+    at_threshold = float(((approximation[0] - exact[0]) / exact[0]).abs())
+    assert at_threshold == pytest.approx(worst, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32]
+)
+def test_where_mixed_condition_is_mixed_on_every_format(fmt):
+    """Both branches of the `mixed` where variant must be reachable, on every format.
+
+    The in-test assertion catches this too, but only on a lane with hardware. This is the
+    failure mode that motivated the whole check: a condition that is all-true passes against a
+    golden that is also all-true, so the variant reports green while testing half of what it
+    claims. `uniform(0.0, 1.0)` produced 0 exact zeros in 4096 on Float32 and 20 on Float16_b;
+    only Int32's integer narrowing made it look mixed.
+
+    Pinned per format because the two ways to get this wrong are format-specific: a float
+    format rounds nothing to zero, and an integer one quantizes a fractional non-zero *to*
+    zero -- so a spread chosen for one silently degenerates on the other.
+    """
+    import test_sfpu_ternary
+    import torch
+    from helpers.stimuli_generator import generate_stimuli
+
+    spec = StimuliSpec(distribution=test_sfpu_ternary._where_mixed_condition, seed=0)
+    src, _, _, _ = generate_stimuli(
+        stimuli_format_A=fmt,
+        input_dimensions_A=[64, 64],
+        stimuli_format_B=fmt,
+        input_dimensions_B=[64, 64],
+        spec_A=spec,
+        spec_B=spec,
+    )
+    values = src.flatten().to(torch.float32)
+    frac_true = float((values != 0.0).float().mean())
+    assert 0.2 < frac_true < 0.8, f"{fmt.name}: condition is {frac_true:.1%} true"
+    # Both signs on the non-zero half, so the variant asserts that `cond != 0` and not
+    # `cond > 0` is what selects the true branch.
+    assert bool((values > 0).any()) and bool((values < 0).any()), (
+        f"{fmt.name}: the non-zero half of the condition is single-signed, so a kernel "
+        "selecting on cond > 0 would pass"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# How the probe fills the face
+#
+# Not metadata, but the mechanism that delivers it, and the failure mode is the same shape as
+# everything else here: a probe that reaches only lanes 0-3 still reads as coverage, and no
+# hardware run reports it -- the variant passes, having tested four lanes and 252 zeros.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_edge_spec_cycles_probes_across_the_whole_face():
+    """Edge probes must fill the face rather than leaving a zero tail.
+
+    With a four-value median list against a 256-element face, a zero-filled tail makes the
+    tolerance verdict a statement about 0.0: PCC and every aggregate are dominated by the
+    filler, and the probes never leave the first vector operation of each face.
+    """
+    from helpers.sfpu_domains import edge_spec
+
+    spec = edge_spec(
+        MathOperation.Reciprocal,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert spec.cycle, (
+        "edge probes must fill the face; a zero-filled tail makes the verdict a statement "
+        "about 0.0, not about the probe"
+    )
+
+
+def test_edge_spec_lets_a_caller_opt_out_of_cycling():
+    """cycle=True is a default, not a fixed policy.
+
+    No sweep passes it today: the int comparison sweep builds its own spec around a zero tail
+    on purpose -- the tail is its below-threshold probe -- but it does so through
+    StimuliSpec.custom directly and never reaches this builder. So this test is what keeps the
+    knob reachable, for the sweep that next wants a probe the cycled face would destroy.
+    """
+    from helpers.sfpu_domains import edge_spec
+
+    spec = edge_spec(
+        MathOperation.Reciprocal,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+        cycle=False,
+    )
+    assert not spec.cycle
+
+
+def test_cycled_custom_face_holds_only_probe_values():
+    """A cycled face contains the probe values and nothing else -- no filler, in any lane.
+
+    The strategy-level half of the same claim: `test_edge_spec_cycles_probes_across_the_whole_face`
+    pins the flag, this pins what the flag does. A four-value list must produce a face with no
+    zeros in it unless 0.0 is one of the four, and every lane must hold a value the caller asked
+    for.
+    """
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    size = 256
+    values = [-2.5, -1.5, 1.5, 2.5]
+    face = CustomStrategy().generate_face(
+        StimuliSpec.custom(values=values, cycle=True),
+        DataFormat.Float32,
+        16,
+        size,
+        None,
+    )
+    assert face.numel() == size
+    assert not bool((face == 0.0).any()), "a cycled face must have no filler lanes"
+    assert set(face.tolist()) == set(values)
+    # Tiled in order and truncated at the end, so a face that is not a multiple of the list
+    # length still starts every repeat at values[0].
+    assert face[: len(values)].tolist() == values
+    assert face[len(values) : 2 * len(values)].tolist() == values
+
+
+def test_uncycled_custom_face_still_zero_fills():
+    """The default is unchanged, so a caller that relied on the tail still gets it."""
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    face = CustomStrategy().generate_face(
+        StimuliSpec.custom(values=[1.0, 2.0]),
+        DataFormat.Float32,
+        16,
+        256,
+        None,
+    )
+    assert face[:2].tolist() == [1.0, 2.0]
+    assert int((face == 0.0).sum()) == 254
+
+
+def test_custom_rejects_an_over_long_list_on_both_branches():
+    """Longer than a face is an error whether the values are written at the head or tiled.
+
+    Writing 300 values at the head of a 256-element face drops 44 of them, which is the worst
+    failure mode an edge list can have. Tiling was previously accepted as the fix and is not
+    one: it drops the same 44, in every face, so the trailing probes are not sampled less often
+    -- they are never driven, and the variant reports coverage of a list it never delivered.
+    """
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    long_list = [float(i) for i in range(300)]
+    for spec in (
+        StimuliSpec.custom(values=long_list),
+        StimuliSpec.custom(values=long_list, cycle=True),
+    ):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="face has only 256"
+        ):
+            CustomStrategy().generate_face(spec, DataFormat.Float32, 16, 256, None)
+
+    # Exactly a face still fits on both branches, so the bound is the face size and not a
+    # margin below it: a 256-value edge list is the largest either branch can deliver whole.
+    for spec in (
+        StimuliSpec.custom(values=long_list[:256]),
+        StimuliSpec.custom(values=long_list[:256], cycle=True),
+    ):
+        face = CustomStrategy().generate_face(spec, DataFormat.Float32, 16, 256, None)
+        assert face.tolist() == long_list[:256]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cat F — format extremes and the subnormal band
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16]
+)
+def test_format_extremes_straddle_the_ftz_cliff(fmt):
+    """The subnormal probe must be below the smallest normal and the min-normal probe at it.
+
+    A probe placed on the wrong side of the flush-to-zero cliff tests nothing and looks like it
+    tests everything: the pair exists to put one value where the hardware keeps it and one where
+    the hardware (or the golden's _apply_ftz) does not, and if both land on the same side the
+    variant still passes.
+
+    Checked against golden_generators._FTZ_THRESHOLD rather than against a literal, because that
+    is the number the goldens actually flush by -- the two are built from the same torch.finfo
+    call and this is what keeps them so.
+    """
+    from helpers.golden_generators import _FTZ_THRESHOLD
+    from helpers.sfpu_domains import _FORMAT_MIN_NORMAL, format_extremes
+
+    magnitudes = sorted({abs(v) for v in format_extremes(fmt)})
+    subnormal, min_normal = magnitudes[0], magnitudes[1]
+
+    assert min_normal == _FORMAT_MIN_NORMAL[fmt]
+    assert subnormal < min_normal, (
+        f"{fmt.name}: the subnormal probe {subnormal} is not below the smallest normal "
+        f"{min_normal}, so the pair asserts nothing about the subnormal band"
+    )
+
+    threshold = _FTZ_THRESHOLD[fmt]
+    if fmt is DataFormat.Float16:
+        # Float16 keeps subnormals, so its cliff is below the smallest *subnormal* and this
+        # probe is a real value the hardware holds rather than one it flushes.
+        assert subnormal > threshold, (
+            f"{fmt.name} keeps subnormals, so the probe {subnormal} must be above the FTZ "
+            f"threshold {threshold} -- otherwise it is a flushed value, not a subnormal one"
+        )
+    else:
+        # Float32 and Float16_b flush the whole subnormal band, so the cliff sits at the
+        # smallest normal and the probe must be on the flushed side of it.
+        assert threshold == min_normal
+        assert subnormal < threshold, (
+            f"{fmt.name} flushes subnormals below {threshold}, and the probe {subnormal} is "
+            "not below it"
+        )
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16]
+)
+def test_format_extremes_are_exactly_representable(fmt):
+    """Every cat-F probe must survive a round trip through the format it is a probe for.
+
+    Same trap the saturation probes are written to avoid, and it applies just as hard here: a
+    value written near a threshold gets pinned to a value other than the one it names. _FORMAT_MAX_MAGNITUDE's bfloat16 fallback is a decimal literal that sits a
+    hair *above* the true bfloat16 maximum, so an unrounded ceiling probe would quantize on the
+    way in and stop being the ceiling.
+    """
+    import torch
+    from helpers.sfpu_domains import format_extremes
+
+    dtype = format_dict[fmt]
+    for value in format_extremes(fmt):
+        round_tripped = float(
+            torch.tensor([value], dtype=torch.float32).to(dtype).float()
+        )
+        assert round_tripped == value, (
+            f"{fmt.name}: the probe {value!r} arrives as {round_tripped!r}, so it pins a "
+            "value other than the one it names"
+        )
+
+
+def test_format_extremes_are_never_clipped_away():
+    """clip_to_format() must keep every probe format_extremes() emits, on every pipeline.
+
+    The two read the same table, and this is what keeps them reading it the same way: a ceiling
+    derived from the format's own maximum but clipped against the *pipeline's* would silently
+    drop the one probe the sweep exists to drive, leaving a variant that passes on six values
+    instead of eight and says nothing about it.
+    """
+    from helpers.sfpu_domains import clip_to_format, format_extremes
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        if not extremes_safe(input_format, output_format, dest_acc):
+            continue
+        range_fmt = narrowest_range_format(input_format, output_format)
+        emitted = list(format_extremes(range_fmt))
+        assert clip_to_format(emitted, range_fmt) == emitted, (
+            f"{input_format.name}->{output_format.name}: clip_to_format drops "
+            f"{sorted(set(emitted) - set(clip_to_format(emitted, range_fmt)))}"
+        )
+
+
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+@pytest.mark.parametrize("input_format", [DataFormat.Float32, DataFormat.Float16_b])
+def test_subnormal_probe_is_sent_only_where_it_can_be_delivered(input_format, dest_acc):
+    """The subnormal is dropped off the unpack-to-dest path; the other three probes are not.
+
+    The measured half of cat F (see subnormal_delivered): Ceil, Floor, Sign and Signbit all
+    answered as though the input were +0.0 on every pipeline but Float32 at dest_acc=Yes.
+    Dropping the probe rather than xfailing it is the same decision Signbit's six retired
+    entries record -- an xfail there blames the kernel for a datum it never received.
+    """
+    from helpers.sfpu_domains import _FORMAT_MIN_NORMAL, extreme_values
+
+    values = extreme_values(input_format, input_format, dest_acc)
+    subnormals = [
+        v for v in values if v != 0.0 and abs(v) < _FORMAT_MIN_NORMAL[input_format]
+    ]
+    delivered = input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+    assert bool(subnormals) == delivered, (
+        f"{input_format.name} dest_acc={dest_acc}: subnormal probes {subnormals}, but "
+        f"subnormal_delivered says {delivered}"
+    )
+    # The ceiling, its neighbour and the smallest normal are unaffected either way, so the
+    # gate must never be doing more than it claims.
+    assert len(values) == (8 if delivered else 6), (
+        f"{input_format.name} dest_acc={dest_acc}: {len(values)} probes, expected the four "
+        "magnitudes in both signs minus the subnormal pair where it is not delivered"
+    )
+
+
+def test_extremes_gate_is_not_the_specials_gate():
+    """extremes_safe() and specials_safe() must not collapse into each other.
+
+    They answer different questions -- whether a finite datum with an extreme exponent arrives,
+    against whether a non-finite one does -- and the whole reason cat F has its own flag is that
+    specials_safe()'s two measured breakers (a Float16 anywhere, a 16-bit input into a 32-bit
+    Dest) are about non-finites and do not apply to a subnormal or a ceiling. If someone
+    "simplifies" one into the other, this fails rather than silently taking cat F off the cells
+    where it is the whole point.
+    """
+    from helpers.sfpu_domains import extremes_safe
+
+    differ = [
+        cell
+        for cell in _EDGE_SWEEP_CELLS
+        if extremes_safe(*cell) != specials_safe(*cell)
+    ]
+    assert differ, (
+        "extremes_safe() now agrees with specials_safe() on every cell the edge sweep "
+        "reaches, which means one of them has been redefined in terms of the other"
+    )
+    # Every cell specials_safe accepts, extremes_safe must accept too: a pipeline that carries
+    # a NaN certainly carries a large finite number. The converse is what differs.
+    for cell in _EDGE_SWEEP_CELLS:
+        if specials_safe(*cell):
+            assert extremes_safe(
+                *cell
+            ), f"{cell} carries specials but not extremes, which cannot be right"
+
+
+def test_format_extremes_rejects_formats_with_no_per_element_small_end():
+    """Integer and block-float formats raise rather than returning a plausible number.
+
+    Bfp8_b's smallest element is set by the exponent shared across its 16-element block, so any
+    single number returned for it would be wrong for every block but one -- and would look
+    entirely reasonable in a probe list.
+    """
+    from helpers.sfpu_domains import format_extremes
+
+    for fmt in (DataFormat.Int32, DataFormat.UInt32):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="cat C"
+        ):
+            format_extremes(fmt)
+
+    for fmt in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="shared across a block"
+        ):
+            format_extremes(fmt)
+
+
+def test_every_extremes_enrolment_carries_a_claim():
+    """A cat-F reason string has to say something, as the cat-B ones do."""
+    from helpers.sfpu_domains import EXTREMES_READY_OPS
+
+    assert EXTREMES_READY_OPS, "the cat-F tranche is empty, so nothing is ever driven"
+    for op, reason in EXTREMES_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-F reason is too short to be a claim"
 
 
 def test_total_order_key_matches_the_isa_remap():
@@ -1064,10 +2127,6 @@ def test_zero_pole_probes_are_not_loosened(op):
         op, DataFormat.Float32, DataFormat.Float32, dest_acc=DestAccumulation.No
     )
     assert min(abs(v) for v in probes if v != 0.0) == 2 * 2**-23
-
-
-def _is_negative_zero(value: float) -> bool:
-    return value == 0.0 and math.copysign(1.0, value) < 0.0
 
 
 def test_pow_edge_pairs_include_negative_zero_exponent():

@@ -34,11 +34,17 @@ from helpers.sfpu_domains import (
     BINARY_SPECIALS_READY_OPS,
     SHIFT_EDGE_AMOUNTS,
     edge_pair_values,
+    edge_values,
     exclude_undefined_pair,
     for_op,
+    format_extremes,
     generated_nan_sign_is_asserted,
     integer_specials,
+    nan_survives_to_l1,
+    negative_zero_delivered,
+    op_edge_points,
     ops_with_singularity,
+    signed_zero_pole_cells,
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -496,14 +502,42 @@ def _comparison_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
-def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 (exp(-x)) is only read in the x > 4 branch, so
-    # restrict x to [-8, 3.9] (never uses in1) and sweep the passthrough (x < -4) and
-    # polynomial (-4 < x < 4) branches. The distribution is invoked per 16x16 face (size 256).
-    def dist(size, dtype, generator):
-        return torch.linspace(-8.0, 3.9, size).to(dtype)
+# `calculate_logsigmoid` has three branches -- passthrough below -4, a ninth-degree polynomial
+# in [-4, 4], and `result = -in1` above 4, the only one that reads operand B. The sweep used to
+# stop at 3.9 and say why ("never uses in1"), which is exactly why that branch went unexecuted
+# and why SfpuLogsigmoid was excused from cat B as "effectively unary".
+#
+# B is not a free operand: the kernel's contract is in1 == exp(-in0), so it is built *from* A.
+# Both come from one position ramp, as _isclose_stimuli_specs() and _comparison_stimuli_specs()
+# already do it, so they cannot drift apart.
+_LOGSIGMOID_EXP_BRANCH = 4.0
 
-    return StimuliSpec(distribution=dist, seed=0)
+
+def _logsigmoid_x(size, low, high):
+    """The x ramp both operands are built from. Deterministic, so the pairing is exact."""
+    return torch.linspace(low, high, size)
+
+
+def _logsigmoid_stimuli_specs(low=-8.0, high=12.0):
+    """Paired (x, exp(-x)) specs sweeping [*low*, *high*], invoked per 16x16 face.
+
+    The default crosses the exp branch: 12.0 puts about 40% of each face above the threshold,
+    enough for the branch to be non-vacuous without dominating the face.
+
+    exp(-x) is supplied on *every* lane rather than only above the threshold, because that is
+    the operand contract -- feeding something else on the lanes the kernel does not read would
+    make the tensor a lie about what was driven, and would hide a kernel that read in1 on a
+    branch it should not. At x = -8 that is exp(8) = 2981, comfortably inside every format
+    this sweep runs on.
+    """
+
+    def a_face(size, dtype, generator):
+        return _logsigmoid_x(size, low, high).to(dtype)
+
+    def b_face(size, dtype, generator):
+        return torch.exp(-_logsigmoid_x(size, low, high)).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
 
 
 # =============================================================================
@@ -974,17 +1008,211 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
-    # exp(-x) operand the shared harness can't provide, left to a future driver.
+    """logsigmoid(x) swept across all three branches, with exp(-x) paired into operand B."""
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
+    spec_A, spec_B = _logsigmoid_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+#: The two failure classes of the derived logsigmoid probe.
+#:
+#: Split because sfpu_binary makes one aggregate assert over the whole override, so a marker on
+#: it stands for every pair in the tile: bundled, the NaN pair's sign divergence excused the four
+#: pairs measured to agree, and a regression at +/-inf or +/-0 would have reported as the
+#: expected failure. Two test functions rather than a runtime() axis on one, following
+#: test_ttnn_where_negative_zero_condition -- there is no shared-ELF starvation to guard when
+#: neither variant can empty the other's compile key.
+_LOGSIGMOID_CLASS_NAN = "nan_in"
+_LOGSIGMOID_CLASS_NON_NAN = "non_nan_specials"
+
+
+def _logsigmoid_derived_pairs(formats, dest_acc, edge_class=None):
+    """(x, exp(-x)) pairs at the IEEE specials, for the one op whose operand B is derived.
+
+    *edge_class* keeps one failure class per variant: _LOGSIGMOID_CLASS_NAN is the pair whose
+    golden is a NaN the kernel emitted, _LOGSIGMOID_CLASS_NON_NAN is the +/-inf and +/-0 pairs,
+    whose goldens are finite or infinite and were all measured to agree. None returns both,
+    which nothing drives -- it is what the host tests compare the two halves against.
+
+    Cat B elsewhere in this suite is edge_pair_values(), a cartesian *product* of two free
+    lists -- right for `div(a, b)`, wrong here: logsigmoid's contract is in1 == exp(-in0), so a
+    NaN in B against a finite A is not exp(-A) and the pair asserts nothing either way.
+
+    A's values come from edge_values() rather than a list, so the op enrols by the usual
+    machinery and the -0.0 gate applies as it does everywhere else. Every derived pair is then
+    coherent: exp(-inf) = 0 into the branch that reads B, exp(+inf) = inf into the passthrough
+    that does not, exp(-0) = 1 into the polynomial.
+    """
+    x_values = edge_values(
+        MathOperation.SfpuLogsigmoid,
+        formats.input_format,
+        formats.output_format,
+        specials=True,
+        dest_acc=dest_acc,
+    )
+    if edge_class == _LOGSIGMOID_CLASS_NAN:
+        x_values = [v for v in x_values if math.isnan(v)]
+    elif edge_class == _LOGSIGMOID_CLASS_NON_NAN:
+        x_values = [v for v in x_values if not math.isnan(v)]
+    x = torch.tensor(x_values, dtype=torch.float32)
+    return list(zip(x.tolist(), torch.exp(-x).tolist()))
+
+
+# What the derived probe found on a Blackhole p150: one pair of the five, the NaN.
+#
+# calculate_logsigmoid seeds `result = x` then negates before its branch select, so a NaN -- whose
+# handling SFPSETCC's contract explicitly excludes -- takes the polynomial arm and comes out
+# sign-flipped. The golden canonicalises an emitted NaN's sign to positive, as it must: IEEE
+# leaves it unspecified and SFPMAD promises 0x7fc00000 on Blackhole.
+#
+# Two conditions, both needed -- deriving on the first alone marks three passing cells, which is
+# how the second was found. The pack must narrow, since while a NaN survives to L1 the
+# comparator's both-NaN clause accepts either sign (nan_survives_to_l1()'s question). And the
+# datum must arrive by the datacopy: measured, the flip appears on a Float16_b input but not on a
+# Float32 one at dest_acc=Yes -- the same unpack-to-dest boundary that decides whether a -0.0 or
+# a subnormal survives. What SrcA does to a NaN's sign is not established here; that it is the
+# same boundary is.
+#
+# The other four pairs agree everywhere, and are driven unmarked by
+# test_eltwise_binary_sfpu_logsigmoid_specials -- this reason belongs to the NaN pair and to
+# nothing else, which is what splitting the two variants makes true rather than merely stated.
+_LOGSIGMOID_NAN_SIGN_REASON = (
+    "logsigmoid(NaN) returns a sign-flipped NaN -- the polynomial arm negates, and SFPSETCC's "
+    "contract excludes a NaN operand -- so where the pack substitutes a signed infinity the "
+    "kernel gives -inf against the golden's +inf. Only where the pack narrows *and* the datum "
+    "arrived by the datacopy; a 32-bit input at dest_acc=Yes agrees."
+)
+
+
+def _logsigmoid_nan_sign_cells():
+    """The cells where the pack turns logsigmoid's NaN sign into an observable infinity."""
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
+        and not nan_survives_to_l1(fmt.input_format, fmt.output_format, dest_acc)
+        # negative_zero_delivered() is "did this arrive by unpack-to-dest", asked of the
+        # input leg. Reused rather than restated: it is the same predicate, and a second copy
+        # would let the two drift while looking identical.
+        and not negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
+def _skip_logsigmoid_specials_unsupported(formats, dest_acc):
+    """The cells both derived-probe variants share, asked once so they cannot diverge."""
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    if not specials_safe(formats.input_format, formats.output_format, dest_acc):
+        pytest.skip(
+            reason="this pipeline does not deliver non-finites intact "
+            "(see sfpu_domains.specials_safe)"
+        )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_specials(formats, dest_acc, mathop):
+    """The +/-inf and +/-0 pairs of the derived probe, asserted with no marker over them.
+
+    Unmarked is the point of the split: these four pairs were measured to agree on every safe
+    cell, and while they shared a tile with the NaN pair the xfail that pair needs stood for
+    them too. No golden here is a NaN -- logsigmoid(-inf) = -inf, (+inf) = 0, (+/-0) = -log 2 --
+    so the generated-NaN sign question does not arise and the comparison stays exact, which is
+    the other half of the same point: the relaxation belongs only to the variant that needs it.
+    """
+    _skip_logsigmoid_specials_unsupported(formats, dest_acc)
+
+    pairs = _logsigmoid_derived_pairs(
+        formats, dest_acc, edge_class=_LOGSIGMOID_CLASS_NON_NAN
+    )
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
-        spec_A=_logsigmoid_stimuli_spec(),
+        src_A_override=_build_paired_tile_override(pairs, torch.float32),
     )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_nan(request, formats, dest_acc, mathop):
+    """The NaN pair of the derived probe alone, carrying the sign divergence it measured.
+
+    Its own variant so the marker below covers one pair and one failure class. The other four
+    pairs are in test_eltwise_binary_sfpu_logsigmoid_specials, unmarked.
+    """
+    _skip_logsigmoid_specials_unsupported(formats, dest_acc)
+
+    # logsigmoid(NaN) leaves the polynomial arm as a NaN the datapath *built*, not the operand
+    # forwarded, so `SFPMAD.md`'s wording covers it: canonical 0x7fc00000 on Blackhole, "might or
+    # might not" set on Wormhole. Where the pipeline also narrows, that sign becomes the
+    # observable result -- an infinity of one sign or the other -- and there is nothing sound to
+    # assert on Wormhole. Same gate and same per-lane relaxation the edge sweep applies at its
+    # nan_golden class; every measurement behind the xfail below is a p150, where this is False
+    # and the full assertion stands.
+    unspecified_sign = generated_nan_sign_is_asserted(
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
+
+    # Only where the sign *is* asserted: with the comparison relaxed to magnitude the divergence
+    # cannot be observed, and the marker would be an XPASS every run.
+    if (
+        not unspecified_sign
+        and (
+            formats.input_format,
+            formats.output_format,
+            dest_acc,
+        )
+        in _logsigmoid_nan_sign_cells()
+    ):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_LOGSIGMOID_NAN_SIGN_REASON, strict=False)
+        )
+
+    pairs = _logsigmoid_derived_pairs(
+        formats, dest_acc, edge_class=_LOGSIGMOID_CLASS_NAN
+    )
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.float32),
+        unspecified_nonfinite_sign=unspecified_sign,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_exp_branch(formats, dest_acc, mathop):
+    """The x > 4 branch on its own, where operand B is the result.
+
+    Its own variant because the branch is invisible inside the swept one: |logsigmoid(x)| runs
+    from 8.0 to 6e-6 across [-8, 12], so PCC there is decided by the passthrough lanes and every
+    above-threshold lane could be wrong without moving the verdict.
+
+    Starts just above 4.0, not at it: the kernel takes the polynomial arm at exactly 4.0 (its
+    `v_elseif` is `>= -4 && < 4` on the negated operand), so including it would put two branches
+    back in one tensor.
+    """
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    spec_A, spec_B = _logsigmoid_stimuli_specs(low=4.25, high=12.0)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 # =============================================================================
@@ -1134,10 +1362,17 @@ _UINT32_BINARY_OPS = {
     MathOperation.SfpuRemainderUint32,
 }
 
-# int/uint binary ops sharing the same driver: dest_acc=Yes, single-format, and a per-op
-# uniform positive stimuli range. Ranges keep operands (and results) non-negative and small
-# enough to round-trip the sign-magnitude Dst packer plus any int->fp32 reciprocal the
-# kernel uses. mathop -> (low, high).
+
+# int/uint binary ops sharing one driver (dest_acc=Yes, single-format), mathop -> (low, high):
+# the range each kernel is *documented to be valid on* and nothing else, which is why they are
+# all positive and far from the format ceiling -- operands and results stay round-trippable
+# through the sign-magnitude Dst packer and any int->fp32 reciprocal.
+#
+# It deliberately does not encode which individual values get driven, and reading it as though it
+# did is how zero came to be missing from every one of them. The discrete values live in
+# test_eltwise_binary_sfpu_int_zero_operands and test_eltwise_binary_sfpu_uint32_high_range,
+# which drive them as a *product*: 0 against a positive, against 1 and against itself are three
+# cases, and a uniform draw with a few values grafted in tests one of them.
 _INT_BINARY_STIMULI = {
     # trunc/floor division < 2**24: exact int->fp32 reciprocal, trunc == floor, and the
     # sign-magnitude pack path can't round-trip the negatives these kernels would emit.
@@ -1170,12 +1405,299 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
     _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc)
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
-    low, high = _INT_BINARY_STIMULI[mathop]
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=_INT_BINARY_STIMULI[mathop][0],
+            high=_INT_BINARY_STIMULI[mathop][1],
+        ),
+    )
+
+
+# Ops whose *divisor* has no defined answer at zero, excluded from the zero probe's B operand
+# rather than driven blind.
+#
+# From the kernels: calculate_div_int32 and its floor twin build the quotient from
+# `_sfpu_reciprocal_<2>`, whose contract is stated only for 0 <= x < 2, and remainder and fmod
+# compose the same quotient -- so a zero divisor is outside what the primitive promises, exactly
+# as for the float div family in _BINARY_SPECIALS_NOT_READY. Section 5.6 Q1's composition
+# question, not a new one, and the honest record is an exclusion rather than an xfail against a
+# result nobody specified. The goldens agree: torch's integer div and the Python `%` both raise
+# at a zero divisor, so there is no reference answer either.
+#
+# A zero *dividend* is fine for all five and is driven -- 0 / n and 0 % n are ordinary.
+_INT_ZERO_UNDEFINED_DIVISOR: Dict[MathOperation, str] = {
+    MathOperation.SfpuDivInt32: "quotient via _sfpu_reciprocal_, whose contract is stated "
+    "only for 0 <= x < 2; torch's integer div raises at a zero divisor too",
+    MathOperation.SfpuDivInt32Floor: "as SfpuDivInt32 -- the same reciprocal composition, "
+    "differing only in how the quotient is rounded",
+    MathOperation.SfpuRemainderInt32: "composes the same reciprocal quotient; the golden's "
+    "Python % raises ZeroDivisionError",
+    MathOperation.SfpuFmodInt32: "as SfpuRemainderInt32 -- the same quotient, differing only "
+    "in the sign convention for a negative dividend",
+    MathOperation.SfpuRemainderUint32: "as SfpuRemainderInt32, with the operands read "
+    "unsigned; the divisor being zero is the same undefined reciprocal either way",
+}
+
+assert set(_INT_ZERO_UNDEFINED_DIVISOR) <= set(_INT_BINARY_STIMULI), (
+    "these ops record a zero-divisor exclusion but are not driven by the int uniform sweep: "
+    f"{sorted(op.name for op in set(_INT_ZERO_UNDEFINED_DIVISOR) - set(_INT_BINARY_STIMULI))}"
+)
+
+# Cat C for the arithmetic integer ops, decided by measurement rather than by reading
+# _INT_BINARY_STIMULI's sub-range comments.
+#
+# Reading them suggested most of these ops were out of range at the extremes (div below 2**24,
+# lcm below 2**15, mul below ~46340). Driven on a Blackhole p150, eight of the ten int32 ops pass
+# at the full signed extremes: those bounds are *accuracy* bounds for the random sweep, and every
+# pair from integer_specials is degenerate for a divide -- x/1, x/x, 0/x -- so the quotient is
+# exact whatever the magnitude. Cat C asks about the values; the ranges are about the bulk.
+#
+# So the exclusion table has one entry, not seven.
+_INT_EXTREMES_OUT_OF_RANGE: Dict[MathOperation, str] = {
+    MathOperation.SfpuLcm: "the kernel's binary-GCD stage assumes |a|, |b| < 2**15 and "
+    "truncates above it: measured, lcm(1, INT32_MAX) returns 65535 and "
+    "lcm(INT32_MAX, INT32_MAX) returns 8388607, against INT32_MAX for both. The bound is real "
+    "and an extreme operand is sixteen binades outside it.",
+}
+
+# Ops driven at the *non-negative* extremes only, and for a reason that is the golden's rather
+# than the kernel's.
+#
+# fmod's result follows the sign of the dividend, C-style; BinarySFPUGolden._fmod_int is Python
+# `%`, which follows the divisor, and its own comment says so -- "non-negative stimuli make it
+# equal to a % b". Measured: fmod(-1, INT32_MAX) returns -1 from the kernel, which is correct,
+# against 2147483646 from the golden, which is not. Restricting the probe keeps the op covered
+# where the reference is valid instead of recording a divergence the kernel does not own.
+# Remainder is unaffected: both it and Python `%` follow the divisor, and it passes signed.
+_INT_EXTREMES_NON_NEGATIVE = frozenset({MathOperation.SfpuFmodInt32})
+
+# A composite and a prime to pair the knees against, so gcd and lcm results are not all
+# trivially 1 or equal. The knees themselves -- 0 and 1 -- come from _OP_EDGE_POINTS via
+# op_edge_points(), not from a list here: an op joins this probe by gaining a table entry, and
+# the coverage ledger then derives cat D from the same place rather than from a list it cannot
+# see. Ops with no registered knee (the divisor family) still get 0 as a *dividend*, which is
+# an ordinary value rather than a knee.
+_INT_ZERO_SPREAD = (2, 7)
+_INT_ZERO_DIVIDEND = 0
+
+
+def _int_zero_probe(mathop):
+    """The values *mathop* is driven at: its registered knees plus the spread."""
+    knees = tuple(int(v) for v in op_edge_points(mathop))
+    return tuple(sorted(set(knees) | set(_INT_ZERO_SPREAD) | {_INT_ZERO_DIVIDEND}))
+
+
+def _int_zero_pairs(mathop):
+    """The (a, b) product for *mathop*, with 0 dropped from b where a zero divisor is UB."""
+    values = _int_zero_probe(mathop)
+    b_values = [
+        v for v in values if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
+    ]
+    return [(a, b) for a in values for b in b_values]
+
+
+@pytest.mark.nightly
+@parametrize(
+    mathop=list(_INT_BINARY_STIMULI),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_zero_operands(mathop, dest_acc):
+    """Zero against small operands, for every int binary op that defines an answer there.
+
+    `_INT_BINARY_STIMULI` gives each of these a single positive uniform range, all but max/min
+    starting at 1, so zero was never driven at all -- and gcd(0, x) = x and lcm(0, x) = 0 are
+    the identities those kernels are most plausibly wrong about. A product rather than an
+    element-wise pairing, for the reason edge_pair_values() gives: 0 against a positive, against
+    1 and against itself are three different cases.
+    """
+    int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
+    formats = InputOutputFormat(int_format, int_format)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(
+            _int_zero_pairs(mathop), torch.int32
+        ),
+    )
+
+
+# The uint32 ops exist for the upper half of the range: below 2**31 an unsigned op and its signed
+# twin agree on every input, so _INT_BINARY_STIMULI's 1e6 cap made MaxUint32 indistinguishable
+# from MaxInt32 -- the override threw away the generator's own uniform(0, 2**32 - 2) default.
+#
+# An explicit *pair* list rather than a random spec over both halves, for the trap the `mixed`
+# where condition fell into: uniform(intervals=[...]) picks an interval by length, and the upper
+# half is ~2000x longer than [0, 1e6], so a two-interval spec puts every element above 2**31
+# (measured, 2048 of 2048) and never orders a large operand against a small one. That crossing is
+# the point: 0xFFFFFFFE is -2 and loses to 1 read signed, 4294967294 and wins read unsigned.
+#
+# 2**31 exactly is out -- sign-magnitude Dst reads 0x80000000 as "negative zero" and cannot
+# round-trip it, a documented limitation with its own xfail
+# (test_eltwise_binary_sfpu_int_shift_int32_min_unsupported) -- and 2**31 + 1 stands in, as
+# INT32_MIN + 1 does on the signed side. 2**32 - 1 is integer_specials(UInt32)'s real ceiling and
+# was missing: the list stopped one short, so these ops were driven near the top and never at it,
+# on the very pattern a sign-magnitude Dst is most likely to misread.
+_UINT32_SMALL = (0, 1, 1_000_000)
+_UINT32_LARGE = (2**31 + 1, 3_000_000_000, 2**32 - 2, 2**32 - 1)
+_UINT32_HIGH_PAIRS = [
+    (a, b) for a in _UINT32_SMALL + _UINT32_LARGE for b in _UINT32_SMALL + _UINT32_LARGE
+]
+
+
+@pytest.mark.nightly
+@parametrize(
+    mathop=sorted(_UINT32_BINARY_OPS, key=lambda op: op.name),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_uint32_high_range(mathop, dest_acc):
+    """Drive the uint32 ops above 2**31, the only region where they differ from the signed ops."""
+    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    pairs = [
+        (a, b)
+        for a, b in _UINT32_HIGH_PAIRS
+        # A zero divisor is undefined for remainder_uint32 the same way it is for its signed
+        # twin; see _INT_ZERO_UNDEFINED_DIVISOR.
+        if b != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
+    ]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.int64),
+    )
+
+
+# Truncating and flooring division differ *only* on negative operands -- -7/3 is -2 truncated
+# and -3 floored -- so with the positive-only table above, SfpuDivInt32 and SfpuDivInt32Floor
+# were driven on stimuli that cannot tell them apart. The whole reason the second op exists was
+# unexercised.
+#
+# Both signs on both operands, and magnitudes chosen so the two conventions disagree: 7/3 is
+# exact-free (quotient 2 remainder 1), so every pair with an odd number of negative operands
+# has trunc != floor.
+_SIGNED_DIVISION_PAIRS = [(a, b) for a in (-7, -1, 1, 7) for b in (-3, -1, 1, 3)]
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32, MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_signed_division(formats, dest_acc, mathop):
+    """trunc vs floor division on negative operands, the only inputs that separate them."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(_SIGNED_DIVISION_PAIRS, torch.int32),
+        twos_complement=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Overflow saturation, binary side
+#
+# Same reasoning as the unary half in test_eltwise_unary_sfpu_saturation: the convert from the
+# SFPU's fp32 to a narrower output must saturate to +/-inf, and one that wrapped instead would
+# keep every cat-B probe green -- a non-finite *input* still comes out right -- while every large
+# finite input silently returned a tiny wrong value.
+#
+# A pair list rather than a spec, because these ops overflow as a function of *both* operands:
+# `a * b` wants two large ones, `a + b` two near the ceiling, neither expressible as a range on
+# one. Powers of two throughout, so the saturation is a property of the exponent range rather
+# than of a rounding.
+#
+# THE OPS HERE ARE THE ONES WHOSE CONTRACT REACHES THE CEILING. SfpuElwadd and SfpuElwmul are
+# plain SFPMAD arithmetic, IEEE-exact over the whole format range, and their registered
+# uniform(-1, 1) is a stimulus choice rather than an accuracy claim.
+#
+# SfpuElwpow is absent: base [0, 8] and exponent [0, 4] tops out at
+# 4096, so it cannot overflow inside what the kernel claims accuracy on. Measured anyway, to be
+# sure the exclusion is the domain and not a defect -- above the threshold it saturates correctly
+# (2**200, 2**400, 3**300 all +inf), and below it the finite controls are 45% off at 2**100 and
+# 16% off at 2**127, which is exp(b*ln a) driven two orders outside its registered exponent. A
+# variant built on those controls would fail for a reason unrelated to the convert.
+_BINARY_SATURATION_PAIRS = {
+    # 2**62 * 2**62 = 2**124, inside the range; 2**64 * 2**64 = 2**128, outside it. Both signs
+    # on the overflowing pairs, because a multiply's result sign is the operands' XOR and a
+    # sign-handling defect at the ceiling would otherwise show on half the domain.
+    MathOperation.SfpuElwmul: [
+        (2.0**62, 2.0**62),
+        (2.0**63, 1.0),
+        (2.0**64, 2.0**64),
+        (2.0**65, 2.0**64),
+        (-(2.0**64), 2.0**64),
+        (2.0**64, -(2.0**64)),
+    ],
+    # An add only overflows from two operands already near the ceiling: 2**127 + 2**127 is
+    # 2**128. 2**127 + 2**126 is 1.5 * 2**127, still inside -- the control that a wrapped
+    # result could not fake.
+    MathOperation.SfpuElwadd: [
+        (2.0**126, 2.0**126),
+        (2.0**127, 1.0),
+        (2.0**127, 2.0**126),
+        (2.0**127, 2.0**127),
+        (-(2.0**127), -(2.0**127)),
+    ],
+}
+
+
+def _assert_binary_saturation_pairs_straddle_the_ceiling():
+    """Each op's pair list must contain both an overflowing pair and a finite control.
+
+    The binary twin of _assert_saturation_probes_straddle_the_ceiling. Without it the lists are
+    literals that stay plausible while the ceiling they were chosen to straddle moves, and the
+    variant passes either way -- asserting ordinary arithmetic if every pair went finite, or
+    saturation with no control if every pair went infinite.
+
+    BinarySFPUGolden is instantiated directly rather than through get_golden_generator for the
+    reason _classify_edge_pair records: the harness swaps in a stub under --compile-producer,
+    and this runs at import.
+    """
+    golden = BinarySFPUGolden()
+    for fmt in (DataFormat.Float16_b, DataFormat.Float32):
+        ceiling = max(abs(v) for v in format_extremes(fmt))
+        for mathop, pairs in _BINARY_SATURATION_PAIRS.items():
+            classified = {True: 0, False: 0}
+            for a, b in pairs:
+                result = abs(
+                    float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+                )
+                classified[not math.isfinite(result) or result > ceiling] += 1
+            assert classified[True] and classified[False], (
+                f"{mathop.name} on {fmt.name}: {classified[True]} overflowing pairs and "
+                f"{classified[False]} finite ones — the list has to contain both, or it "
+                "asserts saturation with no control (or no saturation at all)"
+            )
+
+
+_assert_binary_saturation_pairs_straddle_the_ceiling()
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=sorted(_BINARY_SATURATION_PAIRS, key=lambda op: op.name),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_saturation(formats, dest_acc, mathop):
+    """A product or sum too large for the output format must saturate to ±inf, not wrap."""
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(
+            _BINARY_SATURATION_PAIRS[mathop], torch.float32
+        ),
     )
 
 
@@ -1501,31 +2023,44 @@ assert _BINARY_EDGE_OPS, (
 # XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
 # a combination drifting in or out shows up here. Keyed by (op, edge class): a class XPASSing
 # across the board loses its entry, one XPASSing on Blackhole alone becomes arch-gated.
+# Keyed by (op, edge class), not by op. The two used to be separable because every divergence
+# an op had belonged to one class and one set of cells; the signed-zero *pole* probe broke that.
+# fmod's lost zero sign is a bfloat16-path story and its `fmod(0, -0.0)` is an unpack-to-dest
+# one, so a single per-op cell list would have to be the union and would then xfail each class
+# on cells where it passes -- reporting XPASS forever, which is exactly the drift the per-cell
+# enumeration exists to catch.
+_ZERO_SIGN_CELLS = (
+    (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+)
+
+
+def _signed_zero_pole_cells():
+    """The cells where a -0.0 driven *into* a registered pole actually reaches the LREG.
+
+    The unary suite asks the identical question of the identical grid, so the derivation itself
+    lives in sfpu_domains; this is the name the table below reads by. Distinct from
+    _ZERO_SIGN_CELLS above, which is about the sign of a zero *result* on the SFPMAD path.
+    """
+    return signed_zero_pole_cells(
+        input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+        (DestAccumulation.No, DestAccumulation.Yes),
+    )
+
+
 _BINARY_EDGE_COMBINATIONS = {
-    MathOperation.SfpuElwdiv: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuXlogy: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryFmod: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryRemainder: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
+    (MathOperation.SfpuElwdiv, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuXlogy, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuBinaryFmod, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuBinaryRemainder, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    # What driving a -0.0 *into* the pole found, measured on a Blackhole p150. Two ops of the
+    # six with a zero pole; div and atan2 agree, which is the result worth having -- the whole
+    # point of the probe is that div(x, -0.0) must be the opposite sign from div(x, +0.0), and
+    # it is.
+    (MathOperation.SfpuBinaryFmod, _EDGE_CLASS_BOTH_ZERO): _signed_zero_pole_cells(),
+    (MathOperation.SfpuXlogy, _EDGE_CLASS_ORDINARY): _signed_zero_pole_cells(),
 }
 
 _ZERO_SIGN_ISA_NOTE = (
@@ -1544,10 +2079,18 @@ _BINARY_EDGE_REASON = {
     MathOperation.SfpuXlogy: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
+        _EDGE_CLASS_ORDINARY: "xlogy(x, -0.0) returns NaN; IEEE gives x * log(-0) = -inf. "
+        "The log is a composition the ISA specifies only inside a stated range, so what it "
+        "does at a signed zero is an LLK decision -- the same section 5.6 Q1 question that "
+        "keeps this op out of cat B. Only on the cells that deliver a real -0.0.",
     },
     MathOperation.SfpuBinaryFmod: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
         f"({_ZERO_SIGN_ISA_NOTE}).",
+        _EDGE_CLASS_BOTH_ZERO: "fmod(0, -0.0) returns +0.0; IEEE gives NaN, as it does for "
+        "fmod(0, +0.0), which this kernel gets right. So the divergence is the *signed* zero "
+        "divisor specifically, reached through the quotient's reciprocal composition. Only on "
+        "the cells that deliver a real -0.0.",
     },
     MathOperation.SfpuBinaryRemainder: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
@@ -1570,13 +2113,19 @@ _BINARY_EDGE_REASON = {
 
 # No op may claim a divergence without a combination list to apply it to, and none may
 # list combinations with nothing to apply them to.
-assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
-    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
-    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
+_REASON_KEYS = {
+    (op, cls) for op, classes in _BINARY_EDGE_REASON.items() for cls in classes
+}
+assert _REASON_KEYS == set(_BINARY_EDGE_COMBINATIONS), (
+    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which (op, class) pairs "
+    f"diverge: {sorted((o.name, c) for o, c in _REASON_KEYS ^ set(_BINARY_EDGE_COMBINATIONS))}"
 )
 assert all(
     cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
 ), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
+assert all(
+    cells for cells in _BINARY_EDGE_COMBINATIONS.values()
+), "an (op, class) claiming a divergence with no cell to apply it to is a dead xfail"
 
 # Edge classes whose divergence is a *Wormhole* limitation, so on Blackhole the case is
 # asserted rather than tolerated.
@@ -1622,7 +2171,7 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
         and not arch_fixed
         and (
             (formats.input_format, formats.output_format, dest_acc)
-            in _BINARY_EDGE_COMBINATIONS[mathop]
+            in _BINARY_EDGE_COMBINATIONS[(mathop, edge_class)]
         )
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
@@ -1720,13 +2269,40 @@ _INT_EXTREME_OPS = [
     MathOperation.SfpuEqInt,
     MathOperation.SfpuNeInt,
     *_INT_COMPARISON_OPS,
+    # The arithmetic ops whose documented range reaches the extremes, all measured there before
+    # being added. Every one takes the full signed set except fmod, whose *golden* -- not the
+    # kernel -- is only valid on the non-negative half; that narrowing is
+    # _INT_EXTREMES_NON_NEGATIVE's, applied by _build_int_extremes_src.
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+    MathOperation.SfpuFmodInt32,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuMaxInt32,
+    MathOperation.SfpuMinInt32,
+    MathOperation.SfpuMulInt32,
+    MathOperation.SfpuRemainderInt32,
+    MathOperation.SfpuRsubInt32,
 ]
 
 
-def _build_int_extremes_src():
-    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
+def _build_int_extremes_src(mathop=None):
+    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN.
+
+    INT32_MIN is excluded for every op: sign-magnitude Dst reads 0x80000000 as "negative zero"
+    and cannot round-trip it, which is hardware rather than a gap and has its own xfail.
+    INT32_MIN + 1 stands in.
+
+    *mathop* narrows the list two ways. _INT_EXTREMES_NON_NEGATIVE drops the negatives for the
+    one op whose *golden* is only valid there, and _INT_ZERO_UNDEFINED_DIVISOR drops a zero
+    divisor for the ops that have no defined answer at one. Passing None keeps everything,
+    which is what the bitwise and comparison ops want -- they document no sub-range and have no
+    divisor.
+    """
     vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
-    pairs = [(a, b) for a in vals for b in vals]
+    if mathop in _INT_EXTREMES_NON_NEGATIVE:
+        vals = [v for v in vals if v >= 0]
+    divisors = [v for v in vals if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR]
+    pairs = [(a, b) for a in vals for b in divisors]
     return _build_paired_tile_override(pairs, torch.int32)
 
 
@@ -1747,7 +2323,7 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
         formats,
         dest_acc,
         mathop,
-        src_A_override=_build_int_extremes_src(),
+        src_A_override=_build_int_extremes_src(mathop),
         twos_complement=True,
     )
 
