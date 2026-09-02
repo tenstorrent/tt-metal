@@ -748,11 +748,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     }
     // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    if (!ratio_ok(tuning.reader_threads, tuning.compute_threads) ||
-        !ratio_ok(tuning.compute_threads, tuning.writer_threads)) {
-        return false;
-    }
-    return true;
+    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
+           ratio_ok(tuning.compute_threads, tuning.writer_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
