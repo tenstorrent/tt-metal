@@ -648,6 +648,17 @@ struct MatmulGeometry {
         SA::cols == SB::rows, "matmul inner dimension disagrees: operand A's columns must equal operand B's rows");
     static_assert(SA::leading == SB::leading, "matmul operands disagree on their leading (batch) extent");
 
+    // And again in ELEMENTS, which the tile-count check above cannot see. Equal tile counts
+    // at different tile geometry pass it and are still not a valid product: a 1x32-tiled
+    // Shape<1, 1> has one column of 32 elements, a 1x32-tiled Shape<1, 1> as the RHS has one
+    // row of ONE. That mismatch used to reach the hardware and come back as an out-of-bounds
+    // read -- measured at 4.6e32 max error, see unified_blaze_integration_spec.md B3.
+    static_assert(
+        logical_cols_v<SA> == logical_rows_v<SB>,
+        "matmul inner dimension disagrees in ELEMENTS: operand A's columns times its tile WIDTH must "
+        "equal operand B's rows times its tile HEIGHT. Equal tile counts are not enough when the two "
+        "operands are tiled differently");
+
     static constexpr uint32_t rt_dim = SA::rows;  // output rows  (A rows)
     static constexpr uint32_t ct_dim = SB::cols;  // output cols  (B cols)
     static constexpr uint32_t kt_dim = SA::cols;  // inner dim
@@ -982,10 +993,16 @@ struct ReduceGeometry {
         return axis == ReduceAxis::Rows ? wt : (axis == ReduceAxis::Cols ? ht : 1);
     }
 
-    // Elements folded into ONE output value -- what an average divides by. A tile
-    // is 32x32, so collapsing rows folds ht*32 of them.
+    // Elements folded into ONE output value -- what an average divides by. Derived from
+    // the TILE rather than a hardcoded 32, which was wrong for any re-tiled shape and
+    // silently so: with a 1x32 tile a Cols collapse still folds 32 columns and the old
+    // constant was right by accident, while a Rows collapse folds ht*1 and it was wrong
+    // by 32x. A mean divided by 32 times too much is not a shape error anywhere -- it is
+    // just a quietly wrong answer, which is why this had to move into the type.
     static constexpr uint32_t elements(ReduceAxis axis) {
-        return axis == ReduceAxis::Rows ? ht * 32 : (axis == ReduceAxis::Cols ? wt * 32 : ht * wt * 32 * 32);
+        return axis == ReduceAxis::Rows
+                   ? logical_rows_v<S>
+                   : (axis == ReduceAxis::Cols ? logical_cols_v<S> : logical_rows_v<S> * logical_cols_v<S>);
     }
 
     // Input tiles feeding one output tile.
