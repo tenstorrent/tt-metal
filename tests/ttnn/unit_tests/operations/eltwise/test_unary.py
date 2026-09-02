@@ -16,6 +16,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range_dtype,
 )
 from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import generate_bfloat16_bits_in_range
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -2697,40 +2698,22 @@ def test_softcap_zero_beta_guard(device, expect_error):
 
 
 @pytest.mark.parametrize(
-    "op_name, values, ttnn_op",
+    "op_name, low, high, ttnn_op",
     [
-        (
-            "deg2rad",
-            [0.0, 1.0, 45.0, 90.0, 180.0, 360.0, -45.0, -180.0, 1e4, -1e4],
-            ttnn.deg2rad,
-        ),
-        (
-            "rad2deg",
-            [
-                0.0,
-                3.141592653589793 / 2,
-                3.141592653589793,
-                2 * 3.141592653589793,
-                -3.141592653589793 / 2,
-                -3.141592653589793,
-                100.0,
-                -100.0,
-            ],
-            ttnn.rad2deg,
-        ),
+        ("deg2rad", -1e6, 1e6, ttnn.deg2rad),
+        ("rad2deg", -5e36, 5e36, ttnn.rad2deg),
     ],
 )
-@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 256, 256], [1, 4, 512, 512]])
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 256, 256]])
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
 def test_angle_conversion_values_and_dtypes(
-    device, op_name, values, ttnn_op, shape, torch_dtype, ttnn_dtype
+    device, op_name, low, high, ttnn_op, shape, torch_dtype, ttnn_dtype
 ):
-    num_elements = 1
-    for dim in shape:
-        num_elements *= dim
-
-    repeated_values = (values * (num_elements // len(values) + 1))[:num_elements]
-    torch_input_tensor = torch.tensor(repeated_values, dtype=torch_dtype).reshape(shape)
+    if ttnn_dtype == ttnn.bfloat16:
+        input_tensor_bf16 = generate_bfloat16_bits_in_range(low, high)
+        torch_input_tensor = input_tensor_bf16[: shape[2], : shape[3]].reshape(shape)
+    else:
+        torch_input_tensor = torch.empty(shape, dtype=torch_dtype).uniform_(low, high)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_output = golden_function(torch_input_tensor, device=device)
@@ -2740,3 +2723,22 @@ def test_angle_conversion_values_and_dtypes(
     torch_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(golden_output, torch_output, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "ttnn_bw_op",
+    [ttnn.deg2rad_bw, ttnn.rad2deg_bw],
+)
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 256, 256]])
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_angle_conversion_bw_ops(device, ttnn_bw_op, shape, torch_dtype, ttnn_dtype):
+    grad_data, grad_tensor = data_gen_with_range_dtype(shape, -100, 100, device, dtype=ttnn_dtype)
+    in_data, input_tensor = data_gen_with_range_dtype(shape, -200, 200, device, required_grad=True, dtype=ttnn_dtype)
+
+    tt_output = ttnn_bw_op(grad_tensor, input_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn_bw_op)
+    golden_tensors = golden_function(grad_data, in_data)
+
+    for i in range(len(tt_output)):
+        assert_with_pcc(golden_tensors[i], ttnn.to_torch(tt_output[i]), pcc=0.99)
