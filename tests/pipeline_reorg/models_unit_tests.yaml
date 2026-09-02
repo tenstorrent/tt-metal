@@ -1086,32 +1086,35 @@
     # this 4-chip SKU every row except 2x2 self-skips (including 1x1, which otherwise times out
     # in fabric router sync -- #53331). The skip report is what shows the 2x2 rows actually ran
     # rather than the job passing because it executed nothing.
-    pytest --timeout 1200 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
+    pytest --timeout 600 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode || status=1
     # The two layer-skip parametrizations get one pytest invocation each so the process frees
     # the host memory in between. Both in one process is an OOM kill (exit 137, run
-    # 33667518970, died at checkpoint shard 6/7): each cache-missing config loads the full 32B
-    # torch transformer, and single_blocks has a different cache key than all_blocks -- the
-    # layer counts differ -- so it reloads rather than reusing what all_blocks just built.
+    # 33667518970, died at checkpoint shard 6/7). Both parametrizations load the full 32B torch
+    # reference checkpoint at test start -- that is unconditional, nothing to do with the TT
+    # cache, which run 33685965436 confirms both share one key of
+    # (TP2_1_SP2_0_mesh2x2_bf16_FSDP) -- and two of those in one process exhausts host RAM.
     #
     # The all_blocks 2x2 case fails until the Linear-topology correctness fix lands -- FLUX.2
     # drops the attention residual off the non-Ring path in ColParallelLinear, giving noise
     # (PCC -3.71%, RMSE/sigma 179%, reproduced on runs 33667518970 and 33678382128). Fix is on
     # branch stisi/flux2-qb2, commit 92919ba7f5d.
     pytest --timeout 3300 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks || status=1
-    pytest --timeout 3300 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
     exit $status
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      # Still 3h: the HF weights are staged now, but the single_blocks converted-weight cache
-      # has never been built. Recalibrate to the measured warm time before merge, and walk the
-      # budget back down with it. Keep this above the sum of the pytest --timeouts above
-      # (160 min) so a hang fails cleanly rather than being killed by the job timeout.
-      timeout: 180
+      # Sized from run 33685965436, the first run where all four tests reported: VAE 66s,
+      # prompt encoder 27m02s, transformer all_blocks 39m28s, single_blocks 4m15s -- about
+      # 72 min of pytest. The margin is for the once-per-job cold NFS read of the converted
+      # cache, which is most of the two big numbers (Mistral3Encoder 1220s, Flux2Transformer
+      # 1470s; single_blocks then reuses the same key in 1s). Above the sum of the pytest
+      # --timeouts (145 min) so a hang fails cleanly rather than being killed by the runner.
+      timeout: 150
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1139,8 +1142,9 @@
     # and the same shape the LTX-2.3 bh_sc1 leg uses.
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1; }
-    # Cheapest first. The two transformer parametrizations get a process each: both in one is an
-    # OOM kill on 4 chips (run 33667518970) and each loads the full 32B torch reference.
+    # Cheapest first. The two transformer parametrizations get a process each: each loads the full
+    # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
+    # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
     run --timeout 1200 models/tt_dit/tests/models/flux2/test_vae_flux2.py
     run --timeout 2400 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
     # Unlike 2x2, the 4x8 row runs Ring topology, which is the path the ColParallelLinear
