@@ -12,11 +12,24 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import importlib.util
+
+import pytest
+
 from scripts.tt_hw_planner.reference_loader_resolver import (
     _resolved,
     _validates,
     loader_path,
     uses_random_weights,
+    verify,
+    weight_provenance,
+)
+
+# Scoped to the tests that need it: the structural checks below must keep running on a box with no
+# torch, which is exactly where a contributor is most likely to run this file.
+requires_torch = pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None or importlib.util.find_spec("safetensors") is None,
+    reason="needs torch + safetensors",
 )
 
 
@@ -113,3 +126,107 @@ def test_real_weight_loader_carries_no_caveat(tmp_path: Path) -> None:
     )
     assert not uses_random_weights(d)
     assert "random_weights" not in _resolved(d, "loader written")
+
+
+# --- runtime gate: a file that parses is still not a loader that WORKS ------------------------
+# Each case below is a loader that sails through the structural check and would have been banked as
+# resolved, then failed somewhere downstream where the cause is no longer obvious.
+
+
+@requires_torch
+@pytest.mark.parametrize(
+    ("body", "expect"),
+    [
+        ("raise RuntimeError('no weights here')", "RuntimeError"),
+        ("return None", "returned None"),
+        ("return {'state_dict': {}}", "not nn.Module"),
+        ("import torch; return torch.nn.Module()", "no parameters"),
+    ],
+    ids=["raises", "returns-none", "returns-non-module", "no-parameters"],
+)
+def test_runtime_gate_rejects_loaders_that_cannot_produce_a_model(tmp_path: Path, body: str, expect: str) -> None:
+    d = _write(tmp_path, f"def load_reference_model(model_id):\n    {body}\n")
+    assert _validates(d), "precondition: the structural check accepts all of these"
+    v = verify(d, "some/model")
+    assert v["ok"] is False and v["status"] == "broken"
+    assert expect in v["reason"], v["reason"]
+
+
+@requires_torch
+def test_runtime_gate_accepts_a_loader_that_returns_a_real_module(tmp_path: Path) -> None:
+    d = _write(
+        tmp_path,
+        """
+        import torch
+
+        def load_reference_model(model_id):
+            return torch.nn.Linear(8, 8)
+        """,
+    )
+    v = verify(d, "some/model")
+    assert v["ok"] is True and v["status"] == "verified", v["reason"]
+
+
+# --- provenance: break the model on purpose ---------------------------------------------------
+
+
+def _checkpoint(tmp_path: Path, tensors: dict) -> str:
+    from safetensors.torch import save_file
+
+    d = tmp_path / "ckpt"
+    d.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, str(d / "model.safetensors"))
+    return str(d)
+
+
+def _module_with(weight) -> "torch.nn.Module":
+    import torch
+
+    m = torch.nn.Module()
+    m.w = torch.nn.Parameter(weight, requires_grad=False)
+    return m
+
+
+@requires_torch
+def test_provenance_confirms_weights_that_came_from_the_checkpoint(tmp_path: Path) -> None:
+    import torch
+
+    w = torch.randn(4096)
+    out = weight_provenance(_checkpoint(tmp_path, {"w": w}), _module_with(w.clone()))
+    assert out["status"] == "from_checkpoint", out
+
+
+@requires_torch
+def test_provenance_flags_a_reference_that_never_loaded_the_weights(tmp_path: Path) -> None:
+    """THE case worth catching: architecture built from config, weights left at random init.
+
+    Such a reference loads cleanly, has the right shapes, and passes every other check -- while
+    every PCC measured against it is meaningless.
+    """
+    import torch
+
+    ckpt = _checkpoint(tmp_path, {"w": torch.randn(4096)})
+    random_init = _module_with(torch.randn(4096) * 0.02)  # never read the checkpoint
+    out = weight_provenance(ckpt, random_init)
+    assert out["status"] == "no_match", out
+    assert "randomly initialised" in out["reason"]
+
+
+@requires_torch
+def test_provenance_tolerates_a_permuted_but_correct_conversion(tmp_path: Path) -> None:
+    """A correct loader may reorder weights (RoPE layouts differ); that must not read as no_match."""
+    import torch
+
+    w = torch.randn(4096)
+    permuted = w[torch.randperm(w.numel())]
+    out = weight_provenance(_checkpoint(tmp_path, {"w": w}), _module_with(permuted))
+    assert out["status"] == "from_checkpoint", out
+
+
+@requires_torch
+def test_unreachable_checkpoint_is_unverified_not_a_failure(tmp_path: Path) -> None:
+    """An environment that cannot check must not be reported as a bad loader."""
+    import torch
+
+    out = weight_provenance(str(tmp_path / "nothing-here"), _module_with(torch.randn(4096)))
+    assert out["status"] == "unverified", out

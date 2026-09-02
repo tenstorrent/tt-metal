@@ -134,14 +134,10 @@ def cmd_decompose(args) -> int:
         # no `model_type`): fall back to the SAME shared reference loader the
         # per-component PCC tests use, so decompose can resolve the module tree.
         try:
-            import importlib.util as _ilu
+            from ..reference_loader_resolver import has_loader, load_reference
 
-            _rl = demo_dir / "tests" / "pcc" / "_reference_loader.py"
-            if _rl.is_file():
-                _spec = _ilu.spec_from_file_location("_reference_loader", str(_rl))
-                _rlmod = _ilu.module_from_spec(_spec)
-                _spec.loader.exec_module(_rlmod)
-                hf_model = _rlmod.load_reference_model(model_id)
+            if has_loader(demo_dir):
+                hf_model = load_reference(demo_dir, model_id)
         except Exception as e:
             _load_err = e
     if hf_model is None:

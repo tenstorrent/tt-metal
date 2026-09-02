@@ -11,11 +11,16 @@ the repo (file list + `library` tag + config), asks an LLM to write ONE model-lo
 PCC-test template imports that loader as a fallback, so every per-component test (and the global PCC
 gate) picks it up automatically.
 
-What validation here does and does NOT mean: the loader is checked STRUCTURALLY — it parses and it
-really defines `load_reference_model(model_id)`. It is not executed, and nothing proves the reference
-it returns is numerically right; for these checkpoints there is by definition no golden to compare
-against, which is the reason the loader had to be written at all. A reference that loads cleanly but
-computes the wrong thing will still be the yardstick every later PCC score is measured against.
+What validation here does and does NOT mean, in three layers:
+  1. STRUCTURAL — it parses and really defines `load_reference_model(model_id)` (`_validates`).
+  2. RUNTIME — it is executed, and must hand back an `nn.Module` that has parameters (`verify`).
+  3. PROVENANCE — its parameters are sampled against the shipped checkpoint, which catches a
+     reference built from config with weights never loaded (`weight_provenance`, advisory).
+
+What none of them establish is that the reference computes the RIGHT thing. For these checkpoints
+there is by definition no golden to compare against — that is why the loader had to be written at
+all — so a reference that loads real weights but wires them up wrongly (a transposed projection, a
+wrong RoPE base) will still be the yardstick every later PCC score is measured against.
 
 OFF BY DEFAULT: `resolve` is a no-op unless `TT_HW_PLANNER_LOADER_RESOLVER=1` (or `enabled=True`).
 Correctness is still gated by PCC — the resolver only produces a loader; it never weakens a test.
@@ -29,7 +34,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 _LOADER_FILENAME = "_reference_loader.py"
 _LOADER_FUNC = "load_reference_model"
@@ -39,6 +44,14 @@ _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
 # purpose: the fallback used to be recorded in a module docstring, which nothing reads, so a run
 # could be scored against a reference unrelated to the shipped weights with no trace in the result.
 _RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
+
+# Weight-provenance sampling. Small tensors (norms, biases) are skipped because their moments
+# collide easily -- a vector of ones matches a vector of ones whatever checkpoint it came from.
+# Sampling a handful of tensors is enough: a real load matches nearly all of them, random init
+# essentially none, so the verdict does not get sharper by reading more of a multi-GB shard.
+_FINGERPRINT_MIN_NUMEL = 4096
+_PROVENANCE_SAMPLE = 12
+_MOMENT_TOL = 1e-4
 
 
 def is_enabled(enabled: Optional[bool] = None) -> bool:
@@ -210,6 +223,155 @@ def _validates(demo_dir: Path) -> bool:
     return tree is not None and _defines_loader(tree)
 
 
+def load_reference(demo_dir: Path, model_id: str):
+    """Execute the model-local loader and return whatever `load_reference_model` builds.
+
+    Single home for "run the loader": module_tree and decompose each had their own copy of the
+    spec_from_file_location dance, and decompose's copy rebuilt the path from string parts instead
+    of calling loader_path(), so a change to the filename would have silently missed it. Raises
+    whatever the loader raises -- callers already turn that into their own diagnostic.
+    """
+    import importlib.util as ilu
+
+    p = loader_path(demo_dir)
+    spec = ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(p))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot import {p}")
+    mod = ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    fn = getattr(mod, _LOADER_FUNC, None)
+    if not callable(fn):
+        raise AttributeError(f"{p} defines no callable {_LOADER_FUNC}")
+    return fn(model_id)
+
+
+def verify(demo_dir: Path, model_id: str) -> dict:
+    """Actually RUN the loader and report what came back.
+
+    The structural gate only proves a `def` is present; it cannot tell a loader that builds the
+    real model from one that raises, returns None, or hands back something that is not a module.
+    Those all used to be discovered much later, as an error far from its cause. Returns
+    {ok, status, reason}: `broken` means the loader itself is at fault, while `unverified` means
+    THIS environment could not run it (no weights cached, torch missing) and is not held against
+    the loader -- an environment problem must not be reported as a bad loader.
+    """
+    try:
+        import torch.nn as nn
+    except Exception as exc:  # noqa: BLE001 -- no torch here is an environment fact, not a verdict
+        return {"ok": True, "status": "unverified", "reason": f"torch unavailable: {exc}"}
+
+    try:
+        ref = load_reference(demo_dir, model_id)
+    except Exception as exc:  # noqa: BLE001 -- any failure to produce a model is the loader's
+        return {"ok": False, "status": "broken", "reason": f"{type(exc).__name__}: {exc}"}
+
+    if ref is None:
+        return {"ok": False, "status": "broken", "reason": f"{_LOADER_FUNC} returned None"}
+    if not isinstance(ref, nn.Module):
+        return {
+            "ok": False,
+            "status": "broken",
+            "reason": f"{_LOADER_FUNC} returned {type(ref).__name__}, not nn.Module",
+        }
+    if not any(True for _ in ref.parameters()):
+        return {"ok": False, "status": "broken", "reason": "reference module has no parameters"}
+    return {
+        "ok": True,
+        "status": "verified",
+        "reason": "loader returned an nn.Module with parameters",
+        "provenance": weight_provenance(model_id, ref),
+    }
+
+
+def _checkpoint_files(model_id: str) -> List[Path]:
+    """Shipped safetensors shards for `model_id`, local dir or hub cache, newest-first by size."""
+    if os.path.isdir(model_id):
+        found = list(Path(model_id).rglob("*.safetensors"))
+    else:
+        try:
+            from huggingface_hub import snapshot_download
+
+            root = snapshot_download(model_id, allow_patterns=["*.safetensors"], local_files_only=True)
+            found = list(Path(root).rglob("*.safetensors"))
+        except Exception:
+            return []
+    return sorted(found, key=lambda p: p.stat().st_size, reverse=True)
+
+
+def _fingerprint(t) -> Optional[Tuple[int, float, float]]:
+    """(numel, mean, std) of a float tensor, or None if it is not one worth comparing.
+
+    Deliberately order-insensitive: a correct loader is allowed to permute weights (RoPE layouts
+    differ between checkpoint and `transformers` conventions), so comparing values positionally
+    would flag correct conversions. Whole-tensor moments survive any permutation.
+    """
+    try:
+        if not t.is_floating_point() or t.numel() < _FINGERPRINT_MIN_NUMEL:
+            return None
+        f = t.detach().float()
+        return (int(t.numel()), float(f.mean()), float(f.std()))
+    except Exception:
+        return None
+
+
+def weight_provenance(model_id: str, ref) -> dict:
+    """Advisory: do this module's parameters actually come from the shipped checkpoint?
+
+    This is the closest thing to numerical proof available without a golden output to compare
+    against. It cannot confirm the maths is right, but it does catch the failure that is otherwise
+    invisible -- a loader that builds the architecture from config and never loads the weights, so
+    PCC is measured against a randomly-initialised "reference" and means nothing.
+
+    Matching is on (numel, mean, std) because a real load copies most tensors through unchanged,
+    while random init reproduces neither the moments nor the per-tensor spread of trained weights.
+    Advisory only: a loader that legitimately transforms weights (dequantising, merging LoRA) can
+    score low while being correct, so this reports and never blocks.
+    """
+    files = _checkpoint_files(model_id)
+    if not files:
+        return {"status": "unverified", "reason": "no local safetensors checkpoint to compare against"}
+    try:
+        from safetensors import safe_open
+    except Exception as exc:  # noqa: BLE001 -- absence of the reader is an environment fact
+        return {"status": "unverified", "reason": f"safetensors unavailable: {exc}"}
+
+    have = {}
+    for p in ref.parameters():
+        fp = _fingerprint(p)
+        if fp:
+            have.setdefault(fp[0], []).append(fp)
+    if not have:
+        return {"status": "unverified", "reason": "no parameters large enough to fingerprint"}
+
+    checked = matched = 0
+    try:
+        with safe_open(str(files[0]), framework="pt") as f:
+            for key in list(f.keys()):
+                if checked >= _PROVENANCE_SAMPLE:
+                    break
+                fp = _fingerprint(f.get_tensor(key))
+                if not fp:
+                    continue
+                checked += 1
+                matched += any(
+                    abs(fp[1] - c[1]) <= _MOMENT_TOL and abs(fp[2] - c[2]) <= _MOMENT_TOL for c in have.get(fp[0], ())
+                )
+    except Exception as exc:  # noqa: BLE001 -- unreadable shard is not the loader's fault
+        return {"status": "unverified", "reason": f"could not read checkpoint: {exc}"}
+
+    if not checked:
+        return {"status": "unverified", "reason": "no comparable tensors in checkpoint"}
+    if matched:
+        return {"status": "from_checkpoint", "reason": f"{matched}/{checked} sampled tensors match the checkpoint"}
+    return {
+        "status": "no_match",
+        "reason": (
+            f"0/{checked} sampled tensors match the shipped checkpoint -- the reference may be "
+            f"randomly initialised, which would make any PCC against it meaningless"
+        ),
+    }
+
+
 def _resolved(demo_dir: Path, reason: str) -> dict:
     """Success payload, carrying the random-weight caveat when one applies."""
     out = {"resolved": True, "path": str(loader_path(demo_dir)), "reason": reason}
@@ -219,6 +381,21 @@ def _resolved(demo_dir: Path, reason: str) -> dict:
             "reference built from RANDOM weights, not the shipped checkpoint: PCC against it "
             "verifies STRUCTURE only and does not bound numerical correctness"
         )
+    return out
+
+
+def _accept(demo_dir: Path, model_id: str, reason: str) -> dict:
+    """Structural gate passed -- now run the thing before calling it resolved.
+
+    Reporting a loader as resolved when it cannot produce a model is what turned a bad loader into
+    a confusing failure somewhere downstream. A loader that is merely unverifiable here still
+    counts as resolved; only one that demonstrably fails to build a model is rejected.
+    """
+    v = verify(demo_dir, model_id)
+    if not v["ok"]:
+        return {"resolved": False, "reason": f"{_LOADER_FILENAME} does not produce a model: {v['reason']}"}
+    out = _resolved(demo_dir, reason)
+    out["verification"] = v
     return out
 
 
@@ -270,7 +447,7 @@ def resolve(
     except Exception as exc:  # noqa: BLE001
         return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
     if _validates(demo_dir):
-        return _resolved(demo_dir, "loader written")
+        return _accept(demo_dir, model_id, "loader written")
     return {"resolved": False, "reason": f"agent did not produce a valid {_LOADER_FILENAME}"}
 
 

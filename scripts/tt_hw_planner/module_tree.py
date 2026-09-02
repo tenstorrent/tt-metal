@@ -768,18 +768,10 @@ def _load_reference_module(model_id: str, demo_dir=None):
             )
         if not _rlr.has_loader(demo_dir):
             return None
-        import importlib.util as _ilu
-
         loader_file = _rlr.loader_path(demo_dir)
 
-        def _exec_loader():
-            spec = _ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(loader_file))
-            mod = _ilu.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod.load_reference_model(model_id)
-
         try:
-            ref = _exec_loader()
+            ref = _rlr.load_reference(demo_dir, model_id)
         except Exception as exc:
             _write_loader_blocker(demo_dir, _reference_loader_next_steps(model_id, exc, loader_file))
             return None
