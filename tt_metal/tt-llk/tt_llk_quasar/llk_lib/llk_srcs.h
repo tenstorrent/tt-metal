@@ -132,6 +132,7 @@ inline void _llk_unpack_srcs_binary_mop_config_(const std::uint32_t buf_desc_id_
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
+    // Two L1 bases, one UNP_S L1 tile-index. Only instrn1 increments L1 so both operands stay on the same slice.
     std::uint32_t unpack_instrn0 = TT_OP_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_0, 0b0 /*no dvalid*/);
     std::uint32_t unpack_instrn1 = TT_OP_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_1, 0b1 /*Set dvalid*/);
 

@@ -34,9 +34,9 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
+#include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_square.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
