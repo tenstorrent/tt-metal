@@ -78,6 +78,7 @@ MANIFEST_COLUMNS = (
     "tag",
     "arch",
     "run_id",
+    "source_run_id",
     "commit_sha",
     "timestamp",
     "pipeline",
@@ -180,6 +181,40 @@ def bare_run_id(run_id):
     return run_id.split("-", 1)[0]
 
 
+# ---------------------------------------------------------------- stage
+
+
+def tag_of(parquet_path):
+    """The run tag ``<run_id>-<arch>-<shard>`` a run Parquet is named after."""
+    return os.path.basename(parquet_path)[: -len(".parquet")]
+
+
+def shard_of(tag):
+    """The shard index at the end of a run tag."""
+    return tag.rsplit("-", 1)[-1]
+
+
+def bare_run_id(run_id):
+    """``33465181016-2`` (re-run attempt 2) -> ``33465181016``.
+
+    ``core._run_id`` appends the attempt number to the row-level ``run_id`` but
+    the workflow builds the run tag from ``github.run_id`` alone, so the two
+    disagree on every re-run. This is the one place that knows it.
+    """
+    return run_id.split("-", 1)[0]
+
+
+def attempt_of(run_id):
+    """The re-run attempt suffix of a run_id, or "" for attempt 1.
+
+    Only a trailing all-digits component counts. The arch and shard components
+    of ``33465181016-wormhole-4`` -- what the fixed producer writes -- are not
+    an attempt, and neither is a bare workflow id.
+    """
+    head, _, tail = run_id.rpartition("-")
+    return tail if head and tail.isdigit() else ""
+
+
 def _verify_parquet(path):
     """Read ``path`` and return its provenance, or raise BackfillError.
 
@@ -242,18 +277,60 @@ def _verify_parquet(path):
     return provenance
 
 
-def remote_name(tag, provenance, prefix=DEFAULT_REMOTE_PREFIX):
+def warehouse_run_id(tag, provenance):
+    """The ``run_id`` this file must carry: the run tag, plus any re-run attempt.
+
+    The warehouse loader replays by RUN_ID -- it deletes every row already
+    carrying the incoming file's RUN_ID, then inserts the file -- so two files
+    that share a run_id do not merge: the second erases the first. A nightly
+    publishes one file per shard, so the id has to name the shard.
+
+    Nights archived before the producer was fixed all carry
+    ``run_id = <workflow run id>``, one value shared by ten files. ``stage``
+    rewrites the column to this value, which is what the producer now writes
+    itself, so an already-correct file is copied untouched.
+
+    The re-run attempt is recovered by stripping the prefix the id is known to
+    start with -- the tag, or the bare workflow id -- rather than by looking for
+    a trailing number. A shard index is a trailing number too.
+    """
+    run_id = provenance["run_id"]
+    if run_id == tag:
+        return tag
+    for prefix in (tag, bare_run_id(tag)):
+        attempt = run_id[len(prefix) + 1 :] if run_id.startswith(f"{prefix}-") else ""
+        if attempt.isdigit():
+            return f"{tag}-{attempt}"
+    # No attempt: an old-style file carrying the bare workflow id. _verify_parquet
+    # has already tied run_id to this tag, so the tag is the whole answer.
+    return tag
+
+
+def remote_name(run_id, prefix=DEFAULT_REMOTE_PREFIX):
     """The flat object name this Parquet takes in the SFTP home directory.
 
-    Built from the rows' own ``run_id``, not from the file name, because the
-    file name drops the re-run attempt: attempt 1 and attempt 2 of the same
-    shard share a run tag. Two attempts are two different measurements, so they
-    must be two different objects -- ``...-33465181016-blackhole-7`` and
-    ``...-33465181016-2-blackhole-7``.
+    ``run_id`` is unique per file, so it is the whole name. The prefix keeps
+    LLK perf files identifiable in a directory shared with other producers.
     """
-    return (
-        f"{prefix}{provenance['run_id']}-{provenance['arch']}-{shard_of(tag)}.parquet"
-    )
+    return f"{prefix}{run_id}.parquet"
+
+
+def _copy_with_run_id(src, dst, run_id):
+    """Copy ``src`` to ``dst``, forcing every row's ``run_id`` to ``run_id``.
+
+    A plain copy when the value already matches, so a file the producer already
+    stamped correctly keeps its original bytes.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(src)
+    if set(table.column("run_id").to_pylist()) == {run_id}:
+        shutil.copyfile(src, dst)
+        return
+    column = pa.array([run_id] * table.num_rows, type=pa.string())
+    table = table.set_column(table.schema.get_field_index("run_id"), "run_id", column)
+    pq.write_table(table, dst, compression="zstd")
 
 
 def stage(parquets, stage_dir, *, prefix=DEFAULT_REMOTE_PREFIX):
@@ -272,15 +349,17 @@ def stage(parquets, stage_dir, *, prefix=DEFAULT_REMOTE_PREFIX):
         except BackfillError as e:
             rejected.append((path, str(e)))
             continue
-        name = remote_name(tag_of(path), provenance, prefix)
+        run_id = warehouse_run_id(tag_of(path), provenance)
+        name = remote_name(run_id, prefix)
         target = os.path.join(stage_dir, name)
-        shutil.copyfile(path, target)
+        _copy_with_run_id(path, target, run_id)
         staged.append(
             {
                 "file": name,
                 "tag": tag_of(path),
                 "arch": provenance["arch"],
-                "run_id": provenance["run_id"],
+                "run_id": run_id,
+                "source_run_id": provenance["run_id"],
                 "commit_sha": provenance["commit_sha"],
                 "timestamp": provenance["timestamp"],
                 "pipeline": provenance["pipeline"],

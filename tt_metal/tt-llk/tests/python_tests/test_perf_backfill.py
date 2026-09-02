@@ -14,6 +14,7 @@ import os
 import subprocess
 
 import pandas as pd
+import pyarrow.parquet as pq
 from helpers.perf import backfill
 from helpers.perf.backfill import (
     bare_run_id,
@@ -23,6 +24,7 @@ from helpers.perf.backfill import (
     remote_name,
     stage,
     tag_of,
+    warehouse_run_id,
     write_manifest,
 )
 from helpers.perf.parquet import write_run_batch
@@ -69,26 +71,54 @@ def test_collect_parquets_finds_nested_and_ignores_csvs(tmp_path):
 
 def test_remote_name_is_flat_and_prefixed(tmp_path):
     path = _shard(tmp_path, "42", "blackhole", 3)
-    provenance = {"run_id": "42", "arch": "blackhole"}
     assert tag_of(str(path)) == "42-blackhole-3"
-    assert (
-        remote_name("42-blackhole-3", provenance) == "llk_perf_42-blackhole-3.parquet"
-    )
-    assert remote_name("42-blackhole-3", provenance, "x_") == "x_42-blackhole-3.parquet"
+    assert remote_name("42-blackhole-3") == "llk_perf_42-blackhole-3.parquet"
+    assert remote_name("42-blackhole-3", "x_") == "x_42-blackhole-3.parquet"
 
 
-def test_remote_name_keeps_re_run_attempts_apart():
-    # The workflow builds the tag from github.run_id, which drops the attempt,
-    # so attempt 2 of a shard arrives under attempt 1's tag. The rows know
-    # better, and the object name follows the rows.
+def test_warehouse_run_id_recovers_the_attempt_without_guessing():
+    # A shard index is a trailing number, so the attempt cannot be found by
+    # looking for one. It is whatever is left after the known prefix.
+    tag = "42-wormhole-0"
+    assert warehouse_run_id(tag, {"run_id": "42"}) == tag  # old style, attempt 1
+    assert warehouse_run_id(tag, {"run_id": "42-2"}) == "42-wormhole-0-2"  # old, re-run
+    assert warehouse_run_id(tag, {"run_id": tag}) == tag  # what the producer writes now
+    assert warehouse_run_id(tag, {"run_id": f"{tag}-2"}) == f"{tag}-2"  # ...its re-run
     assert bare_run_id("42-2") == "42"
-    assert (
-        remote_name("42-blackhole-3", {"run_id": "42-2", "arch": "blackhole"})
-        == "llk_perf_42-2-blackhole-3.parquet"
+
+
+def test_stage_rewrites_a_shared_run_id_to_the_run_tag(tmp_path):
+    # Nights archived before the producer fix carry run_id = <workflow run id>,
+    # one value shared by every shard. The warehouse replays by RUN_ID, so left
+    # alone the second file to load would erase the first.
+    runs, out = tmp_path / "runs", tmp_path / "stage"
+    _shard(runs, "42", "wormhole", 0)
+    _shard(runs, "42", "wormhole", 1)
+
+    staged, rejected = stage(collect_parquets(str(runs)), str(out))
+
+    assert rejected == []
+    assert [row["run_id"] for row in staged] == ["42-wormhole-0", "42-wormhole-1"]
+    assert {row["source_run_id"] for row in staged} == {"42"}
+    # The rewrite must reach the rows, not only the file name.
+    for row in staged:
+        table = pq.read_table(out / row["file"])
+        assert set(table.column("run_id").to_pylist()) == {row["run_id"]}
+
+
+def test_stage_keeps_an_already_correct_run_id(tmp_path):
+    # What the fixed producer writes. Nothing to rewrite.
+    runs, out = tmp_path / "runs", tmp_path / "stage"
+    _write_run_parquet(
+        runs / "42-wormhole-0" / "42-wormhole-0.parquet", run_id="42-wormhole-0"
     )
 
+    staged, _ = stage(collect_parquets(str(runs)), str(out))
 
-def test_stage_accepts_a_re_run_shard(tmp_path):
+    assert staged[0]["run_id"] == staged[0]["source_run_id"] == "42-wormhole-0"
+
+
+def test_stage_keeps_a_re_run_attempt_in_the_run_id(tmp_path):
     runs, out = tmp_path / "runs", tmp_path / "stage"
     # Attempt 2: rows say 42-2, the file is still named after the bare run id.
     _write_run_parquet(runs / "42-wormhole-0" / "42-wormhole-0.parquet", run_id="42-2")
@@ -96,7 +126,8 @@ def test_stage_accepts_a_re_run_shard(tmp_path):
     staged, rejected = stage(collect_parquets(str(runs)), str(out))
 
     assert rejected == []
-    assert [row["file"] for row in staged] == ["llk_perf_42-2-wormhole-0.parquet"]
+    assert staged[0]["run_id"] == "42-wormhole-0-2"
+    assert staged[0]["file"] == "llk_perf_42-wormhole-0-2.parquet"
 
 
 def test_stage_copies_verified_files_and_records_provenance(tmp_path):
@@ -108,7 +139,7 @@ def test_stage_copies_verified_files_and_records_provenance(tmp_path):
 
     assert rejected == []
     assert {row["arch"] for row in staged} == {"wormhole", "blackhole"}
-    assert {row["run_id"] for row in staged} == {"42"}
+    assert {row["source_run_id"] for row in staged} == {"42"}
     assert all(row["rows"] == 2 and row["bytes"] > 0 for row in staged)
     assert sorted(os.listdir(out)) == [
         "llk_perf_42-blackhole-1.parquet",
@@ -170,6 +201,7 @@ def test_manifest_lists_every_staged_file(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["file"] == "llk_perf_42-wormhole-0.parquet"
+    assert rows[0]["source_run_id"] == "42"
     assert rows[0]["commit_sha"] == "deadbeef"
     assert rows[0]["rows"] == "2"
 
