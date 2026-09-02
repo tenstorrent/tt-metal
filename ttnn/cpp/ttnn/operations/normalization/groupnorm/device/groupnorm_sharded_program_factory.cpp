@@ -830,8 +830,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
         compute_named_compile_time_args.push_back(
             {"fp32_sfpu_normalizer", static_cast<uint32_t>(fp32_sfpu_normalizer)});
-        compute_named_compile_time_args.push_back({"cb_ex_global_fp32", ex_global_fp32_alias_index});
-        compute_named_compile_time_args.push_back({"cb_ex2pe_fp32", ex2pe_fp32_alias_index});
+        compute_named_compile_time_args.push_back(
+            {"cb_ex_global_fp32", fp32_sfpu_normalizer ? ex_global_fp32_alias_index : tt::CBIndex::c_15});
+        compute_named_compile_time_args.push_back(
+            {"cb_ex2pe_fp32", fp32_sfpu_normalizer ? ex2pe_fp32_alias_index : tt::CBIndex::c_17});
         compute_named_compile_time_args.push_back(
             {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
     }
