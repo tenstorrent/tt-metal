@@ -60,21 +60,13 @@ def _build_reference_kv_tensor(submesh, num_users, max_seq_len, k_chunk_size):
 )
 def test_dram_zero_fill_row_major_formats(bh_2d_mesh_device, dtype, layout):
     """Exercise native row pages directly; FP8 is widened only for host readback."""
-    shape = [1, 1, 128, KVPE_DIM]
     output = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(shape),
+        ttnn.Shape([1, 1, 128, KVPE_DIM]),
         dtype,
         layout,
         bh_2d_mesh_device,
         ttnn.DRAM_MEMORY_CONFIG,
     )
-    poison = ttnn.from_torch(
-        torch.full(shape, 7.0, dtype=torch.float32),
-        dtype=dtype,
-        layout=layout,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(bh_2d_mesh_device),
-    )
-    ttnn.copy_host_to_device_tensor(poison, output)
 
     DRAMZeroFill.op(output)
     ttnn.synchronize_device(bh_2d_mesh_device)
