@@ -453,6 +453,20 @@ __attribute__((always_inline)) inline uint32_t frame_bytes(uint32_t slot) {
     return (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[kLenWord] + kPrefix) * 4u;
 }
 
+// The wrap-image rule as one subtraction on the take already in hand (spsc_span_wrap_image's form costs two
+// more instructions per wrapping lane); the check pins it to the shared rule.
+constexpr uint32_t kImageMinTake = kRingWords - kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
+constexpr bool image_rule_matches() {
+    for (uint32_t take = 1; take < 2 * kRingWords; take++) {
+        const bool mine = take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
+        if (mine != kernel_profiler::spsc_span_wrap_image(kRingWords - 1u, take, kRingWords)) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(image_rule_matches(), "the inline image test drifted from spsc_span_wrap_image");
+
 // Computed once: get_noc_addr's coordinate arithmetic would otherwise run at every issue of an
 // instruction-bound sweep.
 // NOC_TARG_ADDR_COORDINATE field of each worker's profiler block, ready to write.
@@ -508,7 +522,7 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
                     gather_read(ring_src + hm * 4u, slot + off * 4u, take * 4u);
                 }
                 off += take;
-            } else if (kernel_profiler::spsc_span_wrap_image(start, take, kRingWords)) {
+            } else if (take - kImageMinTake <= kernel_profiler::SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS) {
                 // A near-full wrapping run ships as its whole ring image in one read (the decoder linearises by head).
                 // Coalescing adjacent images into one read starves the producer's L1 port ~70x.
                 off += kernel_profiler::spsc_span_pack_pad(0u, off);
