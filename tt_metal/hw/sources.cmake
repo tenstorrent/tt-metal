@@ -40,6 +40,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/binary_shift.h
     inc/api/compute/blank.h
     inc/api/compute/cb_api.h
+    inc/api/compute/clamped_silu_glu.h
     inc/api/compute/common.h
     inc/api/compute/common_globals.h
     inc/api/compute/compute_kernel_hw_startup.h
