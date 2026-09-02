@@ -64,19 +64,35 @@ class SrcRegBank(Check):
         "MOVD2A/MOVD2B whose STALLWAIT is in a DIFFERENT function is not correlated at "
         "all. The BLOCK mask (1st operand) is not verified to actually block the move "
         "(p_stall::STALL_MATH), only the wait condition. "
-        "The UNPACK-SIDE half of the same handshake is NOT modeled: the dummy "
-        "publication (UNPACR_NOP doing ZEROSRC/SET_DVALID) must wait on "
-        "Unpackers[i].SrcBank — the bank it clears — rather than MatrixUnit.Src?Bank, "
-        "via the wait-like-UNPACR control bit or a preceding STALLWAIT on "
-        "SRCA_CLR/SRCB_CLR. Ownership for DUMMY_PUBLISH is tracked PER SRC REGISTER "
-        "and is SPENT by each SET_DVALID (which flips Unpackers[i].SrcBank), so a "
-        "guard is credited only to publications on the same register before the next "
-        "publish; the Src register is read from the macro's first operand, so a "
-        "publication whose operand is a variable rather than a literal SrcA/SrcB is "
-        "not attributed and is never flagged. "
-        "SRCA_CLR/SRCB_CLR. Pairing a publisher to its Dest->Src consumer is "
-        "cross-thread and usually cross-file, so it is left to the skill; a publication "
-        "missing that wait will NOT appear here even when the math side is flagged. "
+        "The UNPACK-SIDE half of the same handshake is modeled only as an ENCODING "
+        "check on the dummy publication (UNPACR_NOP doing ZEROSRC / SET_DVALID / "
+        "CLR_SRC). The wait-like-UNPACR control bit selects WHICH bank the "
+        "publication waits on: set = Unpackers[i].SrcBank, the bank it clears, which "
+        "lets unpack prepare the next bank while math consumes the current one; clear "
+        "= MatrixUnit.Src?Bank, which under bank-pointer lockstep holds until NO bank "
+        "is outstanding and is therefore a strictly STRONGER, serializing wait. So the "
+        "default form is emitted as DUMMY_PUBLISH_SERIALIZING — a throughput/parity "
+        "observation, NEVER corruption. The corruption risk on this handshake is the "
+        "math-side drain (DEST2SRC_NO_MATH_DRAIN), which this bit does not fix. Only "
+        "two encoding DEFECTS are flagged: the wait bit set together with a both-banks "
+        "clear (DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE), and a Wormhole-shaped packed "
+        "UNP_ZEROSRC_* constant on an arch whose UNPACR_NOP takes these controls as "
+        "separate operands (DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH). Whether a "
+        "SERIALIZING publication should actually change is NOT decided here: that "
+        "needs its Dest->Src consumer, which is cross-thread and usually cross-file, "
+        "so the pairing is left to the skill. Ownership for DUMMY_PUBLISH is tracked "
+        "PER SRC REGISTER and is SPENT by each SET_DVALID (which flips "
+        "Unpackers[i].SrcBank), so a guard is credited only to publications on the "
+        "same register before the next publish. The Src register is read from the "
+        "macro's first operand (SrcA/SrcB, UNP0/UNP1, UNP_A/UNP_B, or a bare 0/1); a "
+        "publication whose selector is a variable is not attributed and is never "
+        "flagged. A TT_OP_ word builder is judged on its ENCODING ONLY — it has no "
+        "source-position neighbours, so nothing preceding it can be credited as a "
+        "guard and it establishes no ownership for what follows; a MOP/template word "
+        "whose guard genuinely lives at the issue site therefore reads as SERIALIZING. "
+        "Operand values are read through inline comments, but only literal 0/1 are "
+        "recognised — a control passed as a variable or an expression reads as neither "
+        "set nor clear. "
         "IMPORTANT: the SET side is recalled ONLY as a RAW SETDVALID; the SUPPORTED "
         "set path — UNPACR_NOP(...,SET_DVALID,...) — is DELIBERATELY excluded (so it "
         "is never mis-flagged as the raw anti-pattern), so on correct code the SET "
@@ -243,16 +259,37 @@ class SrcRegBank(Check):
         return out
 
     def _dummy_publication_guard(self, fb: FactBase) -> list[Finding]:
-        """The UNPACK half of check 5. A dummy publication (UNPACR_NOP doing
-        ZEROSRC/SET_DVALID) clears Unpackers[i].SrcBank but, in its default form,
-        WAITS on MatrixUnit.Src?Bank — a different bank in double-buffered steady
-        state — so it can clear a bank it never waited for.
+        """The UNPACK half of check 5 — the dummy publication's bank wait.
 
-        RECALL only, never a flag: the tool cannot pair a publisher with its
-        Dest->Src consumer (cross-thread, usually cross-file), so it cannot prove
-        the publication feeds one. Scoped to functions whose PURPOSE is publishing
-        a dummy bank — unscoped, ~90% of all publications in the tree lack the wait
-        and the bucket carries no signal."""
+        A dummy publication (UNPACR_NOP doing ZEROSRC / SET_DVALID / CLR_SRC) always
+        clears Unpackers[i].SrcBank. The wait-like-UNPACR control bit selects which
+        bank it WAITS on, and the two settings differ in strength, not in correctness:
+
+          bit set   -> waits on Unpackers[i].SrcBank, the bank it clears. PIPELINED:
+                       unpack can prepare the next bank while math consumes the
+                       current one. Blackhole's preferred operating mode.
+          bit clear -> waits on MatrixUnit.Src?Bank. Under the bank-pointer lockstep
+                       invariant that pointer is only back with the unpackers when NO
+                       bank is outstanding, so this is a strictly STRONGER, serializing
+                       wait - it implies the own-bank condition.
+
+        So a publication in the default form is SERIALIZING, not unguarded: the
+        symptom is lost overlap (or a stall), never a silent wrong value. It is
+        emitted as a throughput/parity recall candidate, never as corruption. The
+        Dest->Src race that IS corruption lives on the math side
+        (DEST2SRC_NO_MATH_DRAIN) and is not fixed by this bit.
+
+        Two real defects DO live here and are flagged:
+          - the wait bit set together with a BOTH-BANKS clear, which waits on one
+            bank and then clears the other one too, and
+          - a Wormhole-shaped packed NoOp constant used on an arch that takes the
+            controls as separate operands, where the value lands in the wrong field.
+
+        Scoped to functions whose PURPOSE is publishing a dummy bank - unscoped,
+        ~90% of all publications in the tree are in the default form and the bucket
+        carries no signal. The tool cannot pair a publisher with its Dest->Src
+        consumer (cross-thread, usually cross-file), so it never proves the
+        publication feeds one."""
         out: list[Finding] = []
         for fn in fb.functions:
             if not registry.is_dest_reuse_publisher_fn(fn.name):
@@ -280,33 +317,104 @@ class SrcRegBank(Check):
                         owned[src] = True
                     continue
 
-                if "UNPACR_NOP" not in up or name.startswith("TT_OP_"):
+                if "UNPACR_NOP" not in up:
                     continue
-                is_publish = any(t in text for t in ("ZEROSRC", "SET_DVALID"))
+                # A TT_OP_ form builds a WORD rather than issuing at this source
+                # position - but a word handed to a MOP or ckernel_template still
+                # executes, so its own encoding is fair game. What does NOT apply is
+                # sequencing: the word has no neighbours here, so nothing preceding
+                # it establishes bank ownership and it establishes none for anything
+                # after it. Skipping these entirely hid the rmsnorm MOP publications.
+                is_word_builder = name.startswith("TT_OP_")
+                # CLR_SRC / UNP_CLRSRC* are publications too: they clear the
+                # unpacker's bank exactly as ZEROSRC does. Both spellings occur
+                # (p_unpacr_nop::CLR_SRC vs p_unpacr::UNP_CLRSRC_*), and omitting
+                # them hid every both-banks site in the tree, since those are all
+                # encoded as a clear with Set_Dvalid=0.
+                is_publish = any(
+                    t in text for t in ("ZEROSRC", "SET_DVALID", "CLR_SRC", "CLRSRC")
+                ) or registry.publication_sets_dvalid(text, fb.arch)
                 if not is_publish:
                     continue
 
-                waits_own = registry.publication_waits_own_bank(text)
-                if waits_own and src:
-                    # Establishes ownership for whatever is sequenced after it — this
-                    # is how a wait-like ZEROSRC guards a following bare SET_DVALID.
-                    owned[src] = True
-
-                if not (waits_own or (src and owned[src]) or (src is None)):
+                # A Wormhole packed constant on Blackhole/Quasar does not mean what it
+                # says: the value lands in Bank_Clr_Ctrl instead of the wait bit, with
+                # no compile-time check. Report it and do not credit it as a guard.
+                if registry.publication_misuses_packed_wait(text, fb.arch):
                     out.append(
                         Finding(
                             file=f["file"],
                             line=f.get("line", 0),
                             function=fn.name,
                             kind="dvalid:DUMMY_PUBLISH",
-                            hint="DUMMY_PUBLISH_UNGUARDED",
+                            hint="DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH",
                             detail=(
-                                f"{name} publishes a dummy Src bank without gating on "
-                                "Unpackers[i].SrcBank (no wait-like-UNPACR bit, no "
-                                "preceding STALLWAIT on SRCA_CLR/SRCB_CLR, no preceding "
-                                "UNPACR or wait-like publication) — it can clear a bank "
-                                "it never waited for. Confirm whether a Dest->Src move "
-                                "consumes this bank"
+                                f"{name} uses a Wormhole-shaped packed UNP_ZEROSRC_* "
+                                f"constant on {fb.arch}, whose UNPACR_NOP takes these "
+                                "controls as SEPARATE operands. The value silently lands "
+                                "in the wrong bit field (Bank_Clr_Ctrl, an unintended "
+                                "both-banks clear) and leaves the wait bit clear; "
+                                "TTI_UNPACR_NOP does not call TT_UNPACR_NOP_VALID, so the "
+                                "operand overflow is not caught. Pass the operand instead"
+                            ),
+                            evidence=[self._ev(f, text or name)],
+                        )
+                    )
+                    continue
+
+                waits_own, both_banks = registry.publication_bank_controls(
+                    text, fb.arch
+                )
+                if waits_own is None:
+                    # Encoding not modeled for this arch - say nothing rather than
+                    # imply safety.
+                    continue
+
+                # The one genuinely unsafe combination: the own-bank wait covers only
+                # the bank being prepared, so clearing BOTH banks can overwrite one the
+                # Matrix Unit still owns. Clearing both banks is correct ONLY with the
+                # default (drained) wait.
+                if waits_own and both_banks:
+                    out.append(
+                        Finding(
+                            file=f["file"],
+                            line=f.get("line", 0),
+                            function=fn.name,
+                            kind="dvalid:DUMMY_PUBLISH",
+                            hint="DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE",
+                            detail=(
+                                f"{name} clears BOTH banks while waiting only on "
+                                "Unpackers[i].SrcBank, so it can overwrite the other bank "
+                                "while the Matrix Unit still owns it. A both-banks clear "
+                                "must keep the default drained wait on MatrixUnit.Src?Bank"
+                            ),
+                            evidence=[self._ev(f, text or name)],
+                        )
+                    )
+
+                if waits_own and src and not is_word_builder:
+                    # Establishes ownership for whatever is sequenced after it — this
+                    # is how a wait-like ZEROSRC guards a following bare SET_DVALID.
+                    owned[src] = True
+
+                inherited = bool(src) and owned[src] and not is_word_builder
+                if not (waits_own or both_banks or inherited or (src is None)):
+                    out.append(
+                        Finding(
+                            file=f["file"],
+                            line=f.get("line", 0),
+                            function=fn.name,
+                            kind="dvalid:DUMMY_PUBLISH",
+                            hint="DUMMY_PUBLISH_SERIALIZING",
+                            detail=(
+                                f"{name} publishes a dummy Src bank in the default form, "
+                                "waiting on MatrixUnit.Src?Bank rather than the "
+                                "Unpackers[i].SrcBank it clears. That wait is STRONGER "
+                                "(it holds until no bank is outstanding), so this is a "
+                                "lost-overlap/parity observation, NOT corruption: unpack "
+                                "cannot prepare the next bank while math consumes the "
+                                "current one. Compare the other arch's twin; the "
+                                "corruption risk on this handshake is the math-side drain"
                             ),
                             evidence=[self._ev(f, text or name)],
                         )
@@ -314,6 +422,6 @@ class SrcRegBank(Check):
 
                 # SET_DVALID hands the bank over and flips Unpackers[i].SrcBank, so
                 # ownership of the NEW bank is not established by anything so far.
-                if "SET_DVALID" in text and src:
+                if "SET_DVALID" in text and src and not is_word_builder:
                     owned[src] = False
         return out
