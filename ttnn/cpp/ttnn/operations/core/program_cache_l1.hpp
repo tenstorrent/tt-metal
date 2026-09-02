@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 
