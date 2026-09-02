@@ -4,7 +4,8 @@
 - User guide: [docs/source/ttnn/ttnn/profiling_ttnn_operations.rst](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst)
 - Firmware implementation: [tt_metal/tools/profiler/perf_counters.hpp](../../tt_metal/tools/profiler/perf_counters.hpp)
 - Python analysis: [tools/tracy/perf_counter_analysis.py](../../tools/tracy/perf_counter_analysis.py)
-- Metric computation: [tools/tracy/process_ops_logs.py](../../tools/tracy/process_ops_logs.py)
+- Metric formulas (shared with the tt-llk harness): [tools/tracy/perf_metrics_common.py](../../tools/tracy/perf_metrics_common.py)
+- CSV writer: [tools/tracy/process_ops_logs.py](../../tools/tracy/process_ops_logs.py)
 
 ## Overview
 
@@ -24,17 +25,21 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 
 5. **Host reads**: After the kernel completes, the host reads the profiler data from DRAM and decodes each marker into a counter type, value, and reference count.
 
-6. **Python processes**: `perf_counter_analysis.py` aggregates raw counter values across cores per operation and computes derived metrics (utilization percentages, backpressure rates, composite ratios). Results are written to CSV and printed to console.
+6. **Python processes**: `perf_counter_analysis.py` decodes the markers and computes derived metrics per operation and core through the shared formula module `perf_metrics_common.py` (also used by the tt-llk test harness, so both report the same numbers from the same counters). Results are written to CSV and printed to console.
 
 ### How to Run
 
 ```bash
-# Capture all counter groups (fpu, pack, unpack, l1_0, instrn)
-python -m tracy --profiler-capture-perf-counters=all \
+# Capture every counter group; needs several passes, so opt in to the workload replay
+python -m tracy --perf-counter-multipass --profiler-capture-perf-counters=all \
     -m "pytest your_test.py -x -v"
 ```
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
+The `--perf-counter-multipass` option and the arch-wide expansion of `all` land with tt-metal PR #55166; until it merges, request at most three groups and one L1 bank per run.
+
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`; `all` expands to the running architecture's full set.
+
+Two limits force a request like `all` into several capture passes: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share one count-time mux, so at most one L1 bank can count per run. `python -m tracy` schedules the passes automatically. A request that fits one pass runs once, exactly as before; a request that does not stops with the printed pass plan unless `--perf-counter-multipass` is given, in which case the workload is replayed once per pass and the per-pass device logs are merged. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Environment Variable
 
@@ -52,24 +57,25 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
 | `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
 
-Recommended value for a broad capture: `47` (`0x2F`) — FPU | PACK | UNPACK | L1_0 | INSTRN.
+The env-var path selects one pass directly, so keep it to at most 3 groups: the BRISC firmware image only fits the readout code for 3, and a larger mask overflows its `.text` section (measured on Blackhole). Example single-pass capture:
 
 ```bash
-export TT_METAL_PROFILE_PERF_COUNTERS=47
+export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
 ```
 
-**L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run. The env-var path throws if more than one L1 bit is set. To capture multiple L1 banks, run the profiler twice and merge results; the `python -m tracy --profiler-capture-perf-counters=...` CLI does this automatically when both `l1_0` and `l1_1` are requested (see `process_model_log.run_device_profiler`).
+**L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run; the env-var path throws if more than one L1 bit is set. For anything that needs several passes, use `python -m tracy --perf-counter-multipass` (above), which schedules the passes and merges the results.
 
 ### Architecture Summary
 
 | | Wormhole | Blackhole |
 |---|---|---|
 | Tensix counters read | 135 | 154 |
-| Derived metrics | 60+ | 60+ |
+
+The derived-metric catalogue (107 metrics, below) is shared between architectures; a metric whose counters exist on only one architecture reports N/A on the other.
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
-**Blackhole** has fewer raw TDMA counters because `PACK_COUNT=1` ties the per-engine busy and dest-read signals for engines 1-3 to constants. Only RTL-live signals are read from hardware — any counter whose RTL signal is hardwired to a constant has been omitted from the `hw_counters.h` arrays, and any aliased grant counter is consolidated to one canonical entry. `Packer Efficiency` and `Math-to-Pack Handoff Efficiency` fall back to alternative formulas when `PACKER_BUSY` is 0 for a given workload (e.g. pure-SFPU ops that don't drive the packer). TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Blackhole** has fewer raw TDMA counters because `PACK_COUNT=1` ties the per-engine busy and dest-read signals for engines 1-3 to constants. Only RTL-live signals are read from hardware — any counter whose RTL signal is hardwired to a constant has been omitted from the `hw_counters.h` arrays, and any aliased grant counter is consolidated to one canonical entry. `Math-to-Pack Handoff Efficiency` falls back to the bank's reference cycles as denominator when `PACKER_BUSY` is 0 for a given workload (e.g. pure-SFPU ops that don't drive the packer); `Packer Efficiency` reports N/A there. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
 **INSTRN_THREAD bank** — `perf_cnt_instrn_thread` is built from a Verilog generate array in `tt_instruction_thread.sv` and has architecture-specific counter_sel mappings. Req-side: sels 0-23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each), sels 24-26 are per-thread total stall cycles, and sels 27+ are stall reasons. On WH the shared stall conditions (SRCA/B clear/valid) are replicated across 3 slots each (sels 27-38); on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons are thread-major: WH sels 39-65 (9 types × 3 threads), BH sels 31-57. Grant-side: the RTL wires grant as `{8{ibuffer_rden[th]}}` per instance and `{9{inst_stall_thread[th]}}` per per-thread stall-reason instance, so the 24 possible issue-count sels collapse to 3 distinct per-thread values and the per-thread stall-reason grants reproduce `THREAD_STALLS_{th}`. We expose only the distinct grants: `THREAD_INSTRUCTIONS_{0,1,2}` at sels 256/264/272 (one per instance) and `ANY_THREAD_STALL` at sel 283. The counter arrays are in arch-specific `hw_counters.h` files; `perf_counters.hpp` is arch-agnostic (WH defines empty L1_2/3/4 arrays).
 
@@ -77,1049 +83,168 @@ export TT_METAL_PROFILE_PERF_COUNTERS=47
 
 ## Derived Metrics Reference
 
-Each metric is listed with its formula, what high and low values mean, which architecture supports it, and what it's useful for.
-
----
-
-### Compute Utilization
-
-**1. SFPU Util**
-
-Measures fraction of cycles the SFPU (special function processing unit) was executing a valid operation.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | FPU |
-
-```
-SFPU Util = SFPU_COUNTER / ref_cnt * 100
-```
-
-- **High value (>20%)**: SFPU is actively computing. Expected for SFPU-heavy ops like sqrt, gelu, exp.
-- **Low value (~0%)**: SFPU is idle. Expected for matmul (uses FPU path) or data movement ops.
-
-**Use case:** Confirms whether an operation is using the SFPU pipeline. Compare with FPU Util to distinguish FPU vs SFPU workloads.
-
----
-
-**2. FPU Util**
-
-Measures fraction of cycles the FPU was executing a valid operation.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | FPU |
-
-```
-FPU Util = FPU_COUNTER / ref_cnt * 100
-```
-
-- **High value (>20%)**: FPU is actively computing. Expected for matmul, eltwise multiply.
-- **Low value (~0%)**: FPU is idle. Expected for SFPU ops or pure data movement.
-
-**Use case:** Primary indicator of compute utilization for FPU-path operations.
-
----
-
-**3. MATH Util**
-
-Measures combined FPU + SFPU utilization (cycles where either was active).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | FPU |
-
-```
-MATH Util = MATH_COUNTER / ref_cnt * 100
-```
-
-- **High value (>30%)**: Math hardware is well-utilized. Expected for compute-heavy ops like sqrt (74%), relu (36%).
-- **Low value (~0%)**: No math activity. Expected for pure data movement (tilize, concat).
-
-**Use case:** Single-number summary of total compute utilization regardless of FPU vs SFPU path.
-
----
-
-### Pipeline Efficiency
-
-**4. Packer Efficiency**
-
-Measures how often the packer has valid destination data available when it's busy.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Primary:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
-Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE * 100
-```
-
-The primary formula applies whenever `PACKER_BUSY > 0` (any op where the packer runs). For ops that never trigger the packer (e.g. pure SFPU ops like relu/sqrt), `PACKER_BUSY = 0` and the formula falls back to the dest-read grant rate — fraction of dest-read requests that were granted.
-
-- **High value (100%)**: Packer always has data when busy (no stalls).
-- **Low value (<80%)**: Packer is busy but waiting for destination register data from the math stage.
-
-**Use case:** Detects destination register stalls indicating the math stage is not keeping up with the packer.
-
----
-
-**5. Math-to-Pack Handoff Ratio**
-
-Measures pipeline balance between math output and packer consumption.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Primary:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
-Fallback: Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
-```
-
-`AVAILABLE_MATH` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
-
-- **>100%**: Math produces output faster than packer consumes (packer is the consumer bottleneck).
-- **~100%**: Math and packer balanced.
-- **<100%**: Math is frequently stalled, limiting pack throughput.
-
-**Use case:** Identifies whether math is keeping up with the packer. Low values indicate math is the bottleneck.
-
----
-
-**6. Unpacker-to-Math Data Flow**
-
-Measures backpressure from math stage to unpackers.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Unpacker-to-Math Data Flow = avg(SRCA_WRITE_AVAILABLE, SRCB_WRITE_AVAILABLE) /
-                             avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
-```
-
-- **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
-- **Low value (<30%)**: Unpackers are busy but source register buffers are full. Math is not consuming data fast enough.
-
-**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
-
----
-
-### Thread Analysis
-
-**7. Thread 0/1/2 Stall Rate**
-
-Measures fraction of cycles each instruction thread was stalled.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-Thread N Stall Rate = THREAD_STALLS_N / ref_cnt * 100
-```
-
-Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
-
-- **High value (>30%)**: Thread is frequently stalled. For Thread 0 this usually means waiting for data (NOC, semaphore). For Thread 1, waiting for math hardware. For Thread 2, waiting for pack hardware.
-- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread.
-
-**Use case:** First-order indicator of where time is being lost. The stall breakdown metrics (below) identify the specific stall reason.
-
----
-
-**8. T0/T1/T2 Instrn Issue Rate**
-
-Average instructions issued per cycle, per thread.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-TN Instrn Issue Rate = THREAD_INSTRUCTIONS_N / ref_cnt
-```
-
-Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
-
-- **High value (close to 1.0)**: Thread issues an instruction almost every cycle.
-- **Low value (<0.1)**: Thread is stalled or idle most of the time.
-
-**Use case:** Lets you see where the pipeline is spending instruction-issue bandwidth. Combined with the stall-rate metric (#7) it distinguishes "thread issued lots of instructions" from "thread sat idle".
-
----
-
-### Pipeline Wait Metrics
-
-**9. SrcA/SrcB Valid Wait**
-
-Cycles waiting for source register data to become valid (unpacker hasn't filled it yet).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-SrcA Valid Wait = WAITING_FOR_SRCA_VALID / ref_cnt * 100
-SrcB Valid Wait = WAITING_FOR_SRCB_VALID / ref_cnt * 100
-```
-
-- **High value (>5%)**: Math is waiting for unpacker to provide data. Data starvation.
-- **Low value (~0%)**: Data is ready when math needs it.
-
-**Use case:** Detects data starvation from the unpacker side.
-
----
-
-**10. SrcA/SrcB Clear Wait**
-
-Cycles waiting for source register to be cleared (math is still using the previous data).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-SrcA Clear Wait = WAITING_FOR_SRCA_CLEAR / ref_cnt * 100
-SrcB Clear Wait = WAITING_FOR_SRCB_CLEAR / ref_cnt * 100
-```
-
-- **High value (>10%)**: Register pressure — math is holding srcA/B longer than unpack can wait. Common for silu (35%), relu (16%).
-- **Low value (~0%)**: No register pressure. Math releases source registers quickly.
-
-**Use case:** Identifies source register contention between unpack and math threads.
-
----
-
-**11. Math/Pack/Unpack Idle Wait**
-
-Cycles each thread waits for its primary hardware unit to become idle.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-Math Idle Wait T1 = WAITING_FOR_MATH_IDLE_1 / ref_cnt * 100
-Pack Idle Wait T2 = WAITING_FOR_PACK_IDLE_2 / ref_cnt * 100
-Unpack Idle Wait T0 = WAITING_FOR_UNPACK_IDLE_0 / ref_cnt * 100
-```
-
-- **High value (>10%)**: Hardware unit is busy when the thread needs it. Pipeline bottleneck.
-- **Low value (~0%)**: Hardware is available when needed.
-
-**Use case:** Pinpoints which hardware unit is the pipeline bottleneck.
-
----
-
-### Semaphore Waits
-
-**12. Semaphore Zero/Full Wait T0/T1/T2**
-
-Cycles each thread waits for semaphore synchronization.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-Semaphore Zero Wait TN = WAITING_FOR_NONZERO_SEM_N / ref_cnt * 100
-Semaphore Full Wait TN = WAITING_FOR_NONFULL_SEM_N / ref_cnt * 100
-```
-
-- **Semaphore Zero Wait high (>10%)**: Thread is waiting for a producer to signal (semaphore is 0). Common for tilize (7%) where unpack waits for data.
-- **Semaphore Full Wait high (>5%)**: Thread is waiting for a consumer to drain (semaphore is at max). Indicates backpressure from downstream.
-- **Both low (~0%)**: Good producer-consumer balance.
-
-**Use case:** Identifies producer-consumer imbalances between threads or between host and device.
-
----
-
-### TDMA Stall Metrics
-
-**13. Data Hazard Stall Rate**
-
-Fraction of math-valid cycles stalled by destination-to-source data hazards (MOVD2A/MOVD2B operations).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A)
-                         / MATH_INSTRN_AVAILABLE * 100
-```
-
-The RTL counter `DATA_HAZARD_STALLS_MOVD2A` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
-
-- **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for concat (22% max).
-- **Low value (~0%)**: No data hazard stalls. Expected for matmul and simple eltwise ops.
-
-**Use case:** Identifies operations with heavy dest-to-src register movement overhead.
-
----
-
-
-**14. SrcA Write Overwrite Blocked Rate**
-
-Fraction of srcA DMA write attempts blocked by overwrite protection (data not yet consumed by math).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-SrcA Write Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                     SRCA_WRITE_AVAILABLE * 100
-```
-
-On WH, `SRCA_WRITE_NOT_BLOCKED_OVR` (counter_sel 261) directly measures srcA DMA writes not blocked by overwrite. On BH, counter_sel 260 is used (verified empirically).
-
-- **High value (>30%)**: SrcA writes are frequently blocked. Data overwrite protection is active.
-- **Low value (~0%)**: SrcA writes proceed without blocking.
-
-**Use case:** Detects source register overwrite contention on the srcA path.
-
----
-
-**15. SrcB Write Port Blocked Rate**
-
-Fraction of srcB DMA write attempts blocked by port unavailability.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-SrcB Write Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) /
-                          SRCB_WRITE_AVAILABLE * 100
-```
-
-On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DMA writes not blocked by the write port. On BH, counter_sel 262 is used (verified empirically).
-
-- **High value (>50%)**: SrcB write port is heavily contended.
-- **Low value (<20%)**: SrcB writes proceed with minimal blocking.
-
-**Use case:** Detects srcB write port contention.
-
----
-
-**16. Dest Read Backpressure**
-
-Fraction of packer destination register reads that were blocked.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Dest Read Backpressure = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) /
-                         PACKER_DEST_READ_AVAILABLE * 100
-```
-
-- **High value (>20%)**: Packer can't read destination register (math still writing).
-- **Low value (~0%)**: No destination register contention.
-
-**Use case:** Identifies math-to-pack register handoff bottleneck.
-
----
-
-**17. Math Dest Write Port Stall Rate**
-
-Fraction of math cycles stalled by destination register write port contention.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_PORT) /
-                             MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>10%)**: Math is stalled waiting for write port to destination register.
-- **Low value (~0%)**: No write port stalls.
-
-The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 for an entire op (would otherwise report a misleading 100% stall rate). This happens on BH for workloads that don't exercise the write-port path heavily.
-
-**Use case:** Detects destination register write contention from the math side.
-
----
-
-**18. Math Scoreboard Stall Rate**
-
-Fraction of math cycles stalled by FPU data hazard scoreboard.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | PACK |
-
-```
-Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) /
-                        MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>10%)**: FPU scoreboard is blocking math instructions (RAW/WAW hazards).
-- **Low value (~0%)**: No scoreboard stalls.
-
-**Use case:** Identifies FPU pipeline hazards that prevent math instructions from issuing.
-
----
-
-### Instruction Availability Rates
-
-**19. CFG/SYNC/THCON/MOVE/MATH/UNPACK/PACK Instrn Avail Rate**
-
-Fraction of cycles each instruction type was available in its primary thread's instruction buffer.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-TYPE Instrn Avail Rate = TYPE_INSTRN_AVAILABLE_N / ref_cnt * 100
-```
-
-Where TYPE is CFG, SYNC, THCON, MOVE (on T0), MATH (on T1), UNPACK (on T0), PACK (on T2).
-
-- **High value (>10%)**: This instruction type frequently sits in the buffer waiting to issue. The thread is spending significant time on this instruction type.
-- **Low value (~0%)**: This instruction type is rarely pending. Either rarely used or issues immediately.
-
-**Use case:** Identifies which instruction types dominate the scheduling pipeline. High THCON avail rate (matmul 13%) indicates thread control overhead.
-
----
-
-### Stall Breakdown
-
-> **Removed metrics:** The stall breakdown percentage metrics (`THCON/MOVE Idle Stall Pct T0`, `MMIO/SFPU Idle Stall Pct T1`) were removed. They divided `WAITING_FOR_X` by `THREAD_STALLS`, but `WAITING_FOR_X` counts cycles a hardware unit was busy — not cycles the thread was stalled by that unit. When thread stalls are low (e.g. concat, tilize), `WAITING_FOR_X >> THREAD_STALLS`, producing meaningless >100% values. Use the absolute idle wait metrics (`MMIO/SFPU/THCON/MOVE Idle Wait`) instead, which correctly measure % of total time each hardware unit was busy.
-
----
-
-### Write Port Analysis
-
-**20. SrcA Write Actual Efficiency**
-
-Fraction of srcA write attempts that actually succeeded.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
-```
-
-- **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
-- **Low value (<80%)**: Significant fraction of srcA writes are blocked.
-
-**Note:** SrcB Write Actual Efficiency works on both Wormhole and Blackhole.
-
-**Use case:** Measures effective srcA write throughput. Low values indicate write port contention.
-
----
-
-### Additional Idle Waits
-
-**21. MMIO/SFPU/THCON/MOVE Idle Wait**
-
-Fraction of total cycles each thread spent waiting for specific hardware units.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-MMIO Idle Wait T0 = WAITING_FOR_MMIO_IDLE_0 / ref_cnt * 100
-SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
-THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
-MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
-```
-
-- **High value (>5%)**: Significant time spent waiting for this unit. MOVE Idle Wait at 2.8% for tilize is expected.
-- **Low value (~0%)**: Hardware unit is fast enough to never bottleneck. THCON and MMIO are typically ~0%.
-
-**Use case:** Absolute (not relative) measure of time lost to each hardware unit. Unlike the stall breakdown metrics which show percentage of stalls, these show percentage of total time.
-
----
-
-**22. L1 TDMA Packer Port Util**
-
-TDMA packer 2 L1 port utilization (port 8).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_1 |
-
-```
-L1 TDMA Packer Port Util = L1_1_TDMA_PACKER_2 / ref_cnt * 100
-```
-
-- **High value (>10%)**: RISC core is actively accessing L1. Indicates firmware memory overhead.
-- **Low value (~0%)**: Minimal RISC L1 traffic.
-
-**Use case:** Measures firmware memory access overhead on BH. Requires L1_1 group enabled.
-
----
-
-### L1 Memory Utilization
-
-**23. L1 Unpacker/Packer Port Util**
-
-Fraction of cycles each L1 port had a transaction attempt.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 Unpacker Port Util = L1_0_UNPACKER_0 / ref_cnt * 100
-L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100   # Wormhole only; Blackhole's port 1 is unpacker 1 and folds into L1 Unpacker Port Util
-```
-
-- **High value (>20%)**: Port is heavily used. Matmul shows 15% on unpacker.
-- **Low value (~0%)**: Port is idle (e.g. sqrt has 0% unpacker port util because data arrives via NOC).
-
-**Use case:** Identifies which L1 ports are active for a given operation.
-
----
-
-**24. L1 TDMA Bundle Util**
-
-Average utilization of the two TDMA/RISC L1 ports.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / ref_cnt * 100
-```
-
-- **High value (>10%)**: RISC/TDMA data movement is significant. Relu shows 11%.
-- **Low value (~0%)**: Minimal RISC/TDMA L1 access.
-
-**Use case:** Measures firmware and TDMA data movement overhead through L1.
-
----
-
-**25. NOC Ring 0/1 Outgoing/Incoming Util**
-
-Average utilization of NOC channels per ring.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 (Ring 0), L1_1 (Ring 1) |
-
-```
-NOC Ring 0 Outgoing Util = avg(L1_0_NOC_RING0_OUTGOING_0, _1) / ref_cnt * 100
-NOC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, _1) / ref_cnt * 100
-```
-
-- **High value (>15%)**: Significant NOC traffic. Matmul shows 15% outgoing + 16% incoming.
-- **Low value (<3%)**: Minimal NOC traffic. Sqrt shows 3% outgoing, 0% incoming.
-
-**Use case:** Measures NOC bandwidth utilization per ring. Compare outgoing vs incoming to understand data flow direction.
-
----
-
-### L1 Backpressure
-
-**26. NOC Ring 0/1 Outgoing/Incoming Backpressure**
-
-Fraction of NOC transaction cycles where L1 was not ready.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 (Ring 0), L1_1 (Ring 1) |
-
-```
-NOC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100
-```
-
-- **High value (>15%)**: NOC outgoing traffic is being stalled by L1. Sqrt shows 15%.
-- **Low value (<5%)**: NOC traffic flows with minimal L1 stalls. Matmul shows 2%.
-
-**Use case:** Detects L1 port contention affecting NOC traffic. High outgoing BP means data can't leave the core fast enough.
-
----
-
-**27. L1 Unpacker/Packer Port Backpressure**
-
-L1 port contention for unpacker and packer.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 Unpacker BP = (L1_0_UNPACKER_0 - L1_0_UNPACKER_0_GRANT) / L1_0_UNPACKER_0 * 100
-L1 Packer Port BP = (L1_0_PORT1 - L1_0_PORT1_GRANT) / L1_0_PORT1 * 100
-```
-
-- **L1 Unpacker BP high (>80%)**: L1 is almost always busy when unpacker wants access. Values of 75-100% are common across all ops.
-- **L1 Packer Port BP low (<5%)**: Packer port has low contention. Normal.
-
-**Blackhole note:** On BH, the L1 unpacker grant counter can exceed the request counter on some cores (different signal semantics). When this happens, the backpressure metric is suppressed rather than showing meaningless values.
-
-**Use case:** High unpacker BP is expected (unpacker competes with other ports). Investigate only if combined with high Thread 0 stall rate.
-
----
-
-### L1 Composite Metrics
-
-These metrics combine multiple counters to provide higher-level L1 insights.
-
-**28. L1 Total Bandwidth Util**
-
-Overall L1 memory bandwidth saturation.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 Total BW Util = sum(all 8 port req counts) / (8 * ref_cnt) * 100
-```
-
-- **High value (>30%)**: L1 is heavily utilized. May become a bottleneck.
-- **Medium value (10-20%)**: Moderate L1 usage. Matmul shows 12.6%.
-- **Low value (<5%)**: L1 bandwidth is underutilized.
-
-**Use case:** Single number showing how much of the theoretical L1 bandwidth is being used. If this is high and performance is low, L1 is the bottleneck.
-
----
-
-**29. L1 Read vs Write Ratio**
-
-Balance between read and write L1 traffic.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 R/W Ratio = (Unpacker + NOC Outgoing) / (Unpacker + NOC Outgoing + Packer + NOC Incoming) * 100
-```
-
-Read ports: Unpacker (reads tiles from L1), NOC Outgoing (sends data from L1 to network).
-Write ports: Packer (writes results to L1), NOC Incoming (receives data from network to L1).
-
-- **~50%**: Balanced read/write. Matmul shows 50%.
-- **>70%**: Read-heavy. Operation is primarily consuming data.
-- **<30%**: Write-heavy. Operation is primarily producing data.
-
-**Use case:** Understands data flow direction through L1.
-
----
-
-**30. NOC Ring 0 Asymmetry**
-
-Balance between outgoing and incoming NOC traffic.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-NOC Asymmetry = NOC_Outgoing / (NOC_Outgoing + NOC_Incoming) * 100
-```
-
-- **~50%**: Balanced send/receive. Matmul shows 50%.
-- **>70%**: Send-heavy (core produces more than it consumes).
-- **<30%**: Receive-heavy (core consumes more than it produces).
-
-**Use case:** Identifies directional imbalance in NOC traffic which may indicate suboptimal data placement.
-
----
-
-**31. L1 Contention Index**
-
-Average backpressure across all active L1 ports.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-L1 Contention Index = avg(backpressure of Unpacker, NOC Out 0, NOC Out 1, NOC In 0, NOC In 1)
-```
-
-- **High value (>40%)**: Significant L1 port contention across the board.
-- **Medium value (15-30%)**: Moderate contention. Matmul shows 22%.
-- **Low value (<10%)**: Minimal L1 contention.
-
-**Use case:** Single number summarizing overall L1 memory stress level. Easier to compare across ops than looking at individual port backpressures.
-
----
-
-**32. Unpacker L1 Efficiency**
-
-When the unpacker is busy, how often does L1 actually serve it.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 + UNPACK |
-
-```
-Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
-```
-
-- **High value (>50%)**: L1 serves unpacker requests efficiently.
-- **Low value (<5%)**: L1 is frequently unable to serve the unpacker when it needs data. Matmul shows 0.25% (high contention from other ports).
-
-**Use case:** Measures actual L1 service rate to the unpacker. Low values combined with high unpacker backpressure confirm L1 is the bottleneck for data delivery.
-
----
-
-**33. Packer L1 Efficiency**
-
-When the packer is busy, how often does L1 serve it.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 + PACK |
-
-```
-Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
-```
-
-- **High value (>100%)**: L1 port has headroom. Values can exceed 100% because the packer port is shared with other clients (ECC on WH, other traffic on BH), so grant cycles may exceed packer busy cycles.
-- **Low value (<50%)**: Packer is being starved by L1.
-
-**Use case:** Confirms packer is not L1-bottlenecked. Low values would indicate L1 port contention affecting write-back.
-
----
-
-**34. NOC vs Compute Balance**
-
-Whether the operation is NOC-bound or compute-bound.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 + FPU |
-
-```
-NOC vs Compute = (NOC_Out + NOC_In) / (FPU_COUNTER + NOC_Out + NOC_In) * 100
-```
-
-- **>60%**: NOC-bound. More time is spent on data movement than compute. Matmul shows 68%.
-- **~50%**: Balanced between compute and data movement.
-- **<40%**: Compute-bound. FPU/SFPU is the bottleneck.
-
-**Use case:** Quick diagnostic for whether to optimize compute kernels or data placement/NOC routing.
-
----
-
-**35. TDMA vs NOC L1 Share**
-
-Fraction of L1 bandwidth used by RISC/TDMA vs NOC.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | L1_0 |
-
-```
-TDMA vs NOC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NOC_Out + NOC_In) * 100
-```
-
-- **High value (>20%)**: RISC/TDMA firmware uses significant L1 bandwidth.
-- **Low value (<5%)**: Most L1 bandwidth goes to NOC. Matmul shows 3%.
-
-**Use case:** Measures firmware L1 overhead. High values may indicate firmware optimization opportunities.
-
----
-
-**36. Stall Cause Overlap Factor T0/T1/T2**
-
-Ratio of the sum of all 9 per-thread stall reason counters to the total thread stalls. Values >1.0 mean multiple stall conditions are active simultaneously.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | INSTRN |
-
-```
-Stall Overlap TN = sum(all 9 WAITING_FOR_*_N) / THREAD_STALLS_N
-```
-
-- **~1.0x**: Single dominant stall cause. The thread is stalled for one reason at a time.
-- **>2.0x**: Multiple hardware units are busy simultaneously when the thread stalls. Common for Thread 2 (pack) which may have move + pack stalls overlapping.
-
-**Use case:** Tells you whether to focus on a single bottleneck or multiple interacting ones.
-
----
-
-**37. Packer Load Imbalance**
-
-Spread between the most and least utilized packer engines. WH only (PACK_COUNT=4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole only |
-| **Counter group** | PACK |
-
-```
-Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
-```
-
-- **Low value (<10%)**: Work is evenly distributed across pack engines.
-- **High value (>25%)**: Significant imbalance. Some engines are idle while others are busy.
-
-**Use case:** Detects uneven work distribution across WH's 4 packer engines which may indicate suboptimal tile packing.
-
----
-
-**38. Compute-to-Unpack Ratio**
-
-Whether the operation is compute-bound or memory-bound.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | FPU + UNPACK |
-
-```
-Compute-to-Unpack Ratio = MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY) * 100
-```
-
-- **>100%**: Compute-bound — math takes longer than data unpacking.
-- **~50%**: Balanced between compute and data movement. Matmul shows ~53%.
-- **<20%**: Memory-bound — unpackers are busy much longer than math.
-
-**Use case:** Quick one-number diagnostic for whether to optimize compute kernels or data placement.
-
----
-
-### Additional Pipeline Metrics
-
-**39. Math Pipeline Utilization**
-
-Measures math instruction flow efficiency through the pipeline.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>80%)**: Math pipeline efficiently moves instructions. Expected for compute-bound ops like matmul (99.91%).
-- **Low value**: Math pipeline is mostly idle or stalled.
-
-**Use case:** Diagnoses whether math instructions are issuing at the rate the front-end can produce them.
-
----
-
-**40. SrcB Write Actual Efficiency**
-
-Fraction of srcB write attempts that were not blocked by port contention.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE * 100
-```
-
-Mirrors **SrcA Write Actual Efficiency** (#20); both measure "fraction of writes not blocked by the DMA write port" for their respective source registers.
-
-- **100%**: Every srcB write attempt succeeds at the port.
-- **<100%**: Port contention occasionally blocks writes.
-
-**Use case:** Measures effective srcB write throughput.
-
----
-
-**41. Packer Engine 0/1/2 Util**
-
-Per-engine packer utilization.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole only |
-| **Counter group** | PACK |
-
-```
-Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
-```
-
-**Not available on Blackhole**: `PACK_COUNT=1`, per-engine busy signals tied to 0 in RTL.
-
-**Use case:** Detects load imbalance across WH's 4 packer engines.
-
----
-
-**42. Unpacker0/1 Write Efficiency**
-
-Source register write throughput per unpacker — fraction of unpacker-busy cycles where the write actually succeeded (port-OK).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Unpacker0 Write Efficiency = SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 * 100
-Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
-```
-
-- **High value (>80%)**: Unpacker spends most busy time successfully writing data.
-- **Low value (<40%)**: Unpacker busy but writes are blocked (port contention or less data than busy cycles).
-
-**Use case:** Identifies unpacker bottlenecks — low efficiency combined with high Unpack Busy cycles suggests port contention or register overwrite stalls.
-
----
-
-**43. FPU Execution Efficiency**
-
-FPU active cycles as fraction of math instruction availability on the math thread.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | FPU + INSTRN |
-
-```
-FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
-```
-
-- **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
-- **Low value (<30%)**: Math instructions pending but FPU not running (pipeline stalls).
-
-**Use case:** Distinguishes compute-bound (high efficiency) from stall-bound (low efficiency) workloads on the math path.
-
----
-
-**44. SrcA/SrcB Write Overwrite Blocked Rate**
-
-Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previous data not yet consumed by math).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-SrcA Write Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                               SRCA_WRITE_AVAILABLE * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_ACTUAL) /
-                               SRCB_WRITE_AVAILABLE * 100
-```
-
-Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
-- **Port blocking**: DMA write port unavailable (mux contention)
-- **Overwrite blocking**: previous srcA/B value not yet consumed by math; can't overwrite
-
-- **High value (>30%)**: Math is slow to consume; unpacker frequently waits. Typical for SFPU-heavy ops (silu shows 91% on srcA).
-- **Low value (~0%)**: No register pressure.
-
-**Use case:** Distinguishes source register overwrite stalls (math-consumer bottleneck) from port stalls (DMA arbitration).
-
----
-
-**45. Fidelity Stall Rate**
-
-Fraction of math-valid cycles stalled in a fidelity phase (multi-HF-cycle math instruction).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: LoFi math only (all instructions complete in 1 HF cycle).
-- **>0%**: HiFi math instructions are active. Each HiFi2 takes 2 cycles, HiFi4 takes 4 cycles.
-
-**Use case:** Detects whether a workload uses HiFi math; non-zero values indicate multi-cycle math instructions contributing to total execution time.
-
----
-
-**46. HiFi Fraction**
-
-Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 or HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
-                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
-```
-
-- **0%**: Pure LoFi.
-- **100%**: Pure HiFi.
-
-**Use case:** Quick check of fidelity mix in a workload.
-
----
-
-**47. Avg HF Cycles Per Instrn**
-
-Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
-```
-
-- **1.0**: All LoFi.
-- **2.0**: All HiFi2.
-- **4.0**: All HiFi4.
-- Between: Mixed workload.
-
-**Use case:** Single-number summary of fidelity impact on math execution.
-
----
+Every derived metric is computed by one shared module, [tools/tracy/perf_metrics_common.py](../../tools/tracy/perf_metrics_common.py). The Tracy tool computes it per operation and core and aggregates to Min/Median/Max/Avg across cores; the tt-llk test harness computes it per zone and run and aggregates to mean/std across runs. The tables below are the complete set. The module is the source of truth, and a unit test (`tests/ttnn/tracy/test_perf_metrics_common.py`) fails if this file stops listing a metric the module computes.
+
+Metrics come in two families, told apart by the key suffix:
+
+- `*_pct` — bounded percentages (0-100%). The numerator is a subset of its denominator.
+- `*_ratio` — unbounded raw ratios that can exceed 1.0 by design, because the numerator and denominator come from different measurement domains or because overlapping events are summed. Reported with a `(ratio)` unit and never clamped; the excess over 1.0 is the signal.
+
+A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics are N/A on Blackhole, and the Blackhole-only extended L1 groups are N/A on Wormhole. Cross-bank metrics are likewise N/A when one of their counter groups was not captured in the run.
+
+In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycle count (`ref_cnt`, the elapsed cycles between counter start and stop), and `1 - x / y` denotes the complement of a counter that counts not-stalled or granted cycles.
+
+### Compute
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| FPU Util (%) | `fpu_utilization_pct` | `FPU_COUNTER / fpu cycles` | Fraction of cycles the FPU executed an instruction. |
+| MATH Util (%) | `compute_utilization_pct` | `MATH_COUNTER / fpu cycles` | FPU or SFPU active (the counter is the OR of both). |
+| SFPU Util (%) | `sfpu_utilization_pct` | `SFPU_COUNTER / fpu cycles` | Fraction of cycles the SFPU was active. |
+| FPU Execution Efficiency (%) | `fpu_exec_eff_pct` | `FPU_COUNTER / FPU_INSTRN_AVAILABLE_1` | Of the cycles a math instruction was available, how many the FPU executed. |
+| Math Pipeline Utilization (%) | `math_pipeline_util_pct` | `MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE` | Available math instructions that actually started. |
+
+### Math pipeline stalls
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Fidelity Stall Rate (%) | `fidelity_stall_pct` | `MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE` | Math-available cycles stalled by HiFi fidelity phases; 0 at LoFi. |
+| Data Hazard Stall Rate (%) | `data_hazard_stall_pct` | `1 - DATA_HAZARD_STALLS_MOVD2A / MATH_INSTRN_AVAILABLE` | MOVD2A data-hazard stall rate (counter counts not-stalled cycles). |
+| Math Dest Write Port Stall Rate (%) | `math_dest_wr_port_stall_pct` | `1 - MATH_NOT_STALLED_DEST_WR_PORT / MATH_INSTRN_AVAILABLE` | Dest write-port stalls. N/A when the pack group was not captured. |
+| Math Scoreboard Stall Rate (%) | `math_scoreboard_stall_pct` | `1 - AVAILABLE_MATH / MATH_INSTRN_AVAILABLE` | Scoreboard stalls. N/A when the pack group was not captured. |
+
+### Unpacker
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Unpacker0 Write Efficiency (%) | `unpack0_write_eff_pct` | `SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0` | Unpacker-0 busy cycles that completed a srcA write. |
+| Unpacker1 Write Efficiency (%) | `unpack1_write_eff_pct` | `SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0` | Unpacker-1 busy cycles that completed a srcB write. |
+| Unpacker Write Efficiency (%) | `unpack_write_eff_pct` | `mean of the two write efficiencies` | Combined unpacker write efficiency. |
+| Unpacker-to-Math Data Flow (%) | `unpack_to_math_flow_pct` | `mean of the srcA and srcB flows` | Combined unpacker-to-math data flow. |
+| Unpacker-to-Math Data Flow (srcA) (%) | `unpack_to_math_flow0_pct` | `SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0` | srcA buffer availability while unpacker 0 is busy. |
+| Unpacker-to-Math Data Flow (srcB) (%) | `unpack_to_math_flow1_pct` | `SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0` | srcB buffer availability while unpacker 1 is busy. |
+| SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE` | Available srcA writes that completed. |
+| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE` | Available srcB writes that completed. |
+| SrcA Write Port Blocked Rate (%) | `srca_write_port_blocked_pct` | `1 - SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE` | srcA writes blocked on the write port. |
+| SrcA Write Overwrite Blocked Rate (%) | `srca_write_ovr_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_AVAILABLE` | srcA writes blocked by overwrite protection. |
+| SrcB Write Overwrite Blocked Rate (%) | `srcb_write_ovr_blocked_pct` | `1 - SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE` | srcB writes blocked by overwrite protection. |
+| SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE` | srcB writes blocked on the write port. |
+| Unpacker0 T1 Share (%) | `unpack0_thread1_share_pct` | `UNPACK0_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-0 busy cycles driven by the math thread. |
+| Unpacker1 T1 Share (%) | `unpack1_thread1_share_pct` | `UNPACK1_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-1 busy cycles driven by the math thread. |
+| SrcA Write T0 Share (%) | `srca_write_thread0_share_pct` | `SRCA_WRITE_THREAD0 / (thread0 + thread1 writes)` | srcA writes issued from thread 0. |
+| SrcB Write T0 Share (%) | `srcb_write_thread0_share_pct` | `SRCB_WRITE_THREAD0 / (thread0 + thread1 writes)` | srcB writes issued from thread 0. |
+
+### Packer
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Packer Utilization (%) | `pack_utilization_pct` | `PACKER_BUSY / pack cycles` | Fraction of cycles any packer engine was busy. |
+| Packer Efficiency (%) | `pack_dest_eff_pct` | `PACKER_DEST_READ_AVAILABLE / PACKER_BUSY` | Packer busy cycles with dest data available to read. N/A when the packer is idle. |
+| Pack Dest Grant Efficiency (%) | `pack_dest_grant_eff_pct` | `DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE` | Dest read requests that were granted. |
+| Dest Read Backpressure (%) | `dest_read_backpressure_pct` | `1 - DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE` | Dest reads waiting on the grant. |
+| Packer Engine 0 Util (%) | `packer0_util_pct` | `PACKER_BUSY_0 / pack cycles` | Per-engine packer 0. Wormhole only; N/A on Blackhole. |
+| Packer Engine 1 Util (%) | `packer1_util_pct` | `PACKER_BUSY_1 / pack cycles` | Per-engine packer 1. Wormhole only; N/A on Blackhole. |
+| Packer Engine 2 Util (%) | `packer2_util_pct` | `PACKER_BUSY_2 / pack cycles` | Per-engine packer 2. Wormhole only; N/A on Blackhole. |
+| Packer Engine 3 Util (%) | `packer3_util_pct` | `PACKER_BUSY / pack cycles` | Engine 3 shares the aggregate counter; present on both arches. |
+| Packer Load Imbalance (%) | `packer_load_imbalance_pct` | `(max - min) / max over active packer engines` | N/A unless at least two engines were active. |
+
+### Pipeline handoff
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Math-to-Pack Handoff Efficiency (ratio) | `math_to_pack_handoff_ratio` | `AVAILABLE_MATH / PACKER_BUSY (pack cycles when the packer is idle)` | UNBOUNDED ratio; above 1 the packer is the handoff bottleneck. |
+| Compute-to-Unpack Ratio (ratio) | `compute_to_unpack_ratio` | `MATH_COUNTER / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0)` | UNBOUNDED ratio; above 1 = compute-bound, below 1 = unpack-bound. |
+
+### Thread stalls and waits
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Thread 0 Stall Rate (%) | `unpack_thread_stall_pct` | `THREAD_STALLS_0 / instrn cycles` | Thread 0 (unpack) stall rate. |
+| Thread 1 Stall Rate (%) | `math_thread_stall_pct` | `THREAD_STALLS_1 / instrn cycles` | Thread 1 (math) stall rate. |
+| Thread 2 Stall Rate (%) | `pack_thread_stall_pct` | `THREAD_STALLS_2 / instrn cycles` | Thread 2 (pack) stall rate. |
+| SrcA Valid Wait (%) | `math_wait_srca_pct` | `WAITING_FOR_SRCA_VALID / instrn cycles` | Math waiting for srcA to become valid. |
+| SrcB Valid Wait (%) | `math_wait_srcb_pct` | `WAITING_FOR_SRCB_VALID / instrn cycles` | Math waiting for srcB to become valid. |
+| SrcA Clear Wait (%) | `srca_clear_wait_pct` | `WAITING_FOR_SRCA_CLEAR / instrn cycles` | Unpack waiting for srcA to clear. |
+| SrcB Clear Wait (%) | `srcb_clear_wait_pct` | `WAITING_FOR_SRCB_CLEAR / instrn cycles` | Unpack waiting for srcB to clear. |
+| Math Idle Wait T1 (%) | `math_idle_wait_t1_pct` | `WAITING_FOR_MATH_IDLE_1 / instrn cycles` | Thread 1 waiting for its own math unit to go idle. |
+| Pack Idle Wait T2 (%) | `pack_idle_wait_t2_pct` | `WAITING_FOR_PACK_IDLE_2 / instrn cycles` | Thread 2 waiting for the packer to go idle. |
+| Unpack Idle Wait T0 (%) | `unpack_idle_wait_t0_pct` | `WAITING_FOR_UNPACK_IDLE_0 / instrn cycles` | Thread 0 waiting for the unpacker to go idle. |
+| Math Waiting on Unpack (T1) (%) | `math_wait_unpack_pct` | `WAITING_FOR_UNPACK_IDLE_1 / instrn cycles` | Math thread blocked on the unpacker. |
+| Pack Waiting on Math (T2) (%) | `pack_wait_math_pct` | `WAITING_FOR_MATH_IDLE_2 / instrn cycles` | Pack thread blocked on math. |
+| Unpack Waiting on Pack (T0) (%) | `unpack_wait_pack_pct` | `WAITING_FOR_PACK_IDLE_0 / instrn cycles` | Unpack thread blocked on the packer. |
+| SFPU Idle Wait T1 (%) | `math_wait_sfpu_pct` | `WAITING_FOR_SFPU_IDLE_1 / instrn cycles` | Math thread waiting for the SFPU. |
+| MMIO Idle Wait T0 (%) | `mmio_idle_wait_t0_pct` | `WAITING_FOR_MMIO_IDLE_0 / instrn cycles` | Thread 0 waiting for MMIO. |
+| THCON Idle Wait T0 (%) | `thcon_idle_wait_t0_pct` | `WAITING_FOR_THCON_IDLE_0 / instrn cycles` | Thread 0 waiting for THCON. |
+| MOVE Idle Wait T0 (%) | `move_idle_wait_t0_pct` | `WAITING_FOR_MOVE_IDLE_0 / instrn cycles` | Thread 0 waiting for MOVE. |
+| Semaphore Zero Wait T1 (%) | `math_sem_wait_pct` | `WAITING_FOR_NONZERO_SEM_1 / instrn cycles` | Thread 1 waiting on a non-zero semaphore. |
+| Semaphore Zero Wait T2 (%) | `pack_sem_wait_pct` | `WAITING_FOR_NONZERO_SEM_2 / instrn cycles` | Thread 2 waiting on a non-zero semaphore. |
+| Semaphore Zero Wait T0 (%) | `sem_zero_wait_t0_pct` | `WAITING_FOR_NONZERO_SEM_0 / instrn cycles` | Thread 0 waiting on a non-zero semaphore. |
+| Semaphore Full Wait T0 (%) | `sem_full_wait_t0_pct` | `WAITING_FOR_NONFULL_SEM_0 / instrn cycles` | Thread 0 waiting on a non-full semaphore. |
+| Semaphore Full Wait T1 (%) | `sem_full_wait_t1_pct` | `WAITING_FOR_NONFULL_SEM_1 / instrn cycles` | Thread 1 waiting on a non-full semaphore. |
+| Semaphore Full Wait T2 (%) | `sem_full_wait_t2_pct` | `WAITING_FOR_NONFULL_SEM_2 / instrn cycles` | Thread 2 waiting on a non-full semaphore. |
+| Stall Overlap T0 (ratio) | `stall_overlap_t0_ratio` | `sum of the nine WAITING_FOR_*_0 counters / instrn cycles` | UNBOUNDED ratio; above 1 means several waits overlap in the same cycle. |
+| Stall Overlap T1 (ratio) | `stall_overlap_t1_ratio` | `sum of the nine WAITING_FOR_*_1 counters / instrn cycles` | Same for thread 1. |
+| Stall Overlap T2 (ratio) | `stall_overlap_t2_ratio` | `sum of the nine WAITING_FOR_*_2 counters / instrn cycles` | Same for thread 2. |
+| Any-Thread Stall Rate (%) | `any_thread_stall_pct` | `ANY_THREAD_STALL / instrn cycles` | Cycles where any thread was stalled; one pipeline-level indicator. |
+
+### Instruction issue and availability
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| CFG Instrn Avail Rate T0 (%) | `cfg_instrn_avail_t0_pct` | `CFG_INSTRN_AVAILABLE_0 / instrn cycles` | CFG instructions pending on thread 0. |
+| SYNC Instrn Avail Rate T0 (%) | `sync_instrn_avail_t0_pct` | `SYNC_INSTRN_AVAILABLE_0 / instrn cycles` | SYNC instructions pending on thread 0. |
+| THCON Instrn Avail Rate T0 (%) | `thcon_instrn_avail_t0_pct` | `THCON_INSTRN_AVAILABLE_0 / instrn cycles` | THCON instructions pending on thread 0. |
+| MOVE Instrn Avail Rate T0 (%) | `move_instrn_avail_t0_pct` | `MOVE_INSTRN_AVAILABLE_0 / instrn cycles` | MOVE instructions pending on thread 0. |
+| MATH Instrn Avail Rate T1 (%) | `math_instrn_avail_t1_pct` | `FPU_INSTRN_AVAILABLE_1 / instrn cycles` | Math instructions pending on thread 1. |
+| UNPACK Instrn Avail Rate T0 (%) | `unpack_instrn_avail_t0_pct` | `UNPACK_INSTRN_AVAILABLE_0 / instrn cycles` | Unpack instructions pending on thread 0. |
+| PACK Instrn Avail Rate T2 (%) | `pack_instrn_avail_t2_pct` | `PACK_INSTRN_AVAILABLE_2 / instrn cycles` | Pack instructions pending on thread 2. |
+| T0 Instrn Issue Rate (%) | `thread0_ipc_pct` | `THREAD_INSTRUCTIONS_0 / instrn cycles` | Thread 0 issue rate; single-issue, so at most 100%. |
+| T1 Instrn Issue Rate (%) | `thread1_ipc_pct` | `THREAD_INSTRUCTIONS_1 / instrn cycles` | Thread 1 issue rate. |
+| T2 Instrn Issue Rate (%) | `thread2_ipc_pct` | `THREAD_INSTRUCTIONS_2 / instrn cycles` | Thread 2 issue rate. |
+
+### L1 client ports and NoC
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| L1 Unpacker Port Util (%) | `l1_unpacker_util_pct` | `L1_0_UNPACKER_0 / l1 cycles` | Unpacker-0 L1 port utilization. |
+| L1 Port 1 Util (%) | `l1_port1_util_pct` | `L1_0_UNPACKER_1_ECC_PACK1 / l1 cycles` | L1_0 port 1: pack1+ECC on Wormhole, unpacker1+ECC on Blackhole. |
+| L1 TDMA Packer Port Util (%) | `l1_tdma_packer2_util_pct` | `L1_1_TDMA_PACKER_2 / l1 cycles` | L1_1 port 8: TDMA packer 2 on both arches (Blackhole used to misname it RISC core). |
+| L1 TDMA Bundle Util (%) | `l1_tdma_bundle_util_pct` | `mean over the two L1_0_TDMA_BUNDLE ports / l1 cycles` | RISC and TRISC TDMA bundle traffic. |
+| L1 Ext Unpacker Util (%) | `l1_ext_unpacker_util_pct` | `mean over the extended unpacker ports (L1_1 ext 1-3; plus L1_2 ext 4-7 on Blackhole)` | Extended unpacker interfaces. |
+| L1 Ext Packer Util (%) | `l1_ext_pack_util_pct` | `mean over L1_3_EXT_PACKER_2-5 and L1_4_EXT_PACKER_6-7` | Blackhole only; N/A on Wormhole. |
+| L1 Tag Search Util (%) | `l1_tag_search_util_pct` | `L1_4_TAG_SEARCH_PACKER_1 / l1 cycles` | Blackhole only; N/A on Wormhole. |
+| L1 Mean Client Util (%) | `l1_mean_client_util_pct` | `mean busy/ref over every present L1 client port` | One number for overall L1 client pressure. |
+| RISC Core L1 Util (%) | `risc_core_l1_util_pct` | `L1_0_TDMA_BUNDLE_0_RISC / l1 cycles` | The bundle-0 (RISC) port on its own. |
+| NOC Ring 0 Util (%) | `noc_ring0_util_pct` | `mean over the ring-0 ports (4 on Wormhole, 8 on Blackhole) / l1 cycles` | NoC ring 0 utilization. |
+| NOC Ring 1 Util (%) | `noc_ring1_util_pct` | `mean over the ring-1 ports (4 on Wormhole, 8 on Blackhole) / l1 cycles` | NoC ring 1 utilization. |
+| NOC Ring 0 Outgoing Util (%) | `noc_ring0_out_util_pct` | `mean over L1_0_NOC_RING0_OUTGOING_0/1 / l1 cycles` | Primary ring-0 outgoing channels only. |
+| NOC Ring 0 Incoming Util (%) | `noc_ring0_in_util_pct` | `mean over L1_0_NOC_RING0_INCOMING_0/1 / l1 cycles` | Primary ring-0 incoming channels only. |
+| NOC Ring 1 Outgoing Util (%) | `noc_ring1_out_util_pct` | `mean over L1_1_NOC_RING1_OUTGOING_0/1 / l1 cycles` | Primary ring-1 outgoing channels only. |
+| NOC Ring 1 Incoming Util (%) | `noc_ring1_in_util_pct` | `mean over L1_1_NOC_RING1_INCOMING_0/1 / l1 cycles` | Primary ring-1 incoming channels only. |
+| NOC Ring 0 Grant Efficiency (%) | `noc_ring0_grant_eff_pct` | `sum of ring-0 grant counters / sum of ring-0 request counters` | Ring-0 requests that were granted. |
+| Unpacker L1 Efficiency (ratio) | `unpacker_l1_eff_ratio` | `L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0` | UNBOUNDED ratio (cross-domain); above 1 = ample L1 bandwidth for the unpacker. |
+| Packer L1 Efficiency (ratio) | `packer_l1_eff_ratio` | `L1_0_PORT1_GRANT / PACKER_BUSY` | UNBOUNDED ratio; only meaningful on Wormhole, where port 1 carries pack1 traffic. |
+| L1 Unpacker Backpressure (%) | `l1_unpacker_backpressure_pct` | `1 - L1_0_UNPACKER_0_GRANT / L1_0_UNPACKER_0` | Unpacker-0 requests waiting on the L1 arbiter. |
+| L1 Port 1 Backpressure (%) | `l1_port1_backpressure_pct` | `1 - L1_0_PORT1_GRANT / L1_0_UNPACKER_1_ECC_PACK1` | Port-1 requests waiting on the L1 arbiter. |
+| NOC Ring 0 Outgoing Backpressure (%) | `noc_ring0_out_backpressure_pct` | `1 - grants / requests over the primary ring-0 outgoing pair` | L1 not ready for outgoing ring-0 traffic. |
+| NOC Ring 0 Incoming Backpressure (%) | `noc_ring0_in_backpressure_pct` | `1 - grants / requests over the primary ring-0 incoming pair` | L1 not ready for incoming ring-0 traffic. |
+| NOC Ring 1 Outgoing Backpressure (%) | `noc_ring1_out_backpressure_pct` | `1 - grants / requests over the primary ring-1 outgoing pair` | L1 not ready for outgoing ring-1 traffic. |
+| NOC Ring 1 Incoming Backpressure (%) | `noc_ring1_in_backpressure_pct` | `1 - grants / requests over the primary ring-1 incoming pair` | L1 not ready for incoming ring-1 traffic. |
+| NOC Ring 1 Grant Efficiency (%) | `noc_ring1_grant_eff_pct` | `sum of ring-1 grant counters / sum of ring-1 request counters` | Ring-1 requests that were granted. |
+| L1 Ext Unpacker Backpressure (%) | `l1_ext_unpacker_backpressure_pct` | `1 - grants / requests over the extended unpacker ports` | Extended unpacker contention. |
+| L1 Ext Packer Backpressure (%) | `l1_ext_pack_backpressure_pct` | `1 - grants / requests over the extended packer ports` | Blackhole only; N/A on Wormhole. |
+| L1 Tag Search Backpressure (%) | `l1_tag_search_backpressure_pct` | `1 - L1_4_TAG_SEARCH_PACKER_1_GRANT / L1_4_TAG_SEARCH_PACKER_1` | Blackhole only; N/A on Wormhole. |
+
+### L1 and NoC composites
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| L1 Total Bandwidth Util (%) | `l1_total_bw_pct` | `sum of the primary L1_0 port counters / (8 x l1 cycles)` | Aggregate L1 bank-0 bandwidth utilization. |
+| L1 Read vs Write Ratio (%) | `l1_read_write_ratio_pct` | `reads / (reads + writes), reads = unpacker0 + ring0 out, writes = ring0 in; port 1 counts as a read on Blackhole (unpacker 1) and a write on Wormhole (pack1)` | Above 50% = read-dominated. |
+| NOC Ring 0 Asymmetry (%) | `noc_ring0_asymmetry_pct` | `ring0 outgoing / (outgoing + incoming)` | Direction balance of ring-0 traffic. |
+| TDMA vs NOC L1 Share (%) | `tdma_vs_noc_l1_share_pct` | `TDMA bundle / (bundle + ring0 traffic)` | Firmware traffic as a share of L1 bank-0 activity. |
+| L1 Contention Index (%) | `l1_contention_index_pct` | `mean of (1 - grant/request) over the five primary request/grant pairs` | One number for L1 bank-0 contention. |
+| NOC vs Compute Balance (%) | `noc_vs_compute_balance_pct` | `ring0 traffic / (ring0 traffic + FPU_COUNTER)` | Above 50% = NoC-bound, below = compute-bound. |
 
 ## Hardware Register Reference
 
@@ -1160,4 +285,4 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 
 Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
-Some counters will still be 0 for a given workload — for example, `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU, and `MATH_INSTRN_HF_2/4_CYCLE` fire only for HiFi math. These are workload-dependent zeros, not dead counters.
+Some counters will still be 0 for a given workload — for example, `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU, and `MATH_FIDELITY_STALL` fires only for HiFi math. These are workload-dependent zeros, not dead counters.
