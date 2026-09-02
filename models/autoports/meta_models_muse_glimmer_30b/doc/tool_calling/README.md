@@ -1,120 +1,121 @@
 # Tool calling for agentic coding
 
-The bring-up shipped without tool calling. The model's card puts it first —
-*"purpose-built for autonomous agentic tasks… reliable tool use"*, with **Reliable
-Tool Use**, **Failure Recovery** and **Scaffold Compatibility** among its eight
-capability bullets and six benchmark rows (MCP Atlas 75.5, τ3-Banking 23.5,
-Gaia2 43.3, WildClawBench 47.6, SWE-Bench Pro 51.2, TerminalBench 51.7) that all
-depend on it — but no stage produced a tool parser, and the release server was
-never launched with tool calling enabled.
+Muse-Glimmer emits tool calls in its own ATEM grammar. Stock vLLM parsers do
+not recognize that grammar, so a server without the model-owned parser returns
+the raw markup as prose with `finish_reason: stop`. The parser in
+`tt/muse_glimmer_tool_parser.py` converts the markup to OpenAI-compatible tool
+calls for coding agents and other tool-using clients.
 
-Without a parser the failure is silent rather than loud: the model emits a correct
-`<atem:function_calls>` block, the server never extracts it, and the client sees
-`finish_reason=stop` with markup sitting in `content`. Every agentic scaffold
-breaks and nothing looks broken.
+## Protocol contract
 
-## The grammar
+The checkpoint emits channel-framed assistant messages:
 
-Quoted from the checkpoint's own chat template, which is what instructs the model:
-
-```
+```text
+<|start|>assistant to=self<|message|>reasoning<|eom|>
+<|start|>assistant to=read_file<|message|>
 <atem:function_calls>
-<atem:invoke name="$FUNCTION_NAME">
-<atem:parameter name="$PARAMETER_NAME">$PARAMETER_VALUE</atem:parameter>
-...
+<atem:invoke name="read_file">
+<atem:parameter name="path">src/app.py</atem:parameter>
 </atem:invoke>
-</atem:function_calls>
+</atem:function_calls><|eom|>
+<|start|>assistant to=user<|message|>final answer<|eot|>
 ```
 
-Three template statements drive the implementation, all quoted rather than inferred:
+Channel scoping is security-relevant. Only ATEM invocations in a tool-recipient
+message are dispatched. Markup quoted in `to=self` reasoning or a `to=user`
+answer remains text and cannot become a tool call.
 
-- *"The output is not expected to be valid XML and is parsed with regular
-  expressions."* — so the parser is regex-based deliberately; an XML parser would
-  reject output the model is licensed to produce.
-- *"String and scalar parameters should be specified as is, while lists and
-  objects should use JSON format."* — parameters arrive as name/value text, so the
-  arguments object is reassembled and each value decoded individually.
-- *"Note that spaces for string values are not stripped."* — values are preserved
-  verbatim, including a trailing newline when the model closes the tag on its own
-  line.
+The parser supports:
 
-No stock vLLM parser reads this grammar. It is not the `<tool_call>` shape most
-expect, and not Laguna's `poolside_v1` shape either.
+- OpenAI Chat Completions in streaming and non-streaming mode.
+- `tool_choice` values `auto`, `required`, and a named function.
+- Multiple tool calls in emission order.
+- Mixed string, scalar, list, and object arguments.
+- Stable JSON argument serialization and generated streaming call IDs.
+- Reasoning, calls, and final content in the same generated turn.
+- Markers split across stream chunks without leaking protocol tokens.
+- Recovery from damaged/truncated framing without fabricating calls.
+- Bare-name normalization: `get_weather.get_weather` maps to a registered
+  `get_weather`; other unmatched namespaces are never guessed.
+- Multi-turn OpenAI tool results through vLLM's chat-template preprocessing.
 
-## Serve with tool calling on
+The request hook forces `skip_special_tokens=false`. These channel markers are
+the only reliable way to distinguish executable calls from quoted markup.
+Required and named choices deliberately avoid vLLM's generic JSON-guidance
+path because Muse-Glimmer generates ATEM rather than a JSON tool envelope.
+
+## Serve
+
+The container manifest enables the parser automatically. For a direct developer
+serve, load the model-owned file explicitly and use the clean plugin revision
+that registers the architecture:
 
 ```bash
-MESH_DEVICE=P300x2 python -m vllm.entrypoints.openai.api_server \
+python -m vllm.entrypoints.openai.api_server \
   --model meta-models/Muse-Glimmer-30B \
-  --block_size 64 --max_num_seqs 32 --max_model_len 131072 --port 8000 \
+  --block-size 64 --max-num-seqs 32 --max-model-len 131072 --port 8000 \
   --enable-auto-tool-choice \
+  --tool-parser-plugin models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py \
   --tool-call-parser muse_glimmer \
-  --reasoning-parser muse_glimmer \
-  --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 400000000, "fabric_config": "FABRIC_1D_RING", "fabric_packet_payload_bytes": 8192, "l1_small_size": 6144, "trace_mode": "decode_only"}}'
+  --additional-config '{"tt":{"sample_on_device_mode":"all","trace_region_size":400000000,"fabric_config":"FABRIC_1D_RING","fabric_packet_payload_bytes":8192,"l1_small_size":6144,"trace_mode":"decode_only"}}'
 ```
 
-`--tool-call-parser muse_glimmer` resolves because the `vllm_ext` bundle registers
-it under that name; install the bundle first:
+Do not set `VLLM_PLUGINS`; it is an allowlist and can suppress the Tenstorrent
+platform plugin.
+
+## API smoke test
 
 ```bash
-pip install -e models/autoports/meta_models_muse_glimmer_30b/vllm_ext
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model":"meta-models/Muse-Glimmer-30B",
+    "messages":[{"role":"user","content":"Weather in Paris in Celsius? Use get_weather."}],
+    "tools":[{"type":"function","function":{
+      "name":"get_weather",
+      "description":"Get current weather for a city.",
+      "parameters":{"type":"object","properties":{
+        "city":{"type":"string"},"metric":{"type":"boolean"}
+      },"required":["city"]}
+    }}],
+    "tool_choice":"auto",
+    "max_tokens":256,
+    "temperature":0
+  }' | python3 -m json.tool
 ```
 
-The same bundle also registers the architecture, so no `vllm-tt-plugin` patch is
-needed. Registration lands early enough because
-`load_general_plugins()` runs in `EngineArgs.__post_init__`
-(`arg_utils.py:757`) while `ModelConfig(...)` is built later in
-`create_model_config()` (`:1598`).
+Pass criteria are `finish_reason: "tool_calls"`, a function named
+`get_weather`, and `function.arguments` containing valid JSON matching the tool
+schema.
 
-## Verify
+## Agentic coding acceptance
+
+After the packaged server is ready, run the bounded multi-turn harness:
 
 ```bash
-curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model":"meta-models/Muse-Glimmer-30B",
-  "messages":[{"role":"user","content":"Weather in Paris in Celsius? Use get_weather."}],
-  "tools":[{"type":"function","function":{"name":"get_weather",
-    "parameters":{"type":"object","properties":{"city":{"type":"string"},
-    "metric":{"type":"boolean"}},"required":["city"]}}}],
-  "tool_choice":"auto"}' | python3 -m json.tool
+python models/autoports/meta_models_muse_glimmer_30b/tests/tool_calling_harness.py \
+  --base-url http://127.0.0.1:8000 \
+  --model meta-models/Muse-Glimmer-30B
 ```
 
-Expect `finish_reason: "tool_calls"` and a `tool_calls[0].function` naming
-`get_weather` with `arguments` a JSON string. If instead you get
-`finish_reason: "stop"` and raw `<atem:function_calls>` text in `content`, the
-parser is not registered — check the bundle is installed into the same venv the
-server runs from.
+It creates a disposable project, exposes only `list_files`, `read_file`,
+`write_file`, and `run_tests`, and requires the model to inspect the source,
+repair a defect, obtain a passing test run, and then give a final answer. Paths
+cannot escape the temporary workspace, writes cannot create unexpected files,
+and the test command is fixed rather than model-controlled.
 
-## What is tested, and what is not
+## Offline tests
 
-`tests/test_tool_parser.py` — **19 tests, no device, no weights on the parse path**:
+The CPU suite requires no model execution and covers channel isolation,
+argument decoding, parallel calls, malformed output, auto/required/named
+choices, streaming boundary splits, parser registration, and a tokenizer/chat
+template round trip pinned to weight revision
+`f84ecc3a0ea984a4c04542a84269e3d065350a6e`.
 
-- single call; mixed value types (string / int / bool / list / object)
-- parallel calls in one block; namespaced names passed through
-- whitespace preserved verbatim; multi-line values keep their newline
-- `"NaN"` stays a string (`json.loads` would coerce it to a float)
-- prose before a block becomes `content`
-- an unterminated block is **not** reported as a tool call
-- streaming: content streams, a split open tag never leaks, calls emit once
-- the worked example from the template itself parses to that example
-- multi-turn round trip through vLLM's own `_postprocess_messages`
-
-**Not tested:** anything on device. The parser is host-side text handling, so the
-above is the whole contract — but an end-to-end `tool_choice: "auto"` request
-against a live server has not been run, and should be before this is called done.
-
-### One thing that looks like a bug and is not
-
-The chat template raises if `tool_call.function.arguments` is a JSON string:
-
-```
-Muse Glimmer ATEM chat template requires tool_call.function.arguments to be a
-dict (mapping); a JSON string cannot be parsed in the HF jinja sandbox.
+```bash
+python -m pytest -q \
+  models/autoports/meta_models_muse_glimmer_30b/tests/test_tool_parser.py
 ```
 
-OpenAI clients send a JSON string, so this looks like multi-turn tool use is
-broken by construction. It is not: vLLM converts it in
-`chat_utils._postprocess_messages` before rendering, and jinja genuinely cannot
-do it (`tojson` has no inverse), which is why the template refuses rather than
-guessing. Calling the tokenizer directly *does* raise — so a test that bypasses
-vLLM will mislead you. `test_openai_json_string_arguments_round_trip` goes
-through vLLM's conversion for that reason.
+Hardware API and coding-harness results must be recorded separately for each
+published image digest; parser unit tests alone do not qualify a release.

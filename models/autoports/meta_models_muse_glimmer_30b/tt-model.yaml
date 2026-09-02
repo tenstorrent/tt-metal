@@ -1,0 +1,149 @@
+# Muse-Glimmer-30B on QB2 (2 P300 boards = 4 Blackhole ASICs), transcribed from the
+# validated bring-up in this checkout: quickstart/README.md's serve line and the
+# muse-glimmer_pyenv venv that served it. Single validated configuration, so a flat
+# serve: block is the whole launch config.
+schema: "5.1"
+repo: tt-hous/muse-glimmer-30b
+name: muse-glimmer-30b
+# Public and ungated, ~56 GB. This immutable snapshot contains the two
+# safetensors shards used for bring-up; the current default branch is
+# metadata-only and is therefore not a valid serving input.
+weights:
+  repo: meta-models/Muse-Glimmer-30B
+  revision: f84ecc3a0ea984a4c04542a84269e3d065350a6e
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/ttuser/dev/muse-glimmer/wt-toolcalling
+  code:
+    # The import closure crosses THREE packages — computed, not eyeballed: tt/ imports
+    # models.common.* AND models.tt_transformers.tt.model_config. Dir-level entries are
+    # PROVEN: this exact list built and passed in-image verify (2026-08-23).
+    - models/common
+    - models/tt_transformers
+    - models/autoports/meta_models_muse_glimmer_30b/tt
+    # The model dir root is NOT listed: it carries readiness_* artifacts, .refpt
+    # reference tensors, a docker/ bring-up flow, and ~556 MB under doc/ — only the one
+    # load-bearing config subdir ships (doc/context_contract.json is mentioned in a log
+    # string only; nothing reads it at runtime):
+    - models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep
+  ubuntu: "22.04"
+  python: "3.12"   # matches the validated venv; required for the seeded lock below
+
+runtime:
+  vllm: {version: "0.24.0"}
+  # Clean, pushed revision containing the MuseGlimmer architecture registration
+  # and the fabric_packet_payload_bytes setting required before mesh creation.
+  # Pinning it avoids shipping the unrelated Qwen work and uncommitted changes in
+  # the host's current plugin checkout.
+  plugin:
+    repo: https://github.com/housTT/vllm-tt-plugin.git
+    ref: 106744c01de96825ed8c81226f4fa043e8e929f4
+  # Seeded from the validated venv (`uv pip freeze` of muse-glimmer_pyenv), minus the
+  # editable tt-metal/plugin installs and vllm+empty (the build provides those), minus
+  # fiftyone*/voxel51-eta (its sse-starlette<1 pin contradicts the installed 3.4.8) and
+  # the CUDA-only nvidia-/cuda-/flashinfer- stack, with the local transformers wheel
+  # re-pinned to its identical PyPI release. Load-bearing beyond reproducibility: the
+  # closure reaches models/common/utility_functions (via tt_transformers.model_config),
+  # which imports pytest at module level — a live resolve never pulls pytest in and the
+  # image fails verify (and would fail serve). This exact lock passed a full container
+  # build + verify on 2026-08-23.
+  lock: requirements.lock
+
+serve:
+  port: 8000
+  hardware: p300x2        # QB2: 2 boards x 2 ASICs = the (1,4) mesh
+  mesh_device: P300x2
+  max_num_seqs: 32
+  block_size: 64          # the TT backend rejects vLLM's default
+  max_model_len: 131072   # full advertised context — validated
+  # The model's chat template emits ATEM tool-call markup (<atem:function_calls>).
+  # Upstream vLLM ships a muse_glimmer parser from 0.28.0; this stack pins 0.24.0, so
+  # tt/muse_glimmer_tool_parser.py is the 0.28.0 file backported (one self-registration
+  # shim appended — 0.24's --tool-parser-plugin flow expects the file to register
+  # itself). Parse + channel-scoping behavior verified in the validated venv; the
+  # end-to-end tool-call serve is NOT yet hardware-validated.
+  capabilities:
+    tool_parser: muse_glimmer
+  args:
+    - [--tool-parser-plugin, /opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py]
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 400000000
+      fabric_config: FABRIC_1D_RING
+      fabric_packet_payload_bytes: 8192   # needs the plugin pin above — no env override exists
+      l1_small_size: 6144
+      trace_mode: decode_only
+
+verify:
+  # the silent-fallback trap: tt/precision_config.py falls back to in-code defaults
+  # when this file is missing — nothing else would catch an allowlist slip
+  - "import pathlib; p = pathlib.Path('/opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/datatype_sweep/selected_precision_config.json'); assert p.exists(), f'{p} missing: model would silently serve with default precision'"
+  - "import models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm"
+  # the plugin actually registers this model. vllm is imported FIRST: with
+  # vllm_tt_plugin.platform as the root import, platform.py's own `import vllm`
+  # re-enters the half-initialized module via plugin activation and dies on a circular
+  # current_platform — an order no real serve ever uses.
+  - "import vllm; import vllm_tt_plugin.platform as p; import inspect; assert 'MuseGlimmerForConditionalGeneration' in inspect.getsource(p), 'plugin lacks the Muse-Glimmer registration'"
+  # the backported ATEM tool parser ships and registers under the name the
+  # capabilities block launches with
+  - "import vllm; import importlib.util; s = importlib.util.spec_from_file_location('mgtp', '/opt/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/muse_glimmer_tool_parser.py'); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); from vllm.tool_parsers import ToolParserManager; assert 'muse_glimmer' in ToolParserManager.tool_parsers, 'ATEM tool parser did not register'"
+
+card:
+  quickstart: |
+    Muse-Glimmer-30B (~29.6 B dense, text-only) is served as an
+    OpenAI-compatible endpoint for **agentic coding**: long-context (131k)
+    tool-calling work driven by a coding agent.
+
+    On this model the first start takes about 4 minutes (weight loading + kernel
+    compilation). Verify it is running correctly with tool calling:
+    ```bash
+    curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+      "model": "meta-models/Muse-Glimmer-30B",
+      "messages": [{"role": "user", "content": "What is the weather in Paris right now, in Celsius?"}],
+      "tools": [{
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city":   {"type": "string", "description": "City name"},
+              "metric": {"type": "boolean", "description": "true for Celsius"}
+            },
+            "required": ["city"]
+          }
+        }
+      }],
+      "tool_choice": "auto",
+      "max_tokens": 256,
+      "temperature": 0
+    }' | python3 -c 'import sys, json; c = json.load(sys.stdin)["choices"][0]; print(c["finish_reason"], json.dumps(c["message"]["tool_calls"], indent=2))'
+    ```
+    A correct serve prints `tool_calls` followed by a structured `get_weather` call
+    with JSON arguments (e.g. `{"city": "Paris", "metric": true}`). If the call comes
+    back as prose in `message.content` with `finish_reason` `stop`, the tool-call
+    parser is not active in the launch.
+
+    ## Performance
+
+    Latency sweep on P300x2: one request at a time (batch 1), 512 output tokens,
+    input length swept to the full context. Decode rate is per user.
+
+    | input tokens | output tokens | TTFT | TPOT | end-to-end | tokens/s/user |
+    |---:|---:|---:|---:|---:|---:|
+    | 128 | 512 | 65.0 ms | 23.59 ms | 12.1 s | 42.38 |
+    | 1,024 | 512 | 145.9 ms | 24.97 ms | 12.9 s | 40.05 |
+    | 4,096 | 512 | 458.1 ms | 26.64 ms | 14.1 s | 37.54 |
+    | 8,192 | 512 | 918.7 ms | 27.88 ms | 15.2 s | 35.87 |
+    | 16,384 | 512 | 2.08 s | 30.33 ms | 17.6 s | 32.97 |
+    | 32,768 | 512 | 4.51 s | 35.24 ms | 22.5 s | 28.37 |
+    | 65,536 | 512 | 10.27 s | 45.12 ms | 33.3 s | 22.16 |
+    | 130,560 | 512 | 25.59 s | 64.79 ms | 58.7 s | 15.43 |
+
+    The last row saturates the advertised context (130,560 + 512 = 131,072).
+    Serve one request at a time: concurrency at long context is admission-limited
+    by the KV cache.
