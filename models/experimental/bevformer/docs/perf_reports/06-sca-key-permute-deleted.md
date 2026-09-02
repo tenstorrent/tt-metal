@@ -1,5 +1,6 @@
 # Stage: 06-sca-key-permute-deleted
 
+- source commit: [`a933e1059d9`](https://github.com/tenstorrent/tt-metal/commit/a933e1059d96ffb98c68f78d6965a6e92d9b35f4)
 - candidate: [5a](../perf_optimization_candidates.md#5a-delete-the-key-permute)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **438.4 ms kernel**, 126 device ops (−1), CSV

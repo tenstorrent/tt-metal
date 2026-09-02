@@ -1,5 +1,6 @@
 # Stage: 10-value-head-split-unpadded
 
+- source commit: [`7820f325bd8`](https://github.com/tenstorrent/tt-metal/commit/7820f325bd86cbca8dfcbe27cf460204c8d9773c)
 - candidate: [5d](../perf_optimization_candidates.md#5d-split-value-into-heads-in-row_major)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **280.2 ms kernel**, 106 device ops (−6), CSV

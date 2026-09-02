@@ -1,5 +1,6 @@
 # Stage: 09-head-major-sampling-grid
 
+- source commit: [`e6b4ce53fe1`](https://github.com/tenstorrent/tt-metal/commit/e6b4ce53fe163df02964a3655d55222a0a3ed5e0)
 - candidate: [5e](../perf_optimization_candidates.md#5e-permute-grid-once-slice-after)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **286.8 ms kernel**, 112 device ops (−1), CSV

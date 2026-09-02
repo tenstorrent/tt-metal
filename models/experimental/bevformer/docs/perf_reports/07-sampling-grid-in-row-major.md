@@ -1,5 +1,6 @@
 # Stage: 07-sampling-grid-in-row-major
 
+- source commit: [`a32ddae6c62`](https://github.com/tenstorrent/tt-metal/commit/a32ddae6c62363ba9ad45844a8d08e8655d564b4)
 - candidate: [5b](../perf_optimization_candidates.md#5b-do-the-sampling-location-math-in-row_major)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **356.2 ms kernel**, 131 device ops (+5), CSV
@@ -32,11 +33,17 @@ mean. So the whole chain now runs on the `(bs, Q, 256)` shape the Linear already
 ROW_MAJOR, where the split into `(heads, levels, points, 2)` is a trailing-axis view rather than a
 re-layout:
 
+> **Corrected by [stage 09](09-head-major-sampling-grid.md).** That last claim is wrong: a ROW_MAJOR
+> reshape is a view only when the **last dimension is unchanged**, and `256 → 2` changes it. The
+> "view" on the line below measured **7.09 ms**. The −82.2 ms this stage reports is real and
+> unaffected — it was measured, not derived — but the reasoning was luckier than it deserved, and
+> stage 09 collected the remaining 24.5 ms once the rule was right.
+
 ```
 Linear → (bs, Q, 256) TILE
 to_layout ROW_MAJOR
 add grid_bias                                            ← one add, on real data
-reshape → (bs, Q, heads, L, P, 2)                        ← view
+reshape → (bs, Q, heads, L, P, 2)                        ← 7.09 ms, not a view (see above)
 ```
 
 Two constant folds make that single add sufficient:

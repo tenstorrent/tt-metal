@@ -1,5 +1,6 @@
 # Stage: 08-attn-prepared-once-per-call
 
+- source commit: [`c649b46fee2`](https://github.com/tenstorrent/tt-metal/commit/c649b46fee237ebc5b17e838b80354aa2c337144)
 - candidate: [5c](../perf_optimization_candidates.md#5c-untilize-attn-once-not-per-level)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **311.3 ms kernel**, 113 device ops (−18), CSV

@@ -119,7 +119,8 @@ def multi_scale_deformable_attn_ttnn(
     # It arrives as (bs, Q, num_heads, L*P) in TILE and is prepared once for all levels: the
     # head-major move is a TILE transpose (cheap — it swaps whole tiles) rather than a ROW_MAJOR
     # permute, and the untilize runs on an L*P-wide tensor instead of on a (L, P) tail that would
-    # pad 4x4 to 32x32. The split into (L, P) afterwards is a ROW_MAJOR view.
+    # pad 4x4 to 32x32. The split into (L, P) afterwards changes the row width, so it is a
+    # re-layout and not a view — cheap only because this tensor is small.
     attn_all = ttnn.transpose(attention_weights, 1, 2)  # (bs, num_heads, Q, L*P)
     attn_all = ttnn.to_layout(attn_all, layout=ttnn.ROW_MAJOR_LAYOUT)
     attn_all = ttnn.reshape(attn_all, (bs * num_heads, num_queries, num_levels, num_points))
