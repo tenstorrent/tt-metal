@@ -5,6 +5,7 @@
 #ifndef _RISC_ATTRIBS_H_
 #define _RISC_ATTRIBS_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 union tt_uint64_t {
@@ -17,6 +18,18 @@ union tt_uint64_t {
 
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr __attribute__((rvtt_reg_ptr))
+
+// Distinguishes a count of 32-bit words from a byte count at the type level, so a byte count can't be
+// passed where l1_to_local_mem_copy expects words.
+struct L1WordCount {
+    int32_t words;
+    static constexpr L1WordCount from_bytes(size_t bytes) { return {(int32_t)(bytes / 4)}; }
+    template <typename T>
+    static constexpr L1WordCount from_range(T* start, T* end) {
+        static_assert(sizeof(T) == sizeof(uint32_t), "L1WordCount ranges must use 32-bit elements");
+        return {static_cast<int32_t>(end - start)};
+    }
+};
 
 // This enum is used to specify the dest location type for inline writes.
 // It is needed because inline writes use all 4 memory ports and may hang on Blackhole when there is back-pressure.

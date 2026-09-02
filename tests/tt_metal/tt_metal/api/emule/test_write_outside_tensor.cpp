@@ -286,7 +286,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_SameAddressTempBuffer_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the owner's full range is still live.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
