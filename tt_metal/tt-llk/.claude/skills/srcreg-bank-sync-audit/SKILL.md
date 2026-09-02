@@ -46,7 +46,9 @@ reads only the nearest *textually* preceding stall in the *same* function (no co
 flow, so a stall inside an `if constexpr` is credited to a move outside it), and it does
 **not** pair a publication with its consumer: `DUMMY_PUBLISH_UNGUARDED` recalls the
 **unpack half of check 5** — a publication with no wait-like bit, no preceding
-`SRCA_CLR`/`SRCB_CLR` stall and no preceding real `UNPACR` — but only inside functions
+`SRCA_CLR`/`SRCB_CLR` stall, and no preceding instruction that already owned that
+register's bank (a real `UNPACR`, or a wait-like `ZEROSRC`). Ownership is tracked per
+Src register and is spent by each `SET_DVALID`. Recalled only inside functions
 whose NAME marks them as dummy-bank publishers (`*dummy_valid*`, `*switch_to_reduce*`,
 `*reuse_dest*`). A publisher named otherwise (e.g. rmsnorm's MOP-config, which builds
 the publication as a `static constexpr` MOP op) is NOT recalled. **Widen** with the
@@ -93,7 +95,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    canonical-tt-llk-only search misses:
    ```bash
    # from the repo root
-   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|STALLWAIT|get_valid" \
+   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|UNPACR_NOP|SET_DVALID|ZEROSRC|TTI_UNPACR|STALLWAIT|get_valid" \
         tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.
