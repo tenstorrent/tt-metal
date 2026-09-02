@@ -31,10 +31,15 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
     // Clamp to prevent exponent field wraparound in setexp below: SFPSETEXP only writes
     // the low 8 bits of the exponent, so an unclamped k (k = round(x/ln2)) outside
-    // [-127, 127] silently wraps instead of saturating to 0/inf. -87/+87 keep k within
-    // that range with margin (exp(87) and exp(-87) already saturate float32 range).
+    // [-127, 127] silently wraps instead of saturating to 0/inf. -87 keeps the lower
+    // bound within that range with margin (exp(-87) already saturates to 0 in float32).
+    // The upper bound is not symmetric: SFPSETEXP writes a biased exponent (k+127), which
+    // wraps once it exceeds the 8-bit field's max of 255, i.e. once k > 128 -- that is
+    // x > 128*ln(2) ~= 88.7228. Clamping any tighter (e.g. to 87.0f) would truncate
+    // results that are correctly representable in float32 today, since exp(x) stays
+    // within float32 range up to x ~= 88.7228 (fp32 max ~= 3.403e+38).
     x = sfpi::max(x, -87.0f);
-    x = sfpi::min(x, 87.0f);
+    x = sfpi::min(x, 88.7228f);
 
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
