@@ -246,7 +246,15 @@ jobs:
           # One Parquet per shard, already named <run_id>-<arch>-<job_index>,
           # so a flat copy cannot collide. generated/<producer>/ is where every
           # other producer in this repo stages its upload.
-          find perf-data -name '*.parquet' -exec cp {} generated/llk_perf/ \;
+          #
+          # Prefix every name with llk_perf_. The upload lands in a remote
+          # directory this repo shares between producers, where a bare
+          # <run_id>-<arch>-<shard> says nothing about who owns the file. The
+          # prefix is greppable, it is what an ingest rule can key on, and it
+          # matches what helpers.perf.backfill sends for the older nights.
+          find perf-data -name '*.parquet' | while read -r f; do
+            cp "$f" "generated/llk_perf/llk_perf_$(basename "$f")"
+          done
           ls -l generated/llk_perf
           if [ -z "$(ls -A generated/llk_perf)" ]; then
             echo "::error::no run Parquet in the perf-data artifacts"
