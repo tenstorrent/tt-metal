@@ -350,7 +350,75 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
     return data if pad == 0 else data + [0] * pad
 
 
-def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=16):
+def _mx_shared_exponents(blocks, elem_exp_max_unbiased, exp_rnd_en):
+    """Derive one E8M0 block scale per 32-datum block, as the Tensix packer does.
+
+    Mirrors ``tt_t6_com_elem_to_mx_convert.sv`` (``mxfmt_exponent_s0``), whose
+    MXFP branch computes
+
+        E8M0 = max_exp_final - max_normal_exp_8b + 127
+
+    with ``max_exp_final`` the largest *input* biased exponent in the block and
+    ``max_normal_exp_8b - 127`` the element format's unbiased max exponent
+    (15 for E5M2, 8 for E4M3, 2 for E2M1). That is the OCP MX rule
+
+        E8M0 = floor(log2(amax)) - elem_exp_max_unbiased + 127
+
+    i.e. the *floor* of log2(amax) — never a ceiling. A block whose amax has a
+    significand above the element format's max (1.75 for E5M2/E4M3) therefore
+    saturates its largest datum rather than borrowing another exponent step.
+
+    ``np.frexp`` is used instead of ``floor(log2())`` because it is exact: in
+    float32 ``log2()`` of the largest value below 2^k rounds up to exactly k,
+    which would pick a block scale one step too large.
+
+    Args:
+        blocks: (num_blocks, MX_FORMAT_BLOCK_SIZE) float32 array of raw datums
+        elem_exp_max_unbiased: Element format's unbiased max exponent
+        exp_rnd_en: If True, increment non-zero, non-special block exponents to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF (``i_mx_block_exp_rnd_to_inf``)
+
+    Returns:
+        (num_blocks,) int32 array of E8M0 scale codes
+    """
+    # Inf/NaN datums are excluded from the max-exponent tree in RTL
+    # (special_exp_flush), so amax is taken over finite datums only.
+    finite_blocks = np.where(np.isfinite(blocks), blocks, 0.0)
+    max_abs_values = np.max(np.abs(finite_blocks), axis=1)
+    # amax = mantissa * 2^exp with mantissa in [0.5, 1), so floor(log2) = exp - 1
+    _, frexp_exp = np.frexp(max_abs_values)
+    shared_exp = np.where(max_abs_values == 0, 0, frexp_exp - 1)
+
+    if exp_rnd_en:
+        # RTL skips the increment when max_exp_final is 0 (all-zero block) or
+        # already 0xFE/0xFF, i.e. amax == 0 or floor(log2(amax)) >= 127.
+        can_increment = (max_abs_values != 0) & (shared_exp < 127)
+        shared_exp = np.where(can_increment, shared_exp + 1, shared_exp)
+
+    shared_exp_adj = np.maximum(shared_exp - elem_exp_max_unbiased, -127)
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
+
+    # Special block exponents:
+    # - every datum NaN                                   -> 0xFF (NaN block)
+    # - only {Inf, NaN, 0} and at least one Inf           -> 0xFE
+    all_nan_blocks = np.all(np.isnan(blocks), axis=1)
+    inf_or_zero_or_nan = np.isinf(blocks) | np.isnan(blocks) | (blocks == 0)
+    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
+    has_inf = np.any(np.isinf(blocks), axis=1)
+
+    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
+    return np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+
+
+def _pack_mxfp8(
+    tensor,
+    fp8_dtype,
+    element_max_normal,
+    num_faces=4,
+    face_r_dim=16,
+    exp_rnd_en: bool = False,
+    ovf_en: bool = False,
+):
     """
     Internal helper to pack MXFP8 formats with FULLY SEPARATED layout.
 
@@ -369,6 +437,12 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
         element_max_normal: Maximum normal value for element format
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
+        ovf_en: If True, out-of-range elements overflow (Inf for E5M2, NaN for
+            E4M3); if False they saturate to ±element_max_normal. Models
+            FMT_CTRL_FP8_OVF_EN, which resets to 0 (saturate) and is left
+            untouched by the LLK (default: disabled).
 
     Returns:
         List of packed bytes: [all scales][all elements]
@@ -395,35 +469,33 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
         num_blocks, MX_FORMAT_BLOCK_SIZE
     )
 
-    # Vectorized scale encoding - calculate all scales at once
-    max_abs_values = np.max(np.abs(blocks), axis=1)
-
-    # Handle special cases: zero, nan, inf
-    scale_ratio = max_abs_values / element_max_normal
-    exponents = np.ceil(
-        np.log2(scale_ratio, where=(scale_ratio > 0), out=np.zeros_like(scale_ratio))
+    # E8M0 block scales, per the packer's floor(log2(amax)) rule
+    scales_e8m0_array = _mx_shared_exponents(
+        blocks,
+        elem_exp_max_unbiased=ml_dtypes.finfo(fp8_dtype).maxexp - 1,
+        exp_rnd_en=exp_rnd_en,
     )
-
-    # Apply special case handling
-    exponents = np.where(
-        (max_abs_values == 0) | np.isnan(max_abs_values),
-        0,  # Neutral scale (2^0 = 1) for zero/nan
-        np.where(np.isinf(max_abs_values), 127, exponents),  # Max scale for inf
-    )
-
-    # Clamp to E8M0 range [-127, 127] and add bias
-    scales_e8m0_array = np.clip(exponents, -127, 127).astype(np.int32) + 127
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     # Vectorized scale decoding for applying to blocks
-    scale_factors = np.where(
-        scales_e8m0_array == 255,
-        np.nan,
-        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-    )
+    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
+    # still runs exp2(128) and overflows float32; the mask discards it.
+    with np.errstate(over="ignore"):
+        scale_factors = np.where(
+            scales_e8m0_array == 255,
+            np.nan,
+            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+        )
 
-    # Scale blocks and convert to FP8
+    # Scale blocks and convert to FP8. With the floor block scale the largest
+    # datum can land above the element format's max normal; clamping the scaled
+    # value first turns the fp8 cast's native overflow (Inf for E5M2, NaN for
+    # E4M3 — the FP8_OVF_EN=1 behavior) into the saturation HW does by default.
+    # NaN survives the clamp, and Inf clamps to the saturation value, matching
+    # the packer's Inf-with-saturation path.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
+    if not ovf_en:
+        scaled_blocks = np.clip(scaled_blocks, -element_max_normal, element_max_normal)
     fp8_blocks = scaled_blocks.astype(fp8_dtype)
 
     # FULLY SEPARATED layout: all scales first, then all elements (both 16B-aligned)
@@ -432,7 +504,14 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(fp8_bytes)
 
 
-def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = False):
+def _pack_mxfp8_srcs(
+    tensor,
+    fp8_dtype,
+    element_max_normal,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
+    ovf_en: bool = False,
+):
     """Pack a tensor into per-slice SrcS blocks for MX formats.
 
     Splits the tensor into SrcS slices and packs each independently as
@@ -458,13 +537,21 @@ def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = Fal
                 element_max_normal,
                 num_faces=1,
                 face_r_dim=slice_row_dim,
+                exp_rnd_en=exp_rnd_en,
+                ovf_en=ovf_en,
             )
         )
     return out
 
 
 def pack_mxfp8r(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
+    ovf_en: bool = False,
 ):
     """
     Pack tensor into MXFP8R format (MXFP8 E5M2 variant).
@@ -485,6 +572,10 @@ def pack_mxfp8r(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
+        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
+        ovf_en: If True, out-of-range elements overflow to ±Inf instead of
+            saturating to ±57,344 (models FMT_CTRL_FP8_OVF_EN, default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -500,6 +591,8 @@ def pack_mxfp8r(
             ml_dtypes.float8_e5m2,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
             dest_acc,
+            exp_rnd_en=exp_rnd_en,
+            ovf_en=ovf_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -507,11 +600,19 @@ def pack_mxfp8r(
         MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
         num_faces,
         face_r_dim,
+        exp_rnd_en=exp_rnd_en,
+        ovf_en=ovf_en,
     )
 
 
 def pack_mxfp8p(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
+    ovf_en: bool = False,
 ):
     """
     Pack tensor into MXFP8P format (MXFP8 E4M3 variant).
@@ -532,6 +633,10 @@ def pack_mxfp8p(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 80 bytes/slice) instead of 16-bit (8×16, 144 bytes/slice).
+        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
+        ovf_en: If True, out-of-range elements overflow to NaN instead of
+            saturating to ±448 (models FMT_CTRL_FP8_OVF_EN, default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -547,6 +652,8 @@ def pack_mxfp8p(
             ml_dtypes.float8_e4m3fn,
             MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
             dest_acc,
+            exp_rnd_en=exp_rnd_en,
+            ovf_en=ovf_en,
         )
     return _pack_mxfp8(
         tensor,
@@ -554,6 +661,8 @@ def pack_mxfp8p(
         MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
         num_faces,
         face_r_dim,
+        exp_rnd_en=exp_rnd_en,
+        ovf_en=ovf_en,
     )
 
 
@@ -630,60 +739,22 @@ def pack_mxfp4(
     blocks_raw = blocks
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
-    # Scale selection aligned to ws-tensix storage.py verification model:
-    # shared_exp = floor(log2(amax))
-    # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
-    # E8M0 = shared_exp_adj + 127
-    # (elem_exp_max_unbiased is 2 for E2M1)
-    elem_exp_max_unbiased = 2
-
-    # Max abs over finite values only (NaN/Inf ignored for scale selection)
-    finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
-    max_abs_values = np.max(np.abs(finite_blocks), axis=1)
-
-    # np.where evaluates both branches eagerly, so log2(0) is still computed
-    # for all-zero blocks even though the result is discarded by the mask.
-    # That raises a "divide by zero" RuntimeWarning — silence it since the
-    # mask handles the zero case correctly.
-    with np.errstate(divide="ignore"):
-        max_abs_exp = np.where(
-            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
-        )
-    shared_exp_adj = np.where(
-        (max_abs_exp - elem_exp_max_unbiased) >= -127,
-        max_abs_exp - elem_exp_max_unbiased,
-        -127,
+    # E8M0 block scales, per the packer's floor(log2(amax)) rule
+    # (elem_exp_max_unbiased is 2 for E2M1: max normal 6.0 = 1.5 * 2^2)
+    scales_e8m0_array = _mx_shared_exponents(
+        blocks_raw, elem_exp_max_unbiased=2, exp_rnd_en=exp_rnd_en
     )
-    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
-
-    # Special cases (match storage.py):
-    # - All NaN -> 0xFF (NaN block)
-    # - Block contains only {Inf, NaN, 0} and has at least one Inf -> 0xFE
-    all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
-    inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
-    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
-    has_inf = np.any(np.isinf(blocks_raw), axis=1)
-
-    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
-    scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
-
-    if exp_rnd_en:
-        # Match mx_block_exp_rnd_to_inf: increment only for non-zero, non-special exponents.
-        can_inc = (
-            (scales_e8m0_array != 0)
-            & (scales_e8m0_array != 254)
-            & (scales_e8m0_array != 255)
-        )
-        scales_e8m0_array = np.where(can_inc, scales_e8m0_array + 1, scales_e8m0_array)
-
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     # Vectorized scale decoding for applying to blocks
-    scale_factors = np.where(
-        scales_e8m0_array == 255,
-        np.nan,
-        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-    )
+    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
+    # still runs exp2(128) and overflows float32; the mask discards it.
+    with np.errstate(over="ignore"):
+        scale_factors = np.where(
+            scales_e8m0_array == 255,
+            np.nan,
+            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+        )
 
     # Scale blocks and convert to FP4 using storage.py-style rounding.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
@@ -836,11 +907,14 @@ def _mxint_block_scale_and_quantize(
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     # Decode scale factors for applying to blocks (NaN scale -> NaN -> 0 below).
-    scale_factors = np.where(
-        scales_e8m0_array == 255,
-        np.nan,
-        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-    )
+    # np.where evaluates both branches eagerly, so the NaN-scale code (255)
+    # still runs exp2(128) and overflows float32; the mask discards it.
+    with np.errstate(over="ignore"):
+        scale_factors = np.where(
+            scales_e8m0_array == 255,
+            np.nan,
+            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+        )
 
     # Scale blocks; saturate Inf to ±2.0 and replace NaN with 0 so that int
     # conversion below can't overflow.

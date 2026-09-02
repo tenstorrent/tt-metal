@@ -4681,21 +4681,30 @@ class ReduceGapoolGolden(FidelityMasking):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        # On Quasar with implied_math_format, HW dest precision is implied by
-        # the SrcA tag: Float16 → FP16A; Float16_b / MX inputs → BF16. For
-        # MX-output paths we preserve that precision through the gapool +
-        # face-accumulation chain rather than collapsing inputs to the output
-        # dtype (which would force fp16 → bf16 before any math).
+        # The math/DEST format follows the unpacker's SrcA output, which is derived
+        # from the INPUT format — never from the pack output. `infer_math_format`
+        # returns unpack_out_A (helpers/data_format_inference.py), and under
+        # ImpliedMathFormat `_llk_math_srcAB_hw_configure_` writes no ALU SrcA
+        # override, so the ALU reads that per-bank SrcA format directly
+        # (tt_llk_quasar/llk_lib/llk_math_common.h). A 16-bit DEST is then Float16
+        # for a 5-bit-exponent SrcA and Float16_b for an 8-bit-exponent one.
+        # MX cannot live in a register, so it unpacks to Float16_b and keeps a bf16
+        # DEST whatever the pack output is; Fp8_e4m3 unpacks to Float16. Taking the
+        # output format here instead made an MX-in/Float16-out reduce accumulate in
+        # fp16 (11-bit mantissa) against a bf16 (8-bit) DEST, landing the golden on
+        # sums bf16 cannot represent.
         # When dest_acc=Yes, HW accumulates in fp32 regardless of input —
         # so the inter-face / inter-fidelity accumulators must follow.
         out_is_mx = data_format.is_mx_format()
         fp32_acc = dest_acc == DestAccumulation.Yes
-        if out_is_mx and input_format is not None:
-            compute_format = (
-                DataFormat.Float16_b if input_format.is_mx_format() else input_format
-            )
-        else:
+        if input_format is None:
             compute_format = data_format
+        elif input_format.is_mx_format():
+            compute_format = DataFormat.Float16_b
+        elif input_format == DataFormat.Fp8_e4m3:
+            compute_format = DataFormat.Float16
+        else:
+            compute_format = input_format
 
         result = torch.cat(
             [
