@@ -30,6 +30,7 @@ from tracy.common import (
     PROFILER_CPP_DEVICE_PERF_REPORT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
+    PROFILER_SESSION_MANIFEST,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
     TRACY_OPS_DATA_FILE_NAME,
@@ -1183,8 +1184,9 @@ def get_device_data_generate_report(
         perCoreCSVPath = os.path.join(outFolder, f"{perCoreName}.csv")
         logger.info(f"Copying runtime artifacts")
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-        if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
-            os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+        for artifact in (PROFILER_DEVICE_SIDE_LOG, PROFILER_SESSION_MANIFEST):
+            if os.path.isfile(logFolder / artifact):
+                os.system(f"cp {logFolder / artifact} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -1438,10 +1440,9 @@ def generate_reports(
 
     logger.info(f"Copying runtime artifacts")
     os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    if os.path.isfile(f"{logFolder / TRACY_FILE_NAME}"):
-        os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
-    if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
-        os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    for artifact in (TRACY_FILE_NAME, PROFILER_DEVICE_SIDE_LOG, PROFILER_SESSION_MANIFEST):
+        if os.path.isfile(logFolder / artifact):
+            os.system(f"cp {logFolder / artifact} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 

@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
+import json
 import os
 from pathlib import Path
 
@@ -12,12 +13,12 @@ import pytest
 
 from tracy import (
     RUN_SESSION_ID_ENV,
-    annotate_profile_log,
     get_or_create_session_id,
     process_ops_logs,
     validate_session_id,
+    write_session_manifest,
 )
-from tracy.process_device_log import extract_device_info
+from tracy.common import PROFILER_SESSION_MANIFEST
 
 
 # class for mocking creation of npe data
@@ -173,6 +174,7 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
     log_folder.mkdir(parents=True, exist_ok=True)
+    write_session_manifest(log_folder / PROFILER_SESSION_MANIFEST, "session-123")
 
     ops = {
         1: {
@@ -210,47 +212,8 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
         assert "SESSION ID" not in reader.fieldnames
 
-
-# Keep readers compatible with device logs from builds that appended a SESSION_ID field.
-_SESSION_ID = "0123456789abcdef0123456789abcdef"
-
-
-def _write_device_log(path: Path, arch: str = "wormhole_b0", rows: tuple = ()) -> Path:
-    lines = [
-        f"ARCH: {arch}, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: {_SESSION_ID}",
-        "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
-        *rows,
-    ]
-    path.write_text("\n".join(lines))
-    return path
-
-
-def test_extract_device_info_ignores_trailing_session_id(tmp_path):
-    device_log = _write_device_log(tmp_path / "profile_log_device.csv")
-
-    arch, freq, max_compute_cores = extract_device_info(device_log)
-
-    assert arch == "wormhole_b0"
-    assert freq == 1000
-    assert max_compute_cores == 64
-
-
-@pytest.mark.parametrize("arch,expected", [("wormhole_b0", False), ("quasar", True)])
-def test_is_quasar_device_log_unaffected_by_session_id(tmp_path, arch, expected):
-    device_log = _write_device_log(tmp_path / "profile_log_device.csv", arch=arch)
-
-    assert process_ops_logs.is_quasar_device_log(device_log) is expected
-
-
-def test_build_sub_device_id_lookup_skips_preamble_with_session_id(tmp_path):
-    device_log = _write_device_log(
-        tmp_path / "profile_log_device.csv",
-        rows=('0,0,0,BRISC,1,100,0,42,0,1,BRISC-FW,ZONE_START,1,k.cpp,{"sub_device_id":3}',),
-    )
-
-    lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_log)
-
-    assert lookup[(0, 42, 0, 1)] == 3
+    with (report_folder / PROFILER_SESSION_MANIFEST).open() as manifest_file:
+        assert json.load(manifest_file) == {"session_id": "session-123"}
 
 
 def test_get_or_create_session_id_publishes_generated_id(monkeypatch):
@@ -275,38 +238,10 @@ def test_validate_session_id_rejects_unsafe_metadata(session_id, expect_error):
         validate_session_id(session_id)
 
 
-def test_annotate_profile_log_with_session_id(tmp_path):
-    profile_log = tmp_path / "profile_log_device.csv"
-    profile_log.write_text(
-        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64\n" "PCIe slot,core_x\n" "0,1\n"
-    )
+def test_write_session_manifest(tmp_path):
+    manifest_path = tmp_path / PROFILER_SESSION_MANIFEST
 
-    assert annotate_profile_log(profile_log, "abc123") == "abc123"
-    assert profile_log.read_text() == (
-        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: abc123\n"
-        "PCIe slot,core_x\n"
-        "0,1\n"
-    )
+    write_session_manifest(manifest_path, "session-123")
 
-
-def test_annotate_profile_log_accepts_matching_existing_session_id(tmp_path):
-    profile_log = tmp_path / "profile_log_device.csv"
-    original = (
-        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: abc123\n" "PCIe slot,core_x\n"
-    )
-    profile_log.write_text(original)
-
-    assert annotate_profile_log(profile_log, "abc123") == "abc123"
-    assert profile_log.read_text() == original
-
-
-def test_annotate_profile_log_rejects_mismatched_existing_session_id(tmp_path, expect_error):
-    profile_log = tmp_path / "profile_log_device.csv"
-    original = (
-        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: old-session\n" "PCIe slot,core_x\n"
-    )
-    profile_log.write_text(original)
-
-    with expect_error(ValueError, "old-session.*new-session"):
-        annotate_profile_log(profile_log, "new-session")
-    assert profile_log.read_text() == original
+    with manifest_path.open() as manifest_file:
+        assert json.load(manifest_file) == {"session_id": "session-123"}

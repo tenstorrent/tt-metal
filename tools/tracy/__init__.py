@@ -7,10 +7,9 @@ import sys
 import signal
 import os
 import io
+import json
 import re
-import shutil
 import subprocess
-import tempfile
 import time
 import socket
 import uuid
@@ -23,7 +22,7 @@ from .common import (
     PROFILER_BIN_DIR,
     PROFILER_LOGS_DIR,
     PROFILER_ARTIFACTS_DIR,
-    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_SESSION_MANIFEST,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_WASM_DIR,
     PROFILER_WASM_TRACE_FILE_NAME,
@@ -42,7 +41,6 @@ import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
-PROFILE_LOG_SESSION_ID_PATTERN = re.compile(r"(?:^|,\s*)SESSION_ID:\s*([^,\r\n]+)")
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
@@ -62,47 +60,13 @@ def get_or_create_session_id():
     return validate_session_id(session_id)
 
 
-def annotate_profile_log_session_id(profile_log, session_id):
-    """Append SESSION_ID to the device-log preamble, or verify an existing value.
-
-    Returns ``True`` when the preamble was changed and ``False`` when it already
-    contained the requested ID. A different existing ID is an error: silently
-    retaining it would pair this performance report with the wrong memory report.
-    """
+def write_session_manifest(manifest_path, session_id):
+    """Write the validated session ID into a small performance-report sidecar."""
     session_id = validate_session_id(session_id)
-    profile_log = os.fspath(profile_log)
-    with open(profile_log, "r", newline="") as source:
-        preamble = source.readline()
-        match = PROFILE_LOG_SESSION_ID_PATTERN.search(preamble)
-        if match:
-            existing_session_id = validate_session_id(match.group(1).strip())
-            if existing_session_id != session_id:
-                raise ValueError(
-                    f"{profile_log} already contains SESSION_ID: {existing_session_id}, "
-                    f"but the profiler session is {session_id}"
-                )
-            return False
-
-        with tempfile.NamedTemporaryFile(
-            "w", newline="", dir=os.path.dirname(profile_log) or ".", delete=False
-        ) as destination:
-            temporary_path = destination.name
-            destination.write(f"{preamble.rstrip()}, SESSION_ID: {session_id}\n")
-            shutil.copyfileobj(source, destination)
-
-    os.chmod(temporary_path, os.stat(profile_log).st_mode)
-    os.replace(temporary_path, profile_log)
-    return True
-
-
-def annotate_profile_log(profile_log, session_id):
-    """Stamp a device log with the profiler session ID."""
-    changed = annotate_profile_log_session_id(profile_log, session_id)
-    if changed:
-        logger.info(f"Added SESSION_ID: {session_id} to {profile_log}")
-    else:
-        logger.info(f"Verified existing SESSION_ID: {session_id} in {profile_log}")
-    return session_id
+    with open(manifest_path, "w") as manifest_file:
+        json.dump({"session_id": session_id}, manifest_file)
+        manifest_file.write("\n")
+    logger.info(f"Wrote session manifest to {manifest_path}")
 
 
 def signpost(header, message=None):
@@ -245,9 +209,8 @@ def generate_report(
 
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
 
-    profile_log = logsFolder / PROFILER_DEVICE_SIDE_LOG
-    if session_id and profile_log.is_file():
-        annotate_profile_log(profile_log, session_id)
+    if session_id:
+        write_session_manifest(logsFolder / PROFILER_SESSION_MANIFEST, session_id)
 
     process_ops(
         outputFolder,

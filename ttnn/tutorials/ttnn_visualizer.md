@@ -195,6 +195,7 @@ This directory contains the following output files:
 
 * `ops_perf_results_<timestamp>.csv`
 * `profile_log_device.csv`
+* `session.json`
 * `<name>.tracy` (Tracy file)
 
 Upload this entire directory to TT-NN Visualizer as the **Performance report**.
@@ -214,7 +215,7 @@ Both reports carry one overall session ID, so they can be paired without relying
 
 - The Tracy launcher creates the session ID before starting the profiled process and exports it as `TTNN_RUN_SESSION_ID`.
 - The memory report stores it in the `session_id` column of each `graph_captures` row in `db.sqlite`.
-- Tracy report postprocessing writes the launcher's ID into the first line of `profile_log_device.csv` as `SESSION_ID: <id>`.
+- Tracy report postprocessing writes the launcher's ID to `session.json`.
 
 Metal does not manage the ID. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
 
@@ -222,9 +223,9 @@ Metal does not manage the ID. Set `TTNN_RUN_SESSION_ID` before launch when sever
 export TTNN_RUN_SESSION_ID=$(uuidgen)
 ```
 
-Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in environment and CSV metadata.
+Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in environment and report metadata.
 
-Match `SESSION_ID` in `profile_log_device.csv` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
+Match `session_id` in `session.json` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
 
 | Column | Meaning |
 | --- | --- |
@@ -249,7 +250,7 @@ AND ((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) < device_operation_id_end
 
 Comparing `GLOBAL CALL COUNT` directly against the range matches nothing: on a 2-chip run the smallest encoded value is already `1 << 10`. Each dispatched operation contributes one row per device, so a capture of N operations on a D-device mesh selects N×D rows.
 
-Upload the two directories as usual. The session ID in `profile_log_device.csv` identifies the matching performance report; each range then indexes into `ops_perf_results*.csv`. The session ID is intentionally absent from `ops_perf_results*.csv`.
+Upload the two directories as usual. The session ID in `session.json` identifies the matching performance report; each range then indexes into `ops_perf_results*.csv`. The session ID is intentionally absent from the CSV files.
 
 A process that captures more than once (several pytest cases, successive model iterations, or repeated manual captures) produces one row per capture, each with its own range, so a capture is paired with its own interval rather than with everything the process did.
 
