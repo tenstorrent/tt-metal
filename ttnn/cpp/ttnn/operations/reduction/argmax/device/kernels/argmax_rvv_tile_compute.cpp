@@ -5,9 +5,9 @@
 // =============================================================================
 // argmax_rvv_tile_compute.cpp — TILE-layout last-dim argmax+maxval on the pack
 // RISC's RVV (Zve32f) unit. Blackhole only; selected internally by
-// ttnn.argmax (ArgMaxEngine::Rvv).
+// ttnn.argmax (ArgMaxPath::Rvv).
 //
-// The incumbent TILE-input argmax has NO compute kernel: the whole reduction
+// The scalar-reader TILE-input argmax has NO compute kernel: the whole reduction
 // is a scalar C++ loop on a single dataflow RISC, with the NOC read and the
 // scan of each tile serialized against each other. Here the reader streams
 // tiles into a double-buffered CB, the scan of one chunk overlaps the staging
@@ -38,8 +38,8 @@
 //   transformed value is < 0x8000 was all-negative, and takes an exact minu
 //   fix-up sweep (both-negative order is reversed). Comparisons across chunks
 //   happen in the fully monotone domain m = x ^ ((x >> 15 arith) | 0x8000);
-//   the running max is seeded with m(0xFF80) — the incumbent's -inf init — so
-//   even the all-negative-NaN-row corner matches the incumbent bit-for-bit.
+//   the running max is seeded with m(0xFF80) — the scalar readers' -inf init
+//   — so even the all-negative-NaN-row corner matches them bit-for-bit.
 //   Strictly-greater updates + first-match re-scan preserve the smallest-
 //   index tie-break across lanes, faces, tiles, and chunks.
 //
@@ -145,7 +145,7 @@ struct AmxPageIter {
 inline uint32_t amx_left_off(uint32_t g) { return ((g < 8) ? 0u : 1024u) + (g & 7u) * 64u; }
 
 constexpr uint16_t kSignBit = 0x8000u;
-// Monotone image of 0xFF80 (-inf) — the incumbent scan's initial max value.
+// Monotone image of 0xFF80 (-inf) — the scalar scan's initial max value.
 constexpr uint16_t kInitMono = 0x007Fu;
 
 // Running per-row state for the current tile-row pass. Static => resides in
@@ -279,7 +279,7 @@ void kernel_main() {
 
             for (uint32_t r = 0; r < units; r++) {
                 s_running_mono[r] = kInitMono;
-                s_running_raw[r] = 0xFF80u;  // -inf: the incumbent's init value
+                s_running_raw[r] = 0xFF80u;  // -inf: the scalar readers' init value
                 s_running_idx[r] = 0;
             }
 

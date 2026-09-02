@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TILE-layout last-dim argmax on the SFPU — Blackhole, single- or multi-core.
-// Selected by ArgMaxEngine::Sfpu; ttnn::argmax decides that on its own (see
-// select_argmax_engine in argmax.cpp).
+// Selected by ArgMaxPath::Sfpu; ttnn::argmax decides that on its own (see
+// select_argmax_path in argmax.cpp).
 // See kernels/argmax_sfpu_tile_compute.cpp for the algorithm and
 // the (documented, silicon-measured) special-value semantics.
+//
+// Measurements and the routing-threshold rationale live next to kSfpuMinRows
+// in argmax.cpp.
 //
 // Work split: phase 1 reduces all 32 rows of a tile-row lane-parallel, so a
 // tile-row pass costs the same whether 1 or 32 rows are valid — the batch-
@@ -17,18 +20,15 @@
 // lexicographic rule. The cross-core traffic is 256 B per core per pass —
 // per-row scalar candidates, never tiles.
 //
-// Core-count heuristic: per-core phase 1 is a fixed cost per tile that does
-// not depend on H (measured at ~0.60 us/tile on one core: 4875 / 4881 /
-// 4911 us over an 8192-tile row at H = 1 / 8 / 32), while every extra core
-// adds a gather-merge pass and ~0.44 us of per-program dispatch. The optimum
-// therefore sits near sqrt(w_tiles) and does NOT move with H; we use
-// ceil(sqrt(1.5 * w_tiles)) capped by the grid and by w_tiles. Trace-replay
-// device time (throughput mode, not single-op latency) puts that default
-// within 0.87x-1.04x of this engine's own per-shape optimum at every point
-// measured -- regenerate with tests/ttnn/unit_tests/operations/reduce/
-// _argmax_engine_crossover_bench.py.
+// Core-count heuristic: per-core phase 1 is a fixed ~0.60 us/tile that does
+// NOT depend on H (the flat-in-H measurement in argmax.cpp), while every extra
+// core adds a gather-merge pass and ~0.44 us of per-program dispatch. The
+// optimum therefore sits near sqrt(w_tiles) and does not move with H; we use
+// ceil(sqrt(1.5 * w_tiles)) capped by the grid and by w_tiles, which lands
+// within 0.87x-1.04x of this path's own per-shape optimum at every point
+// swept.
 //
-// This is deliberately NOT the RVV engine's formula: that scan costs per ROW,
+// This is deliberately NOT the RVV path's formula: that scan costs per ROW,
 // so its optimum grows with H and it fits ceil(sqrt(w_tiles * (H + 2)) / 3)
 // instead (see argmax_rvv_tile_program_factory.cpp).
 //
@@ -90,7 +90,7 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
         const uint32_t want = static_cast<uint32_t>(std::ceil(std::sqrt(1.5 * static_cast<double>(w_tiles))));
         num_cores = std::min<uint32_t>({want, static_cast<uint32_t>(cores.size()), w_tiles});
     }
-    TT_FATAL(num_cores >= 1, "the argmax SFPU engine requires at least one core");
+    TT_FATAL(num_cores >= 1, "the argmax SFPU path requires at least one core");
     cores.resize(num_cores);
 
     std::vector<CoreRange> core_ranges_vec;

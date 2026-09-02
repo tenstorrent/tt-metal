@@ -3,99 +3,75 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit — Blackhole
-// only, single- or multi-core. Selected by ArgMaxEngine::Rvv; ttnn::argmax
-// decides that on its own (see select_argmax_engine in argmax.cpp). See
+// only, single- or multi-core. Selected by ArgMaxPath::Rvv; ttnn::argmax
+// decides that on its own (see select_argmax_path in argmax.cpp), and the
+// measurements behind that threshold live next to kSfpuMinRows there. See
 // kernels/argmax_rvv_tile_compute.cpp for the algorithm and semantics notes.
 // Unlike the other argmax paths, this one launches a compute kernel: the
 // unpack/math threads are no-ops and the pack thread does the whole scan, so
 // the dataflow RISC only streams tiles and writes results.
 //
 // Work split: the RVV scan visits every tile once PER VALID ROW, so a pass is
-// linear in both w_tiles and H (measured on one core over an 8192-tile row:
-// ~0.043 us/tile for the first row plus ~0.019 us/tile per further row --
-// see ArgMaxEngine::Rvv in argmax_device_operation_types.hpp). That is why
-// the core-count heuristic below is H-aware and the SFPU engine's is not.
+// linear in both w_tiles and H — measured on one core over an 8192-tile row,
+// ~0.043 us/tile for the first row plus ~0.019 us/tile per further row — which
+// is why the core-count heuristic below is H-aware and the SFPU path's is not.
 // Multicore splits the REDUCTION dim's tiles across cores exactly the way the
-// SFPU engine does: core j scans slice
-// [w_start_j, w_start_j + w_count_j) of every tile-row pass and produces one
-// (global index, max value) candidate per valid row; the gather core (core 0)
-// then merges the per-core per-row candidates. The cross-core traffic is
-// 256 B per core per pass — per-row scalar candidates, never tiles.
+// SFPU path does: core j scans slice [w_start_j, w_start_j + w_count_j) of
+// every tile-row pass and produces one (global index, max value) candidate per
+// valid row, which the gather core (core 0) then merges. The cross-core
+// traffic is 256 B per core per pass — per-row scalar candidates, never tiles.
 //
-// The merge reuses the SFPU engine's exchange PROTOCOL (per-core slots plus
-// two cumulative semaphores) but NOT its comparator: this engine's whole
-// reason for existing is that it is bit-identical to the scalar readers, so
-// the cross-core merge runs bfloat16_greater's sign-magnitude BIT-PATTERN
-// total order with a smallest-global-index tie-break, not an IEEE compare
-// (see reader_argmax_rvv_tile.cpp).
+// The merge reuses the SFPU path's exchange PROTOCOL (per-core slots plus two
+// cumulative semaphores) but NOT its comparator: this path's whole reason for
+// existing is that it is bit-identical to the scalar readers, so the
+// cross-core merge runs bfloat16_greater's sign-magnitude BIT-PATTERN total
+// order with a smallest-global-index tie-break, not an IEEE compare (see
+// reader_argmax_rvv_tile.cpp).
 //
 // Core-count heuristic — AN EMPIRICAL FIT, and deliberately NOT the SFPU
-// engine's. Both engines pay a per-core cost that grows linearly in the core
-// count (a shared ~0.44 us/core per-program dispatch floor, measured as the
-// slope of every curve past its knee), so both optima have the form
-// sqrt(per-core-work / floor). What differs is the work: the SFPU pass is
-// flat in H, so sqrt(1.5 * w_tiles) is right for it, while this engine's scan
-// is per ROW, so its optimum must grow with H too. Using the SFPU formula
-// here cost up to 1.85x at H == 1 (see below).
-//
-// That argument fixes the SHAPE of the rule -- sqrt(w_tiles * (H + c1)) / c2
-// -- and nothing more. The two constants were picked by grid search over the
-// sweep tabulated below, scored on the worst per-shape ratio to the measured
-// optimum. They are FITTED PARAMETERS:
+// path's. Both paths pay a per-core cost linear in the core count (a shared
+// ~0.44 us/core per-program dispatch floor), so both optima have the form
+// sqrt(per-core-work / floor); what differs is the work. The SFPU pass is flat
+// in H, so sqrt(1.5 * w_tiles) suits it, while this scan is per ROW and its
+// optimum must grow with H. That fixes the SHAPE of the rule and nothing more:
+// the constants come from a grid search over the sweep below, scored on the
+// worst per-shape ratio to the measured optimum, and the result is capped by
+// the grid and by w_tiles:
 //
 //     num_cores = ceil(sqrt(w_tiles * (h_logical + 2)) / 3)
 //
-// capped by the grid and by w_tiles.
+// The 2 and the 3 are FITTED PARAMETERS. Do NOT "correct" them against the
+// per-tile constants quoted above: the closed form those imply,
+// sqrt(w_tiles * (H + 1.26)) / 4.81, differs in both constants AND does not
+// track the measurements — at H == 1 it asks for 4 / 11 / 21 cores at
+// V = 4096 / 32768 / 131072, where the sweep's optima are 6 / 24 / 40.
 //
-// Do NOT read the 2 and the 3 back as physical quantities; they are not, and
-// they do not reconcile with the per-tile constants quoted above. Those
-// (0.043 us/tile for the first row, 0.019 us/tile per further row, 0.44 us per
-// core) make the per-tile cost 0.019 * (H + 1.26) and so put the closed-form
-// optimum at sqrt(w_tiles * (H + 1.26)) / 4.81 -- different in both constants.
-// Nor does that closed form track the measurements: at H == 1 it asks for
-// 4 / 11 / 21 cores at V = 4096 / 32768 / 131072, where the sweep's
-// optima are 6 / 24 / 40. The fitted rule is used because the sweep endorses
-// it (worst case 1.08x off the per-shape optimum, table below), not because it
-// can be derived from a cost model.
+// Core counts were pinned with sub_core_grids and swept 1..130 at every (V, H)
+// below; "opt" is the best of that sweep, "picked" what the formula lands on.
+// Every shape is within 8% of its own optimum, the worst points being at
+// H == 32, which the automatic route sends to the SFPU anyway:
 //
-// Measured on a Blackhole p150 (13x10 = 130-core compute grid) by trace
-// replay of throughput-mode captures -- per-op DEVICE time with host dispatch
-// amortized away, NOT single-op latency; methodology and regeneration:
-// tests/ttnn/unit_tests/operations/reduce/_argmax_engine_crossover_bench.py.
-// Core counts were pinned with sub_core_grids and swept 1..130 at every
-// (V, H) below; "opt" is the best time over that sweep, "old"/"new" are the
-// times this factory's default lands on with the SFPU formula and with the
-// formula above:
-//
-//   V         H    opt cores / us     OLD cores / us     NEW cores / us   new/opt
-//   4096      1        6 /   4.4         14 /   8.2         7 /   4.5      1.02
-//   4096      8       12 /  11.8         14 /  11.5        12 /  11.8      1.00
-//   4096     32       16 /  38.6         14 /  39.5        22 /  39.9      1.03
-//   16384     1       12 /   7.9         28 /  12.7        14 /   8.2      1.04
-//   16384     8       28 /  18.6         28 /  18.6        24 /  19.2      1.03
-//   16384    32       28 /  60.5         28 /  60.5        44 /  63.2      1.05
-//   32768     1       24 /  11.3         40 /  18.5        19 /  11.5      1.02
-//   32768     8       53 /  25.2         40 /  25.7        34 /  25.5      1.01
-//   32768    32       44 /  78.6         40 /  79.1        63 /  84.6      1.08
-//   131072    1       40 /  26.3         79 /  44.7        37 /  26.9      1.02
-//   131072    8       80 /  54.8         79 /  54.9        68 /  56.6      1.03
-//   131072   32       80 / 148.0        111 / 148.5       125 / 158.0      1.07
-//   262144    1       28 /  47.3        111 /  74.3        53 /  48.2      1.02
-//   262144    8       48 /  80.5        111 /  86.3        96 /  84.1      1.05
-//   262144   32      130 / 215.2        111 / 215.9       130 / 215.2      1.00
-//
-// OLD = the SFPU formula this used to copy; NEW = the formula above, both
-// re-measured. Worst case goes from 1.85x off the per-shape optimum to 1.08x,
-// and every shape is now within 8%. What it buys is the H == 1 column
-// (1.56x-1.85x recovered, which is the routing target -- H < 32 is exactly
-// what select_argmax_engine sends here); what it costs is 4-8% at H == 32,
-// where the fitted sqrt(H + 2) growth overshoots slightly and which the
-// automatic route sends to the SFPU anyway.
+//   V         H    opt cores / us    picked cores / us   picked/opt
+//   4096      1        6 /   4.4          7 /   4.5         1.02
+//   4096      8       12 /  11.8         12 /  11.8         1.00
+//   4096     32       16 /  38.6         22 /  39.9         1.03
+//   16384     1       12 /   7.9         14 /   8.2         1.04
+//   16384     8       28 /  18.6         24 /  19.2         1.03
+//   16384    32       28 /  60.5         44 /  63.2         1.05
+//   32768     1       24 /  11.3         19 /  11.5         1.02
+//   32768     8       53 /  25.2         34 /  25.5         1.01
+//   32768    32       44 /  78.6         63 /  84.6         1.08
+//   131072    1       40 /  26.3         37 /  26.9         1.02
+//   131072    8       80 /  54.8         68 /  56.6         1.03
+//   131072   32       80 / 148.0        125 / 158.0         1.07
+//   262144    1       28 /  47.3         53 /  48.2         1.02
+//   262144    8       48 /  80.5         96 /  84.1         1.05
+//   262144   32      130 / 215.2        130 / 215.2         1.00
 //
 // The optima themselves are worth reading: at H == 1, V == 4096 the best core
-// count is SIX, and every curve turns back upward well before the grid is
-// full (V = 32768, H = 1: 11.3 us on 24 cores, 50.7 us on 111). "Give it the
-// whole grid" is not a safe default for either engine.
+// count is SIX, and every curve turns back upward well before the grid is full
+// (V = 32768, H = 1: 11.3 us on 24 cores, 50.7 us on 111) — "give it the whole
+// grid" is not a safe default for either path.
 //
 // An explicit sub_core_grids overrides the heuristic (capped by w_tiles only)
 // — pass a single-core grid to force the single-core variant, which skips the
@@ -154,12 +130,12 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
         cores = corerange_to_cores(full_grid, std::nullopt, true);
         // ceil(sqrt(w_tiles * (h_logical + 2)) / 3) — see the header comment for
         // the measurements this was fitted to. Deliberately not the SFPU
-        // engine's flat-in-H formula: this scan costs per ROW.
+        // path's flat-in-H formula: this scan costs per ROW.
         const uint32_t want = static_cast<uint32_t>(
             std::ceil(std::sqrt(static_cast<double>(w_tiles) * (static_cast<double>(h_logical) + 2.0)) / 3.0));
         num_cores = std::min<uint32_t>({want, static_cast<uint32_t>(cores.size()), w_tiles});
     }
-    TT_FATAL(num_cores >= 1, "the argmax RVV engine requires at least one core");
+    TT_FATAL(num_cores >= 1, "the argmax RVV path requires at least one core");
     cores.resize(num_cores);
 
     std::vector<CoreRange> core_ranges_vec;

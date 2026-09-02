@@ -26,19 +26,19 @@
 // p only once the gather core has consumed pass p-1. Both semaphores count
 // cumulatively (wait_min, no mid-run resets) and are restored to 0 at kernel
 // end so trace replay — which does not re-run the dispatcher's semaphore
-// init — starts clean. This exchange protocol is the SFPU engine's
+// init — starts clean. This exchange protocol is the SFPU path's
 // (reader_argmax_sfpu_tile.cpp); the COMPARATOR is not — see below.
 //
 // The exchange buffer is a CB allocated identically on every core, so a
 // worker's local cb_xchg write pointer equals the gather core's address.
 //
-// MERGE ORDER — the reason this engine exists: the RVV scan is bit-identical
+// MERGE ORDER — the reason this path exists: the RVV scan is bit-identical
 // to the scalar reader kernels, whose compare is bfloat16_greater, a pure
 // sign-magnitude BIT-PATTERN total order (NaN payloads participate, +0 sorts
 // above -0), with the smallest index winning ties. The cross-core merge must
-// govern by that same order, NOT by the IEEE compare the SFPU engine's merge
+// govern by that same order, NOT by the IEEE compare the SFPU path's merge
 // uses, or the multicore result would diverge from the single-core one on
-// exactly the special values this engine promises to reproduce.
+// exactly the special values this path promises to reproduce.
 //
 // num_cores == 1 skips the exchange buffer entirely and stages the compute
 // kernel's results (already global, w_start == 0) straight into output pages.

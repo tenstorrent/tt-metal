@@ -1,27 +1,28 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace-replay measurement of the Blackhole accelerated argmax engines (RVV, SFPU).
+"""Trace-replay measurement of the Blackhole accelerated argmax paths (RVV, SFPU).
 
 WHAT THIS MEASURES
 ------------------
-Per-op **device** time of ``ttnn.argmax``'s accelerated engines as a function of
+Per-op **device** time of ``ttnn.argmax``'s accelerated paths as a function of
 the core count they are given, so two questions can be answered from data:
 
-1. **How few cores does each engine need?** This, not absolute latency at the
-   whole grid, is the headline. The fused argmax epilogue rides the LM-head
-   matmul's pack shadow and cannot have the grid -- the matmul owns it. An
-   engine that needs 111 cores to be fast cannot fuse; an engine that is fast on
-   8 can. So the report leads with **cores-to-match** (the fewest cores at which
-   one engine reaches the other's best time, and the fewest at which either
-   reaches a fixed latency target), carries the RVV-vs-SFPU ratio **at every
-   core count** rather than only at the defaults, and prints a `cores x time`
-   column as a proxy for how much of the machine a result costs.
-2. How far does each engine actually scale, and where does it saturate? The
+1. **How few cores does each path need?** A fused argmax epilogue would share
+   the compute grid with the LM-head matmul it follows, so it can only ever be
+   handed a slice of that grid rather than all of it. What decides whether such
+   a fusion is possible is therefore how few cores a path needs to reach a
+   given latency, not the best time it can post with the whole grid to itself.
+   So the report leads with **cores-to-match** (the fewest cores at which one
+   path reaches the other's best time, and the fewest at which either reaches
+   a fixed latency target), carries the RVV-vs-SFPU ratio **at every core
+   count** rather than only at the defaults, and prints a `cores x time` column
+   as a proxy for how much of the machine a result costs.
+2. How far does each path actually scale, and where does it saturate? The
    factories ship DIFFERENT defaults, both capped by the grid and by
-   ``w_tiles``: ``ceil(sqrt(1.5 * w_tiles))`` for the SFPU engine (flat in H)
-   and ``ceil(sqrt(w_tiles * (H + 2)) / 3)`` for the RVV engine (per-row), see
+   ``w_tiles``: ``ceil(sqrt(1.5 * w_tiles))`` for the SFPU path (flat in H)
+   and ``ceil(sqrt(w_tiles * (H + 2)) / 3)`` for the RVV path (per-row), see
    argmax_{sfpu,rvv}_tile_program_factory.cpp. Those are models fitted to
    measurements, so they are worth re-checking. This sweep prints the true optimum, the saturation
    knee, and any core count where adding cores made things *slower*, next to
@@ -34,10 +35,12 @@ the core count they are given, so two questions can be answered from data:
 
 HOW TO RUN IT
 -------------
-On a Blackhole host::
+Manual-only: this directory is swept wholesale by CI, so every test here is
+gated behind ``TTNN_RUN_ARGMAX_CROSSOVER_BENCH=1`` and skips without it. On a
+Blackhole host::
 
-    pytest tests/ttnn/unit_tests/operations/reduce/_argmax_engine_crossover_bench.py \
-      -s --timeout=7200
+    export TTNN_RUN_ARGMAX_CROSSOVER_BENCH=1
+    pytest tests/ttnn/unit_tests/benchmarks/test_argmax_path_crossover_bench.py -s --timeout=7200
 
 Add ``-k core_scaling`` for the perf sweep alone, ``-k trace_safety`` for the
 replay-stability check alone. Then paste the markdown block it prints into the PR.
@@ -81,26 +84,16 @@ CAVEATS
   isolated argmax is not necessarily this fast.
 - Only ``min`` over ``REPLAYS`` is reported. The floor is the stable statistic
   here; the mean drags in unrelated host/DRAM noise.
-- ``torch.randn`` emits no NaN, denormal or signed zero, so the SFPU engine's
-  documented special-value divergence is out of scope and the two engines must
+- ``torch.randn`` emits no NaN, denormal or signed zero, so the SFPU path's
+  documented special-value divergence is out of scope and the two paths must
   agree exactly, ties included. That is asserted at every point.
 
 NOT A REGRESSION GATE. Nothing about timing is asserted; timings are the output.
 Correctness *is* asserted, at every point.
-
-Collection: the leading underscore keeps this out of the directory sweeps that
-pick up ``test_*.py`` from this folder (tests/pipeline_reorg/ttnn_sanity_tests.yaml
-runs `pytest tests/ttnn/unit_tests/operations/reduce`). pytest still collects a
-file named explicitly on the command line, so it stays runnable on demand. Same
-arrangement as _topk_route_cells_bench.py alongside it.
-
-History: this file used to time with the in-process real-time program profiler.
-That path needs a host-IOMMU runner for its D2H socket and silently never
-activates without one, which made the benchmark unrunnable on the reference
-Blackhole box. Trace replay needs nothing but a device.
 """
 
 import math
+import os
 import statistics
 import time
 
@@ -112,21 +105,31 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
+# Manual-only benchmark. tests/pipeline_reorg/ttnn_sanity_tests.yaml sweeps this whole directory with
+# `pytest --timeout 300 ... tests/ttnn/unit_tests/benchmarks ... -xv`, and a full run of this file takes
+# hours, so every test in it is gated behind an opt-in env var. Same arrangement as
+# GEMM_FLOPS_BENCHMARK_ENV in test_benchmark.py alongside it.
+ARGMAX_CROSSOVER_BENCH_ENV = "TTNN_RUN_ARGMAX_CROSSOVER_BENCH"
+
 pytestmark = [
-    run_for_blackhole("the accelerated argmax engines (RVV, SFPU) are Blackhole-only"),
+    pytest.mark.skipif(
+        os.getenv(ARGMAX_CROSSOVER_BENCH_ENV) != "1",
+        reason=f"Benchmark is manual-only; set {ARGMAX_CROSSOVER_BENCH_ENV}=1 to run",
+    ),
+    run_for_blackhole("the accelerated argmax paths (RVV, SFPU) are Blackhole-only"),
     skip_with_watcher("Watcher perturbs kernel timing; a scaling curve measured under it is not the real one."),
     skip_with_llk_assert("LLK asserts perturb kernel timing."),
 ]
 
-# Verification-only forced entries: ttnn.argmax picks an engine on its own and takes no argument that
-# names one, so a per-engine measurement has to pin the engine here. These are bound only under the
-# private module and never fall back -- an engine that cannot serve a case raises. See
+# Verification-only forced entries: ttnn.argmax picks a path on its own and takes no argument that
+# names one, so a per-path measurement has to pin the path here. These are bound only under the
+# private module and never fall back -- a path that cannot serve a case raises. See
 # ttnn/cpp/ttnn/operations/reduction/argmax/argmax_force.hpp.
 _FORCE = {
     "RVV": ttnn._ttnn.operations.reduction.argmax_force_rvv,
     "SFPU": ttnn._ttnn.operations.reduction.argmax_force_sfpu,
 }
-_ENGINES = ("RVV", "SFPU")
+_PATHS = ("RVV", "SFPU")
 
 # Reduction widths and rows-per-tile-row. The two V values are the ones tabulated in argmax.cpp;
 # H spans the kSfpuMinRows boundary (shipped at 32): 1 and 8 are below it, 32 is at it.
@@ -134,8 +137,8 @@ V_SWEEP = (32768, 262144)
 H_SWEEP = (1, 8, 32)
 
 # Explicit core counts to pin with sub_core_grids. `None` means "no sub_core_grids", i.e. whatever the
-# shipped heuristic in that engine's program factory picks -- which is NOT the same formula for the two
-# engines; see _default_num_cores.
+# shipped heuristic in that path's program factory picks -- which is NOT the same formula for the two
+# paths; see _default_num_cores.
 CORE_SWEEP = (1, 2, 4, 8, 16, 32, 64, 111, None)
 
 # Ops recorded into one trace. Chosen per point so a single replay lands near TARGET_REPLAY_US: large
@@ -170,7 +173,7 @@ SHIPPED_SFPU_MIN_ROWS = 32
 # expensive V both land somewhere interesting; unreachable budgets print as "-".
 LATENCY_TARGETS_US = (25.0, 50.0, 100.0, 200.0)
 
-# A point counts as saturated once it is within this fraction of the engine's best over the sweep --
+# A point counts as saturated once it is within this fraction of the path's best over the sweep --
 # the knee, not the minimum, since the minimum is often one noisy point past the knee.
 SATURATION_TOL = 0.05
 
@@ -197,16 +200,16 @@ def _core_grid(n: int, grid_x: int) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet(ranges)
 
 
-def _default_num_cores(engine: str, v: int, h: int, grid_cores: int) -> int:
+def _default_num_cores(path: str, v: int, h: int, grid_cores: int) -> int:
     """The shipped heuristic, mirrored from argmax_{rvv,sfpu}_tile_program_factory.cpp so the report can
-    name the core count the default path actually uses.
+    name the core count a call with no ``sub_core_grids`` actually gets.
 
     The two factories do NOT use the same formula, because their cost models differ: the SFPU pass is
     flat in H, so its optimum only tracks the reduction width, while the RVV scan is per row and its
     optimum grows with H as well. Mirroring one formula for both would mislabel every RVV `default` row.
     """
     w_tiles = math.ceil(v / 32)
-    if engine == "RVV":
+    if path == "RVV":
         want = math.ceil(math.sqrt(w_tiles * (h + 2)) / 3)
     else:
         want = math.ceil(math.sqrt(1.5 * w_tiles))
@@ -214,8 +217,8 @@ def _default_num_cores(engine: str, v: int, h: int, grid_cores: int) -> int:
 
 
 def _golden_indices(arr: torch.Tensor) -> torch.Tensor:
-    """First-occurrence argmax over the last dim, flattened. The engines resolve ties to the smallest
-    index (see the golden in test_argmax_rvv.py:54), and numpy's argmax on a boolean array is
+    """First-occurrence argmax over the last dim, flattened. The paths resolve ties to the smallest
+    index (see _ref_argmax_row in test_argmax_rvv.py), and numpy's argmax on a boolean array is
     documented to return the first True -- torch's tie behaviour is not documented, so numpy it is."""
     a = arr.to(torch.float32).numpy().reshape(-1, arr.shape[-1])
     return torch.from_numpy((a == a.max(axis=-1, keepdims=True)).argmax(axis=-1)).to(torch.int64)
@@ -372,8 +375,8 @@ def _assert_program_cache_active(device) -> None:
 
 @_TRACE_DEVICE_PARAMS
 @pytest.mark.timeout(7200)
-def test_argmax_engine_core_scaling(device):
-    """Sweep explicit core counts and each engine's default for both engines at every (V, H), timed
+def test_argmax_path_core_scaling(device):
+    """Sweep explicit core counts and each path's default for both paths at every (V, H), timed
     with trace replay and, for the same point, eagerly."""
     grid = device.compute_with_storage_grid_size()
     grid_cores = grid.x * grid.y
@@ -385,16 +388,15 @@ def test_argmax_engine_core_scaling(device):
             staging = _Staging(device, h, v)
             try:
                 eager_indices = {}
-                for engine in _ENGINES:
-                    force = _FORCE[engine]
-                    eager_indices[engine] = _indices(force(staging.device_input, dim=-1, keepdim=True))
-                    assert torch.equal(eager_indices[engine], staging.golden[0]), (
-                        f"{engine} at V={v} H={h} disagrees with the first-occurrence golden on "
-                        f"{int((eager_indices[engine] != staging.golden[0]).sum())} of "
+                for path in _PATHS:
+                    force = _FORCE[path]
+                    eager_indices[path] = _indices(force(staging.device_input, dim=-1, keepdim=True))
+                    assert torch.equal(eager_indices[path], staging.golden[0]), (
+                        f"{path} at V={v} H={h} disagrees with the first-occurrence golden on "
+                        f"{int((eager_indices[path] != staging.golden[0]).sum())} of "
                         f"{staging.golden[0].numel()} rows"
                     )
-                # The cross-engine check the file has always carried, kept literal: for randn data no
-                # special value is in play, so the two engines must return identical indices.
+                # For randn data no special value is in play, so the two paths must agree exactly.
                 assert torch.equal(eager_indices["RVV"], eager_indices["SFPU"]), (
                     f"RVV and SFPU disagree on indices at V={v} H={h} for ordinary random data "
                     "(no NaN/denormal/signed zero involved, so they must match exactly)"
@@ -405,13 +407,13 @@ def test_argmax_engine_core_scaling(device):
                     if n_cores is not None and n_cores > grid_cores:
                         continue
                     sub_grid = None if n_cores is None else _core_grid(n_cores, grid.x)
-                    for engine in _ENGINES:
-                        force = _FORCE[engine]
+                    for path in _PATHS:
+                        force = _FORCE[path]
 
                         def run(force=force, sub_grid=sub_grid):
                             return force(staging.device_input, dim=-1, keepdim=True, sub_core_grids=sub_grid)
 
-                        label = f"{engine} V={v} H={h} cores={n_cores or 'default'}"
+                        label = f"{path} V={v} H={h} cores={n_cores or 'default'}"
                         est = _estimate_us(device, run)
                         n_ops = _pick_n(est, N_OPS_MIN, N_OPS_MAX)
                         trace_us = _measure_trace_us(device, run, staging, n_ops, label)
@@ -422,13 +424,13 @@ def test_argmax_engine_core_scaling(device):
                             {
                                 "v": v,
                                 "h": h,
-                                "engine": engine,
+                                "path": path,
                                 "cores": n_cores,
                                 # The number of cores actually used: the factories clamp to w_tiles and
                                 # to the grid, and the `default` row has no requested count at all.
                                 "cores_used": n_cores
                                 if n_cores is not None
-                                else _default_num_cores(engine, v, h, grid_cores),
+                                else _default_num_cores(path, v, h, grid_cores),
                                 "n_ops": n_ops,
                                 "trace_us": trace_us,
                                 "eager_us": eager_us,
@@ -459,25 +461,25 @@ def test_argmax_trace_launch_overhead(device):
     figure: time a 10-op trace and a 100-op trace of the same call, solve for the intercept."""
     grid = device.compute_with_storage_grid_size()
     lines = ["", "### Fixed cost of one `execute_trace` + `synchronize_device`", ""]
-    lines.append("| V | H | engine | cores | 10-op replay (us) | 100-op replay (us) | per-op (us) | launch (us) |")
+    lines.append("| V | H | path | cores | 10-op replay (us) | 100-op replay (us) | per-op (us) | launch (us) |")
     lines.append("|---:|---:|:---|---:|---:|---:|---:|---:|")
     for v, h, n_cores in ((262144, 1, 111), (32768, 8, 16)):
         staging = _Staging(device, h, v)
         try:
             sub_grid = _core_grid(n_cores, grid.x)
-            for engine in _ENGINES:
-                force = _FORCE[engine]
+            for path in _PATHS:
+                force = _FORCE[path]
 
                 def run(force=force):
                     return force(staging.device_input, dim=-1, keepdim=True, sub_core_grids=sub_grid)
 
-                label = f"{engine} V={v} H={h} cores={n_cores}"
+                label = f"{path} V={v} H={h} cores={n_cores}"
                 t10 = _measure_trace_us(device, run, staging, 10, label) * 10
                 t100 = _measure_trace_us(device, run, staging, 100, label) * 100
                 per_op = (t100 - t10) / 90
                 launch = t10 - 10 * per_op
                 lines.append(
-                    f"| {v} | {h} | {engine} | {n_cores} | {t10:.1f} | {t100:.1f} | {per_op:.2f} | {launch:.1f} |"
+                    f"| {v} | {h} | {path} | {n_cores} | {t10:.1f} | {t100:.1f} | {per_op:.2f} | {launch:.1f} |"
                 )
                 logger.info(f"{label}: per-op {per_op:.2f} us, replay launch {launch:.1f} us")
         finally:
@@ -497,7 +499,7 @@ def test_argmax_trace_launch_overhead(device):
 # Trace safety: does replay stay correct, many times over?
 # ---------------------------------------------------------------------------
 
-# Shapes that stress the multicore engines' cross-core handshake hardest under replay:
+# Shapes that stress the multicore paths' cross-core handshake hardest under replay:
 #  - ragged: w_tiles not divisible by the core count, so slices differ in width;
 #  - multi-pass: H > 32, so the per-pass credit/semaphore flow runs more than once per dispatch;
 #  - both at once, and one wide default-core-count case for good measure.
@@ -513,21 +515,21 @@ SAFETY_REPLAYS = 60
 
 @_TRACE_DEVICE_PARAMS
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("engine", _ENGINES)
+@pytest.mark.parametrize("path", _PATHS)
 @pytest.mark.parametrize("h, v, n_cores, note", SAFETY_SHAPES, ids=lambda x: str(x) if not isinstance(x, str) else "")
-def test_argmax_trace_safety(device, engine, h, v, n_cores, note):
+def test_argmax_trace_safety(device, path, h, v, n_cores, note):
     """Capture once, replay many times with the input alternating between two payloads, and require
     the golden for whichever payload is resident every single time.
 
     Alternating is what makes this a safety test rather than a smoke test: a replay that reused a
-    stale result, or an engine whose semaphores were left un-reset by the previous replay, produces
+    stale result, or a path whose semaphores were left un-reset by the previous replay, produces
     the wrong payload's answer (or hangs) rather than a benign repeat.
     """
     grid = device.compute_with_storage_grid_size()
     if n_cores is not None and n_cores > grid.x * grid.y:
         pytest.skip(f"grid has {grid.x * grid.y} cores, need {n_cores}")
     sub_grid = None if n_cores is None else _core_grid(n_cores, grid.x)
-    force = _FORCE[engine]
+    force = _FORCE[path]
     staging = _Staging(device, h, v, seed=11)
     try:
 
@@ -548,14 +550,14 @@ def test_argmax_trace_safety(device, engine, h, v, n_cores, note):
                 ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
                 got = _indices(output)
                 assert torch.equal(got, staging.golden[k]), (
-                    f"{engine} {note}: replay {i} (payload {k}) returned the wrong indices on "
+                    f"{path} {note}: replay {i} (payload {k}) returned the wrong indices on "
                     f"{int((got != staging.golden[k]).sum())} of {got.numel()} rows. "
                     f"Matches the OTHER payload's golden: {torch.equal(got, staging.golden[1 - k])}."
                 )
         finally:
             ttnn.release_trace(device, tid)
             ttnn.deallocate(output)
-        logger.info(f"{engine} trace-safe over {SAFETY_REPLAYS} alternating replays -- {note}")
+        logger.info(f"{path} trace-safe over {SAFETY_REPLAYS} alternating replays -- {note}")
     finally:
         staging.close()
 
@@ -565,35 +567,35 @@ def test_argmax_trace_safety(device, engine, h, v, n_cores, note):
 # ---------------------------------------------------------------------------
 
 
-def _pick(rows, v, h, engine, cores):
+def _pick(rows, v, h, path, cores):
     for r in rows:
-        if r["v"] == v and r["h"] == h and r["engine"] == engine and r["cores"] == cores:
+        if r["v"] == v and r["h"] == h and r["path"] == path and r["cores"] == cores:
             return r
     return None
 
 
-def _series(rows, v, h, engine):
-    """This engine's points at this shape, ordered by the core count actually used. The `default` row
+def _series(rows, v, h, path):
+    """This path's points at this shape, ordered by the core count actually used. The `default` row
     is dropped: it duplicates whichever explicit count the heuristic happens to land on, and keeping it
     would put two entries at the same x."""
-    sub = [r for r in rows if r["v"] == v and r["h"] == h and r["engine"] == engine and r["cores"] is not None]
+    sub = [r for r in rows if r["v"] == v and r["h"] == h and r["path"] == path and r["cores"] is not None]
     return sorted(sub, key=lambda r: r["cores_used"])
 
 
-def _cores_to_reach(rows, v, h, engine, key, target_us):
-    """Fewest cores at which this engine gets at or under ``target_us``. None if it never does."""
-    for r in _series(rows, v, h, engine):
+def _cores_to_reach(rows, v, h, path, key, target_us):
+    """Fewest cores at which this path gets at or under ``target_us``. None if it never does."""
+    for r in _series(rows, v, h, path):
         if r[key] <= target_us:
             return r
     return None
 
 
-def _saturation(rows, v, h, engine, key):
+def _saturation(rows, v, h, path, key):
     """(knee row, best row, [negative-scaling rows]).
 
     knee = the fewest cores within SATURATION_TOL of the best time over the sweep. Negative scaling =
     any point more than REGRESSION_TOL slower than the next smaller core count measured."""
-    series = _series(rows, v, h, engine)
+    series = _series(rows, v, h, path)
     if not series:
         return None, None, []
     best = min(series, key=lambda r: r[key])
@@ -607,63 +609,63 @@ def _shapes(rows):
 
 
 def _report_headline(lines, rows, key, flavour):
-    """Cores-to-match: the fewest cores at which each engine reaches the other's best. This is the
-    number the fusion argument is built on -- the fused argmax epilogue rides the LM-head matmul's
-    pack shadow and cannot have the grid, so an engine that only wins at 111 cores cannot fuse."""
+    """Cores-to-match: the fewest cores at which each path reaches the other's best. See this
+    module's docstring for why that, and not best-case latency, is the number the fusion argument
+    rests on."""
     lines.append(f"##### Cores-to-match ({flavour})")
     lines.append("")
-    lines.append("| V | H | engine | opponent's best | cores to match it | its time there | verdict |")
+    lines.append("| V | H | path | opponent's best | cores to match it | its time there | verdict |")
     lines.append("|---:|---:|:---|:---|---:|---:|:---|")
     for v, h in _shapes(rows):
-        for engine in _ENGINES:
-            other = "SFPU" if engine == "RVV" else "RVV"
-            mine, theirs = _series(rows, v, h, engine), _series(rows, v, h, other)
+        for path in _PATHS:
+            other = "SFPU" if path == "RVV" else "RVV"
+            mine, theirs = _series(rows, v, h, path), _series(rows, v, h, other)
             if not mine or not theirs:
                 continue
             their_best = min(theirs, key=lambda r: r[key])
-            hit = _cores_to_reach(rows, v, h, engine, key, their_best[key])
+            hit = _cores_to_reach(rows, v, h, path, key, their_best[key])
             target = f"{other} {their_best[key]:.1f} us @ {their_best['cores_used']} cores"
             if hit is None:
                 lines.append(
-                    f"| {v} | {h} | {engine} | {target} | never | {min(mine, key=lambda r: r[key])[key]:.1f} "
-                    f"(best) | {engine} never reaches it on this grid |"
+                    f"| {v} | {h} | {path} | {target} | never | {min(mine, key=lambda r: r[key])[key]:.1f} "
+                    f"(best) | {path} never reaches it on this grid |"
                 )
             else:
                 factor = their_best["cores_used"] / hit["cores_used"]
                 verdict = (
-                    f"**{engine} needs {hit['cores_used']} cores to beat {other}'s best "
+                    f"**{path} needs {hit['cores_used']} cores to beat {other}'s best "
                     f"({their_best['cores_used']} cores) -- {factor:.0f}x fewer**"
                     if factor > 1.0
-                    else f"{engine} needs {hit['cores_used']} cores, {other} needs {their_best['cores_used']}"
+                    else f"{path} needs {hit['cores_used']} cores, {other} needs {their_best['cores_used']}"
                 )
                 lines.append(
-                    f"| {v} | {h} | {engine} | {target} | **{hit['cores_used']}** | {hit[key]:.1f} | {verdict} |"
+                    f"| {v} | {h} | {path} | {target} | **{hit['cores_used']}** | {hit[key]:.1f} | {verdict} |"
                 )
     lines.append("")
     lines.append(f"##### Cores to reach a fixed latency budget ({flavour})")
     lines.append("")
-    lines.append("| V | H | engine | " + " | ".join(f"<= {t:.0f} us" for t in LATENCY_TARGETS_US) + " |")
+    lines.append("| V | H | path | " + " | ".join(f"<= {t:.0f} us" for t in LATENCY_TARGETS_US) + " |")
     lines.append("|---:|---:|:---|" + "---:|" * len(LATENCY_TARGETS_US))
     for v, h in _shapes(rows):
-        for engine in _ENGINES:
+        for path in _PATHS:
             cells = []
             for target in LATENCY_TARGETS_US:
-                hit = _cores_to_reach(rows, v, h, engine, key, target)
+                hit = _cores_to_reach(rows, v, h, path, key, target)
                 cells.append("-" if hit is None else str(hit["cores_used"]))
-            lines.append(f"| {v} | {h} | {engine} | " + " | ".join(cells) + " |")
+            lines.append(f"| {v} | {h} | {path} | " + " | ".join(cells) + " |")
     lines.append("")
-    lines.append("`-` means no core count in the sweep gets the engine under that budget.")
+    lines.append("`-` means no core count in the sweep gets the path under that budget.")
     lines.append("")
 
 
 def _report_saturation(lines, rows, key, flavour):
     lines.append(f"##### Saturation and negative scaling ({flavour})")
     lines.append("")
-    lines.append("| V | H | engine | knee (cores) | knee time | best (cores) | best time | adding cores HURTS at |")
+    lines.append("| V | H | path | knee (cores) | knee time | best (cores) | best time | adding cores HURTS at |")
     lines.append("|---:|---:|:---|---:|---:|---:|---:|:---|")
     for v, h in _shapes(rows):
-        for engine in _ENGINES:
-            knee, best, regressions = _saturation(rows, v, h, engine, key)
+        for path in _PATHS:
+            knee, best, regressions = _saturation(rows, v, h, path, key)
             if knee is None:
                 continue
             if regressions:
@@ -672,12 +674,12 @@ def _report_saturation(lines, rows, key, flavour):
             else:
                 hurt = "-"
             lines.append(
-                f"| {v} | {h} | {engine} | {knee['cores_used']} | {knee[key]:.1f} | {best['cores_used']} | "
+                f"| {v} | {h} | {path} | {knee['cores_used']} | {knee[key]:.1f} | {best['cores_used']} | "
                 f"{best[key]:.1f} | {hurt} |"
             )
     lines.append("")
     lines.append(
-        f"knee = fewest cores within {SATURATION_TOL:.0%} of that engine's best over the sweep. A bolded "
+        f"knee = fewest cores within {SATURATION_TOL:.0%} of that path's best over the sweep. A bolded "
         f"`adding cores HURTS` cell is a core count more than {REGRESSION_TOL:.0%} slower than the next "
         "smaller one measured -- negative scaling, worth a look rather than an average."
     )
@@ -686,11 +688,11 @@ def _report_saturation(lines, rows, key, flavour):
 
 def _report_scaling(rows, grid_cores: int) -> None:
     """Print one markdown block, ready to paste into a PR comment."""
-    lines = ["", "### ttnn.argmax engine scaling vs core count (Blackhole, BFLOAT16, TILE, last-dim)", ""]
+    lines = ["", "### ttnn.argmax path scaling vs core count (Blackhole, BFLOAT16, TILE, last-dim)", ""]
     lines.append(
-        f"Input `[1, 1, H, V]`, `dim=-1`, `keepdim=True`. Engines pinned through the forced entries in "
+        f"Input `[1, 1, H, V]`, `dim=-1`, `keepdim=True`. Paths pinned through the forced entries in "
         f"`argmax_force.hpp`; core counts pinned with `sub_core_grids`, `default` = no `sub_core_grids`, "
-        f"i.e. that engine's own shipped heuristic -- `ceil(sqrt(1.5 * w_tiles))` for SFPU and "
+        f"i.e. that path's own shipped heuristic -- `ceil(sqrt(1.5 * w_tiles))` for SFPU and "
         f"`ceil(sqrt(w_tiles * (H + 2)) / 3)` for RVV, each capped by the grid and by `w_tiles`, so the two "
         f"`default` cells in a row are generally DIFFERENT core counts. Compute grid: {grid_cores} cores."
     )
@@ -707,13 +709,13 @@ def _report_scaling(rows, grid_cores: int) -> None:
     )
     lines.append("")
 
-    lines.append("#### Headline: how few cores does each engine need?")
+    lines.append("#### Headline: how few cores does each path need?")
     lines.append("")
     lines.append(
-        "The fused argmax epilogue rides the LM-head matmul's pack shadow and cannot be given the "
-        "whole grid -- the matmul owns it. So the number that decides fusability is not latency at "
-        "111 cores, it is the core count at which an engine is already fast enough. Both flavours are "
-        "printed because an eager-only answer and a trace-only answer can disagree."
+        "Cores-to-match, not latency at the top of the grid, is the headline; see the module "
+        "docstring of `test_argmax_path_crossover_bench.py` for why a fused argmax epilogue cannot "
+        "count on having the whole grid. Both flavours are printed because an eager-only answer and "
+        "a trace-only answer can disagree."
     )
     lines.append("")
     _report_headline(lines, rows, "trace_us", "trace replay, device time")
@@ -723,8 +725,8 @@ def _report_scaling(rows, grid_cores: int) -> None:
     lines.append("")
     lines.append(
         "`SFPU/RVV` > 1 means RVV is faster by that factor at the same core count. Watching it decay "
-        "toward 1 as cores are added is the point: it says the two engines are converging on a shared "
-        "floor, so a comparison taken only at the top of the grid measures the floor, not the engines. "
+        "toward 1 as cores are added is the point: it says the two paths are converging on a shared "
+        "floor, so a comparison taken only at the top of the grid measures the floor, not the paths. "
         "`cores x us` is core count times latency -- a proxy for how much of the machine the result "
         "costs, which is what a fused epilogue has to budget for."
     )
@@ -755,7 +757,7 @@ def _report_scaling(rows, grid_cores: int) -> None:
             )
         lines.append("")
 
-    lines.append("#### Where each engine stops benefiting from more cores")
+    lines.append("#### Where each path stops benefiting from more cores")
     lines.append("")
     _report_saturation(lines, rows, "trace_us", "trace replay, device time")
     _report_saturation(lines, rows, "eager_us", "eager dispatch, wall clock")
@@ -763,20 +765,20 @@ def _report_scaling(rows, grid_cores: int) -> None:
     lines.append("#### Optimal core count vs the shipped heuristic (device time, trace replay)")
     lines.append("")
     lines.append(
-        "| V | H | engine | best cores | best (us) | default cores | default (us) | default / best | "
+        "| V | H | path | best cores | best (us) | default cores | default (us) | default / best | "
         "left on the table |"
     )
     lines.append("|---:|---:|:---|---:|---:|---:|---:|---:|---:|")
     for v, h in _shapes(rows):
-        for engine in _ENGINES:
-            series = _series(rows, v, h, engine)
-            default = _pick(rows, v, h, engine, None)
+        for path in _PATHS:
+            series = _series(rows, v, h, path)
+            default = _pick(rows, v, h, path, None)
             if not series or default is None:
                 continue
             best = min(series, key=lambda r: r["trace_us"])
             ratio = default["trace_us"] / best["trace_us"] if best["trace_us"] > 0 else float("inf")
             lines.append(
-                f"| {v} | {h} | {engine} | {best['cores_used']} | {best['trace_us']:.1f} | "
+                f"| {v} | {h} | {path} | {best['cores_used']} | {best['trace_us']:.1f} | "
                 f"{default['cores_used']} | {default['trace_us']:.1f} | {ratio:.2f}x | "
                 f"{default['trace_us'] - best['trace_us']:+.1f} us |"
             )
@@ -793,25 +795,25 @@ def _report_scaling(rows, grid_cores: int) -> None:
     )
     lines.append("")
     lines.append(
-        "If the plateau these engines run into at high core counts were host dispatch overhead, "
+        "If the plateau these paths run into at high core counts were host dispatch overhead, "
         "`pipelined - trace` would be large and roughly constant while the trace column kept falling. "
-        "If it is near zero, the plateau is device time and the engines have genuinely stopped scaling."
+        "If it is near zero, the plateau is device time and the paths have genuinely stopped scaling."
     )
     lines.append("")
     lines.append(
-        "| V | H | engine | cores | trace (us) | eager pipelined | pipelined - trace | eager isolated | "
+        "| V | H | path | cores | trace (us) | eager pipelined | pipelined - trace | eager isolated | "
         "isolated - trace |"
     )
     lines.append("|---:|---:|:---|---:|---:|---:|---:|---:|---:|")
     for v, h in _shapes(rows):
-        for engine in _ENGINES:
+        for path in _PATHS:
             for n_cores in CORE_SWEEP:
-                r = _pick(rows, v, h, engine, n_cores)
+                r = _pick(rows, v, h, path, n_cores)
                 if r is None:
                     continue
                 name = str(n_cores) if n_cores is not None else f"default ({r['cores_used']})"
                 lines.append(
-                    f"| {v} | {h} | {engine} | {name} | {r['trace_us']:.1f} | {r['eager_us']:.1f} | "
+                    f"| {v} | {h} | {path} | {name} | {r['trace_us']:.1f} | {r['eager_us']:.1f} | "
                     f"{r['eager_us'] - r['trace_us']:+.1f} | {r['eager_iso_us']:.1f} | "
                     f"{r['eager_iso_us'] - r['trace_us']:+.1f} |"
                 )
@@ -845,7 +847,7 @@ def _report_scaling(rows, grid_cores: int) -> None:
     lines.append(
         f"Shipped `kSfpuMinRows` = {SHIPPED_SFPU_MIN_ROWS}. Nothing above is asserted; this file "
         "measures. It does assert, at every point, that RVV and SFPU return identical indices and that "
-        "both match a first-occurrence golden, so the timings compare two engines that computed the "
+        "both match a first-occurrence golden, so the timings compare two paths that computed the "
         "same answer."
     )
     lines.append("")

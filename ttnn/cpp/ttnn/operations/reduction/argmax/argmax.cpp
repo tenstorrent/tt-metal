@@ -130,20 +130,20 @@ Tensor run_argmax_nc(
 }
 
 // ---------------------------------------------------------------------------
-// Engine selection
+// Path selection
 // ---------------------------------------------------------------------------
-// The one place that decides which argmax engine runs. Everything downstream
-// consumes ArgmaxParams::engine; nothing re-derives the choice.
+// The one place that decides which argmax path runs. Everything downstream
+// consumes ArgmaxParams::path; nothing re-derives the choice.
 
-using ttnn::prim::ArgMaxEngine;
+using ttnn::prim::ArgMaxPath;
 
-// Correctness gate shared by both accelerated engines: the preconditions under
+// Correctness gate shared by both accelerated paths: the preconditions under
 // which the Blackhole TILE-layout last-dim kernels are defined at all. Mirrors
-// -- and must stay in sync with -- the per-engine TT_FATALs in
+// -- and must stay in sync with -- the per-path TT_FATALs in
 // ArgMaxDeviceOperation::validate_on_program_cache_miss, which is what catches
 // it if the two ever drift. Uses the same hal::get_arch() the validator does,
 // so the two cannot disagree about the architecture.
-bool accelerated_engines_can_serve(
+bool accelerated_paths_can_serve(
     const Tensor& input,
     const std::optional<int>& dim,
     bool keepdim,
@@ -163,23 +163,16 @@ bool accelerated_engines_can_serve(
     if (input.logical_volume() == 0) {
         return false;
     }
-    // Rank 0 (a scalar) is the only rank the accelerated engines cannot take,
+    // Rank 0 (a scalar) is the only rank the accelerated paths cannot take,
     // and this is a correctness gate, not a preference: a rank-0 shape has no
     // reduction axis, normalize_dim(-1, 0) == -1 compares equal to rank - 1
     // just below, and logical_shape[-1] would then index out of bounds.
     //
-    // Rank 1 IS served, by the RVV engine. A rank-1 logical shape has no H
-    // dim, but that is not a gap in the kernels: both accelerated program
-    // factories already fold it to H == 1 explicitly
-    // (argmax_rvv_tile_program_factory.cpp h_logical,
-    // argmax_sfpu_tile_program_factory.cpp h_logical), which makes a rank-1
-    // [V] input produce exactly the compile-time arguments of a [1, 1, 1, V]
-    // input -- the H == 1 shape the RVV battery already covers. The scalar
-    // readers cannot produce a max-value output, so demoting rank 1 here would
-    // turn `argmax(rank1, dim=-1, maxval_tensor=...)` into a hard error; the
-    // RVV engine served exactly that call before engine selection moved
-    // in-tree. Rank 1 is kept away from the SFPU engine in
-    // select_argmax_engine, not here.
+    // Rank 1 IS served, by the RVV path: both accelerated program factories
+    // fold it to h_logical == 1, so a rank-1 [V] input produces exactly the
+    // compile-time arguments of a [1, 1, 1, V] one, and only the accelerated
+    // paths can fill a max-value output for it. Rank 1 is kept away from the
+    // SFPU path in select_argmax_path, not here.
     if (rank < 1) {
         return false;
     }
@@ -199,18 +192,12 @@ bool accelerated_engines_can_serve(
         return false;
     }
     // The accelerated readers page their writes off the preallocated output, so
-    // a prealloc whose logical shape is not the reduction output shape would
-    // leave results unwritten or write past the tensor's page count.
-    //
-    // The scalar readers do NOT handle such a prealloc correctly either. They
-    // page off the reduction output shape and ignore the prealloc's own, so
-    // they are right exactly when the prealloc's TRAILING dim matches, and
-    // silently short-write otherwise. Measured on Blackhole, input
-    // [1, 1, 32, 2048] with keepdim = false (output shape [1, 1, 32]): a
-    // [1, 1, 32, 1] prealloc comes back with element 0 correct and the other
-    // 31 left at zero, while [32], [1, 32] and [1, 1, 1, 32] -- same trailing
-    // dim, different rank -- all come back fully correct. Nothing here should
-    // be relied on: pass the reduction output shape.
+    // a prealloc whose logical shape is not the reduction output shape leaves
+    // results unwritten or writes past its page count. The scalar readers are
+    // no better -- they page off the reduction output shape and ignore the
+    // prealloc's own, silently short-writing when its TRAILING dim differs
+    // (Blackhole, [1, 1, 32, 2048], keepdim = false, [1, 1, 32, 1] prealloc:
+    // element 0 correct, the other 31 left at zero).
     //
     // This stays a demote rather than becoming a TT_FATAL because promoting it
     // would reject the mis-handled shapes on only this arch/layout/dtype/dim
@@ -226,7 +213,7 @@ bool accelerated_engines_can_serve(
 }
 
 // Valid rows per tile-row pass -- the H dim. This, not the reduction width, is
-// what separates the two accelerated engines (see select_argmax_engine).
+// what separates the two accelerated paths (see select_argmax_path).
 //
 // Rank 1 has no second-to-last dim and answers 1: its single logical row sits
 // in row 0 of one tile-row whose other 31 rows are padding. That is the same
@@ -239,25 +226,23 @@ uint32_t argmax_rows_per_tile_row(const Tensor& input) {
     return rank >= 2 ? logical_shape[rank - 2] : 1u;
 }
 
-// Smallest H at which the SFPU engine is MEASURED to win. See the table below.
+// Smallest H at which the SFPU path is MEASURED to win. See the table below.
 constexpr uint32_t kSfpuMinRows = 32;
 
 // HOW THE NUMBERS BELOW WERE TAKEN. Blackhole p150, 13x10 = 130-core compute
-// grid, last-dim argmax over a [1, 1, H, V] BFLOAT16 TILE input. Per-op
-// DEVICE time by trace replay: N back-to-back argmax ops are captured into
-// one trace, the trace is replayed, and the wall time is divided by N (min of
-// 3 replays). That is THROUGHPUT-mode timing -- per-op host dispatch is
-// amortized to nothing by construction -- so it is NOT the latency an
-// isolated eager caller sees, which the same benchmark measures separately at
-// 20-90 us higher. It is the right number for this decision because what is
-// being chosen is which engine costs the DEVICE less. Regenerate everything
-// here with tests/ttnn/unit_tests/operations/reduce/
-// _argmax_engine_crossover_bench.py.
+// grid, last-dim argmax over a [1, 1, H, V] BFLOAT16 TILE input. Per-op DEVICE
+// time by trace replay (N ops captured into one trace, wall time / N, min of 3
+// replays): THROUGHPUT-mode timing, so NOT the latency an isolated eager caller
+// sees, which the same benchmark reports separately at 20-90 us higher.
+// Regenerate with (the env gate is required: the benchmark's directory IS
+// collected by CI, and the gate is what keeps it from running there):
 //
-// The two engines are compared AT THE SAME CORE COUNT (pinned through
-// sub_core_grids), because otherwise the comparison is between two different
-// core-count heuristics rather than between two engines. Entries are
-// SFPU_time / RVV_time, so a value > 1 means RVV is faster:
+//   TTNN_RUN_ARGMAX_CROSSOVER_BENCH=1 pytest tests/ttnn/unit_tests/benchmarks/test_argmax_path_crossover_bench.py -s
+//
+// The two paths are compared AT THE SAME CORE COUNT (pinned through
+// sub_core_grids), or the comparison would be between two core-count
+// heuristics rather than between two paths. Entries are SFPU_time / RVV_time,
+// so a value > 1 means RVV is faster:
 //
 //   V         H     1 core   8 cores   32 cores   64 cores   111 cores
 //   32768     1     12.37x     5.88x      1.88x      1.00x       1.00x
@@ -267,73 +252,46 @@ constexpr uint32_t kSfpuMinRows = 32;
 //   262144    8      3.75x     3.18x      2.06x      1.57x       1.34x
 //   262144   32      0.95x     0.86x      0.81x      0.85x       0.94x
 //
-// Two things fall out of that table.
+// H is the discriminator, and at small H it is worth 3-14x: the SFPU pass is
+// flat in H (one core, V = 262144: 4875 / 4881 / 4911 us at H = 1 / 8 / 32)
+// while the per-ROW RVV scan measures 350 / 1302 / 5191 us at those same
+// points. The ratios decay toward 1 as cores are added because both paths
+// converge on a shared ~0.44 us/core per-program dispatch floor -- at 111 cores
+// the four V = 32768, H in {1, 8} points all land between 50.6 and 50.9 us --
+// so a comparison read only at the top of the grid measures that floor, not the
+// paths. That floor also makes both paths scale NEGATIVELY past their knee (RVV
+// at V = 32768, H = 1: 12.1 us on 16 cores, 50.6 us on 111), which is why each
+// factory picks a core count rather than taking the grid.
 //
-// (1) H is the discriminator, and at small H it is worth 3-14x. The SFPU
-//     recipe reduces all 32 rows of a tile-row in one lane-parallel pass, so
-//     its cost is nearly FLAT in H: at 1 core, V = 262144, it measures 4875 us
-//     at H = 1, 4881 us at H = 8 and 4911 us at H = 32 -- a 0.7% spread across
-//     a 32x change in real work. The RVV scan is per ROW, and at the same
-//     three points measures 350 / 1302 / 5191 us. So at small H the SFPU is
-//     paying for 32 lanes to serve a handful of real rows; by H = 32 every
-//     lane is doing useful work and it is at worst even.
-//
-// (2) The ratios decay toward 1 as cores are added because BOTH engines
-//     converge on a shared per-program dispatch floor of ~0.44 us per core
-//     (the slope of every curve past its knee). At 111 cores the four
-//     V = 32768, H in {1, 8} points -- two engines over two very different
-//     workloads -- all land between 50.6 and 50.9 us, and the H = 32 pair
-//     costs MORE than that, not less. A comparison read only at the top of
-//     the grid measures
-//     that floor, not the engines. The same floor makes both engines scale
-//     NEGATIVELY past their knee (RVV at V = 32768, H = 1: 12.1 us on 16
-//     cores, 50.6 us on 111), which is why each factory picks a core count
-//     rather than taking the grid.
-//
-// WHY 32, and where it is wrong. The boundary is mildly V-DEPENDENT, so no
+// WHY 32, and where it is wrong: the boundary is mildly V-DEPENDENT, so no
 // H-only rule is right everywhere. H = 1 and H = 8 never lose on RVV at any
-// core count up to 64, at either V, and at the low core counts a fused
-// epilogue can actually afford they win by 1.9x-13.9x. H = 32 is the case that
-// splits: comparing each engine at the core count its own factory picks, at
-// V = 32768 RVV still edges the SFPU (84.6 us on 63 cores vs 87.0 us on 40 --
-// RVV 1.03x) while at V = 262144 the SFPU wins (215.2 us on 130 cores vs
-// 203.8 us on 111 -- RVV 0.95x). 32 is chosen as the simple H-only boundary
-// that gets both large-V cases right in the direction that matters: every H
-// below it goes to RVV, where the margin is large and unambiguous, and
-// H >= 32 goes to the SFPU, which is correct at the larger V and gives up
-// about 3% at the smaller one. Buying that 3% back would take a V-dependent
-// rule, and the SFPU side of it is the side that diverges on special values.
+// core count up to 64, at either V. H = 32 is the case that splits -- comparing
+// each path at the core count its own factory picks, V = 32768 is a narrow RVV
+// win (84.6 us on 63 cores vs 87.0 us on 40) and V = 262144 an SFPU win
+// (215.2 us on 130 cores vs 203.8 us on 111). 32 keeps every unambiguous case
+// on RVV and gives up about 3% at V = 32768; buying that back would take a
+// V-dependent rule, and the SFPU is the side that diverges on special values.
 // The SFPU also reaches its H = 32 result on FEWER cores (40 vs 63 at
-// V = 32768, 111 vs 130 at V = 262144), which is what a fused epilogue
-// sharing the grid with a matmul actually has to budget.
-//
-// The previous boundary of 8 came from a table that has since been shown to
-// compare a SINGLE-CORE RVV against a MULTICORE SFPU: its RVV column (192 us
-// at V = 32768 H = 8, 5275 us at V = 262144 H = 32) reproduces today's
-// ONE-CORE RVV measurements (198 us and 5191 us), not the multicore ones
-// (26 us and 216 us). Its SFPU column, by contrast, is multicore and still
-// reproduces (35 us and 190 us vs 38 us and 204 us today). Against today's
-// multicore RVV, H = 8 is not an SFPU win at ANY core count in the sweep.
-ArgMaxEngine select_argmax_engine(
+// V = 32768, 111 vs 130 at V = 262144), which is what a fused epilogue sharing
+// the grid with a matmul has to budget.
+ArgMaxPath select_argmax_path(
     const Tensor& input,
     const std::optional<int>& dim,
     bool keepdim,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     bool exact_special_values) {
-    if (!accelerated_engines_can_serve(input, dim, keepdim, output_memory_config, optional_output_tensor)) {
-        return ArgMaxEngine::Incumbent;
+    if (!accelerated_paths_can_serve(input, dim, keepdim, output_memory_config, optional_output_tensor)) {
+        return ArgMaxPath::ScalarReader;
     }
 
-    // Both accelerated engines split the reduction dim's tiles across cores
-    // and honour any sub_core_grids the caller supplies, so the grid no longer
-    // constrains the choice -- it is purely the H comparison below. (It used
-    // to: the RVV engine was pinned to core (0, 0) and a grid excluding it had
-    // to be handed to the SFPU.)
+    // Both accelerated paths split the reduction dim's tiles across cores and
+    // honour any sub_core_grids the caller supplies, so the grid does not
+    // constrain the choice -- it is purely the H comparison below.
     //
-    // The SFPU engine's special-value divergence is documented and measured,
-    // but it is still a divergence: a caller that asked for the scalar
-    // readers' exact behaviour must never be routed to it.
+    // The SFPU path's special-value divergence is documented and measured, but
+    // it is still a divergence: a caller that asked for the scalar readers'
+    // exact behaviour must never be routed to it.
     //
     // The `rank >= 2` term is redundant today -- argmax_rows_per_tile_row
     // answers 1 for rank 1, which cannot clear kSfpuMinRows -- and is kept only
@@ -345,12 +303,12 @@ ArgMaxEngine select_argmax_engine(
     const bool sfpu_can_serve = !exact_special_values && rank >= 2;
 
     if (sfpu_can_serve && argmax_rows_per_tile_row(input) >= kSfpuMinRows) {
-        return ArgMaxEngine::Sfpu;
+        return ArgMaxPath::Sfpu;
     }
     // Everything else the accelerated preconditions admit goes to RVV: it
     // serves every rank >= 1, every grid, and is bit-identical to the scalar
-    // readers, so there is no case left for a demotion to the incumbent here.
-    return ArgMaxEngine::Rvv;
+    // readers, so there is no case left for a demotion here.
+    return ArgMaxPath::Rvv;
 }
 
 }  // namespace
@@ -392,9 +350,9 @@ static Tensor zero_volume_argmax(
 namespace {
 
 // The whole of ttnn::argmax, plus a hook for the verification-only forced
-// entries (argmax_force.hpp). `forced_engine` is std::nullopt for every public
-// call: the engine is then chosen by select_argmax_engine and nothing else in
-// the op revisits that decision.
+// entries (argmax_force.hpp). `forced_path` is std::nullopt for every public
+// call: the path is then chosen by select_argmax_path and nothing else in the
+// op revisits that decision.
 Tensor argmax_impl(
     const Tensor& input_tensor,
     const std::optional<int>& dim,
@@ -404,7 +362,7 @@ Tensor argmax_impl(
     std::optional<Tensor> optional_output_tensor,
     std::optional<Tensor> optional_maxval_tensor,
     bool exact_special_values,
-    std::optional<ArgMaxEngine> forced_engine) {
+    std::optional<ArgMaxPath> forced_path) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
@@ -432,12 +390,12 @@ Tensor argmax_impl(
         }
     }
 
-    // Engine choice happens here, once, and only after the dim has been range
-    // checked (select_argmax_engine normalizes it against the rank).
-    const ArgMaxEngine engine =
-        forced_engine.has_value()
-            ? forced_engine.value()
-            : select_argmax_engine(
+    // The path is chosen here, once, and only after the dim has been range
+    // checked (select_argmax_path normalizes it against the rank).
+    const ArgMaxPath path =
+        forced_path.has_value()
+            ? forced_path.value()
+            : select_argmax_path(
                   input_tensor, dim, keepdim, output_memory_config, optional_output_tensor, exact_special_values);
 
     // The maxval contract check must precede the zero-volume and rank-0 early
@@ -445,16 +403,16 @@ Tensor argmax_impl(
     // maxval_tensor must fail loudly rather than silently no-op through the
     // host-side fallback, which would leave that tensor untouched (stale).
     TT_FATAL(
-        !optional_maxval_tensor.has_value() || engine != ArgMaxEngine::Incumbent,
-        "argmax: the max-value output tensor (maxval_tensor) is only produced by the accelerated engines, and this "
-        "call was routed to the scalar reader path. Those engines require a Blackhole device, a BFLOAT16 TILE-layout "
+        !optional_maxval_tensor.has_value() || path != ArgMaxPath::ScalarReader,
+        "argmax: the max-value output tensor (maxval_tensor) is only produced by the accelerated paths, and this "
+        "call was routed to the scalar reader path. Those paths require a Blackhole device, a BFLOAT16 TILE-layout "
         "input of rank >= 1 in INTERLEAVED memory, an explicit last-dim reduction, standard 32x32 tiles, a reduction "
         "dim that is a multiple of 32, an INTERLEAVED output, and (if a preallocated output tensor is supplied) that "
         "its logical shape is the reduction output shape. Drop maxval_tensor, or use ttnn.max separately.");
-    if (engine != ArgMaxEngine::Incumbent) {
+    if (path != ArgMaxPath::ScalarReader) {
         TT_FATAL(
             rank > 0 && input_tensor.logical_volume() > 0,
-            "argmax: the accelerated engines support only non-empty tensors of rank >= 1 (got rank {}, logical "
+            "argmax: the accelerated paths support only non-empty tensors of rank >= 1 (got rank {}, logical "
             "volume {})",
             rank,
             input_tensor.logical_volume());
@@ -498,19 +456,19 @@ Tensor argmax_impl(
         return preallocated_tensor;
     }
 
-    // Accelerated engines: TILE-layout last-dim argmax (Blackhole). Both take
+    // Accelerated paths: TILE-layout last-dim argmax (Blackhole). Both take
     // TILE input DIRECTLY -- no to_layout / untilize hop -- and optionally
     // return the max values alongside the indices. Rvv scans on the pack
-    // RISC's vector unit, one row at a time (the engine at H == 1); Sfpu
-    // reduces all 32 rows of each tile-row in one lane-parallel pass (flat in
-    // H, the batch-shape engine). Both split the reduction dim across cores.
+    // RISC's vector unit, one row at a time (the path at H == 1); Sfpu reduces
+    // all 32 rows of each tile-row in one lane-parallel pass (flat in H, the
+    // batch-shape path). Both split the reduction dim across cores.
     // Eligibility is re-checked by the device op.
-    if (engine != ArgMaxEngine::Incumbent) {
+    if (path != ArgMaxPath::ScalarReader) {
         // The reader kernel derives its output paging from the preallocated
         // tensor, so a wrong logical shape means unwritten results or writes
         // past the tensor's page count -- reject it up front. Automatic
-        // dispatch demotes such a call to the incumbent instead of reaching
-        // here; a forced engine has to be told no.
+        // dispatch demotes such a call to the scalar readers instead of
+        // reaching here; a forced path has to be told no.
         if (optional_output_tensor.has_value()) {
             const auto expected_shape = ttnn::Shape(ttnn::prim::get_output_shape(input_tensor, dim, keepdim));
             TT_FATAL(
@@ -527,7 +485,7 @@ Tensor argmax_impl(
             sub_core_grids,
             output_memory_config,
             std::move(optional_output_tensor),
-            engine,
+            path,
             std::move(optional_maxval_tensor));
     }
 
@@ -585,15 +543,15 @@ Tensor argmax(
         std::move(optional_output_tensor),
         std::move(optional_maxval_tensor),
         exact_special_values,
-        /*forced_engine=*/std::nullopt);
+        /*forced_path=*/std::nullopt);
 }
 
 namespace operations::reduction::detail {
 
 // Verification-only; see argmax_force.hpp for why these exist and why they do
-// not fall back. exact_special_values is irrelevant once the engine is pinned.
+// not fall back. exact_special_values is irrelevant once the path is pinned.
 
-Tensor argmax_force_incumbent(
+Tensor argmax_force_scalar_reader(
     const Tensor& input_tensor,
     const std::optional<int>& dim,
     bool keepdim,
@@ -610,7 +568,7 @@ Tensor argmax_force_incumbent(
         std::move(optional_output_tensor),
         std::move(optional_maxval_tensor),
         /*exact_special_values=*/false,
-        prim::ArgMaxEngine::Incumbent);
+        prim::ArgMaxPath::ScalarReader);
 }
 
 Tensor argmax_force_rvv(
@@ -630,7 +588,7 @@ Tensor argmax_force_rvv(
         std::move(optional_output_tensor),
         std::move(optional_maxval_tensor),
         /*exact_special_values=*/false,
-        prim::ArgMaxEngine::Rvv);
+        prim::ArgMaxPath::Rvv);
 }
 
 Tensor argmax_force_sfpu(
@@ -650,7 +608,7 @@ Tensor argmax_force_sfpu(
         std::move(optional_output_tensor),
         std::move(optional_maxval_tensor),
         /*exact_special_values=*/false,
-        prim::ArgMaxEngine::Sfpu);
+        prim::ArgMaxPath::Sfpu);
 }
 
 }  // namespace operations::reduction::detail

@@ -26,7 +26,7 @@ struct ArgMaxMultiCoreProgramFactory {
 // TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
 // (Blackhole). Single- or multi-core (the reduction dim's tiles are split
 // across cores); returns indices and (optionally) max values.
-// Selected by ArgMaxEngine::Rvv -- see select_argmax_engine in argmax.cpp.
+// Selected by ArgMaxPath::Rvv -- see select_argmax_path in argmax.cpp.
 struct ArgMaxRvvTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
@@ -42,8 +42,8 @@ struct ArgMaxRvvTileProgramFactory {
 // compares — no cross-core tile reduce). Returns indices and (optionally)
 // max values. Semantics are IEEE-compare behind the SFPU's bf16
 // special-value gasket, documented in detail in
-// kernels/argmax_sfpu_tile_compute.cpp. Selected by ArgMaxEngine::Sfpu -- see
-// select_argmax_engine in argmax.cpp.
+// kernels/argmax_sfpu_tile_compute.cpp. Selected by ArgMaxPath::Sfpu -- see
+// select_argmax_path in argmax.cpp.
 struct ArgMaxSfpuTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
@@ -77,7 +77,7 @@ ttnn::Tensor argmax(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
-    ArgMaxEngine engine = ArgMaxEngine::Incumbent,
+    ArgMaxPath path = ArgMaxPath::ScalarReader,
     std::optional<ttnn::Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -38,26 +38,26 @@
 // RISC (reader_argmax_sfpu_tile.cpp). Phase 2 is O(32) per row vs phase 1's
 // O(32 * w_count) per lane, so it amortizes to noise for large widths.
 //
-// SEMANTICS (documented divergence from the incumbent scalar TILE reader;
+// SEMANTICS (documented divergence from the scalar TILE reader;
 // all silicon-measured on Blackhole, planted special-value probes):
 //   The pipeline is IEEE-compare-on-fp32 behind a bf16 special-value gasket:
 //   * NaN behaves as SAME-SIGNED INFINITY end-to-end. A qNaN anywhere in the
-//     row WINS the argmax (same index the incumbent reports for single-NaN
+//     row WINS the argmax (same index the scalar readers report for single-NaN
 //     rows) but the max-value output reads 0x7F80 (+inf), not the NaN
 //     payload; -NaN acts as -inf and never wins. A row holding both a +inf
 //     and a later NaN reports the +inf's index (they tie as +inf; the
-//     incumbent's bit-pattern order picks the NaN).
+//     scalar readers' bit-pattern order picks the NaN).
 //   * -0 flushes to +0 in the value output; +0/-0 compare equal, so the
-//     FIRST zero's index is kept (the incumbent's total order prefers a
+//     FIRST zero's index is kept (the scalar readers' total order prefers a
 //     later +0 over an earlier -0).
-//   * Denormals flush to zero before the compare (the incumbent ranks them
+//   * Denormals flush to zero before the compare (the scalar readers rank them
 //     normally) — same family as the known Blackhole eltwise min-normal
 //     flush behavior.
 //   * The max-value output carries a +2^-127 additive pack bias, visible
 //     only when the winner's magnitude is below ~2^-118; compare order and
 //     the index are unaffected.
 //   Everything finite and normal — including every exact tie — matches the
-//   incumbent's bfloat16_greater + smallest-index semantics bit-for-bit:
+//   scalar readers' bfloat16_greater + smallest-index semantics bit-for-bit:
 //   strict-gt per lane keeps the lowest tile, and phase 2's lexicographic
 //   rule keeps the lowest global index across columns (and cores).
 //   PRECEDENT: ttnn.argmax already ships this divergence class between its
