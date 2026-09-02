@@ -56,17 +56,36 @@ struct Msg {
 };
 static_assert(sizeof(Msg) == 16, "Msg must match the 16 B eth packet");
 
+// Poll-cadence self-measurement, published by the hook once per deadline expiry. The gap between
+// prescaler expiries IS the responder's doorbell-notice granularity (the fast-doorbell path runs
+// once per expiry), so this measures directly what the sample-0 wait distribution only implies:
+// on the chip-3 links that distribution fits a ~330 us notice period against ~33 us on healthy
+// links, and this decides "the responder polls that rarely" vs "the ping itself arrives late".
+// min/max are saturating 32-bit cycle counts; mean is derived host-side as (last-first)/cnt.
+struct GapStats {
+    uint32_t min_cy;    // smallest expiry-to-expiry gap seen (0 until 2 expiries happen)
+    uint32_t max_cy;    // largest
+    uint32_t cnt;       // gaps accumulated (expiries - 1)
+    uint32_t first_lo;  // wall clock at the first expiry, 64-bit split
+    uint32_t first_hi;
+    uint32_t last_lo;  // wall clock at the most recent PUBLISHED expiry
+    uint32_t last_hi;
+    uint32_t pad;  // keep the block 16 B-granular like everything around it
+};
+
 // The hook's L1 block (kernel .bss on the device; address published via kScratchBlkWord).
 struct Blk {
-    Cfg cfg;   // +0   host-written
-    Msg ping;  // +32  initiator -> responder (sample i request; ping 0 is the round doorbell)
-    Msg echo;  // +48  responder -> initiator (sample i acknowledgement)
-    Msg tx;    // +64  local staging for outbound eth sends (never a remote-write target)
+    Cfg cfg;       // +0   host-written
+    Msg ping;      // +32  initiator -> responder (sample i request; ping 0 is the round doorbell)
+    Msg echo;      // +48  responder -> initiator (sample i acknowledgement)
+    Msg tx;        // +64  local staging for outbound eth sends (never a remote-write target)
+    GapStats gap;  // +80  hook-published poll-cadence stats, host-read at teardown
 };
 constexpr uint32_t kPingOff = 32;
 constexpr uint32_t kEchoOff = 48;
 constexpr uint32_t kTxOff = 64;
-static_assert(sizeof(Blk) == 80, "Blk layout is shared with the host config writer");
+constexpr uint32_t kGapOff = 80;
+static_assert(sizeof(Blk) == 112, "Blk layout is shared with the host config writer AND the EDM builder's carve");
 
 // ---- message tags -------------------------------------------------------------------------------
 // [31:25] kind, [24:8] round (17 bits, same width as PP_SYNC's round field), [7:0] sample idx.

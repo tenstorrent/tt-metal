@@ -6685,3 +6685,64 @@ free. Prediction if "notice": slow-link responders show ~300+ us expiry gaps (th
 its base-FW yield runs that rarely); if gaps are ~33 us everywhere, the ping itself arrives late
 (link-level transit) despite clean counters. Both ends of one physical link sharing the behavior
 suggests link-attached state either way.
+
+---
+
+## SOLVED: "why is chip 3 so bad" — it never was. A per-link PHASE LOTTERY on a ~203 us poll grid
+
+New instrument: `GapStats` in the shared `Blk` (+80, carve grown 96 -> sizeof-derived 112 — it was
+a literal that would have let the stats scribble over the first channel buffer), tracked at every
+prescaler expiry where `now64()` is already in hand (free), published once per deadline expiry,
+read at teardown as `FSYNC POLL-GAP` with a built-in consistency check against 2x rtt0.
+
+### The direct measurement refuted BOTH predicted outcomes
+Predicted: ~33 us poll period on fast links / ~330 us on slow ones (from the wait distributions),
+OR ~33 us everywhere (=> late ping transit). Measured at mask 63:
+
+    every lane, all 8 ends, fast and slow alike:  mean gap 273.3-274.0k cy = 202.6 us
+    (min ~272.7k tight; 4272 cy per router iteration x 64 iterations)
+
+The "per-link poll period" inference was WRONG — the uniform-phase model behind it predicts a
+~101 us mean wait and 75% wide zones on EVERY link; fast links show 16.7 us and 0.4%.
+
+### The model that fits everything: the two ends are PHASE-LOCKED
+Both routers' expiry periods are identical (same loop, same mask), so the relative phase between
+the initiator's round-fire and the responder's next doorbell check is FROZEN per boot. Sample-0
+waits sit at that per-link constant delta, not uniform in [0,P). Chip-3's links drew
+delta ~160-190 us; the others ~16 us. One mechanism, all observations at once: per-link constancy
+(~2% across reps — the launch order is deterministic, so the same delta every boot; 9-run
+reproducibility was phase determinism, not silicon), uniformity in time, both-ends symmetry,
+traffic independence, clean retrain/port/pcs counters, and the occasional sub-us sample-0
+(transient phase slips — max gaps of 0.8-1.6M cy are exactly such stalls).
+
+### Falsification run: mask 63 -> 15 (env-only, JIT re-keys)
+Prediction: poll period /4, chip-3 links re-draw their phase. Measured:
+
+| lane gap (mean)     | mask 63    | mask 15                |
+|---------------------|------------|------------------------|
+| every lane          | 202.6 us   | 50.6-50.7 us (exact /4; 4272 cy/iter invariant) |
+
+| edge  | rtt0 mean, mask 63 | rtt0 mean, mask 15 |
+|-------|--------------------|--------------------|
+| 0->1  | ~25k cy            | 21.6k              |
+| 1->2  | ~19k cy            | 13.2k              |
+| 3->0  | **~220k cy**       | **8.3k — now the FASTEST link on the box** |
+| 2->3  | **~259k cy**       | 62.9k (a fresh draw near the new period's top) |
+
+Every rtt0 mean now < P. "Every link touching chip 3 is slow" is dead — it was a coincidence of
+deterministic phase draws at mask 63. Nothing is wrong with chip 3.
+
+### Costs and levers
+- Geomean 1.0060 (mask 63, instrumented) vs 1.0100 (mask 15), 0 golden failures both — n=1 each,
+  inside this harness's noise; no bandwidth cost detected from either the instrument or mask 15.
+- **Lever, not flipped:** PRESCALER_MASK=15 caps the doorbell-notice period at ~51 us (worst-case
+  sample-0 wait ~= one period) for 4x the (tiny) expiry-path cost. Default stays 63 pending a
+  proper repeated A/B; the env knob is `TT_METAL_PERF_DEBUG_FABRIC_SYNC_PRESCALER_MASK`.
+- The blocked-router cost of a round is now dominated by delta (the phase draw), bounded by P.
+  Capping P caps the worst link. The 1.55 ms first_wait tail remains theoretical headroom, never
+  approached now that notice is expiry-granular.
+
+### Method note
+The consistency check ("does 2x rtt0 equal the measured mean gap?") is what exposed the wrong
+model — fast links printed 45k vs 273k. An instrument that carries its own cross-check converts a
+wrong inference into a finding instead of a buried assumption.

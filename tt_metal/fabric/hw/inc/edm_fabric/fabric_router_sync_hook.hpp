@@ -75,6 +75,13 @@ using namespace tt::tt_fabric::router_sync;
 
 // Private state: RISC-local memory (fast, and correctly NOT shared with anyone).
 inline uint32_t g_prescaler = 0;
+// Poll-cadence self-measurement (see GapStats in the shared header): local-memory accumulators,
+// sampled at every prescaler expiry where now64() is already in hand, so the measurement is free.
+inline uint64_t g_gap_last = 0;
+inline uint64_t g_gap_first = 0;
+inline uint32_t g_gap_min = 0xFFFFFFFFu;
+inline uint32_t g_gap_max = 0;
+inline uint32_t g_gap_cnt = 0;
 // Latched sample count for a configured RESPONDER, 0 otherwise. Set from the host config on the
 // deadline path; the doorbell fast path below reads only this, so it never touches cfg L1.
 inline uint32_t g_responder_n = 0;
@@ -309,12 +316,38 @@ inline void poll() {
         }
 #endif
         const uint64_t now = now64();
+        // Gap tracking BEFORE the deadline early-return: every expiry contributes, not just the
+        // ones that cross a deadline. now is already in hand; this is ~6 instructions.
+        if (g_gap_last != 0) {
+            const uint64_t gap = now - g_gap_last;
+            const uint32_t g32 = gap > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(gap);
+            if (g32 < g_gap_min) {
+                g_gap_min = g32;
+            }
+            if (g32 > g_gap_max) {
+                g_gap_max = g32;
+            }
+            ++g_gap_cnt;
+        } else {
+            g_gap_first = now;
+        }
+        g_gap_last = now;
         if (now < g_deadline) [[likely]] {
             return;
         }
         // Deadline: consult the host-writable L1 config -- the only L1 the hook reads between rounds.
         volatile Blk* b = blk<BLK>();
         invalidate_l1_cache();
+        // Publish the poll-cadence stats once per deadline expiry (>= the sync interval apart):
+        // 7 L1 stores, read by the host at teardown. Published even when unconfigured -- the host
+        // only reads lanes it configured.
+        b->gap.min_cy = g_gap_min == 0xFFFFFFFFu ? 0u : g_gap_min;
+        b->gap.max_cy = g_gap_max;
+        b->gap.cnt = g_gap_cnt;
+        b->gap.first_lo = static_cast<uint32_t>(g_gap_first);
+        b->gap.first_hi = static_cast<uint32_t>(g_gap_first >> 32);
+        b->gap.last_lo = static_cast<uint32_t>(g_gap_last);
+        b->gap.last_hi = static_cast<uint32_t>(g_gap_last >> 32);
         if (b->cfg.magic != kCfgMagic || (b->cfg.flags & kFlagEnabled) == 0) {
             publish_state(1);  // unconfigured / disabled by flags
             g_responder_n = 0;  // disarm the doorbell fast path with the rest of the hook

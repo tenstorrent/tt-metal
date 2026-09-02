@@ -9,6 +9,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
+#include "hostdevcommon/fabric_router_sync.h"
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
@@ -327,7 +328,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // memory, which neither the host, the peer router, nor the local TXQ engine can reach. Carved
     // unconditionally (96 B) so the channel layout never depends on a profiler env var.
     this->sync_blk_address = edm_status_address + field_size;
-    uint32_t buffer_address = static_cast<uint32_t>(this->sync_blk_address) + 96;
+    // Carve exactly what the shared Blk needs (16 B-rounded). This was a literal 96 while
+    // sizeof(Blk) was 80; when GapStats grew Blk to 112 the literal would have silently let the
+    // hook scribble its stats over the first channel buffer.
+    uint32_t buffer_address =
+        static_cast<uint32_t>(this->sync_blk_address) + ((sizeof(tt::tt_fabric::router_sync::Blk) + 15u) & ~15u);
 
     // ----------- Sender Channels
     for (uint32_t i = 0; i < num_sender_channels; i++) {

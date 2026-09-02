@@ -3544,6 +3544,53 @@ void PerfDebugProfiler::stop_fabric_sync() {
             stat_r >> 8,
             stat_r & 0xFF,
             e.in_tree ? "" : " [closure]");
+        // POLL-GAP: the hook's own poll-cadence measurement, both ends (GapStats, shared header).
+        // The consistency check prints alongside: if the responder's MEAN gap ~= 2x its link's
+        // rtt0 mean, the sample-0 wait IS the doorbell-notice period (responder polls that
+        // rarely); if the mean gap is far smaller, the ping itself arrived late (wire/TXQ side).
+        try {
+            using tt::tt_fabric::router_sync::GapStats;
+            using tt::tt_fabric::router_sync::kGapOff;
+            auto rdgap = [&](uint32_t chip, const CoreCoord& virt, uint32_t blk_addr, GapStats& g) {
+                cluster.read_core(&g, sizeof(g), tt_cxy_pair(chip, virt), blk_addr + kGapOff);
+            };
+            GapStats gi{};
+            GapStats gr{};
+            rdgap(e.init.chip, e.init.virt, e.init.blk_addr, gi);
+            rdgap(e.resp.chip, e.resp.virt, e.resp.blk_addr, gr);
+            auto mean_cy = [](const GapStats& g) -> uint64_t {
+                if (g.cnt == 0) {
+                    return 0;
+                }
+                const uint64_t first = (static_cast<uint64_t>(g.first_hi) << 32) | g.first_lo;
+                const uint64_t last = (static_cast<uint64_t>(g.last_hi) << 32) | g.last_lo;
+                return last > first ? (last - first) / g.cnt : 0;
+            };
+            const double f = root_freq_ghz_ > 0.0 ? root_freq_ghz_ : 1.35;  // cycles/ns
+            const uint64_t mi = mean_cy(gi);
+            const uint64_t mr = mean_cy(gr);
+            const uint64_t rtt0_mean = e.rtt0_n ? e.rtt0_sum / e.rtt0_n : 0;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] FSYNC POLL-GAP {}->{}: init n={} min/mean/max {}/{}/{} cy "
+                "(mean {:.1f} us) | resp n={} min/mean/max {}/{}/{} cy (mean {:.1f} us) | check: "
+                "2x rtt0 mean = {} cy vs resp mean gap {} cy",
+                e.init.chip,
+                e.resp.chip,
+                gi.cnt,
+                gi.min_cy,
+                mi,
+                gi.max_cy,
+                static_cast<double>(mi) / f / 1000.0,
+                gr.cnt,
+                gr.min_cy,
+                mr,
+                gr.max_cy,
+                static_cast<double>(mr) / f / 1000.0,
+                2 * rtt0_mean,
+                mr);
+        } catch (const std::exception&) {
+        }
         // LINK HEALTH on both ends, from the base-FW eth mailbox (the same reads as
         // print_aerisc_training_status, which llrt does not export). Motivated by the slow-doorbell
         // investigation: sample-0 stalls of ~200 us sit on specific PHYSICAL LINKS in either
