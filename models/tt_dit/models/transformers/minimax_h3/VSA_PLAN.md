@@ -195,8 +195,11 @@ granularity (256-token blocks -- amortizes every per-visit cost 4x, projected ~2
 quality tradeoff) or exp/fidelity relaxation (excluded as lossy).
 
 Lever sweep (2026-09-02), rows-per-pass vs stream depth (`TT_VSA_RMAX`/`TT_VSA_DEPTH` knobs):
-(15,14) 16.2/16.2 | (15,16) L1 overflow | (12,18) HANG (workers stuck in try_emit landed/kack
-check; not depth-monotonic, untested config, not shipped) | (10,20) 17.4/16.5 | (8,22) 19.4/17.6.
+(15,14) 16.2/16.2 | (15,16) L1 overflow | (12,18) HANG -> ROOT CAUSE: cb_corr was sized
+kRowGroup(8)*Sqt tiles but corr slots are indexed by a visit's position in its compute chunk, which
+holds up to half_slots (9 at depth 18) single-block visits -> out-of-bounds packs into the
+neighbouring CB (control-CB corruption -> deadlock). Fixed: cb_corr = max(kRowGroup, half_slots)*Sqt;
+(12,18) passes | (10,20) 17.4/16.5 | (8,22) 19.4/17.6.
 Trading resident rows for window depth is monotonically worse: the extra passes cost more than the
 wider batches return. Lever 1 closed at (15,14).
 

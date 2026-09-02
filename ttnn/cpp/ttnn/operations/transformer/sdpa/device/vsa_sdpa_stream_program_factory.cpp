@@ -206,7 +206,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(tile_bytes, rmax * out_tiles_per_row, bf);             // cb_o_res
     cb(tile_bytes, rmax * 2 * Sqt, bf);                       // cb_max_res
     cb(tile_bytes, rmax * 2 * Sqt, bf);                       // cb_sum_res
-    cb(tile_bytes, kRowGroup * Sqt, bf);                       // cb_corr
+    // corr slots are indexed by the visit's position in its compute chunk, and a chunk can hold up
+    // to half_slots single-block visits.
+    cb(tile_bytes, ((kRowGroup > stream_depth / 2) ? kRowGroup : stream_depth / 2) * Sqt, bf);  // cb_corr
     cb(tile_bytes, stream_depth * Skt * Sqt, bf);              // cb_qk (two ping-pong window regions)
     cb(tile_bytes, 1, bf);                                     // cb_scale
     cb(tile_bytes, 1, bf);                                     // cb_col_identity

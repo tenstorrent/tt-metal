@@ -114,7 +114,7 @@ void kernel_main() {
     ram(cb_sum_res, R_MAX * 2 * Sqt);
     ram(cb_o_res, R_MAX * Sqt * vDHt);
     ram(cb_qk, G * Sqt * Skt);
-    ram(cb_corr, G * Sqt);
+    ram(cb_corr, ((G > stream_depth / 2) ? G : stream_depth / 2) * Sqt);  // corr slot per chunk visit (<= half_slots)
     ram(cb_k_stream, stream_depth * k_tiles_per_block);
     ram(cb_v_stream, stream_depth * v_tiles_per_block);
     ram(cb_q_res, R_MAX * Sqt * DHt);
