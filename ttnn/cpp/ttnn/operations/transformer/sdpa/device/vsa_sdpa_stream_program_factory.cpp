@@ -343,8 +343,11 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         const tt::tt_metal::CoreCoord leader_phys = device->worker_core_from_logical_core(leader_logical);
         // The leader computes too (its K/V are local and its TRISCs are otherwise idle), so rows
         // are dealt over n_active workers PLUS the leader; the leader is consumer n_active.
-        // Consumer 0 always holds the most rows under chunk-cyclic dealing.
-        const uint32_t n_consumers = n_active + 1;
+        // Consumer 0 always holds the most rows under chunk-cyclic dealing. Small shapes are
+        // excluded: with few rows per consumer the leader's extra serial work outweighs its
+        // compute contribution (measured on the 5s/10s shards).
+        const bool leader_computes = n_q_tiles >= 20 * (n_active + 1);
+        const uint32_t n_consumers = n_active + (leader_computes ? 1u : 0u);
         uint32_t max_rows = 0;
         {
             const uint32_t nc = (n_q_tiles + kRowChunk - 1) / kRowChunk;
@@ -362,7 +365,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         const uint32_t n_chunks = (n_q_tiles + kRowChunk - 1) / kRowChunk;
         const uint32_t consumer_index = sched.is_leader ? n_active : sched.worker_index;
         uint32_t row_count = 0;
-        if (!is_idle) {
+        if (!is_idle && (leader_computes || !sched.is_leader)) {
             for (uint32_t c = consumer_index; c < n_chunks; c += n_consumers) {
                 const uint32_t c0 = c * kRowChunk;
                 row_count += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
