@@ -266,10 +266,19 @@ jobs:
       # (data_airflow dags/pipelines/llk_perf_run), which loads the file into
       # LLK_PERF.{RUNS,TEST_EXECUTIONS,MEASUREMENTS}. Another producer's writer
       # would put the file in a bucket where nothing reads it.
+      # Host and user are literals on purpose: neither is a credential, and the
+      # warehouse owner has to be able to read what we connect as. Only the key
+      # is a secret.
+      #
+      # The user is "llk-perf-run-writer", not "llk-perf-run". data_iac's
+      # aws_transfer_user sets user_name = "${block.name}-${block.permission}"
+      # (resources/aws_sftp/main.tf L127-134, comment: `user_name ex: cicd + "-"
+      # + reader`), so "llk-perf-run" is only the project tag. Both spellings
+      # are refused today; see the PR description.
       - name: Upload perf data
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/llk_perf_batchfile.txt
-          username: ${{ secrets.SFTP_LLK_PERF_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_LLK_PERF_WRITER_HOSTNAME }}
+          username: "llk-perf-run-writer"
+          hostname: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
