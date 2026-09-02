@@ -59,6 +59,9 @@ inline void llk_math_sub_bcast_cols_compensated_init(
 
 inline void llk_math_sub_bcast_cols_compensated(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
     const auto tensor_shape = get_operand_tensor_shape(get_operand_id(operandA));
     _llk_math_sub_bcast_cols_compensated_(ct_dim, tensor_shape, dst_index);
 }
