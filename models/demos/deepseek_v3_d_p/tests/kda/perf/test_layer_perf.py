@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -55,8 +55,9 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
-# Temporary impossible reference: the first hosted Galaxy run must emit samples and fail.
-_GALAXY_PERF_REFERENCE_MS = 0.0
+# Blackhole Galaxy SP8xTP4 calibration at c4f8ddd0e377 (2026-09-02): median
+# of five warm synchronized 10-replay samples on the high-power CI lane.
+_GALAXY_PERF_REFERENCE_MS = 3.963
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
@@ -216,19 +217,32 @@ def test_device_program_label_preserves_material_operation_identity() -> None:
     assert _device_program_label(()) == "unknown"
 
 
-def _assert_galaxy_performance(median_wall_ms: float) -> None:
-    lower = _GALAXY_PERF_REFERENCE_MS * (1.0 - _PERF_MARGIN)
-    upper = _GALAXY_PERF_REFERENCE_MS * (1.0 + _PERF_MARGIN)
+def _synthetic_perf_reference_ms(layout: str) -> float:
+    if layout == "SP8xTP4":
+        return _GALAXY_PERF_REFERENCE_MS
+    return _perf_reference_ms(layout)
+
+
+def _assert_synthetic_performance(layout: str, median_wall_ms: float) -> None:
+    reference_ms = _synthetic_perf_reference_ms(layout)
+    lower = reference_ms * (1.0 - _PERF_MARGIN)
+    upper = reference_ms * (1.0 + _PERF_MARGIN)
     assert lower <= median_wall_ms <= upper, (
-        f"SP8xTP4 median trace wall {median_wall_ms:.3f} ms is outside Galaxy range "
+        f"{layout} median trace wall {median_wall_ms:.3f} ms is outside performance range "
         f"[{lower:.3f}, {upper:.3f}] ms "
-        f"(reference {_GALAXY_PERF_REFERENCE_MS:.3f} ms ± {_PERF_MARGIN:.0%})"
+        f"(reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
     )
 
 
-def test_temporary_galaxy_reference_rejects_positive_latency(expect_error) -> None:
-    with expect_error(AssertionError, "outside Galaxy range"):
-        _assert_galaxy_performance(1.0)
+@pytest.mark.parametrize("layout", ["SP2xTP4", "SP8xTP4"])
+def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect_error) -> None:
+    monkeypatch.setenv("KDA_PERF_SKU", _PERF_SKU)
+    reference_ms = _synthetic_perf_reference_ms(layout)
+    _assert_synthetic_performance(layout, reference_ms)
+    with expect_error(AssertionError, "outside performance range"):
+        _assert_synthetic_performance(layout, reference_ms * 0.96)
+    with expect_error(AssertionError, "outside performance range"):
+        _assert_synthetic_performance(layout, reference_ms * 1.04)
 
 
 def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
@@ -498,23 +512,29 @@ def test_kimi_k3_layer_1_perf(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,tensor_parallel_axis,device_params",
     [
+        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
         pytest.param(
             (8, 4),
+            1,
             torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
-        )
+        ),
     ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 def test_synthetic_kimi_k3_perf(
     mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
     device_params: dict,
 ) -> None:
-    """Measure checkpoint-free production K3 latency and fail until its reference is calibrated."""
-    tensor_parallel_axis = 1
+    """Gate checkpoint-free production K3 latency on LoudBox and Galaxy."""
+    mesh_shape = tuple(mesh_device.shape)
+    sequence_parallel_axis = 1 - tensor_parallel_axis
+    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
+    reference_ms = _synthetic_perf_reference_ms(layout)
     case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
@@ -526,19 +546,19 @@ def test_synthetic_kimi_k3_perf(
     median_wall_ms = statistics.median(samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
-        "layout": "SP8xTP4",
+        "layout": layout,
         "sequence": _SEQUENCE,
         "weights": "deterministic synthetic",
         "repetitions": _REPETITIONS,
         "trace_wall_samples_ms": samples_ms,
         "median_trace_wall_ms": median_wall_ms,
         "timing_sample_count": _TIMING_SAMPLES,
-        "reference_trace_wall_ms": _GALAXY_PERF_REFERENCE_MS,
+        "reference_trace_wall_ms": reference_ms,
         "perf_margin_pct": _PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
     try:
-        _log_device_program_times(mesh_device, layer, hidden_tt, "SP8xTP4")
+        _log_device_program_times(mesh_device, layer, hidden_tt, layout)
     except Exception as error:
-        print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": "SP8xTP4", "error": str(error)}, sort_keys=True))
-    _assert_galaxy_performance(median_wall_ms)
+        print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
+    _assert_synthetic_performance(layout, median_wall_ms)
