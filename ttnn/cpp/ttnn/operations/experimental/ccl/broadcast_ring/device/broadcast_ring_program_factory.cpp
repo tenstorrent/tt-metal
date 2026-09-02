@@ -1,0 +1,172 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// broadcast_ring program factory. Per-device program for a one-sender, one-way, pipelined ring relay on
+// FABRIC_1D_RING. Framework structure mirrors ccl/broadcast; the fabric connection + route + semaphore RT
+// args are marked TODO(on-device) — adapt from ring_attention_all_gather_writer.cpp, which does the same
+// 1-hop unicast forward + atomic-inc on FABRIC_1D.
+
+#include "ttnn/operations/experimental/ccl/broadcast_ring/device/broadcast_ring_program_factory.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/global_semaphore.hpp"
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <numeric>
+
+namespace ttnn::prim {
+
+BroadcastRingProgramFactory::cached_mesh_workload_t BroadcastRingProgramFactory::create_mesh_workload(
+    const BroadcastRingParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const BroadcastRingInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+
+    // Per-chunk recv credits (upstream increments, this device waits) + a readiness barrier. Global
+    // semaphores so a neighbour on another device can atomic-inc them over the fabric.
+    auto recv_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program =
+            create_at(operation_attributes, coord, tensor_args, tensor_return_value, recv_semaphore, barrier_semaphore);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+}
+
+BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::create_at(
+    const BroadcastRingParams& operation_attributes,
+    const ttnn::MeshCoordinate& coord,
+    const BroadcastRingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const tt::tt_metal::GlobalSemaphore& recv_semaphore,
+    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto& output_tensor = tensor_return_value;
+    tt::tt_metal::Program program{};
+    auto* mesh_device = input_tensor.device();
+
+    const uint32_t ring_size = operation_attributes.ring_size;
+    const uint32_t ring_index =
+        ::ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, coord, operation_attributes.cluster_axis);
+
+    // Forward neighbour along the ring axis (Ring topology wraps last -> first, giving one-way coverage).
+    std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor, coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+    TT_FATAL(forward_coord.has_value(), "broadcast_ring needs a forward neighbour (Ring topology)");
+
+    // Role: sender reads local input; the final recipient (ring_size-1 hops from sender) does not forward.
+    const uint32_t hops_from_sender = (ring_index + ring_size - operation_attributes.sender_ring_index) % ring_size;
+    const bool is_last = hops_from_sender == ring_size - 1;
+
+    // Worker cores (1 per link).
+    const uint32_t num_workers_per_link = 1;
+    const auto [worker_core_range, worker_cores] = ::ttnn::ccl::choose_worker_cores(
+        operation_attributes.num_links,
+        num_workers_per_link,
+        mesh_device,
+        operation_attributes.sub_device_id,
+        CoreCoord(0, 0),
+        std::nullopt);
+
+    // Staging CB: depth >= 2-3 chunks so receive(k+1) overlaps forward(k). Page = input aligned page.
+    const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    // v1: one chunk = one packet's worth of pages; tune on-device for pipeline overlap vs overhead.
+    const uint32_t fabric_packet_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t chunk_num_pages = std::max<uint32_t>(1, fabric_packet_bytes / page_size);
+    const uint32_t num_chunks = (input_num_pages + chunk_num_pages - 1) / chunk_num_pages;
+    const uint32_t cb_depth_pages = 3 * chunk_num_pages;
+
+    const uint32_t cb_id = tt::CB::c_in0;
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto cb_config =
+        tt::tt_metal::CircularBufferConfig(cb_depth_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
+    CreateCircularBuffer(program, worker_core_range, cb_config);
+
+    // TODO(on-device): forward-neighbour fabric route args (dst_mesh_id, dst_chip_id) for the 1-hop
+    //   unicast. Derive from forward_coord via the fabric node id, as ring_attention_all_gather does.
+    const uint32_t fabric_route_arg0 = 0;  // placeholder
+    const uint32_t fabric_route_arg1 = 0;  // placeholder
+
+    std::vector<uint32_t> ct_args = {
+        ring_size,
+        operation_attributes.sender_ring_index,
+        ring_index,
+        num_chunks,
+        chunk_num_pages,
+        page_size,
+        cb_id,
+        fabric_route_arg0,
+        fabric_route_arg1,
+    };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
+
+    auto relay_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/broadcast_ring/device/kernels/broadcast_ring_relay.cpp",
+        worker_core_range,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = ct_args});
+
+    // Runtime args (per worker core). Buffer addresses + semaphore addresses + the fabric connection args.
+    // TODO(on-device): append the FabricConnectionManager args for the forward connection (only when this
+    //   device forwards, i.e. !is_last), mirroring ring_attention_all_gather_writer.cpp's arg layout, and
+    //   pass the downstream device's recv-semaphore + CB write addr for the completion atomic-inc + payload
+    //   target. override_runtime_arguments below refreshes the buffer addresses on cache hit.
+    for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+        const CoreCoord core = worker_cores[link];
+        std::vector<uint32_t> rt = {
+            input_tensor.buffer()->address(),
+            output_tensor.buffer()->address(),
+            recv_semaphore.address(),
+            recv_semaphore.address(),  // forward neighbour's recv-sem shares the same L1 offset (global sem)
+            // TODO(on-device): + fabric connection args here (built_from_args on the kernel side).
+        };
+        (void)is_last;
+        tt::tt_metal::SetRuntimeArgs(program, relay_kernel_id, core, rt);
+    }
+
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .worker_cores = worker_cores,
+            .relay_kernel_id = relay_kernel_id,
+            .recv_semaphore = recv_semaphore,
+            .barrier_semaphore = barrier_semaphore,
+            .ring_index = ring_index}};
+}
+
+void BroadcastRingProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const BroadcastRingParams& operation_attributes,
+    const BroadcastRingInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared = cached_workload.shared_variables.at(range);
+        auto& rt_by_core = tt::tt_metal::GetRuntimeArgs(program, shared.relay_kernel_id);
+        for (const auto& core : shared.worker_cores) {
+            auto& rt = rt_by_core[core.x][core.y];
+            rt[0] = tensor_args.input_tensor.buffer()->address();
+            rt[1] = tensor_return_value.buffer()->address();
+        }
+    }
+}
+
+}  // namespace ttnn::prim
