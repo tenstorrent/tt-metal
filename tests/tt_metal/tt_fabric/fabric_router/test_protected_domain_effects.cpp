@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression for the producer effect derivation that selects each sender's flow-control guard, per
-// GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 4.4, checked against the worked node tables in
-// its section 6.
+// Regression for the producer effect derivation that selects each sender's flow-control guard.
 //
 // The ladder is driven from the real derived ring topologies -- the same AxisRouteTopology state
 // the ControlPlane serves -- rather than hand-written predicate answers, so a disagreement between
 // the derivation and the ladder shows up here. The three ring queries are re-implemented over the
 // machine-free topology pair, mirroring ControlPlane::is_protected_ring_edge /
 // are_same_directed_ring_edges / continuation_allowed line for line; the ControlPlane versions
-// themselves are pinned CP-backed in test_axis_route_topology.cpp. Keeping this file machine-free
+// themselves are pinned CP-backed in test_express_ring_topology.cpp. Keeping this file machine-free
 // means the builder ladder runs in every environment.
 
 #include <gtest/gtest.h>
@@ -155,7 +153,7 @@ ProtectedRingQueries bind(const QuadGalaxy& fixture, uint32_t row) {
     return queries;
 }
 
-// --- Builder contract section 6.1: node Y=2, an ex4 express node ---
+// --- Node Y=2: an ex4 express node ---
 
 TEST(ProtectedDomainEffectsTest, Row2ExpressEgressCarriesBothRoles) {
     const QuadGalaxy fixture;
@@ -206,7 +204,7 @@ TEST(ProtectedDomainEffectsTest, Row2TurnOntoXAcquiresTheXRing) {
         ProtectedDomainEffect::REMAIN);
 }
 
-// --- Builder contract section 6.2: node Y=3, a leaf ---
+// --- Node Y=3: a leaf ---
 
 TEST(ProtectedDomainEffectsTest, LeafCardinalEgressIsNotRingAcquisition) {
     const QuadGalaxy fixture;
@@ -231,7 +229,7 @@ TEST(ProtectedDomainEffectsTest, LeafStillNeedsXRingGuards) {
         ProtectedDomainEffect::REMAIN);
 }
 
-// --- Builder contract section 6.3: cross-family turns ---
+// --- Cross-family turns ---
 
 TEST(ProtectedDomainEffectsTest, ContinueCrossoverEntersButLandOnlyIsNonCanonical) {
     const QuadGalaxy fixture;
@@ -310,9 +308,9 @@ TEST(ProtectedDomainEffectsTest, EffectNamesAreStable) {
 //
 // ExpressInjectionPolicy takes only bound facts (the ring predicates, the chip's capability set,
 // its Z port role), so the unified slot walk is drivable from the derived topologies without a
-// ControlPlane. The expected effects are the same section 6 worked tables asserted above; what
-// these cases add is the slot arithmetic around them: which producer lands on which channel, the
-// VC1 shift, the dimension-order skip, and the absent-direction skip.
+// ControlPlane. The expected effects are asserted above; these cases add the slot arithmetic around
+// them: which producer lands on which channel, the VC1 shift, the dimension-order skip, and the
+// absent-direction skip.
 
 TEST(ProtectedDomainEffectsTest, ExpressEgressFlagsLandOnTheirProducerSlots) {
     const QuadGalaxy fixture;

@@ -131,9 +131,9 @@ private:
         //     ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         static constexpr uint32_t MAX_1D_HOPS = 63;
 
-        // 2D: Max route buffer size (optimized to 67, fits in 128B header)
-        //     Each byte in route buffer encodes 1 hop, so MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE
-        //     67-byte buffer fits in 128B header (61B base + 67B buffer = 128B, zero padding waste)
+        // 2D: Max route-buffer size supported by the L1 memory map.
+        //     Action maps consume Y + X bytes; 60 B base + 67 B buffer rounds to a 128 B header.
+        //     MAX_2D_HOPS retains the legacy packet-sizing limit name but measures route-map bytes.
         static constexpr uint32_t MAX_2D_ROUTE_BUFFER_SIZE = 67;
         static constexpr uint32_t MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE;
     };
@@ -142,10 +142,10 @@ private:
     static constexpr uint32_t ROUTING_1D_HOPS_PER_WORD = 16;
 
     // 2D routing: buffer tiers optimized to maximize capacity per header size
-    // Header base = 61B, aligned to 16B boundaries
+    // Header base = 60 B, aligned to 16 B boundaries
     // Strategy: One tier per header size (max capacity) to avoid bloat
-    //   80B:  61+19=80  (max capacity)
-    //   96B:  61+35=96  (max capacity)
+    //   80 B: 60 + 20 = 80
+    //   96 B: 60 + 36 = 96
     // Fabric context automatically selects smallest header that fits required hop count
     struct Routing2DBufferTier {
         uint32_t max_hops;
