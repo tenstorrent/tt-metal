@@ -491,9 +491,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
                         .pool = pool,
                         .format = format});
             }
-            // A two-tile block on the column axis reduces each tile in place, so the golden checks
-            // BOTH tiles' outputs -- unlike the row axis, where only the first tile carries a result.
-            // That makes this the case that verifies a whole block is packed out, not just its head.
+            // Two tiles wide. Every tile keeps its own result on this axis, so the golden checks
+            // all of them -- making this the one case that would catch a block whose later tiles
+            // never got written out. The row cases cannot see that: a row result lives in the
+            // first tile alone, so they pass even if the rest of the block comes back empty.
             if (supports_multi_tile_block(format)) {
                 run_single_core_sfpu_reduce(
                     this->devices_.at(0),
