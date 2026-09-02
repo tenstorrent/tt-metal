@@ -556,7 +556,7 @@ def test_mtp_transformer_chunks(
             actual_end=start + real_len,
             cache_user_id=0,
             index_kv_cache=index_kv_cache,
-            mtp_tokens=stream,
+            mtp_token_stream=stream,
             on_mtp_complete=_on_mtp_complete,
         )
         ttnn.synchronize_device(mesh_device)

@@ -12,17 +12,19 @@ touch host memory. This module is the device twin -- same ``(k, H^k) -> embeddin
 
 Two things make that possible.
 
-**1. The overhang rides the trunk's own H2D row.** One socket delivers chip ``c`` the contiguous
-``[c*L, c*L + L + overhang)``, and the runner cuts it at ``L`` into the ``[1, 1, L]`` trunk the model
-has always been handed and the ``overhang`` ids that follow it. Because a chip's lookahead is the ids
-immediately past its OWN shard, MTP level ``k`` -- which wants position ``p + k`` on the row whose
-hidden sits at ``p`` -- reads the SAME local slice ``[k, k+L)`` on every chip. No SP ring-shift, no
-cross-chip rotation. See ``runner_utils.MTP_OVERHANG_ALIGN`` for why the overhang is a whole tile.
+**1. The MTP ids ride the trunk's own H2D row.** One socket delivers chip ``c`` the contiguous
+``[c*L, c*L + L + num_mtp_tokens)``, and the runner cuts it at ``L`` into the ``[1, 1, L]`` trunk the
+model has always been handed and the ``num_mtp_tokens`` ids that follow it. Because a chip's
+lookahead is the ids immediately past its OWN shard, MTP level ``k`` -- which wants position ``p + k``
+on the row whose hidden sits at ``p`` -- reads the SAME local slice ``[k, k+L)`` on every chip. No SP
+ring-shift, no cross-chip rotation. See ``runner_utils.MTP_TOKEN_ALIGN`` for why that count is a
+whole tile.
 
 **2. What crosses the D2D socket is the union EMBEDDING, not the ids.** The first rank gathers the
 two id tensors separately -- out of the table it already loads -- and ships both stacked under the
 hidden. The trunk gather is not extra work: its result IS this chunk's model input, so the whole
-union costs ``L + overhang`` gathered rows, not ``L`` for the model and another ``L + overhang`` for
+union costs ``L + num_mtp_tokens`` gathered rows, not ``L`` for the model and another
+``L + num_mtp_tokens`` for
 MTP. Downstream ranks slice their windows out of what arrived, so the
 LAST rank runs its levels with no embedding table at all (453.75 MiB/chip at GLM-5.2's 154880-entry
 vocab). ``slice(embed(ids)) == embed(slice(ids))`` row-for-row, so the two paths agree bit-exactly by
@@ -52,14 +54,14 @@ __all__ = ["MTPUnionEmbedding", "MTPDeviceEmbedSource", "MTPDeviceGeneration"]
 
 
 class MTPUnionEmbedding:
-    """One chunk's MTP source rows: the ``L + overhang`` embeddings covering this chip's trunk
-    positions and the ``overhang`` positions that follow them.
+    """One chunk's MTP source rows: the ``L + num_mtp_tokens`` embeddings covering this chip's trunk
+    positions and the ``num_mtp_tokens`` positions that follow them.
 
     Held as an ordered list of row BLOCKS rather than one tensor, because the two ranks that build it
     hold it differently and neither should pay a copy to look like the other:
 
-    * :meth:`from_ids` -- the FIRST rank, holding the trunk and overhang id tensors the H2D row was
-      cut into. It gathers each separately, so the blocks are ``[trunk, overhang]`` and
+    * :meth:`from_ids` -- the FIRST rank, holding the trunk and MTP id tensors the H2D row was
+      cut into. It gathers each separately, so the blocks are ``[trunk, mtp]`` and
       :attr:`trunk`, which is this chunk's model input, is the leading block at no cost.
     * :meth:`from_embedding` -- any downstream rank, holding the contiguous union that arrived packed
       under the hidden on the D2D socket. One block.
@@ -90,7 +92,7 @@ class MTPUnionEmbedding:
 
     @classmethod
     def from_ids(
-        cls, chunk_ids: ttnn.Tensor, overhang_ids: ttnn.Tensor, embed_fn, *, num_levels: int
+        cls, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor, embed_fn, *, num_levels: int
     ) -> "MTPUnionEmbedding":
         """Gather the union from the two id tensors the H2D row was cut into. Neither is consumed.
 
@@ -106,14 +108,14 @@ class MTPUnionEmbedding:
         """
         window_len = int(chunk_ids.shape[-1])
         return cls(
-            [embed_fn(chunk_ids), embed_fn(overhang_ids)],
+            [embed_fn(chunk_ids), embed_fn(mtp_ids)],
             num_levels=num_levels,
             window_len=window_len,
         )
 
     @classmethod
     def from_embedding(cls, embedding: ttnn.Tensor, num_levels: int, window_len: int) -> "MTPUnionEmbedding":
-        """Take ownership of a received union: ``[1, 1, window_len + overhang, H/tp]`` bf16 TILE."""
+        """Take ownership of a received union: ``[1, 1, window_len + num_mtp_tokens, H/tp]`` bf16 TILE."""
         return cls([embedding], num_levels=num_levels, window_len=window_len)
 
     @property
@@ -123,7 +125,7 @@ class MTPUnionEmbedding:
         return list(self._parts)
 
     @property
-    def overhang(self) -> int:
+    def num_mtp_tokens(self) -> int:
         """Rows the union holds past this chip's trunk shard: ``U - window_len``."""
         assert self._parts, "union embedding already deallocated"
         return sum(int(p.shape[-2]) for p in self._parts) - self.window_len
@@ -137,7 +139,7 @@ class MTPUnionEmbedding:
 
         Defined only on a :meth:`from_ids` union, where the trunk is a block in its own right. A
         received union is one contiguous tensor whose leading rows are not separable without a copy,
-        so this asserts rather than quietly hand back all ``L + overhang`` of them.
+        so this asserts rather than quietly hand back all ``L + num_mtp_tokens`` of them.
         """
         assert self._parts, "union embedding already deallocated"
         rows = int(self._parts[0].shape[-2])

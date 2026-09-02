@@ -118,55 +118,57 @@ def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
 
 TILE_HEIGHT = 32
 
-MTP_OVERHANG_ALIGN = TILE_HEIGHT
-"""Granularity of the MTP overhang, in ids. Three constraints meet here, and 32 is the smallest
+MTP_TOKEN_ALIGN = TILE_HEIGHT
+"""Granularity of the MTP token block, in ids. Three constraints meet here, and 32 is the smallest
 number satisfying all of them:
 
-* the H2D socket's page must be ``H2D_PAGE_ALIGNMENT_BYTES``-aligned, so ``L + overhang`` is a
+* the H2D socket's page must be ``H2D_PAGE_ALIGNMENT_BYTES``-aligned, so ``L + num_mtp_tokens`` is a
   multiple of 16 ids (16 * 4 B = 64 B);
-* the runner cuts the arriving row at ``L`` into the trunk and the overhang, and both cuts must land
-  on a page boundary too;
+* the runner cuts the arriving row at ``L`` into the trunk ids and the MTP ids, and both cuts must
+  land on a page boundary too;
 * the first rank embeds the two halves separately and stacks them, and a TILE row-concat needs BOTH
-  operands to be a whole number of 32-row tiles -- so ``overhang`` itself must be tile-aligned, not
-  just the sum.
+  operands to be a whole number of 32-row tiles -- so ``num_mtp_tokens`` itself must be tile-aligned,
+  not just the sum.
 
-With the production ``L = 640``: the trunk is 40 pages / 20 tiles, the overhang is 2 pages / 1 tile,
+With the production ``L = 640``: the trunk is 40 pages / 20 tiles, the MTP block is 2 pages / 1 tile,
 the socket row is 672 ids = 42 pages, and the union embedding is 21 tiles. No pad anywhere.
 
 That third constraint is what one widened row alone would not have given: 644 ids satisfies the page
-rules once rounded but leaves a 4-row overhang that cannot be tile-concatenated onto the trunk
-embedding without a pad. Rounding the overhang to a tile is what lets the union be built as two
+rules once rounded but leaves a 4-row MTP block that cannot be tile-concatenated onto the trunk
+embedding without a pad. Rounding the block to a tile is what lets the union be built as two
 gathers stacked rather than one gather over a re-joined id row -- see
 :meth:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows.MTPUnionEmbedding.from_ids`.
 """
 
 
-def mtp_overhang(mtp_levels: int) -> int:
-    """Ids past this chip's trunk shard that the H2D row carries: ``mtp_levels`` rounded up to
-    ``MTP_OVERHANG_ALIGN``. 0 when MTP is off.
+def num_mtp_tokens(mtp_levels: int) -> int:
+    """MTP lookahead ids the H2D row carries past this chip's trunk shard: ``mtp_levels`` rounded up
+    to ``MTP_TOKEN_ALIGN``. 0 when MTP is off.
 
     THE number every side of the MTP transport builds to -- the producer's rows, the H2D socket's
     spec, the runner's cut point, the union embedding's height and the D2D activation's height. Chip
-    ``c``'s overhang row is ``stream[(c+1)*L : (c+1)*L + overhang]``, so ``chunk_row ++ overhang_row``
-    is exactly the contiguous ``stream[c*L : c*L + L + overhang]`` and MTP level ``k``'s window is
-    the SAME local slice ``[k, k+L)`` on every chip -- one uniform slice, no cross-chip rotation.
+    ``c``'s MTP ids are ``stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`` -- they hang past the end of
+    ``c``'s own shard into ``c+1``'s territory, so ``chunk_row ++ mtp_row`` is exactly the contiguous
+    ``stream[c*L : c*L + L + num_mtp_tokens]`` and MTP level ``k``'s window is the SAME local slice
+    ``[k, k+L)`` on every chip -- one uniform slice, no cross-chip rotation.
 
-    Note the overhang is PER CHIP: only the last chip's row reaches into the next chunk, the other
-    ``sp-1`` take theirs from inside this one. That is what makes the windows uniform.
+    Note they are PER CHIP: only the last chip's ids reach into the next chunk, the other ``sp-1``
+    take theirs from inside this one. That is what makes the windows uniform.
     """
     assert mtp_levels >= 0, f"mtp_levels must be non-negative, got {mtp_levels}"
     if not mtp_levels:
         return 0
-    return -(-mtp_levels // MTP_OVERHANG_ALIGN) * MTP_OVERHANG_ALIGN
+    return -(-mtp_levels // MTP_TOKEN_ALIGN) * MTP_TOKEN_ALIGN
 
 
 def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
-    """Rows of ONE chip's union embedding: its ``L`` chunk rows plus the ``overhang`` lookahead rows.
+    """Rows of ONE chip's union embedding: its ``L`` chunk rows plus the ``num_mtp_tokens`` lookahead
+    rows.
 
     Level ``k`` (1..K) reads rows ``[k, k+L)`` of it, so the deepest level touches row ``K + L - 1``
-    and the rest of the overhang is transport padding no level reads.
+    and the rest of the lookahead is transport padding no level reads.
     """
-    rows = h2d_row_len(chunk_size, sp_factor) + mtp_overhang(mtp_levels)
+    rows = h2d_row_len(chunk_size, sp_factor) + num_mtp_tokens(mtp_levels)
     assert rows % TILE_HEIGHT == 0, (
         f"union embedding is {rows} rows, not a whole number of {TILE_HEIGHT}-row tiles; "
         f"chunk_size/sp_factor = {chunk_size // sp_factor} must itself be tile-aligned"
@@ -193,9 +195,9 @@ def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
 def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> ttnn.TensorSpec:
     """Per-push spec of THE H2D token socket -- there is exactly one, MTP or not.
 
-    Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``mtp_overhang(mtp_levels)`` lookahead
-    ids, so chip ``c``'s row is the contiguous ``stream[c*L : c*L + L + overhang]``. The runner cuts
-    the row back at ``L`` on arrival (``prefill_runner._socket_next``), and hands the model the same
+    Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``num_mtp_tokens(mtp_levels)``
+    lookahead ids, so chip ``c``'s row is the contiguous ``stream[c*L : c*L + L + num_mtp_tokens]``.
+    The runner cuts the row back at ``L`` on arrival (``prefill_runner._socket_next``), and hands the model the same
     ``[1, 1, chunk_size // sp]`` trunk it gets with MTP off.
     """
     if mtp_levels:
@@ -269,7 +271,7 @@ def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0)
 
     Plain prefill and DFlash ship one row per token: ``chunk_size``. MTP stacks the chunk's union
     EMBEDDING under the hidden, so each chip sends its ``L`` hidden rows followed by its
-    ``L + overhang`` embedding rows. Both are multiples of 32, so the receiver's split is a
+    ``L + num_mtp_tokens`` embedding rows. Both are multiples of 32, so the receiver's split is a
     tile-aligned row slice.
 
     Sending the embedding rather than the ids is what lets the LAST rank run its levels without an

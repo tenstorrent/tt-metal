@@ -7,7 +7,7 @@ The model-agnostic engine helpers (mesh open, H2D service, trace loading) live i
 the common package at ``models.demos.common.prefill.runners.runner_utils``. What
 remains here is the one piece of model-specific glue the runtime needs:
 ``prepare_prefill_input_tensor`` (the SP-sharded chunk input), which backs
-``TtPrefillRuntime.make_chunk_input``, plus the MTP overhang and shift-window uploads built on
+``TtPrefillRuntime.make_chunk_input``, plus the MTP lookahead and shift-window uploads built on
 top of it.
 
 The MTP index algebra itself lives one layer down in
@@ -41,7 +41,7 @@ def prepare_prefill_input_tensor(
     ``prefill_producer._h2d_rows`` builds for the H2D socket.
 
     MTP's lookahead ids are NOT folded in here; they ride their own tensor
-    (:func:`prepare_prefill_mtp_overhang`), so an MTP run and a plain run upload identical trunk
+    (:func:`prepare_prefill_mtp_tokens`), so an MTP run and a plain run upload identical trunk
     chunks.
     """
     isl_per_chip = len(token_ids) // sp_factor
@@ -59,34 +59,37 @@ def prepare_prefill_input_tensor(
     return _upload_ids(token_ids_sharded, mesh_device, mesh_shape, sp_axis)
 
 
-def prepare_prefill_mtp_overhang(
+def prepare_prefill_mtp_tokens(
     token_ids: list[int],
     mesh_device: ttnn.MeshDevice,
     sp_factor: int,
     mesh_shape: tuple,
     sp_axis: int,
     *,
-    overhang: int,
+    num_mtp_tokens: int,
 ) -> ttnn.Tensor:
-    """Upload the MTP overhang: the ``overhang`` ids that follow each chip's trunk shard.
+    """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard.
 
-    ``token_ids`` is this chunk's ``C`` tokens followed by the next ``overhang`` from the stream
-    (``C + overhang`` in all), and chip ``c`` gets ``token_ids[(c+1)*L : (c+1)*L + overhang]``.
-    Concatenated onto that chip's trunk row it forms the contiguous ``token_ids[c*L : c*L+L+overhang]``,
+    ``token_ids`` is this chunk's ``C`` tokens followed by the next ``num_mtp_tokens`` from the stream
+    (``C + num_mtp_tokens`` in all), and chip ``c`` gets ``token_ids[(c+1)*L : (c+1)*L + num_mtp_tokens]``.
+    Concatenated onto that chip's trunk row it forms the contiguous ``token_ids[c*L : c*L+L+num_mtp_tokens]``,
     so MTP level ``k`` reads the same local slice ``[k, k+L)`` on every chip.
 
     Only the LAST chip's row reaches past the chunk; the other ``sp-1`` take theirs from inside it.
     Block-cyclic only: under ``is_balanced`` the row -> position map is a permutation, so "the next
     ids after this row" is not a contiguous slice of the stream.
     """
-    assert overhang > 0, f"overhang must be positive, got {overhang}"
-    isl_per_chip = (len(token_ids) - overhang) // sp_factor
-    assert len(token_ids) == sp_factor * isl_per_chip + overhang, (
-        f"got {len(token_ids)} ids, expected sp_factor*L + overhang = " f"{sp_factor}*{isl_per_chip} + {overhang}"
+    assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
+    isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
+    assert len(token_ids) == sp_factor * isl_per_chip + num_mtp_tokens, (
+        f"got {len(token_ids)} ids, expected sp_factor*L + num_mtp_tokens = "
+        f"{sp_factor}*{isl_per_chip} + {num_mtp_tokens}"
     )
-    # unfold gives the sp windows of length `overhang` at stride L, as a view; dropping the first L
+    # unfold gives the sp windows of length `num_mtp_tokens` at stride L, as a view; dropping the first L
     # ids is what shifts window c from chip c's own rows to the ids just past them.
-    rows = torch.tensor(token_ids, dtype=torch.int64)[isl_per_chip:].unfold(0, overhang, isl_per_chip).unsqueeze(1)
+    rows = (
+        torch.tensor(token_ids, dtype=torch.int64)[isl_per_chip:].unfold(0, num_mtp_tokens, isl_per_chip).unsqueeze(1)
+    )
     return _upload_ids(rows, mesh_device, mesh_shape, sp_axis)
 
 
@@ -185,7 +188,7 @@ def mtp_generation_union_rows(
     sp_factor: int,
     chunk_size: int,
     *,
-    overhang: int,
+    num_mtp_tokens: int,
     chunk_start: int,
     actual_end: int,
     level: int,
@@ -195,9 +198,9 @@ def mtp_generation_union_rows(
     THE geometry of last-chunk generation, stated once and shared by both mask builders below.
 
     Chip ``c``'s union covers global positions ``[chunk_start + c*L, chunk_start + c*L + U)`` with
-    ``L = chunk_size / sp`` and ``U = L + overhang``. So the row holding position ``p`` is
+    ``L = chunk_size / sp`` and ``U = L + num_mtp_tokens``. So the row holding position ``p`` is
     ``u = p - chunk_start - c*L``, present iff ``0 <= u < U``. Adjacent chips' unions OVERLAP by
-    ``overhang`` rows (that overlap is what makes every level's window the same local slice), so two
+    ``num_mtp_tokens`` rows (that overlap is what makes every level's window the same local slice), so two
     chips can hold the same position -- both entries are returned and both get patched, which is what
     keeps the windows consistent across the seam.
 
@@ -209,10 +212,10 @@ def mtp_generation_union_rows(
     Block-cyclic only: under ``is_balanced`` the row -> position map is a permutation and a chip's
     union is not a contiguous position range at all.
     """
-    assert overhang > 0, f"overhang must be positive, got {overhang}"
+    assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
     isl_per_chip = chunk_size // sp_factor
-    union_len = isl_per_chip + overhang
+    union_len = isl_per_chip + num_mtp_tokens
     target = actual_end + level - chunk_start
     rows = []
     for c in range(sp_factor):
@@ -220,7 +223,7 @@ def mtp_generation_union_rows(
         rows.append(int(u) if 0 <= u < union_len else None)
     assert any(r is not None for r in rows), (
         f"no chip holds global position {actual_end + level}: chunk_start={chunk_start} "
-        f"chunk_size={chunk_size} overhang={overhang} level={level}. MTP levels must be <= overhang."
+        f"chunk_size={chunk_size} num_mtp_tokens={num_mtp_tokens} level={level}. MTP levels must be <= num_mtp_tokens."
     )
     return rows
 
@@ -233,7 +236,7 @@ def build_mtp_generation_keep_mask(
     sp_axis: int,
     *,
     emb_dim_per_chip: int,
-    overhang: int,
+    num_mtp_tokens: int,
     chunk_start: int,
     actual_end: int,
     num_levels: int,
@@ -253,12 +256,17 @@ def build_mtp_generation_keep_mask(
     Full width, like :func:`build_position_zero_mask`, so the multiply is plain elementwise.
     """
     isl_per_chip = chunk_size // sp_factor
-    union_len = isl_per_chip + overhang
+    union_len = isl_per_chip + num_mtp_tokens
     keep = torch.ones(sp_factor, 1, union_len, 1, dtype=torch.float32)
     for level in range(num_levels):
         for c, u in enumerate(
             mtp_generation_union_rows(
-                sp_factor, chunk_size, overhang=overhang, chunk_start=chunk_start, actual_end=actual_end, level=level
+                sp_factor,
+                chunk_size,
+                num_mtp_tokens=num_mtp_tokens,
+                chunk_start=chunk_start,
+                actual_end=actual_end,
+                level=level,
             )
         ):
             if u is not None:
@@ -274,7 +282,7 @@ def build_mtp_generation_select(
     mesh_shape: tuple,
     sp_axis: int,
     *,
-    overhang: int,
+    num_mtp_tokens: int,
     chunk_start: int,
     actual_end: int,
     level: int,
@@ -295,13 +303,18 @@ def build_mtp_generation_select(
     construction, no padding subtleties.
     """
     isl_per_chip = chunk_size // sp_factor
-    union_len = isl_per_chip + overhang
+    union_len = isl_per_chip + num_mtp_tokens
     width = ttnn.TILE_SIZE * sp_factor
     assert 0 <= source_row < width, f"source_row {source_row} out of range [0, {width})"
     select = torch.zeros(sp_factor, 1, union_len, width, dtype=torch.float32)
     for c, u in enumerate(
         mtp_generation_union_rows(
-            sp_factor, chunk_size, overhang=overhang, chunk_start=chunk_start, actual_end=actual_end, level=level
+            sp_factor,
+            chunk_size,
+            num_mtp_tokens=num_mtp_tokens,
+            chunk_start=chunk_start,
+            actual_end=actual_end,
+            level=level,
         )
     ):
         if u is not None:

@@ -473,7 +473,7 @@ class TtPrefillTransformer(LightweightModule):
         cache_user_id: int = 0,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
-        mtp_tokens: Optional[list[int]] = None,
+        mtp_token_stream: Optional[list[int]] = None,
         mtp_union=None,
         mtp_seed_token: Optional[int] = None,
         on_mtp_complete: Optional[Callable] = None,
@@ -514,15 +514,15 @@ class TtPrefillTransformer(LightweightModule):
                         pad-zero, but with a device sync first. Wire one or the other, never both.
             on_layer_hidden: optional tap fired at the END of each block with (GLOBAL layer index, block
                         output activation). Read-only — see tt_prefill_block.forward.
-            mtp_tokens: GLM-5.2 MTP (#53533) — this chunk's seq_len + K extended token stream from
+            mtp_token_stream: GLM-5.2 MTP (#53533) — this chunk's seq_len + K extended token stream from
                         mtp_extended_stream(), indexed by chunk-local position, so level k's window is
                         the slice [k : k+seq_len]. None disables MTP for this chunk. Requires an
                         mtp_predictor; the K levels run after the trunk tail, off model.norm's output.
-            mtp_union: the DEVICE alternative to `mtp_tokens` — an `MTPUnionEmbedding` holding this
-                        chunk's `L + overhang` embedded rows per chip, from which each level slices
+            mtp_union: the DEVICE alternative to `mtp_token_stream` — an `MTPUnionEmbedding` holding
+                        this chunk's `L + num_mtp_tokens` embedded rows per chip, from which each level slices
                         its own window on device. This is what the prefill runner passes: its ids
                         come off the H2D socket, are embedded on the first rank and reach this rank
-                        inside the activation. Mutually exclusive with `mtp_tokens`.
+                        inside the activation. Mutually exclusive with `mtp_token_stream`.
             mtp_seed_token: optional t_P for the last chunk, saving one 32-row LM head call. Only pass
                         it when it was produced greedily — see _mtp_next_token_fn. Host path only:
                         on the device path the ids never leave the device (see `MTPDeviceGeneration`).
@@ -564,8 +564,8 @@ class TtPrefillTransformer(LightweightModule):
         # the very end of this forward (run_mtp -> MTPEmbedSource, which asserts the same length), so
         # a wrong-length list otherwise costs a whole trunk chunk -- one that has already written KV --
         # before it raises. Pure host arithmetic; it costs nothing.
-        assert mtp_tokens is None or mtp_union is None, (
-            "mtp_tokens (host ids) and mtp_union (device embedding) are two spellings of the same "
+        assert mtp_token_stream is None or mtp_union is None, (
+            "mtp_token_stream (host ids) and mtp_union (device embedding) are two spellings of the same "
             "input; pass exactly one"
         )
         if mtp_union is not None:
@@ -574,10 +574,10 @@ class TtPrefillTransformer(LightweightModule):
                 f"union carries {mtp_union.num_levels} levels, predictor runs {self.num_mtp_levels}; "
                 "the runner and the runtime disagree on PREFILL_MTP_LEVELS"
             )
-        if mtp_tokens is not None:
-            assert self.mtp_predictor is not None, "mtp_tokens passed but this transformer has no mtp_predictor"
-            assert len(mtp_tokens) == self.seq_len + self.num_mtp_levels, (
-                f"mtp_tokens is {len(mtp_tokens)} ids, expected seq_len + K = {self.seq_len} + "
+        if mtp_token_stream is not None:
+            assert self.mtp_predictor is not None, "mtp_token_stream passed but this transformer has no mtp_predictor"
+            assert len(mtp_token_stream) == self.seq_len + self.num_mtp_levels, (
+                f"mtp_token_stream is {len(mtp_token_stream)} ids, expected seq_len + K = {self.seq_len} + "
                 f"{self.num_mtp_levels}. It is the EXTENDED stream from mtp_extended_stream(), not the "
                 "chunk's own tokens -- it carries K positions past the chunk's right edge. Slice the "
                 "trunk input off the same list with TtPrefillRuntime.make_mtp_chunk_input()."
@@ -712,7 +712,7 @@ class TtPrefillTransformer(LightweightModule):
         # --- MTP levels (GLM-5.2, #53533) ---------------------------------------------------
         # After the trunk tail, so the trunk path is byte-identical when MTP is off. `h` is h^0
         # (post-model.norm) and is still live: neither the LM head nor _sample frees it.
-        if mtp_tokens is not None or mtp_union is not None:
+        if mtp_token_stream is not None or mtp_union is not None:
             assert self.mtp_predictor is not None, "MTP tokens passed but this transformer has no mtp_predictor"
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to know whether this chunk contains absolute "
@@ -727,7 +727,7 @@ class TtPrefillTransformer(LightweightModule):
                 h,
                 kvpe_cache,
                 rope_tensors,
-                mtp_tokens,
+                mtp_token_stream,
                 actual_isl,
                 zero_position_0=(actual_start == 0),
                 seed_token=mtp_seed_token,
@@ -806,7 +806,7 @@ class TtPrefillTransformer(LightweightModule):
         free -- the token tensor is ROW_MAJOR uint32, so a row offset costs nothing, while the
         embedding is TILE_LAYOUT and ``k`` in 1..4 is never 32-row aligned.
 
-        The sequence axis does not grow: ``+K`` is a token-window overhang, not extra rows of
+        The sequence axis does not grow: ``+K`` is a token-window lookahead, not extra rows of
         compute. Every window is ``L`` rows per chip, exactly like the trunk input.
         """
         assert (
@@ -934,7 +934,7 @@ class TtPrefillTransformer(LightweightModule):
             chunk_size=self.seq_len,
             mesh_shape=self.mesh_shape,
             sp_axis=self.sp_axis,
-            overhang=union.overhang,
+            num_mtp_tokens=union.num_mtp_tokens,
             chunk_start=actual_start,
             actual_end=actual_end,
         )
@@ -951,7 +951,7 @@ class TtPrefillTransformer(LightweightModule):
         h_normed: ttnn.Tensor,
         kvpe_cache: MlaKvCache,
         rope_tensors: dict,
-        mtp_tokens: Optional[list[int]],
+        mtp_token_stream: Optional[list[int]],
         actual_isl: int,
         *,
         zero_position_0: bool,
@@ -964,11 +964,11 @@ class TtPrefillTransformer(LightweightModule):
 
         Args:
             h_normed: ``h^0`` -- the trunk output AFTER ``model.norm``.
-            mtp_tokens: this chunk's ``C + K`` extended token stream from
+            mtp_token_stream: this chunk's ``C + K`` extended token stream from
                 ``mtp_extended_stream``. Interior chunks carry the next chunk's first ``K`` ids;
                 the last chunk carries ``K`` generation slots instead, filled level by level from
                 each level's own LM head. None when ``union`` is given.
-            union: ``MTPUnionEmbedding`` — the on-device alternative to ``mtp_tokens``, where each
+            union: ``MTPUnionEmbedding`` — the on-device alternative to ``mtp_token_stream``, where each
                 level's embedding is a row slice of one already-gathered tensor rather than a host
                 list uploaded and gathered per level. ``generated_tokens`` comes back empty even on
                 the last chunk: the ids are argmaxed, embedded and consumed on device.
@@ -977,7 +977,7 @@ class TtPrefillTransformer(LightweightModule):
             zero_position_0: True only on the chunk containing absolute position 0.
             is_last_chunk: True only on the chunk that ends the request, where the prompt has no ids
                 past ``actual_end`` and the ``K`` positions the windows read there must be generated
-                (``union`` path only; ``mtp_tokens`` carries its own generation slots).
+                (``union`` path only; ``mtp_token_stream`` carries its own generation slots).
             seed_token: ``t_P`` if the caller already has it. Optional; omitting it costs one 32-row
                 LM head call and removes any coupling to the trunk's sampling temperature.
             fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
@@ -987,7 +987,7 @@ class TtPrefillTransformer(LightweightModule):
                 ``layer_num``, since the flat slot is ``cache_user_id * layer_num + cache_layer_idx``.
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
-        assert (mtp_tokens is None) != (union is None), "run_mtp takes exactly one of mtp_tokens/union"
+        assert (mtp_token_stream is None) != (union is None), "run_mtp takes exactly one of mtp_token_stream/union"
         generation = None
         if union is not None:
             if is_last_chunk:
@@ -1001,7 +1001,7 @@ class TtPrefillTransformer(LightweightModule):
             )
         else:
             source = MTPEmbedSource(
-                mtp_tokens,
+                mtp_token_stream,
                 self.seq_len,
                 self.num_mtp_levels,
                 embed_fn=lambda window: self._mtp_embed_window(window, zero_position_0),

@@ -22,7 +22,7 @@ permutation applied to the window's *contents*, so applying it to an already-shi
 ring-shift, because chip ``c``'s last ``k`` rows want chip ``c+1``'s first ``k`` tokens. That claim
 is measured on the mesh by ``tests/mtp_prefill/test_mtp_device_windows.py``.
 
-**The sequence axis does not grow.** ``+K`` is a token overhang, not extra rows of compute: every
+**The sequence axis does not grow.** ``+K`` is a token lookahead, not extra rows of compute: every
 level writes KV at position ``p`` with the trunk's rope and actual_start/end, every window is ``C``
 long, and every activation stays ``[1, 1, L, H/tp]``. Only the embedding fed in is shifted.
 

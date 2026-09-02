@@ -102,7 +102,7 @@ from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import (
     h2d_row_len,
     load_trace_token_ids,
-    mtp_overhang,
+    num_mtp_tokens,
     resolve_trace_dir,
 )
 
@@ -195,7 +195,7 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    # MTP: with K levels the producer pushes a SECOND token tensor of mtp_overhang(K) lookahead ids
+    # MTP: with K levels the producer pushes a SECOND token tensor of num_mtp_tokens(K) lookahead ids
     # per chip (_mtp_rows), on the same socket and the same push. Must match the runner's
     # PREFILL_MTP_LEVELS, which sizes the receiving side; a mismatch trips the size assert in _push.
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
@@ -229,7 +229,7 @@ def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> No
     """One push, carrying the producer's three tensors: chunk tokens, MTP lookahead tokens, metadata.
 
     `tokens` is the `[SP, 1, L]` chunk buffer the plain path has always sent, unchanged by MTP;
-    `mtp_tokens` is the separate `[SP, 1, overhang]` lookahead buffer (None when MTP is off). One H2D
+    `mtp_tokens` is the separate `[SP, 1, num_mtp_tokens]` lookahead buffer (None when MTP is off). One H2D
     socket delivers ONE global tensor per transfer, so the lookahead rides that tensor beside each
     chip's token row -- the way `metadata` rides the transfer rather than the row -- and
     `inbound_socket_service_sync` hands the runner all three back as separate tensors.
@@ -275,20 +275,21 @@ def _h2d_rows(tokens):
 
 
 def _mtp_rows(pool, actual_start: int):
-    """The MTP lookahead tensor: `[SP, 1, overhang]`, row c holding the ids that follow chip c's
-    shard -- `stream[(c+1)*L : (c+1)*L + overhang]`. None when MTP is off.
+    """The MTP lookahead tensor: `[SP, 1, num_mtp_tokens]`, row c holding the ids that follow chip
+    c's shard -- `stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`. None when MTP is off.
 
     Only the LAST chip's row reaches past this chunk; the other sp-1 take theirs from inside it. That
     overlap is the whole trick: `chunk_row ++ lookahead_row` is the contiguous
-    `stream[c*L : c*L + L + overhang]`, so MTP level k reads the SAME local slice `[k, k+L)` on every
-    chip, with no SP ring-shift and no cross-chip rotation. It costs `overhang` re-sent ids per chip.
+    `stream[c*L : c*L + L + num_mtp_tokens]`, so MTP level k reads the SAME local slice `[k, k+L)` on
+    every chip, with no SP ring-shift and no cross-chip rotation. It costs that many re-sent ids per
+    chip.
     """
-    overhang = mtp_overhang(MTP_LEVELS)
-    if not overhang:
+    n_mtp = num_mtp_tokens(MTP_LEVELS)
+    if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
-    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, overhang) for c in range(sp)]
+    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, n_mtp) for c in range(sp)]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 

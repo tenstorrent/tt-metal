@@ -49,7 +49,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     d2d_activation_rows as d2d_rows_for,  # aliased: the locals below hold the resolved geometry
 )
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
-from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, mtp_overhang, open_mesh_device
+from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
 
 # NOTE: the layer_completion classes (the standalone `_layer_completion` extension)
 # are imported lazily at point-of-use — its .so is built only under WITH_PYTHON_BINDINGS and may be
@@ -145,16 +145,16 @@ DFLASH_ENABLED = (
 )
 # Number of MTP levels to run after the trunk's last layer (0 = off). Two gates: the model declares the
 # capability (ADAPTER.supports_mtp — only GLM 5.2) and the run asks for a level count. K > 0 widens the
-# ONE H2D row by mtp_overhang(K) lookahead ids (level k reads the window shifted k tokens right), adds
+# ONE H2D row by num_mtp_tokens(K) lookahead ids (level k reads the window shifted k tokens right), adds
 # K KV-cache slots per user, and stacks the union embedding under the hidden on the D2D activation
 # (see runner_utils.d2d_activation_rows).
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
 assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
-MTP_OVERHANG = mtp_overhang(MTP_LEVELS)
+NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 """Lookahead ids the H2D row carries past this chip's trunk shard; 0 with MTP off. The producer
 builds its rows to this number and the socket op splits them back off on receive."""
 TOKEN_ID_BYTES = 4
-"""uint32 token ids. Converts MTP_OVERHANG (ids) to the socket op's overhang_size_bytes."""
+"""uint32 token ids. Converts NUM_MTP_TOKENS (ids) to the socket op's overhang_size_bytes."""
 CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 """PrefillMetadata carried with each chunk. With MTP a 4th word, `is_last`, says this chunk completes
 the request: past `actual_end` the prompt HAS no more ids, so the MTP windows must be filled by
@@ -320,28 +320,28 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service, overhang: int = 0) -> tuple:
-    """Block on the next producer push and hand back what it carried: (tt_ids, tt_overhang_or_None,
+def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
+    """Block on the next producer push and hand back what it carried: (tt_ids, tt_mtp_tokens_or_None,
     meta, tt_metadata) -- see _decode_metadata. Used only by the unbounded request loop
     (rank 0 input). The device metadata tensor is returned rather than discarded so it can be
     propagated into the model's per-layer ack send.
 
     ONE socket, ONE op call, THREE tensors. The op splits each arriving row as it copies it out of
     the socket's backing buffer, so ``tt_ids`` is the same ``[1, 1, L]`` uint32 tensor an MTP-off run
-    delivers -- byte for byte -- and ``tt_overhang`` is the ``[1, 1, overhang]`` lookahead tail that
-    level k's window reads past this chip's trunk shard. With ``overhang == 0`` the op emits no
-    second tensor at all and this is exactly the pre-MTP call.
+    delivers -- byte for byte -- and ``tt_mtp_tokens`` is the ``[1, 1, n_mtp]`` lookahead tail that
+    level k's window reads past this chip's trunk shard. With ``n_mtp == 0`` the op emits no second
+    tensor at all and this is exactly the pre-MTP call.
     """
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=overhang * TOKEN_ID_BYTES
+        h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
     )
-    if overhang:
-        tt_ids, tt_overhang, tt_metadata = outs
+    if n_mtp:
+        tt_ids, tt_mtp_tokens, tt_metadata = outs
     else:
-        tt_overhang = None
+        tt_mtp_tokens = None
         tt_ids, tt_metadata = outs
     meta = _decode_metadata(tt_metadata)
-    return tt_ids, tt_overhang, meta, tt_metadata
+    return tt_ids, tt_mtp_tokens, meta, tt_metadata
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, d2d_rows: int, d2d_width: int):
@@ -484,7 +484,7 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None, overhang=None
+    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None, mtp_tokens=None
 ) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
@@ -497,8 +497,8 @@ def _compute_and_send(
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']}) last={meta['is_last']}"
     )
     # MTP-only kwargs, passed only when MTP is on: the other adapters' runtimes do not declare them,
-    # and with MTP off they carry nothing (no overhang tensor, and every chunk's is_last is False).
-    mtp_kwargs = {"mtp_overhang": overhang, "is_last_chunk": meta["is_last"]} if MTP_LEVELS else {}
+    # and with MTP off they carry nothing (no MTP token tensor, and every chunk's is_last is False).
+    mtp_kwargs = {"mtp_tokens": mtp_tokens, "is_last_chunk": meta["is_last"]} if MTP_LEVELS else {}
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -569,20 +569,20 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            # slot/start/end from the producer; overhang only when MTP is on
-            inp, overhang, meta, metadata_device = _socket_next(h2d_service, MTP_OVERHANG)
+            # slot/start/end from the producer; the MTP ids only when MTP is on
+            inp, mtp_tokens, meta, metadata_device = _socket_next(h2d_service, NUM_MTP_TOKENS)
         else:
             # Downstream ranks get the ids' EMBEDDING stacked inside the activation, not a second tensor.
             inp, meta, metadata_device = _d2d_recv(d2d_in)
-            overhang = None
+            mtp_tokens = None
         if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_device)
-            if overhang is not None:
-                ttnn.deallocate(overhang)
+            if mtp_tokens is not None:
+                ttnn.deallocate(mtp_tokens)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width)
             break
@@ -596,7 +596,7 @@ def run_request_loop(
             d2d_out,
             d2h_service=d2h_service,
             record_dev=metadata_device,
-            overhang=overhang,
+            mtp_tokens=mtp_tokens,
         )
         if first is None:
             first = t

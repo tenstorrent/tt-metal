@@ -8,17 +8,18 @@ The runner moves MTP's K token windows from the producer to the rank that runs t
 host round trip anywhere. Four hardware claims carry it:
 
 1. **The producer's three tensors survive ONE H2D socket.** It builds the chunk (``[SP,1,L]``,
-   untouched by MTP), the lookahead (``[SP,1,overhang]``, row ``c`` = ``stream[(c+1)*L : +overhang]``)
+   untouched by MTP), the lookahead (``[SP,1,N]``, row ``c`` = ``stream[(c+1)*L : +N]``, where
+   ``N = num_mtp_tokens(K)``)
    and the metadata as three separate buffers; the socket carries one global tensor per transfer, so
    the first two share chip ``c``'s page and ``inbound_socket_service_sync`` splits them apart again
    as it copies out. ``tt_ids`` must come back byte-identical to what an MTP-*off* run pushes and
-   ``tt_overhang`` must be the ``overhang`` ids that immediately follow it -- otherwise level ``k``'s
+   ``tt_mtp_tokens`` must be the ``N`` ids that immediately follow it -- otherwise level ``k``'s
    window is off by a chip's worth of positions. This drives a REAL ``H2DStreamService``, the real op
    and the real ``producer._push``, so the two ends cannot agree here and disagree in production.
 2. **Two gathers, and the trunk gather IS the model's input.** The union is embedded as two blocks,
    never as one rejoined id row, so the trunk block can be handed to the transformer directly
    (``input_is_embedded``) instead of gathering the same ``L`` rows a second time. The 32-row
-   overhang gather is the small, unusual one -- a second program-cache entry at a row count the op
+   lookahead gather is the small, unusual one -- a second program-cache entry at a row count the op
    never otherwise sees.
 3. **The union slices correctly at a non-tile-aligned row offset.** ``k`` runs 1..4 and is never a
    multiple of 32, so :meth:`MTPUnionEmbedding.window` untilizes, ``ttnn.slice``s and retilizes. A
@@ -53,7 +54,7 @@ import torch
 
 import ttnn
 from models.demos.common.prefill.runners import prefill_producer as producer
-from models.demos.common.prefill.runners.runner_utils import h2d_row_len, mtp_overhang, mtp_union_rows
+from models.demos.common.prefill.runners.runner_utils import h2d_row_len, mtp_union_rows, num_mtp_tokens
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
@@ -75,7 +76,7 @@ VOCAB = 8192
 8192 x 1536 bf16 = 24 MiB/chip instead of GLM-5.2's 454."""
 
 L = h2d_row_len(CHUNK, SP)
-OVERHANG = mtp_overhang(K)
+NUM_MTP_TOKENS = num_mtp_tokens(K)
 UNION_ROWS = mtp_union_rows(CHUNK, SP, K)
 
 METADATA_SIZE_BYTES = 12
@@ -88,11 +89,11 @@ not 0, so a patch that ignored it would show up."""
 
 GENERATION_CASES = [
     pytest.param(CHUNK, id="ends-on-the-chunk-edge"),
-    pytest.param(L + 10, id="ends-on-the-overhang-seam"),
+    pytest.param(L + 10, id="ends-on-the-lookahead-seam"),
 ]
 """Real lengths for claim 5. The first is production (56320 = 11 x 5120): the generated positions
-sit in the LAST chip's overhang and exactly one chip holds each. The second ends 10 rows into chip
-1's shard, where chip 0's overhang covers the same positions -- two chips must be patched."""
+sit in the LAST chip's lookahead and exactly one chip holds each. The second ends 10 rows into chip
+1's shard, where chip 0's lookahead covers the same positions -- two chips must be patched."""
 
 MESH = [
     pytest.param(
@@ -125,7 +126,7 @@ def producer_env(monkeypatch):
 
 def _producer_tensors(pool: list[int], levels: int):
     """The producer's two token tensors for the chunk at position 0 of ``pool``, at a chosen MTP level
-    count: ``(chunk [SP,1,L], lookahead [SP,1,overhang] or None)``. ``levels=0`` gives the plain path,
+    count: ``(chunk [SP,1,L], lookahead [SP,1,NUM_MTP_TOKENS] or None)``. ``levels=0`` gives the plain path,
     whose chunk tensor is the whole push."""
     os.environ["PREFILL_MTP_LEVELS"] = str(levels)
     producer._load_env_config()
@@ -138,9 +139,9 @@ def _producer_tensors(pool: list[int], levels: int):
 
 @pytest.fixture
 def stream() -> torch.Tensor:
-    """The producer's token pool for one chunk: CHUNK ids plus the overhang past its right edge."""
+    """The producer's token pool for one chunk: CHUNK ids plus the lookahead past its right edge."""
     torch.manual_seed(0)
-    return torch.randint(0, VOCAB, (CHUNK + OVERHANG,), dtype=torch.int64)
+    return torch.randint(0, VOCAB, (CHUNK + NUM_MTP_TOKENS,), dtype=torch.int64)
 
 
 def _embed_fn(mesh_device, table: torch.Tensor):
@@ -221,7 +222,7 @@ def _h2d_service(mesh_device):
 
 
 def _cut_stream(stream: torch.Tensor, mesh_device, service=None):
-    """One producer push through a real H2D socket: ``(trunk ids, overhang ids, want_ids grid)``.
+    """One producer push through a real H2D socket: ``(trunk ids, MTP ids, want_ids grid)``.
 
     The op returns the three tensors; nothing here slices anything.
     """
@@ -230,15 +231,15 @@ def _cut_stream(stream: torch.Tensor, mesh_device, service=None):
     try:
         chunk_rows, lookahead_rows = _producer_tensors(stream.tolist(), K)
         producer._push(service, SP * UNION_ROWS * 4, chunk_rows, lookahead_rows, struct.pack("<III", 0, 0, CHUNK))
-        tt_ids, tt_overhang, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-            service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=OVERHANG * 4
+        tt_ids, tt_mtp_tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+            service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=NUM_MTP_TOKENS * 4
         )
     finally:
         if own:
             service.barrier()
     ttnn.deallocate(tt_meta)
-    want_ids = torch.stack([stream[c * L : c * L + UNION_ROWS] for c in range(SP)])  # [SP, L+overhang]
-    return tt_ids, tt_overhang, want_ids
+    want_ids = torch.stack([stream[c * L : c * L + UNION_ROWS] for c in range(SP)])  # [SP, L+NUM_MTP_TOKENS]
+    return tt_ids, tt_mtp_tokens, want_ids
 
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
@@ -253,16 +254,16 @@ def test_h2d_row_cuts_into_the_plain_trunk_and_its_lookahead(mesh_device, stream
     hit the program cache rather than rebuild, and must land the same two tensors.
     """
     service = _h2d_service(mesh_device)
-    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device, service)
+    tt_ids, tt_mtp_tokens, want_ids = _cut_stream(stream, mesh_device, service)
     assert list(tt_ids.shape) == [1, 1, L], f"trunk is {tt_ids.shape}, expected the plain-path [1,1,{L}]"
-    assert list(tt_overhang.shape) == [1, 1, OVERHANG], f"overhang row is {tt_overhang.shape}"
+    assert list(tt_mtp_tokens.shape) == [1, 1, NUM_MTP_TOKENS], f"MTP token row is {tt_mtp_tokens.shape}"
 
     plain_rows, plain_lookahead = _producer_tensors(stream[:CHUNK].tolist(), 0)
     assert plain_lookahead is None, "the MTP-off producer must push no lookahead tensor at all"
     plain = torch.from_numpy(plain_rows.astype("int64"))
     assert plain.shape == (SP, 1, L), f"the MTP-off producer row is {tuple(plain.shape)}"
 
-    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_overhang))):
+    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_mtp_tokens))):
         c = d // TP
         assert torch.equal(g_trunk.flatten().to(torch.int64), plain[c, 0]), (
             f"dev {d} (chip {c}): the trunk cut off the MTP row is NOT the row a plain run sends -- "
@@ -273,19 +274,19 @@ def test_h2d_row_cuts_into_the_plain_trunk_and_its_lookahead(mesh_device, stream
             "every MTP window on this chip is misaligned"
         )
 
-    for t in (tt_ids, tt_overhang):
+    for t in (tt_ids, tt_mtp_tokens):
         ttnn.deallocate(t)
 
     # Second push: the split lives in compile-time args, so a cache miss here would mean the op
     # rebuilds the program on every chunk of every request.
     pre = mesh_device.num_program_cache_entries()
-    tt_ids, tt_overhang, _ = _cut_stream(stream, mesh_device, service)
+    tt_ids, tt_mtp_tokens, _ = _cut_stream(stream, mesh_device, service)
     assert mesh_device.num_program_cache_entries() == pre, "the split op recompiled instead of cache-hitting"
-    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_overhang))):
+    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_mtp_tokens))):
         c = d // TP
         assert torch.equal(g_trunk.flatten().to(torch.int64), want_ids[c, :L]), f"dev {d}: 2nd push trunk differs"
-        assert torch.equal(g_over.flatten().to(torch.int64), want_ids[c, L:]), f"dev {d}: 2nd push overhang differs"
-    for t in (tt_ids, tt_overhang):
+        assert torch.equal(g_over.flatten().to(torch.int64), want_ids[c, L:]), f"dev {d}: 2nd push MTP ids differ"
+    for t in (tt_ids, tt_mtp_tokens):
         ttnn.deallocate(t)
 
     service.barrier()
@@ -302,21 +303,21 @@ def test_union_windows_are_exact_slices_of_the_producers_stream(mesh_device, str
     """
     table = torch.randn(VOCAB, HIDDEN, dtype=torch.float32).to(torch.bfloat16)
     embed_fn = _embed_fn(mesh_device, table)
-    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device)
+    tt_ids, tt_mtp_tokens, want_ids = _cut_stream(stream, mesh_device)
 
-    union = MTPUnionEmbedding.from_ids(tt_ids, tt_overhang, embed_fn, num_levels=K)
-    for t in (tt_ids, tt_overhang):
+    union = MTPUnionEmbedding.from_ids(tt_ids, tt_mtp_tokens, embed_fn, num_levels=K)
+    for t in (tt_ids, tt_mtp_tokens):
         ttnn.deallocate(t)  # consumed by the gathers, as in _mtp_prepare_input
     trunk, over = union.parts
     assert len(union.parts) == 2, "the first rank holds the union as two gathered blocks, not one"
     assert list(trunk.shape) == [1, 1, L, HIDDEN // TP], f"trunk block is {trunk.shape}"
     # The 32-row gather: its own program-cache entry, at a row count the op never otherwise sees.
-    assert list(over.shape) == [1, 1, OVERHANG, HIDDEN // TP], f"overhang block is {over.shape}"
+    assert list(over.shape) == [1, 1, NUM_MTP_TOKENS, HIDDEN // TP], f"lookahead block is {over.shape}"
 
     # Claim 2: the trunk block IS the model input, so it must be the plain embedding of the plain ids.
     assert union.trunk is trunk, "union.trunk must hand back the first block, not a copy or the join"
     _assert_rows(union.trunk, want_ids, table, 0, L, "trunk gather (the model input)")
-    _assert_rows(over, want_ids, table, L, OVERHANG, "overhang gather")
+    _assert_rows(over, want_ids, table, L, NUM_MTP_TOKENS, "lookahead gather")
 
     # Claim 3: each level's window, at a row offset that is never tile-aligned, spanning the seam
     # between the two blocks.
@@ -338,9 +339,9 @@ def test_row_concat_pack_survives_the_d2d_split(mesh_device, stream):
     """
     table = torch.randn(VOCAB, HIDDEN, dtype=torch.float32).to(torch.bfloat16)
     embed_fn = _embed_fn(mesh_device, table)
-    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device)
-    union = MTPUnionEmbedding.from_ids(tt_ids, tt_overhang, embed_fn, num_levels=K)
-    for t in (tt_ids, tt_overhang):
+    tt_ids, tt_mtp_tokens, want_ids = _cut_stream(stream, mesh_device)
+    union = MTPUnionEmbedding.from_ids(tt_ids, tt_mtp_tokens, embed_fn, num_levels=K)
+    for t in (tt_ids, tt_mtp_tokens):
         ttnn.deallocate(t)
 
     # Stand in for the trunk's output: a distinguishable per-chip hidden, so a split that lands on the
@@ -391,16 +392,18 @@ def test_generated_embedding_reaches_every_window_that_reads_it(mesh_device, str
 
     Both cases matter and they are geometrically different: at ``real_len == CHUNK`` (GLM-5.2's
     56320 = 11 x 5120, the shape the demo actually runs) the generated positions live in the LAST
-    chip's overhang and one chip holds each; at a real length that ends mid-chunk they land on the
+    chip's lookahead and one chip holds each; at a real length that ends mid-chunk they land on the
     seam, where two chips' unions overlap and BOTH must be patched or the windows disagree across it.
     """
     table = torch.randn(VOCAB, HIDDEN, dtype=torch.float32).to(torch.bfloat16)
     embed_fn = _embed_fn(mesh_device, table)
-    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device)
-    union = MTPUnionEmbedding.from_ids(tt_ids, tt_overhang, embed_fn, num_levels=K)
-    for t in (tt_ids, tt_overhang):
+    tt_ids, tt_mtp_tokens, want_ids = _cut_stream(stream, mesh_device)
+    union = MTPUnionEmbedding.from_ids(tt_ids, tt_mtp_tokens, embed_fn, num_levels=K)
+    for t in (tt_ids, tt_mtp_tokens):
         ttnn.deallocate(t)
-    assert union.overhang == OVERHANG, f"union reports overhang {union.overhang}, expected {OVERHANG}"
+    assert (
+        union.num_mtp_tokens == NUM_MTP_TOKENS
+    ), f"union reports {union.num_mtp_tokens} MTP rows, expected {NUM_MTP_TOKENS}"
 
     geom = dict(
         mesh_device=mesh_device,
@@ -408,12 +411,12 @@ def test_generated_embedding_reaches_every_window_that_reads_it(mesh_device, str
         chunk_size=CHUNK,
         mesh_shape=(SP, TP),
         sp_axis=0,
-        overhang=OVERHANG,
+        num_mtp_tokens=NUM_MTP_TOKENS,
         chunk_start=0,
         actual_end=real_len,
     )
     rows = [
-        mtp_generation_union_rows(SP, CHUNK, overhang=OVERHANG, chunk_start=0, actual_end=real_len, level=k)
+        mtp_generation_union_rows(SP, CHUNK, num_mtp_tokens=NUM_MTP_TOKENS, chunk_start=0, actual_end=real_len, level=k)
         for k in range(K)
     ]
     keep_mask = build_mtp_generation_keep_mask(**geom, emb_dim_per_chip=HIDDEN // TP, num_levels=K)
