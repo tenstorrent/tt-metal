@@ -441,7 +441,7 @@ class MiniMaxH3Attention(Module):
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
-        N: int | None = None,
+        logical_n: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
@@ -452,7 +452,8 @@ class MiniMaxH3Attention(Module):
             otherwise replicated on SP.
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP. Both
             None skips the rotary embedding entirely, as the token refiner requires.
-        N: logical (unfractured) sequence length. Only needed for ring attention.
+        logical_n: logical (unfractured) sequence length as a [1, 1, 1, 1] uint32 device tensor;
+            `None` on the non-ring path (token refiner).
         addcmul_residual/addcmul_gate: when both are given, the gated residual
             `addcmul_residual + to_out(...) * addcmul_gate` is folded into the to_out matmul's
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
@@ -472,7 +473,7 @@ class MiniMaxH3Attention(Module):
             raise ValueError(msg)
 
         tp_factor = self.parallel_config.tensor_parallel.factor
-        assert not (self.use_ring and N is None), "ring attention needs the logical sequence length N"
+        assert not (self.use_ring and logical_n is None), "ring attention needs the logical sequence length logical_n"
 
         # Passing parallel_config puts ColParallelLinear on all_gather_minimal_matmul_async: the TP
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
@@ -534,7 +535,7 @@ class MiniMaxH3Attention(Module):
                     v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
                 ),
                 joint_strategy="rear",
-                logical_n=N,
+                logical_n=logical_n,
                 program_config=exp_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
@@ -562,7 +563,7 @@ class MiniMaxH3Attention(Module):
                     v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype
                 ),
                 joint_strategy="rear",
-                logical_n=N,
+                logical_n=logical_n,
                 program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,

@@ -315,6 +315,9 @@ class MiniMaxH3Pipeline:
         self._tt_prompt = StateTensor()
         self._tt_adaln = StateTensor()
         self._tt_tsi = StateTensor()
+        # The true packed length, a [1, 1, 1, 1] uint32 for ring attention. Per-request-constant, so a
+        # resident trace input alongside the index tensors.
+        self._tt_logical_n = StateTensor()
         self._tt_cond: list[StateTensor] = []
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
@@ -1128,6 +1131,17 @@ class MiniMaxH3Pipeline:
             mesh_axes=[..., None, self.sp_axis],
         )
 
+    def _logical_length(self, value: int) -> ttnn.Tensor:
+        """The logical packed length as a [1, 1, 1, 1] uint32 tensor, replicated (not SP-sharded) --
+        like `_row_indices` without the shard."""
+        return from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[..., None, None],
+        )
+
     # ------------------------------------------------------------------ decode
 
     def _cache_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
@@ -1788,9 +1802,7 @@ class MiniMaxH3Pipeline:
         transformer = self._transformer
         if transformer is None:
             return
-        tracer = MiniMaxH3Transformer3DModel.traced_step._tracers.get(transformer)
-        if tracer is not None:
-            tracer.release_trace()
+        transformer.release_traces()
 
     def _denoise(
         self,
@@ -1850,11 +1862,11 @@ class MiniMaxH3Pipeline:
         # they land in the persistent buffers the trace bakes rather than a fresh per-call allocation.
         row_slot, slot_roles = build_slot_routing(layout)
 
-        # Trace the per-step forward where the preset asks for it, as Wan does on the quad only. At
-        # SP=32 a step is dominated by dispatching 50 blocks from host across four MPI ranks rather
-        # than by the matmuls, and a trace replaces that dispatch with one replay.
+        # Trace the block stack where the preset asks for it, as Wan does on the quad only. At SP=32 a
+        # step is dominated by dispatching 50 blocks from host across four MPI ranks rather than by the
+        # matmuls, and `transformer.run_blocks` replaces that dispatch with one replay.
         #
-        # `traced_step` has one unkeyed `Tracer` per transformer, so a capture is valid only for the
+        # `run_blocks` has one unkeyed `Tracer` per transformer, so a capture is valid only for the
         # request it was taken at: a different packed length fails the tracer's shape checks. Release
         # the trace whenever the signature changes -- which also lets the transformer reallocate its
         # padding buffer at the new shape without a live trace referencing the old one.
@@ -1915,9 +1927,11 @@ class MiniMaxH3Pipeline:
                 )
                 tt_cond.append((self._tt_cond[block].value, modality))
 
-        # Index tensors are constant across the request, so uploaded once here.
+        # Index tensors are constant across the request, so uploaded once here. `logical_n` joins them:
+        # the true (unpadded) packed length as a device tensor.
         self._tt_adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), padded_len), traced=traced)
         self._tt_tsi.update(self._row_indices(row_slot, padded_len), traced=traced)
+        self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
 
         # Target latents: uploaded once and advanced in place on device by the Euler step below, so
         # they stay resident across the loop -- no per-step re-upload, no host round-trip. Under
@@ -1961,31 +1975,20 @@ class MiniMaxH3Pipeline:
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
 
-            if traced:
-                video_velocity, audio_velocity = transformer.traced_step(
-                    video_1BVC=self._tt_video.value,
-                    audio_1BAC=self._tt_audio.value,
-                    prompt_1BLP=self._tt_prompt.value,
-                    condition_blocks=tt_cond,
-                    timestep=self._tt_timestep.value,
-                    adaln_indices=self._tt_adaln.value,
-                    timestep_indices=self._tt_tsi.value,
-                    rope_cos=self._tt_rope_cos.value,
-                    rope_sin=self._tt_rope_sin.value,
-                    traced=True,
-                )
-            else:
-                video_velocity, audio_velocity = transformer(
-                    video_1BVC=self._tt_video.value,
-                    audio_1BAC=self._tt_audio.value,
-                    prompt_1BLP=self._tt_prompt.value,
-                    condition_blocks=tt_cond,
-                    timestep=self._tt_timestep.value,
-                    adaln_indices=self._tt_adaln.value,
-                    timestep_indices=self._tt_tsi.value,
-                    rope_cos=self._tt_rope_cos.value,
-                    rope_sin=self._tt_rope_sin.value,
-                )
+            # `forward` traces the block stack internally when `traced`; everything else runs eagerly.
+            video_velocity, audio_velocity = transformer(
+                video_1BVC=self._tt_video.value,
+                audio_1BAC=self._tt_audio.value,
+                prompt_1BLP=self._tt_prompt.value,
+                condition_blocks=tt_cond,
+                timestep=self._tt_timestep.value,
+                adaln_indices=self._tt_adaln.value,
+                timestep_indices=self._tt_tsi.value,
+                rope_cos=self._tt_rope_cos.value,
+                rope_sin=self._tt_rope_sin.value,
+                logical_n=self._tt_logical_n.value,
+                traced=traced,
+            )
 
             # On-device Euler, in place so the latents stay resident and the (traced) input buffers
             # are advanced directly: `next = sample + (sigma - sigma_next) * v`, the mirror of Flux2's
