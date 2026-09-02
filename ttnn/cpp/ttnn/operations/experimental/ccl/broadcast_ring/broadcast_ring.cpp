@@ -19,10 +19,7 @@ ttnn::Tensor broadcast_ring(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "broadcast_ring requires a mesh device");
-    // v1: single link. The relay's per-chunk recv-semaphore is targeted at one worker core per device;
-    // multi-link needs per-link downstream cores + a payload split across links (v2). Ignore num_links.
-    (void)num_links;
-    uint32_t num_links_ = 1;
+    uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
     tt::tt_fabric::Topology topology_ =
         ::ttnn::ccl::get_usable_topology(input_tensor, std::optional<tt::tt_fabric::Topology>(topology), cluster_axis);
     return ttnn::prim::broadcast_ring(

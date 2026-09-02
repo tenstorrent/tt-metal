@@ -48,6 +48,8 @@ void kernel_main() {
     const uint32_t ds_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);   // downstream sem noc coords
     const uint32_t ds_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ds_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // downstream recv-sem L1 addr
+    const uint32_t tile_start = get_arg_val<uint32_t>(arg_idx++);   // this core/link's tile range (payload split)
+    const uint32_t tile_count = get_arg_val<uint32_t>(arg_idx++);
     size_t fab_arg = arg_idx;                                       // remaining args -> fabric connection
 
     // Input + output addrgens. Input CT args start at tensor_args_base; output args follow immediately.
@@ -80,10 +82,12 @@ void kernel_main() {
     }
     auto* fwd_conn = forwards ? &fabric_connection.get_forward_connection() : nullptr;
 
-    uint32_t tiles_done = 0;
+    (void)num_tiles;  // per-core range now comes from RT tile_start/tile_count (payload split across links)
+    const uint32_t tile_end = tile_start + tile_count;
+    uint32_t tiles_done = tile_start;
     uint32_t chunk = 0;
-    while (tiles_done < num_tiles) {
-        const uint32_t chunk_tiles = std::min(num_tiles - tiles_done, packet_size_in_pages);
+    while (tiles_done < tile_end) {
+        const uint32_t chunk_tiles = std::min(tile_end - tiles_done, packet_size_in_pages);
 
         // 1) Get this chunk into the CB. Sender reads its local input; receivers wait for upstream's fabric
         //    write to land it in their OUTPUT, then read it back to L1 so they can forward it.

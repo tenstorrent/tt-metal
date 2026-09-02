@@ -138,16 +138,22 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = ct_args});
 
-    // Downstream worker core noc coords (target for the completion atomic-inc). The relay forwards to the
-    // same logical worker core on the forward-neighbour device, so translate this core to noc coords.
-    const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(worker_cores.front());
-
-    // Runtime args (per worker core), matching broadcast_ring_relay.cpp:
-    //   input_addr, output_addr, recv_sem_addr, ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, then fabric args.
+    // Runtime args (per worker core / link), matching broadcast_ring_relay.cpp:
+    //   input_addr, output_addr, recv_sem_addr, ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr,
+    //   tile_start, tile_count, then fabric args.
+    // Each link relays a disjoint slice of the shard's tiles (payload split -> ~num_links x bandwidth), and
+    // targets the DOWNSTREAM's SAME-index worker core, so each link is an independent ring relay with its
+    // own recv-semaphore counter (the global sem has an independent copy per core).
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
     const auto fwd_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+    const uint32_t tiles_per_link =
+        (input_num_pages + operation_attributes.num_links - 1) / operation_attributes.num_links;
     for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
         const CoreCoord core = worker_cores[link];
+        // Downstream same-index worker core: its noc coords (target of this link's completion atomic-inc).
+        const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(core);
+        const uint32_t tile_start = std::min(link * tiles_per_link, input_num_pages);
+        const uint32_t tile_count = std::min(tiles_per_link, input_num_pages - tile_start);
         std::vector<uint32_t> rt = {
             input_tensor.buffer()->address(),
             output_tensor.buffer()->address(),
@@ -155,6 +161,8 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             static_cast<uint32_t>(ds_core_noc.x),
             static_cast<uint32_t>(ds_core_noc.y),
             recv_semaphore.address(),  // downstream recv-sem: same L1 offset (global semaphore)
+            tile_start,
+            tile_count,
         };
         // Fabric connection args, in the exact layout FabricConnectionManager::build_from_args expects:
         //   [forward_flag] [forward sender args if flag] [backward_flag] [backward args if flag].
