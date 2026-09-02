@@ -1073,21 +1073,25 @@
     # -rs everywhere: bh_quietbox_2 is 4 chips, so the 1x8 / 2x4 / 4x8 rows in these files
     # skip on device count. The skip report is what shows the 2x2 rows actually ran rather
     # than the job passing because it executed nothing.
-    pytest --timeout 1200 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
-    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
     # Last on purpose. The step runs under `bash -e`, and the 2x2 PCC case fails (~0.32%)
     # until the Linear-topology correctness fix lands -- FLUX.2 drops the attention residual
     # off the non-Ring path in ColParallelLinear. Fix is on branch stisi/flux2-qb2, commit
     # 92919ba7f5d. Ordering this last keeps that known failure, which `bash -e` turns into an
     # early exit, from suppressing the two tests above.
-    pytest --timeout 3600 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
+    pytest --timeout 4800 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      timeout: 60 # placeholder, recalibrate from the first dispatch
+      # 3h for the first, cold run: it downloads ~106 GB of FLUX.2-dev and writes a ~105 GB
+      # converted-weight cache. Recalibrate to the measured warm-cache time before merge.
+      # Keep this above the sum of the pytest --timeouts above (170 min) so a hang fails
+      # cleanly rather than being killed by the job timeout.
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
