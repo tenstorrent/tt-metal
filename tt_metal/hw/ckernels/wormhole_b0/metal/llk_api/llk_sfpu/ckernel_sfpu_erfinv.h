@@ -45,7 +45,10 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is accepted for signature parity with the Blackhole
+// kernel (which serves a dedicated BF16 path); Wormhole keeps one
+// implementation for both destination formats.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
