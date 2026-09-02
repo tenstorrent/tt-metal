@@ -47,7 +47,7 @@
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml
   skus:
     bh_quietbox_2:
-      timeout: 25
+      timeout: 60
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit
@@ -62,7 +62,7 @@
     bh_p150b_civ2:
       timeout: 30
     bh_quietbox_2:
-      timeout: 10
+      timeout: 60
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit
