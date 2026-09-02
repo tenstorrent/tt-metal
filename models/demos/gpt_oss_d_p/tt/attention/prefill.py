@@ -13,6 +13,7 @@ the exact all-gather / SDPA / reduce-scatter fallback.
 """
 
 import ttnn
+from models.demos.gpt_oss_d_p.utils.profiler_utils import FINE, zone
 
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention
@@ -113,7 +114,8 @@ def attention_forward(
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
     # QKV projection (+ fused bias)
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    with zone("qkv_proj"):
+        xqkv_fused = apply_qkv_projection(hidden_states, weights)
     hidden_states.deallocate(True)  # Free input activations after projection
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
@@ -124,7 +126,8 @@ def attention_forward(
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
 
-    tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
+    with zone("split_heads", FINE):
+        tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
 
     # Apply full RoPE on Q and K.
@@ -140,22 +143,23 @@ def attention_forward(
         rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
-    tt_q = apply_rope(
-        tt_q,
-        rope_mats_sliced,
-        transformation_mat,
-        is_decode_mode=False,
-        kv_actual_global=rope_kv_actual,
-        cluster_axis=rope_cluster_axis,
-    )
-    tt_k = apply_rope(
-        tt_k,
-        rope_mats_sliced,
-        transformation_mat,
-        is_decode_mode=False,
-        kv_actual_global=rope_kv_actual,
-        cluster_axis=rope_cluster_axis,
-    )
+    with zone("rope", FINE):
+        tt_q = apply_rope(
+            tt_q,
+            rope_mats_sliced,
+            transformation_mat,
+            is_decode_mode=False,
+            kv_actual_global=rope_kv_actual,
+            cluster_axis=rope_cluster_axis,
+        )
+        tt_k = apply_rope(
+            tt_k,
+            rope_mats_sliced,
+            transformation_mat,
+            is_decode_mode=False,
+            kv_actual_global=rope_kv_actual,
+            cluster_axis=rope_cluster_axis,
+        )
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
@@ -165,15 +169,16 @@ def attention_forward(
     # write_kv_chunk casts its own copy to the cache dtype.
     if kv_cache is not None:
         assert isinstance(kv_cache, GptOssKVCache), "kv_cache must be a GptOssKVCache"
-        write_kv_chunk(
-            kv_cache,
-            tt_k,
-            tt_v,
-            slot_idx=user_id,
-            layer_idx=layer_idx,
-            kv_actual=cached_len,
-            sp_axis=mesh_config.sp_axis,
-        )
+        with zone("kv_write"):
+            write_kv_chunk(
+                kv_cache,
+                tt_k,
+                tt_v,
+                slot_idx=user_id,
+                layer_idx=layer_idx,
+                kv_actual=cached_len,
+                sp_axis=mesh_config.sp_axis,
+            )
 
     # --- Attention core ---
     # Chunked sequence-parallel prefill uses one cache-backed RingJointSDPA path from
@@ -205,53 +210,62 @@ def attention_forward(
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
-            tt_sdpa_out = dense_sp_attention(
-                tt_q,
-                kv_cache.k,
-                kv_cache.v,
-                tt_k,
-                tt_v,
-                kv_actual=cached_len,
-                logical_n=cached_len + seq_len * sp,
-                n_kv=config.num_kv_heads,
-                cache_global=kv_cache.max_seq_len,
-                head_dim=config.head_dim,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                program_config=sp_prog,
-                compute_kernel_config=sp_kcfg,
-                scale=config.scaling,
-                cluster_axis=mesh_config.sp_axis,
-                attention_sink=weights.sinks,
-                sliding_window_size=config.sliding_window,
-                slot_idx=user_id,
-                layer_idx=layer_idx,
-                num_layers=kv_cache.num_layers,
-                # The per-layer seam wrote current K/V into the cache before this call.
-                write_chunk=False,
-            )
+            # Fused compute + ring CCL in ONE device op: KV ring-rotates between SP neighbours while
+            # SDPA consumes it, so its comm cost cannot be split out into a separate zone.
+            with zone("ring_joint_sdpa"):
+                tt_sdpa_out = dense_sp_attention(
+                    tt_q,
+                    kv_cache.k,
+                    kv_cache.v,
+                    tt_k,
+                    tt_v,
+                    kv_actual=cached_len,
+                    logical_n=cached_len + seq_len * sp,
+                    n_kv=config.num_kv_heads,
+                    cache_global=kv_cache.max_seq_len,
+                    head_dim=config.head_dim,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    program_config=sp_prog,
+                    compute_kernel_config=sp_kcfg,
+                    scale=config.scaling,
+                    cluster_axis=mesh_config.sp_axis,
+                    attention_sink=weights.sinks,
+                    sliding_window_size=config.sliding_window,
+                    slot_idx=user_id,
+                    layer_idx=layer_idx,
+                    num_layers=kv_cache.num_layers,
+                    # The per-layer seam wrote current K/V into the cache before this call.
+                    write_chunk=False,
+                )
         else:
             full_seq_len = seq_len * sp
-            tt_q_full = mesh_config.allgather(tt_q, ccl_manager, axis=mesh_config.sp_axis, dim=2)
-            tt_k_full = mesh_config.allgather(tt_k, ccl_manager, axis=mesh_config.sp_axis, dim=2)
-            tt_v_full = mesh_config.allgather(tt_v, ccl_manager, axis=mesh_config.sp_axis, dim=2)
+            with zone("ag_qkv"):
+                tt_q_full = mesh_config.allgather(tt_q, ccl_manager, axis=mesh_config.sp_axis, dim=2)
+                tt_k_full = mesh_config.allgather(tt_k, ccl_manager, axis=mesh_config.sp_axis, dim=2)
+                tt_v_full = mesh_config.allgather(tt_v, ccl_manager, axis=mesh_config.sp_axis, dim=2)
             tt_q.deallocate(True)
             tt_k.deallocate(True)
             tt_v.deallocate(True)
             tt_q, tt_k, tt_v = tt_q_full, tt_k_full, tt_v_full
-            tt_sdpa_out_full = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, full_seq_len)
-            tt_sdpa_out = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_sdpa_out_full,
-                dim=2,
-                multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=ccl_manager.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ccl_manager.topology,
-                cluster_axis=mesh_config.sp_axis,
-                barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            )
+            with zone("sdpa"):
+                tt_sdpa_out_full = _run_sdpa(
+                    tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, full_seq_len
+                )
+            with zone("sdpa_reduce_scatter"):
+                tt_sdpa_out = ttnn.experimental.reduce_scatter_minimal_async(
+                    tt_sdpa_out_full,
+                    dim=2,
+                    multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+                    num_links=ccl_manager.num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ccl_manager.topology,
+                    cluster_axis=mesh_config.sp_axis,
+                    barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+                )
             tt_sdpa_out_full.deallocate(True)
-            tt_sdpa_out_scaled = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
+            with zone("sdpa_scale", FINE):
+                tt_sdpa_out_scaled = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
             ttnn.deallocate(tt_sdpa_out)
             tt_sdpa_out = tt_sdpa_out_scaled
     elif cached_len > 0:
@@ -269,7 +283,8 @@ def attention_forward(
             "KV-cache storage/write is supported and validated; only the single-device first chunk works."
         )
     else:
-        tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)
+        with zone("sdpa"):
+            tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)
 
     tt_q.deallocate(True)
     tt_k.deallocate(True)
@@ -277,7 +292,8 @@ def attention_forward(
 
     # Concat heads back to (local) hidden dim
     tt_sdpa_out_pre_concat = tt_sdpa_out
-    tt_sdpa_out = concat_heads(tt_sdpa_out)
+    with zone("concat_heads", FINE):
+        tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
@@ -295,11 +311,15 @@ def attention_forward(
         and ccl_manager.topology == ttnn.Topology.Ring
     )
     if use_fused_rs:
-        rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+        with zone("o_proj_fused_rs"):
+            rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
-        tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+        with zone("ccl_out_allgather"):
+            tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
     else:
-        tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        with zone("o_proj"):
+            tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
         tt_sdpa_out.deallocate(True)
-        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+        with zone("ccl_out_allreduce"):
+            tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result
