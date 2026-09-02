@@ -288,6 +288,13 @@ tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // indexed_fill preserves the output shape, so an ND-sharded output config already
+    // carries the authoritative shard distribution. Re-deriving a legacy shard_spec here
+    // is unnecessary and would rewrite an ND-origin config onto the legacy shard-spec path.
+    if (output_mem_config.created_with_nd_shard_spec()) {
+        return output_mem_config;
+    }
+
     if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value()) {
         return output_mem_config;
     }

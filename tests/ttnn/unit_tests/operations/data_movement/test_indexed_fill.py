@@ -271,6 +271,52 @@ def test_indexed_fill_program_cache(device, variant):
             ), "cache-hit run created a new program entry instead of reusing the cached one"
 
 
+@pytest.mark.parametrize(
+    "dim",
+    [0, 3],
+    ids=["dim=0-native", "dim=3-fallback"],
+)
+def test_indexed_fill_nd_sharded_output_preserves_nd_shard_spec(device, dim):
+    B, C, H, W = 8, 1, 64, 64
+    b = 3
+    shape_a = (B, C, H, W)
+    shape_b = list(shape_a)
+    shape_b[dim] = b
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 3))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape([1, 1, 32, 32]), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    spec_a = ttnn.TensorSpec(
+        shape=shape_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        nd_shard_spec=nd_shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    assert spec_a.memory_config.nd_shard_spec is not None
+
+    batch_id = torch.randint(0, shape_a[dim], (1, 1, 1, b))
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    )
+
+    torch_a = torch.rand(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.rand(tuple(shape_b), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(torch_a, spec=spec_a, device=device)
+    input_tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=dim)
+
+    output_mem_config = output_tensor.memory_config()
+    assert output_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+    assert output_mem_config.nd_shard_spec == input_tensor_a.memory_config().nd_shard_spec
+    logger.info(f"Indexed Fill (ND_SHARDED, dim={dim}) Output Memory Config: {output_mem_config}")
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=dim)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
+
 def test_indexed_fill_dim_out_of_bounds(device, expect_error):
     # Verify that a dim outside [-rank, rank) raises a fatal error.
     input_tensor_a = ttnn.rand((4, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
