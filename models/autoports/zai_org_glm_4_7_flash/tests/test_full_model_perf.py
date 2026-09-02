@@ -188,7 +188,7 @@ def test_full_model_perf(built):
     # generator re-captures before replaying over them (FM-016). Timed on its
     # own: it is a one-time cost for this shape, not part of TTFT.
     t0 = time.perf_counter()
-    recaptured = gen._maybe_recapture_after_compile(warm_at=3000)
+    recaptured = gen._maybe_recapture_after_compile()
     cold_recapture_s = time.perf_counter() - t0
     gen.reset()
     t0 = time.perf_counter()

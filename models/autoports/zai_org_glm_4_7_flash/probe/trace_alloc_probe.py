@@ -126,8 +126,9 @@ def main():
         gen.generate(ids_for(args.warmed_prompt), args.tokens, enable_trace=True, stop_on_eos=False)
         record(
             "shipped_path_warmed_single_chunk",
-            "warmup_prefill compiled every bucket shape before capture, so nothing is allocated in the "
-            "unsafe window",
+            "warmup_prefill compiled every bucket shape and warmup_terminal_shapes every terminal tile "
+            "offset before capture, so a prompt inside one chunk allocates nothing in the unsafe window "
+            "and needs no recapture",
             warm_at=args.warmed_prompt,
         )
 
@@ -160,7 +161,7 @@ def main():
         )
 
         # 4. recapture clears it
-        gen.recapture_decode_traces(warm_at=args.second_multi_chunk_prompt)
+        gen.recapture_decode_traces()
         record(
             "after_explicit_recapture",
             "recapture_decode_traces() puts the trace intermediates back on the safe side of those " "program buffers",
@@ -178,6 +179,7 @@ def main():
     ]
     clean = all(by_arm[name]["unsafe_total"] == 0 and by_arm[name].get("replay") == "ok" for name in expected_clean)
     hazard_reproduced = by_arm["hook_bypassed_first_use_multi_chunk"]["unsafe_total"] > 0
+    single_chunk_free = by_arm["shipped_path_warmed_single_chunk"]["trace_recaptures"] == 0
     payload = {
         "source_manifest": source_manifest([__file__]),
         "tracking_enabled": tracking,
@@ -187,8 +189,9 @@ def main():
         ),
         "layers": args.layers,
         "context_allocated": args.seq_cap,
-        "verdict": "clean" if (clean and tracking) else "unsafe_buffers_survive",
+        "verdict": "clean" if (clean and tracking and single_chunk_free) else "unsafe_buffers_survive",
         "shipped_paths_clean": clean,
+        "single_chunk_prompt_needs_no_recapture": single_chunk_free,
         "untreated_hazard_reproduced": hazard_reproduced,
         "arms": arms,
     }

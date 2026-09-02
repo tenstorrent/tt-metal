@@ -159,7 +159,9 @@ def main():
                 "exact_prefix_match_tokens": _common_prefix(hf_tokens[i], tt_tokens[i]),
             }
         )
-    (OUT_DIR / "qualitative_outputs.json").write_text(json.dumps(records, indent=2) + "\n")
+    (OUT_DIR / "qualitative_outputs.json").write_text(
+        json.dumps({"source_manifest": source_manifest([__file__]), "records": records}, indent=2) + "\n"
+    )
 
     lines = []
     for rec in records:

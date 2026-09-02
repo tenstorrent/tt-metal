@@ -34,9 +34,12 @@ from models.autoports.zai_org_glm_4_7_flash.tt.model import source_manifest
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 OUT = MODEL_DIR / "doc" / "full_model" / "first_use_ttft.json"
-#: The AIME24 chat-template reference prompt is 154 tokens, which is what
-#: run_teacher_forcing reports TTFT for.
-DEFAULT_LENGTHS = (154,)
+#: 154 is the AIME24 chat-template reference length, which is what
+#: run_teacher_forcing reports TTFT for and which sits inside one prefill
+#: chunk, so `warmup_terminal_shapes` should leave it with no first-use cost.
+#: 4300 is two whole chunks plus a bucketed tail, whose chunk-offset programs
+#: cannot be warmed cheaply and so must pay one recapture.
+DEFAULT_LENGTHS = (154, 4300)
 
 
 def _ids(gen, seq):

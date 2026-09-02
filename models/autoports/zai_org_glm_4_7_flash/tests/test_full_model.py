@@ -69,6 +69,17 @@ def reference():
 # --------------------------------------------------------------------- capability contract
 
 
+def test_readiness_reference_is_present():
+    """The accuracy gate must not be able to pass by being skipped.
+
+    ``reference`` is a skipping fixture, so a missing reference would drop both
+    top-k tests and still report a green suite. This one fails instead.
+    """
+    assert REFERENCE.is_file(), f"missing readiness reference {REFERENCE}"
+    meta = REFERENCE.with_suffix(".meta.json")
+    assert meta.is_file(), f"missing reference metadata {meta}"
+
+
 def test_context_and_capacity_contract(gen):
     """Supported context is the HF-advertised one, and weights + the full-context
     KV cache fit the measured allocatable DRAM."""
@@ -515,34 +526,61 @@ def test_reset_zeroes_cache_rows_the_request_never_wrote(gen):
     assert model is gen.model
 
 
-def test_first_use_prompt_shape_recaptures_traces_and_stays_correct(gen):
-    """A prompt shape that compiles programs after capture triggers a recapture.
+def test_single_chunk_prompt_shape_does_not_recapture(gen):
+    """No first-use cost for any prompt inside one prefill chunk.
 
-    The terminal slice/pad of the prefill depends on ``seq mod 32``, so a
-    logical length that was not warmed at construction compiles new programs
-    while the decode traces are live. Metal then treats those program buffers
-    as unsafe for the trace's lifetime, so the generator re-captures. What has
-    to hold is that the recapture is (a) triggered and (b) invisible in the
-    output: the same prompt run again, now with everything cached, must give
-    the identical tokens from the newly captured traces.
+    The terminal path slices the 32-row tile holding the last prompt position,
+    so its program is keyed by that tile offset, and
+    ``GLM47FlashModel.warmup_terminal_shapes`` compiles every offset for the
+    five buckets at construction, before the decode traces are captured. A
+    length that is not itself a bucket must therefore still compile nothing
+    and recapture nothing (work log FM-017).
     """
-    seq = 173  # 173 % 32 = 13, not a bucket and not warmed at build
+    seq = 173  # 173 % 32 = 13, not a bucket, but its terminal tile offset is warmed
     ids = _prompt_ids(gen, seq)
+    # Absorb anything an earlier test in this module compiled (several read the
+    # cache back through fresh `ttnn.slice` shapes), so the assertion below is
+    # about this prompt and not about test order.
+    gen._maybe_recapture_after_compile()
     gen.reset()
     gen.reset_counters()
-    first = gen.generate(ids, 6, enable_trace=True, stop_on_eos=False)
-    recaptures = gen.counters["trace_recaptures"]
-    assert recaptures >= 1, "an unwarmed prompt shape must recapture before replaying"
-
-    gen.reset()
-    gen.reset_counters()
-    again = gen.generate(ids, 6, enable_trace=True, stop_on_eos=False)
-    assert again == first, (first, again)
-    assert gen.counters["trace_recaptures"] == 0, "the second request at a cached shape must not recapture"
-    # And the recapture did not disturb the split-sampling contract.
+    entries = gen.mesh_device.num_program_cache_entries()
+    out = gen.generate(ids, 6, enable_trace=True, stop_on_eos=False)
+    assert (
+        gen.mesh_device.num_program_cache_entries() == entries
+    ), "a prompt inside one chunk must compile no new program"
+    assert gen.counters["trace_recaptures"] == 0, "a warmed terminal offset must not recapture"
+    assert len(out) == 6
     assert gen.counters["full_logits_readbacks"] == 0
     assert gen.counters["host_argmax_calls"] == 0
     assert gen.counters["model_trace_replays"] == 5
+
+
+def test_first_use_multi_chunk_shape_recaptures_and_stays_correct(gen):
+    """A first-use *multi-chunk* prompt does still recapture, and correctly.
+
+    The chunk-offset-dependent programs (the RoPE-table ``ttnn.slice`` offsets
+    are compile-time constants) cannot be enumerated cheaply at 99 offsets, so
+    they compile on first use, while the decode traces are live. What has to
+    hold is that the recapture is (a) triggered and (b) invisible in the
+    output: the same prompt again, everything now cached, must give identical
+    tokens from the newly captured traces.
+    """
+    seq = 4300  # two whole 2048 chunks plus a 256 bucket tail; used nowhere else
+    ids = _prompt_ids(gen, seq)
+    gen._maybe_recapture_after_compile()
+    gen.reset()
+    gen.reset_counters()
+    first = gen.generate(ids, 4, enable_trace=True, stop_on_eos=False)
+    assert gen.counters["trace_recaptures"] >= 1, "a first-use chunk offset must recapture before replaying"
+
+    gen.reset()
+    gen.reset_counters()
+    again = gen.generate(ids, 4, enable_trace=True, stop_on_eos=False)
+    assert again == first, (first, again)
+    assert gen.counters["trace_recaptures"] == 0, "the second request at a cached shape must not recapture"
+    assert gen.counters["full_logits_readbacks"] == 0
+    assert gen.counters["host_argmax_calls"] == 0
 
 
 def test_sampling_trace_is_captured_on_demand_if_capture_skipped_it(gen):
@@ -575,14 +613,11 @@ def test_sampling_trace_is_captured_on_demand_if_capture_skipped_it(gen):
     assert gen.counters["host_argmax_calls"] == 0
 
 
-def test_decode_positions_accept_fewer_rows_than_slots(gen, expect_error):
-    """Fixed slots: a caller driving fewer active rows may omit the inactive
-    ones instead of spelling out the -1s, and too many is still an error."""
+def test_decode_positions_reject_more_rows_than_slots(gen, expect_error):
+    """Too many positions is an error. The *padding* branch needs batch > 1 to
+    mean anything, so it is covered in ``test_full_model_batch.py``
+    (`test_batch_decode_positions_pad_inactive_slots`)."""
     slots = gen.max_batch_size
-    gen.set_decode_positions([7])
-    assert gen._host_positions == [7] + [-1] * (slots - 1)
-    gen.set_decode_positions([7] * slots)
-    assert gen._host_positions == [7] * slots
     with expect_error(ValueError, "at most"):
         gen.set_decode_positions([0] * (slots + 1))
     gen.reset()

@@ -32,6 +32,34 @@ def _num(value):
         return 0.0
 
 
+def _bound_summary(rows, steps):
+    """What `tt-perf-report` marks `SLOW`, per window.
+
+    The stage report used to disclose only the tool's nnz and unclassified-op
+    warnings. The `Bound` column is the substantive advisory: it says the row
+    is neither compute nor bandwidth bound, i.e. the geometry is leaving the
+    core idle. Counting it here puts a number on the stage-07 target instead of
+    leaving it in a CSV nobody reads (work log FM-017).
+    """
+    slow = [r for r in rows if r.get("Bound", "").strip().upper() == "SLOW"]
+    slow_us = sum(_num(r.get("Device Time")) for r in slow) / steps
+    total_us = sum(_num(r.get("Device Time")) for r in rows) / steps
+    per_op = collections.Counter()
+    for r in slow:
+        per_op[r.get("OP Code", "").strip()] += 1
+    return {
+        "slow_rows": len(slow),
+        "total_rows": len(rows),
+        "slow_us_per_step": round(slow_us, 1),
+        "slow_pct_of_window": round(slow_us / total_us * 100, 1) if total_us else 0.0,
+        "slow_ops": [{"op": op, "rows": n} for op, n in per_op.most_common(8)],
+        "note": (
+            "`Bound == SLOW` is a tt-perf-report advisory: the row is neither compute nor bandwidth "
+            "bound. Disclosed, not fixed here; matmul geometry is optimized-full-model (stage 07) work."
+        ),
+    }
+
+
 def summarize(path: Path, anchor: str = ANCHOR):
     rows = list(csv.DictReader(path.open()))
     steps = sum(1 for r in rows if r.get("OP Code", "").strip() == anchor)
@@ -56,6 +84,7 @@ def summarize(path: Path, anchor: str = ANCHOR):
         "ops_per_step": round(len(rows) / steps, 1),
         "device_us_per_step": round(total / steps, 1),
         "op_to_op_gap_us_per_step": round(gap / steps, 1),
+        "bound": _bound_summary(rows, steps),
         "op_to_op_gap_is_instrumentation": True,
         "op_to_op_gap_note": (
             "test_full_model_profile.py drains the device profiler after every iteration inside the "

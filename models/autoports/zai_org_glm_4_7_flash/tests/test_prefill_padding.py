@@ -55,6 +55,73 @@ def models(device):
     yield bucketed, unbucketed
 
 
+def test_traced_replay_with_all_slots_inactive_writes_no_cache_row(device):
+    """A traced decode step with every slot at position -1 writes nothing.
+
+    This is the safety proof for the recapture warm pass, which runs an eager
+    decode mid-request and must not touch a live slot's cache rows
+    (work log FM-017): -1 is the inactive marker the decode path already
+    honours, and ``paged_update_cache`` skipping it is what makes warming
+    inactive equivalent to not warming at all. Asserted on the cache itself
+    rather than argued from the op's documentation.
+    """
+    cap = 512
+    model = GLM47FlashModel.from_pretrained(
+        device, max_batch_size=1, max_seq_len=cap, layer_indices=PROBE_LAYERS, prefill_buckets=(128, 256, 512)
+    )
+    gen = GLM47FlashGenerator(model)
+    try:
+        gen._ensure_owned_state()
+        gen.capture_decode_trace()
+        gen.reset()  # zeroes the cache and marks every slot inactive
+        assert gen._host_positions == [-1] * gen.max_batch_size
+        gen.set_decode_tokens([11] * gen.max_batch_size)
+        for _ in range(3):
+            gen.decode_step_traced()
+        ttnn.synchronize_device(device)
+        cache = gen._kv_cache[0]
+        blocks = int(cache.shape[0])
+        for block in (0, blocks // 2, blocks - 1):
+            row = ttnn.slice(
+                cache, [block, 0, 0, 0], [block + 1, 1, int(cache.shape[2]), int(cache.shape[3])], [1, 1, 1, 1]
+            )
+            host = ttnn.to_torch(row).to(torch.float32)
+            ttnn.deallocate(row)
+            assert torch.count_nonzero(host) == 0, (block, float(host.abs().max()))
+        # positions stayed inactive, so the step really was a no-op for state
+        assert gen._host_positions == [-1] * gen.max_batch_size
+    finally:
+        gen.teardown()
+
+
+def test_prefill_at_exactly_the_supported_context(device):
+    """A prompt of exactly ``max_seq_len`` must work, not fail on bookkeeping.
+
+    The post-compile trace recapture used to derive its warm position from the
+    prompt length, so a prompt at exactly the supported context asked
+    ``set_decode_positions`` for ``max_seq_len``, which is one past the last
+    representable position, and the call raised *after* completing the prefill
+    (work log FM-017). Run on a small reduced model so the boundary is cheap:
+    the property is the arithmetic, not the depth.
+    """
+    cap = 512
+    model = GLM47FlashModel.from_pretrained(
+        device, max_batch_size=1, max_seq_len=cap, layer_indices=PROBE_LAYERS, prefill_buckets=(128, 256, 512)
+    )
+    gen = GLM47FlashGenerator(model)
+    try:
+        gen._ensure_owned_state()
+        gen.capture_decode_trace()
+        logits = gen.prefill_logits(list(range(1000, 1000 + cap)))
+        assert logits.shape == (1, cap, model.vocab_size), logits.shape
+        assert torch.isfinite(logits).all()
+        # and the last representable decode position is still usable
+        gen.set_decode_positions([cap - 1])
+        gen.replay_decode_trace()
+    finally:
+        gen.teardown()
+
+
 @pytest.mark.parametrize("seq", [17, 65, 129, 154, 700, 2049, 2600])
 def test_bucketed_prefill_matches_block_aligned_prefill(models, seq):
     """Padding to a bucket changes nothing a real position can see."""

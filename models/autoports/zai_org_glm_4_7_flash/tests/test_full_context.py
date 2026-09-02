@@ -147,7 +147,7 @@ def test_full_context_prefill_and_decode(gen):
     # progress callback), which has no post-compile hook, and a 202733-token
     # prompt compiles programs no bucket warmed. Re-capture before replaying
     # over them: work log FM-016.
-    recaptured = gen._maybe_recapture_after_compile(warm_at=prompt_len)
+    recaptured = gen._maybe_recapture_after_compile()
     print(f"  post-prefill trace recapture: {recaptured}", flush=True)
 
     # The final prompt position's logits must be a real distribution, not drift.

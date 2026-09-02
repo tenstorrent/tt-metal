@@ -34,6 +34,12 @@ from models.autoports.zai_org_glm_4_7_flash.tt.generator import build_generator
 MODEL_DIR = Path(__file__).resolve().parents[1]
 BATCH = int(os.environ.get("GLM47_FM_BATCH", "32"))
 BATCH_SEQ = int(os.environ.get("GLM47_FM_BATCH_SEQ", "8192"))
+#: Printed so the committed log records the geometry *and* whether it came from
+#: the environment or the defaults; the two are indistinguishable otherwise.
+BATCH_SOURCE = {
+    "GLM47_FM_BATCH": os.environ.get("GLM47_FM_BATCH", "<default 32>"),
+    "GLM47_FM_BATCH_SEQ": os.environ.get("GLM47_FM_BATCH_SEQ", "<default 8192>"),
+}
 TRACE_REGION_SIZE = 350_000_000
 
 
@@ -57,6 +63,12 @@ def gen(device):
     )
     yield generator
     generator.teardown()
+
+
+def test_batch_geometry_is_recorded(capsys=None):
+    """One line in the log saying where BATCH and BATCH_SEQ came from."""
+    print(f"batch geometry: BATCH={BATCH} BATCH_SEQ={BATCH_SEQ} from {BATCH_SOURCE}", flush=True)
+    assert BATCH >= 1 and BATCH_SEQ >= 1
 
 
 def _prompt_ids(gen, seq, salt=0):
@@ -190,6 +202,92 @@ def test_batch_inactive_rows(gen):
     assert all(int(pos_after[u]) == -1 for u in inactive), pos_after.tolist()
     assert all(int(pos_after[u]) == seq + 3 for u in active), pos_after.tolist()
     assert gen.counters["position_refreshes"] >= 1
+
+
+def test_recapture_mid_decode_leaves_a_deeper_slot_untouched(gen):
+    """A trace recapture in the middle of a slot's decode must not disturb it.
+
+    The recapture exists because a prefill can compile programs while the
+    traces are live (work log FM-016). Its construction-time sibling warms by
+    running one eager decode, which *writes a KV row for every slot*, so a
+    recapture that warmed would corrupt any slot sitting at a different
+    position: at batch > 1 with mixed prompts that is the normal case, not the
+    corner (FM-017). The recapture therefore does not warm, and this is the
+    control: identical tokens with and without one injected mid-decode.
+    """
+    if BATCH < 2:
+        pytest.skip("needs batch > 1")
+    kv_cache = gen._kv_cache
+    seq, steps = 64, 6
+    tokens = torch.zeros(BATCH, seq, dtype=torch.int32)
+    for user in range(BATCH):
+        tokens[user] = torch.tensor(_prompt_ids(gen, seq, salt=user), dtype=torch.int32)
+
+    def run(recapture_after=None):
+        gen.reset()
+        logits = gen.prefill_forward(
+            tokens, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=[seq] * BATCH
+        )
+        first = torch.argmax(logits[:, 0], dim=-1).tolist()
+        gen.set_decode_tokens(first)
+        gen.set_decode_positions([seq] * BATCH)
+        out = [first]
+        for step in range(steps):
+            if step == recapture_after:
+                gen.recapture_decode_traces()
+            gen.decode_step_traced()
+            out.append(gen.read_decode_tokens(BATCH))
+        return out
+
+    control = run()
+    with_recapture = run(recapture_after=3)
+    assert with_recapture == control, (control, with_recapture)
+
+
+def test_batch_decode_positions_pad_inactive_slots(gen):
+    """Fixed slots: a caller may name fewer positions than slots and leave the
+    rest inactive, which is only meaningful at batch > 1."""
+    if BATCH < 2:
+        pytest.skip("needs batch > 1")
+    gen.set_decode_positions([7, 9])
+    assert gen._host_positions == [7, 9] + [-1] * (BATCH - 2)
+    gen.set_decode_positions([5] * BATCH)
+    assert gen._host_positions == [5] * BATCH
+    gen.reset()
+    assert gen._host_positions == [-1] * BATCH
+
+
+def test_batch_prefill_targets_a_named_slot(gen, expect_error):
+    """``prefill_forward(user_ids=...)`` fills the slot the caller names.
+
+    Without it an adapter could only target a slot by handing in a re-rowed
+    page table, and a stray `user_id=` kwarg was silently swallowed into
+    ``**kwargs`` and prefilled slot 0 (FM-017).
+    """
+    if BATCH < 3:
+        pytest.skip("needs batch > 2")
+    kv_cache = gen._kv_cache
+    seq = 64
+    ids = torch.tensor([_prompt_ids(gen, seq, salt=11)], dtype=torch.int32)
+    gen.reset()
+    into = BATCH - 1
+    logits = gen.prefill_forward(
+        ids, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=[seq], user_ids=[into]
+    )
+    named = int(torch.argmax(logits[0, 0]))
+
+    # The same prompt in slot `into` of a full batch prefill must agree.
+    tokens = torch.zeros(BATCH, seq, dtype=torch.int32)
+    for user in range(BATCH):
+        tokens[user] = torch.tensor(_prompt_ids(gen, seq, salt=11 if user == into else user), dtype=torch.int32)
+    gen.reset()
+    full = gen.prefill_forward(tokens, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=[seq] * BATCH)
+    assert named == int(torch.argmax(full[into, 0]))
+
+    with expect_error(ValueError, "user_ids must be in"):
+        gen.prefill_forward(
+            ids, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=[seq], user_ids=[BATCH]
+        )
 
 
 def test_batch_traced_decode_feedback(gen):
