@@ -162,11 +162,9 @@ void tilize_in(
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer& in_cb) {
     in_cb.wait_front(in_block_w);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
-                     // activation_reuse path, which the resnet conv factories force OFF. Guard the
-                     // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
+    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_block now forwards to plain tilize_block on
+    // Quasar (tilize.h ARCH_QUASAR branch), so the name resolves and the guard is no longer needed.
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-#endif
     in_cb.pop_front(in_block_w);
 }
 
@@ -207,9 +205,8 @@ inline void tilize_in_reuse_split_reader(
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
+    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_init_with_dt forwards to the plain path.
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
-#endif
 
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
@@ -265,9 +262,8 @@ inline void tilize_in_reuse_split_reader(
     PACK((out_cb.evil_set_write_ptr(out_cb_addr_init)));
 #endif
     out_cb.push_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
+    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_uninit forwards to the plain path.
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
-#endif
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>

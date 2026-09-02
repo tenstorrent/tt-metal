@@ -741,6 +741,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
 
+    // [tt-metal #51270 item 2] The weights writer drives weight_block_height_num_outer from out_conv_c_blocks
+    // (output N-split), but the compute consumes conv_act_c_blocks (activation K-split) weight-K-height blocks
+    // (in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w). When these differ -- "input/output shard grids
+    // differ in channel dimension", e.g. a reshard-to-BLOCK_SHARDED on a non-square/degenerate grid where the
+    // input and output shard specs pick different orientations -- the writer under/over-produces weight tiles
+    // and the matmul's in1 unpack reads an unwritten L1 slot (MEM_READ_NO_RESPONSE / ERROR_TRISC1). Log both so
+    // a block-sharded hang can be triaged against this host-side count mismatch before chasing the LLK
+    // MATH<->PACK DEST-recycle handshake. If act != out here, this is the likely cause and the writer weight
+    // K-height count should follow conv_act_c_blocks.
+    log_debug(tt::LogOp, "conv c_blocks: act={} out={}", conv_act_c_blocks, out_conv_c_blocks);
+
     const ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -1143,17 +1154,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
-    // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
-    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
-    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
-    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
-    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
-    // (copy_block reload + re-accumulate), which IS ported/validated on Quasar. This only
-    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
-    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
-    const bool packer_l1_acc_en = false;
-    (void)ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // [from amokan/fused_conv] Packer-L1-accumulate re-enabled on Quasar. It had been forced off because the
+    // Quasar packer-L1-acc pack path (PACR0_TILE_INC in-place accumulate + the QSR_RESTORE_WR / g_dfb ring
+    // rewind between K-blocks) mis-addressed the matmul_partials CB -> OOB L1 write -> ERROR_TRISC1 0x19. That
+    // mis-addressing is the same 18->11 bit source-offset truncation now worked around in llk_unpack_tilize.h
+    // (full-width TILIZE_SRC_ADDR_OFFSET CFG register), so the FPU-reload fallback is no longer required and
+    // the perf optimization is restored.
+    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
