@@ -220,7 +220,79 @@ def _skip_coverage_unsupported(mathop):
         )
 
 
-def _sweep_params(formats, mathops, approx_modes, input_dimensions):
+def _bh_unsupported_float_combo(formats, dest_acc) -> bool:
+    """Blackhole with dest_acc=No supports neither Float16 input nor Float32->Float16."""
+    return (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and (
+            formats.input_format == DataFormat.Float16
+            or formats == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
+        )
+    )
+
+
+def _bh_unless_fp32(formats, dest_acc) -> bool:
+    """Blackhole with dest_acc=No only supports the Float32->Float32 combination."""
+    return (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    )
+
+
+# Reasons a (formats, approx_mode, mathop, dest_acc) combination is not swept. Each was
+# a pytest.skip in the test body; every one is a pure function of the parametrize tuple
+# and TestConfig.CHIP_ARCH, which pytest_configure binds before collection. Evaluating
+# them here drops the case at collection instead of generating it, handing it to an xdist
+# worker and skipping it -- on Blackhole that was 1140 of 5792 cases, a 20% skip rate
+# sitting between a reader and the real coverage number.
+#
+# The reasons stay as strings on purpose. A filtered combination leaves no trace in the
+# report, so this is now the only place that records what is not tested and why;
+# test_unswept_combinations_are_accounted_for keeps the total visible.
+_RELU_MIN_ISSUE = "https://github.com/tenstorrent/tt-llk/issues/1120"
+
+
+def _unsupported_reason(formats, approx_mode, mathop, dest_acc, broad):
+    """Why this combination is not swept, or None if it is."""
+    if mathop == MathOperation.ReluMin:
+        return _RELU_MIN_ISSUE
+
+    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
+        return "Metal tanh does not support approximation mode"
+
+    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
+    # format set: the broad profile runs everything except a Float16 input or
+    # Float32->Float16, while the standard profile allows only Float32->Float32.
+    if broad:
+        if _bh_unsupported_float_combo(formats, dest_acc):
+            return "not supported on BH architecture"
+    elif _bh_unless_fp32(formats, dest_acc):
+        return "not supported on BH architecture"
+
+    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
+    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
+    if (
+        approx_mode == ApproximationMode.Yes
+        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
+        and formats.input_format != DataFormat.Bfp4_b
+        and (
+            formats.input_format == DataFormat.Bfp8_b
+            or formats.output_format == DataFormat.Bfp8_b
+        )
+    ):
+        return "exp-family ops do not support bf8_b in approximation mode"
+
+    return None
+
+
+# Every combination the filter dropped, as {reason: count}. Built as a side effect of
+# _sweep_params so it cannot drift from what was actually filtered.
+UNSWEPT_COMBINATIONS: dict[str, int] = {}
+
+
+def _sweep_params(formats, mathops, approx_modes, input_dimensions, broad):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
@@ -229,26 +301,34 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
-        )
+    candidates = chain(
+        product(
+            formats,
+            approx_modes,
+            fast_ops,
+            [FastMode.No, FastMode.Yes],
+            dest_accs,
+            input_dimensions,
+        ),
+        product(
+            formats,
+            approx_modes,
+            non_fast_ops,
+            [FastMode.No],
+            dest_accs,
+            input_dimensions,
+        ),
     )
+
+    kept = []
+    for params in candidates:
+        fmt, approx_mode, mathop, _fast_mode, dest_acc, _dims = params
+        reason = _unsupported_reason(fmt, approx_mode, mathop, dest_acc, broad)
+        if reason is None:
+            kept.append(params)
+        else:
+            UNSWEPT_COMBINATIONS[reason] = UNSWEPT_COMBINATIONS.get(reason, 0) + 1
+    return kept
 
 
 def _assert_broad_profile_valid():
@@ -294,18 +374,21 @@ UNARY_SWEEP_PARAMS = (
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
         BROAD_DIMENSIONS,
+        broad=True,
     )
     + _sweep_params(
         FORMATS_BFP4_B,
         BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
         BROAD_DIMENSIONS,
+        broad=True,
     )
     + _sweep_params(
         STANDARD_FORMATS,
         STANDARD_SWEEP_OPS,
         [ApproximationMode.No],
         STANDARD_DIMENSIONS,
+        broad=False,
     )
 )
 
@@ -313,17 +396,41 @@ UNARY_SWEEP_PARAMS = (
 _assert_broad_profile_valid()
 
 
-def _skip_bh_unsupported_float_combo(formats, dest_acc):
-    """Blackhole with dest_acc=No supports neither Float16 input nor Float32->Float16."""
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and (
-            formats.input_format == DataFormat.Float16
-            or formats == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
-        )
-    ):
-        pytest.skip(reason="This combination is not supported on BH architecture")
+def test_unswept_combinations_are_accounted_for():
+    """Every combination the collection-time filter dropped, with its reason.
+
+    Moving a skip out of the test body and into the parametrize filter buys speed at the
+    cost of visibility: a filtered case leaves no SKIPPED line in the report, so the only
+    remaining record of what is not tested is _unsupported_reason. This test prints the
+    tally and asserts the two properties worth asserting about it.
+
+    Not asserted: the *count*. It is arch-dependent (the Blackhole guards do most of the
+    filtering) and changes legitimately whenever the format matrix does.
+    """
+    filtered = sum(UNSWEPT_COMBINATIONS.values())
+    total_candidates = len(UNARY_SWEEP_PARAMS) + filtered
+
+    # A filter that dropped nothing would mean the reasons had gone stale -- e.g. the
+    # ReluMin issue was fixed and the entry left behind, which would silently keep the
+    # op unswept.
+    assert UNSWEPT_COMBINATIONS, (
+        "no combination was filtered, so every reason in _unsupported_reason is now "
+        "unreachable -- delete the ones that no longer apply rather than leaving them"
+    )
+
+    # And a filter that dropped most of the matrix would mean the sweep had quietly
+    # stopped testing anything, which is the failure mode this mechanism risks.
+    assert len(UNARY_SWEEP_PARAMS) > total_candidates // 2, (
+        f"the filter dropped {filtered} of {total_candidates} candidate combinations, "
+        "leaving under half the matrix"
+    )
+
+    print(
+        f"\n{len(UNARY_SWEEP_PARAMS)} of {total_candidates} combinations swept; "
+        f"{filtered} filtered at collection:"
+    )
+    for reason, count in sorted(UNSWEPT_COMBINATIONS.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:5d}  {reason}")
 
 
 def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
@@ -344,12 +451,13 @@ def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
 
 
 def _skip_bh_unless_fp32(formats, dest_acc):
-    """Blackhole with dest_acc=No only supports the Float32->Float32 combination."""
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-    ):
+    """Runtime form of _bh_unless_fp32, for the sweeps built with @parametrize.
+
+    The main sweep filters this combination out at collection instead (see
+    _unsupported_reason); the smaller sweeps below are a few dozen cases each, where
+    the bookkeeping of a collection-time filter buys nothing.
+    """
+    if _bh_unless_fp32(formats, dest_acc):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
@@ -410,8 +518,6 @@ def test_eltwise_unary_sfpu(
     Stimuli come from the per-op registry for every op; the sweep envelope (which profile
     the op is in) is the only thing that varies. See BROAD_SWEEP_OPS.
     """
-    broad = mathop in BROAD_SWEEP_OPS
-
     _skip_coverage_unsupported(mathop)
 
     if (
@@ -434,35 +540,9 @@ def test_eltwise_unary_sfpu(
             )
         )
 
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
-    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
-    # format set: the broad profile runs everything except a Float16 input or
-    # Float32->Float16, while the standard profile allows only Float32->Float32.
-    if broad:
-        _skip_bh_unsupported_float_combo(formats, dest_acc)
-    else:
-        _skip_bh_unless_fp32(formats, dest_acc)
-
-    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
-    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and formats.input_format != DataFormat.Bfp4_b
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related operations are not supported for bf8_b format in approximation mode."
-        )
-
+    # The combinations these used to skip are filtered at collection now -- see
+    # _unsupported_reason. Only the coverage-build exclusions above remain a runtime
+    # skip, because WITH_COVERAGE is a property of the build rather than of the tuple.
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
     eltwise_unary_sfpu(
@@ -1269,12 +1349,18 @@ def eltwise_unary_sfpu(
             ).spec_A,
         )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    # No operand B: eltwise_unary_sfpu_test.cpp never reads buffer_B, so generating,
+    # packing and DMA-ing a second tile per test was pure overhead. Its L1 region is
+    # still reserved via tile_count_B below -- the operands are laid out contiguously
+    # and the generated header declares buffer_B unconditionally, so dropping the
+    # reservation would move buffer_Res.
+    src_A, tile_cnt_A, _, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         spec_A=spec_A,
+        generate_operand_B=False,
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -1318,7 +1404,7 @@ def eltwise_unary_sfpu(
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
-            src_B,
+            None,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
@@ -1370,7 +1456,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     src_A[3] = -100
     src_A[4] = -88.5
 
-    src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
+    # Same source, same absent operand B -- see the comment in eltwise_unary_sfpu().
     tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
     tile_cnt_B = tile_cnt_A
 
@@ -1411,7 +1497,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
-            src_B,
+            None,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
