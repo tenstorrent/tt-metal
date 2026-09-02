@@ -194,7 +194,6 @@ private:
         uint64_t order_regressions = 0, bad_frames = 0;
         uint64_t first_data_tsc = 0, last_commit_tsc = 0;
         uint64_t min_zone_ts = 0, max_zone_ts = 0;
-        uint64_t checksum = 0;  // READ_ONLY ablation: defeats elision of the bandwidth-probe reads
         bool desync_warned = false;
         bool watchdog_fired = false;
         std::chrono::steady_clock::time_point last_progress;
@@ -232,9 +231,6 @@ private:
     std::vector<std::unique_ptr<Consumer>> consumers_report_;
     uint64_t next_handle_ = 1;
 
-    bool no_decode_ = false;
-    bool read_only_ = false;  // peek + line-stride read + pop: isolates pinned-FIFO read bandwidth
-    uint32_t die_after_ = 0;
     std::chrono::seconds watchdog_{120};
 
     std::atomic<bool> stop_{false};

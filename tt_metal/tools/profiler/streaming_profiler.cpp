@@ -49,7 +49,6 @@
 
 #include "tools/profiler/spsc_marker_decode.hpp"
 #include "tools/profiler/streaming_profiler_consumer.hpp"
-#include "tools/profiler/streaming_profiler_env.hpp"
 #include "tools/profiler/streaming_profiler_tracy_handler.hpp"
 #include "tools/profiler/streaming_profiler_receiver.hpp"
 #include "tools/profiler/streaming_profiler_tracy_consumer.hpp"
@@ -62,87 +61,12 @@ namespace pz = tt::tt_metal::profiler;
 
 namespace {
 
-// TT_METAL_STREAMING_PROFILER_NO_STATIC_TLB: skip configuring a static TLB window for the DRISC relay,
-// leaving the socket's ack write on UMD's dynamic (reconfigure-per-access) path.
-bool no_static_tlb() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_NO_STATIC_TLB");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return v;
-}
+// DRAM view ids the relays occupy, one per relay. Views 7 and 2 sit at the end of the roster so that a
+// roster truncated to fewer relays sheds the historically bring-up-fragile views first.
+constexpr std::array<uint32_t, 8> kRelayBankRoster = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
 
-// TT_METAL_STREAMING_PROFILER_NOC forces which NIU every relay egresses on (reads take the other); unset =
-// NOC 0 for all of them. Sharing one egress NIU beats spreading the relays over both: NOC 1 egress runs
-// ~2x the service interval of NOC 0, so a relay parked there takes essentially every producer stall.
-// The socket's NOC0-derived PCIe encoding is correct on both NoCs, because the PCIe tile lives in
-// translated space and the coordinate mirroring that applies to worker coords does not apply to it.
-int relay_noc_override() {
-    static const int v = [] {
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_NOC");
-        return (s == nullptr || *s == '\0') ? -1 : (std::strtoul(s, nullptr, 10) == 1 ? 1 : 0);
-    }();
-    return v;
-}
-
-// TT_METAL_STREAMING_PROFILER_RESERVE_COLUMN: under slow dispatch, hold the last worker column back and
-// poll only 11x10=110 instead of the full 12x10=120. Not a functional requirement -- the relay lives on a
-// DRAM core, so no worker is spent on it -- but a fixed poll-list length makes sweep costs comparable
-// across runs.
-bool reserve_column_env() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RESERVE_COLUMN");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return v;
-}
-
-const std::vector<uint32_t>& relay_vcs() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_VCS");
-        if (s != nullptr && *s != '\0') {
-            const char* p = s;
-            while (*p != '\0') {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)) & 3u);
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-        }
-        return out;
-    }();
-    return v;
-}
-
-// DRAM view ids the relays occupy, one per relay. Views 7 and 2 sit at the end of the default roster so
-// that a roster truncated to fewer relays sheds the historically bring-up-fragile views first.
-const std::vector<uint32_t>& relay_banks() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_BANKS");
-        if (s != nullptr && *s != '\0') {
-            const char* p = s;
-            while (*p != '\0') {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-        }
-        if (out.empty()) {
-            out = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
-        }
-        return out;
-    }();
-    return v;
-}
+// Staging slots per relay, capped at what a DRISC's L1 fits.
+constexpr uint32_t kMaxStageSlots = 7;
 
 // TT_METAL_STREAMING_PROFILER_NRELAYS forces the relay count, 1..kMaxRelays; 0 = unset, boot_device then takes
 // min(kMaxRelays, DRAM views). A forced value above the view count is clamped there.
@@ -159,13 +83,6 @@ uint32_t n_relays_env(uint32_t max_relays) {
         s,
         max_relays);
     return static_cast<uint32_t>(n);
-}
-
-// TT_METAL_STREAMING_PROFILER_NSTAGE: cap on staging slots. Default 7, which is what a DRISC's L1 fits.
-uint32_t nstage_cap(uint32_t computed) {
-    const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_NSTAGE");
-    const uint32_t cap = (s == nullptr || *s == '\0') ? 7u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
-    return (cap != 0 && computed > cap) ? cap : computed;
 }
 
 }  // namespace
@@ -194,94 +111,6 @@ uint32_t dram_spool_mb() {
         const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 128u;
         // A ring beyond 4095 MiB would overflow the kernel's 32-bit ring arithmetic (a bank is 4 GiB anyway).
         return n > 4095u ? 4095u : n;
-    }();
-    return v;
-}
-
-// TT_METAL_STREAMING_PROFILER_RELAY_SLICE_MAP: comma-separated permutation, entry d = which core band relay
-// d takes. Unset = identity. Bands are row-major slices assigned with no reference to where the relay's own
-// DRAM core sits, so the default pairing is arbitrary.
-const std::vector<uint32_t>& relay_slice_map() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_SLICE_MAP");
-        if (s != nullptr && *s != '\0') {
-            for (const char* p = s; *p != '\0';) {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-        }
-        return out;
-    }();
-    return v;
-}
-
-// Per-relay core-count weights from TT_METAL_STREAMING_PROFILER_RELAY_WEIGHTS, indexed by relay slot (not
-// bank id). Relays are not equally fast -- an even split measured a 45% spread in service interval, and the
-// knee follows the slowest relay -- so weighting core count by 1/interval equalises the intervals instead
-// of the counts. The weights are board-specific calibration, so the default stays even.
-const std::vector<uint32_t>& relay_weights() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_WEIGHTS");
-        if (s != nullptr && *s != '\0') {
-            for (const char* p = s; *p != '\0';) {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-            return out;
-        }
-        return out;  // empty = even split; the use site treats it that way
-    }();
-    return v;
-}
-
-// TT_METAL_STREAMING_PROFILER_RELAY_SUBCH: comma-separated DRAM subchannel index per relay. Each DRAM view
-// has three subchannels at quite different NoC positions (bank 5: NOC0 (9,2)/(9,10)/(9,3); bank 3:
-// (0,5)/(0,7)/(0,6)), and pick_unused_dram_logical_core() returns whichever is first unreserved -- nothing
-// picks for locality. Unset keeps that behaviour.
-const std::vector<uint32_t>& relay_subchannels() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_SUBCH");
-        if (s != nullptr && *s != '\0') {
-            for (const char* p = s; *p != '\0';) {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-        }
-        return out;
-    }();
-    return v;
-}
-
-// TT_METAL_STREAMING_PROFILER_RELAY_ASSIGN=xsplit: assign worker cores to relays by NoC reachability instead
-// of row-major index order. Round-trip latency is position-independent on these unidirectional tori (a
-// request costs dx+dy hops and its response (17-dx)+(12-dy), always 29), but link occupancy is not: reads
-// ride NoC 1 (-x/-y) and DRAM sits in NOC0 columns x=0 (views D0-D3) and x=9 (views D4-D7), so a relay in
-// the x=0 column reaching a worker at x=1 wraps 0->16->15->...->1 and holds ~15 links for that one read.
-// Row-major bands span both halves; grouping puts each relay on the half its own column reaches cheaply:
-//   x=9 column relays (bank >= 4) -> the left half  (NOC0 x < 9)
-//   x=0 column relays (bank <  4) -> the right half (NOC0 x > 9)
-bool relay_assign_xsplit() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_ASSIGN");
-        return s != nullptr && std::string_view(s) == "xsplit";
     }();
     return v;
 }
@@ -623,32 +452,11 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 }
 
-// Put a DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Run to completion because D2HSocket
+// Put every relay's NIU into stream mode (1) or back to NOC2AXI (0). Run to completion because D2HSocket
 // construction writes the config into DRISC L1 from the host, which only lands once the NIU terminates
 // inbound traffic at L1 instead of forwarding it to GDDR.
-void StreamingProfiler::set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream) {
-    Program p = CreateProgram();
-    CreateKernel(
-        p,
-        "tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp",
-        drisc_logical,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {stream}});
-    const std::string who = fmt::format("niu-mode({},{})->{}", drisc_logical.x, drisc_logical.y, stream);
-    g_bringup_step = who + ":CompileProgram";
-    detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
-    g_bringup_step = who + ":WriteRuntimeArgs";
-    detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
-    // Split into launch and wait so a failure names which half stalled: LaunchProgram's dram_barrier
-    // MMIO-polls a core in every DRAM channel, while the completion poll necessarily runs after the flip,
-    // against a core that is by definition already in stream mode.
-    g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
-    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-    g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
-    detail::WaitProgramDone(device, p);
-    g_bringup_step = who + ":done";
-}
-
-// Flip every relay's NIU in one launch. Every LaunchProgram carries a dram_barrier, which MMIO-polls a core
+//
+// One launch for all of them. Every LaunchProgram carries a dram_barrier, which MMIO-polls a core
 // in every DRAM channel, so flipping one relay per launch makes the second flip's barrier address a core
 // that is already in stream mode -- where an inbound DRAM-range address no longer means what the barrier
 // assumes -- and the read never completes (~210 ms root-port completion timeout). One launch is one
@@ -673,9 +481,9 @@ void StreamingProfiler::set_drisc_niu_mode(
     detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
     g_bringup_step = who + ":WriteRuntimeArgs";
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
-    // Split like the single-core path. Here the barrier runs before any core is in stream mode, so a
-    // failure on the first label means a core was already in stream mode when this run began -- a restore
-    // that did not complete, or a reset that did not cover it.
+    // Split into launch and wait so a failure names which half stalled. The barrier runs before any core
+    // is in stream mode, so a failure on the first label means a core was already in stream mode when this
+    // run began -- a restore that did not complete, or a reset that did not cover it.
     g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
     detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
     g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
@@ -790,9 +598,6 @@ bool StreamingProfiler::boot_device(
     const uint32_t device_id = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(device_id);
 
-    const char* sd_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    const bool slow_dispatch = sd_env != nullptr && *sd_env != '\0' && *sd_env != '0';
-
     // The relay is a DRISC: one DM RISC-V on a DRAM core, which today exists only on Blackhole.
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         log_warning(
@@ -805,15 +610,11 @@ bool StreamingProfiler::boot_device(
 
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    // Slow dispatch hands the whole worker grid to compute (12x10 here) because nothing is reserved for
-    // dispatch; fast dispatch reserves the rest itself and returns 11x10.
-    //
     // The poll list built below defines the drained set, and a producer outside it hangs the workload:
     // producers are lossless, so an undrained one fills its ring, blocks forever in ring_ensure_room and
     // takes the host down with it in wait_until_cores_done. The relay lives on a DRAM core, so no worker is
     // spent on it and the full grid can be polled.
-    const bool reserve_column = slow_dispatch && reserve_column_env();
-    const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
+    const uint32_t gx = static_cast<uint32_t>(grid.x);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
     ctx.nl = static_cast<uint32_t>(num_cores) * kNRisc;
@@ -825,38 +626,10 @@ bool StreamingProfiler::boot_device(
     // core into SPSC_CORE_XY.
     std::vector<uint32_t> coords(num_cores, 0);
     std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
-    // Enumeration order decides what a contiguous relay slice means. Default is row-major; xsplit orders by
-    // (NoC half, row, column), so the first n_left entries are exactly the cores the x=9 DRAM column reaches
-    // without wrapping a row.
-    std::vector<std::pair<uint32_t, uint32_t>> order;  // (lx, ly) in assignment order
-    order.reserve(num_cores);
-    uint32_t n_left = 0;
-    {
-        std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> keyed;
-        keyed.reserve(num_cores);
-        for (uint32_t ly = 0; ly < gy; ly++) {
-            for (uint32_t lx = 0; lx < gx; lx++) {
-                const CoreCoord n0 = cluster.get_physical_coordinate_from_logical_coordinates(
-                    device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
-                const uint32_t half = static_cast<uint32_t>(n0.x) < 9u ? 0u : 1u;
-                keyed.push_back({half, {lx, ly}});
-                n_left += (half == 0u) ? 1u : 0u;
-            }
-        }
-        if (relay_assign_xsplit()) {
-            std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) {
-                return a.first < b.first;  // stable: row-major order preserved inside each half
-            });
-        } else {
-            n_left = 0;  // signals "no grouping" to the assignment loop
-        }
-        for (const auto& k : keyed) {
-            order.push_back(k.second);
-        }
-    }
+    // Row-major enumeration is what makes a relay's band a contiguous run of core indices.
     for (uint32_t idx = 0; idx < num_cores; idx++) {
         {
-            const uint32_t lx = order[idx].first, ly = order[idx].second;
+            const uint32_t lx = idx % gx, ly = idx / gx;
             CoreCoord v =
                 cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord{lx, ly}, CoreType::WORKER);
             const uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
@@ -919,30 +692,21 @@ bool StreamingProfiler::boot_device(
                 kMaxRelays);
         }
     }
-    // The default roster lists all 8 views, fragile ones last; views this part lacks drop out before the
-    // n_drisc prefix is taken.
+    // The roster lists all 8 views, fragile ones last; views this part lacks drop out before the n_drisc
+    // prefix is taken.
     std::vector<uint32_t> banks;
     {
-        const bool banks_forced = [] {
-            const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_RELAY_BANKS");
-            return s != nullptr && *s != '\0';
-        }();
-        for (const uint32_t b : relay_banks()) {
-            TT_FATAL(
-                !banks_forced || b < nbanks,
-                "TT_METAL_STREAMING_PROFILER_RELAY_BANKS names DRAM view {} but this part has views 0..{}",
-                b,
-                nbanks - 1);
+        for (const uint32_t b : kRelayBankRoster) {
             if (b < nbanks) {
                 banks.push_back(b);
             }
         }
         TT_FATAL(
             banks.size() >= ctx.n_drisc,
-            "streaming profiler needs {} relay banks but only {} usable DRAM views are listed{} (part has {} views)",
+            "streaming profiler needs {} relay banks but only {} usable DRAM views are in the roster (part has {} "
+            "views)",
             ctx.n_drisc,
             banks.size(),
-            banks_forced ? " in TT_METAL_STREAMING_PROFILER_RELAY_BANKS" : " in the default roster",
             nbanks);
         banks.resize(ctx.n_drisc);
     }
@@ -964,8 +728,7 @@ bool StreamingProfiler::boot_device(
             TT_FATAL(
                 flip_cores[a] != flip_cores[b],
                 "streaming profiler: DRISC {} (DRAM view {}) and DRISC {} (DRAM view {}) both resolve to logical "
-                "DRAM core ({},{}). Two resident relay kernels cannot share a core -- pick different banks via "
-                "TT_METAL_STREAMING_PROFILER_RELAY_BANKS.",
+                "DRAM core ({},{}). Two resident relay kernels cannot share a core.",
                 a,
                 banks[a],
                 b,
@@ -1008,26 +771,6 @@ bool StreamingProfiler::boot_device(
     }
     set_drisc_niu_mode(ctx.device, flip_cores, 1);
 
-    const std::vector<uint32_t>& slice_map = relay_slice_map();
-    TT_FATAL(
-        slice_map.empty() || slice_map.size() >= ctx.n_drisc,
-        "TT_METAL_STREAMING_PROFILER_RELAY_SLICE_MAP needs {} entries, got {}",
-        ctx.n_drisc,
-        slice_map.size());
-    // Weighted prefix split: relay slot sl owns cores [cum[sl], cum[sl+1]) scaled to num_cores. Integer
-    // math on the running sum keeps the partition exact -- every core assigned once, no rounding gap.
-    const std::vector<uint32_t>& weights_env = relay_weights();
-    TT_FATAL(
-        weights_env.empty() || weights_env.size() >= ctx.n_drisc,
-        "TT_METAL_STREAMING_PROFILER_RELAY_WEIGHTS needs {} entries (one per relay), got {}",
-        ctx.n_drisc,
-        weights_env.size());
-    std::vector<uint64_t> wcum(ctx.n_drisc + 1, 0);
-    for (uint32_t i = 0; i < ctx.n_drisc; i++) {
-        const uint32_t w = weights_env.empty() ? 1u : weights_env[i];
-        TT_FATAL(w != 0, "relay weight {} must be non-zero", i);
-        wcum[i + 1] = wcum[i] + w;
-    }
     // One replicated mesh buffer with one interleaved page per DRAM bank reserves the same
     // [address, address+spool) window in every bank of every device, so a single buffer covers every relay.
     // It must be a mesh-level buffer: MeshBuffer allocations run through the mesh lock-step allocator,
@@ -1060,29 +803,12 @@ bool StreamingProfiler::boot_device(
     } else {
         spool_bytes = 0;
     }
-    // xsplit: a relay serves only the half its own DRAM column reaches without wrapping a row, and the
-    // relays of a column split that half between them.
-    std::vector<uint32_t> xs_grp(ctx.n_drisc, 0), xs_rank(ctx.n_drisc, 0);
-    uint32_t xs_n[2] = {0, 0};
-    for (uint32_t d = 0; d < ctx.n_drisc && d < banks.size(); d++) {
-        const uint32_t g = banks[d] >= 4u ? 0u : 1u;  // views D4-D7 sit in NOC0 column x=9, D0-D3 in x=0
-        xs_grp[d] = g;
-        xs_rank[d] = xs_n[g]++;
-    }
     // Each relay's coords are a contiguous run of the same grid order the host uses everywhere else, so a
     // core belongs to exactly one relay and nothing -- L1, socket, head mirrors -- is shared on the device.
+    // The integer prefix split is exact: every core assigned once, no rounding gap.
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
-        const uint32_t sl = slice_map.empty() ? d : slice_map[d];
-        TT_FATAL(sl < ctx.n_drisc, "slice {} out of range for {} relays", sl, ctx.n_drisc);
-        uint32_t lo = static_cast<uint32_t>((num_cores * wcum[sl]) / wcum[ctx.n_drisc]);
-        uint32_t hi = static_cast<uint32_t>((num_cores * wcum[sl + 1]) / wcum[ctx.n_drisc]);
-        if (n_left != 0 && xs_n[xs_grp[d]] != 0) {
-            const uint32_t g = xs_grp[d];
-            const uint32_t base = g == 0u ? 0u : n_left;
-            const uint32_t span = g == 0u ? n_left : static_cast<uint32_t>(num_cores) - n_left;
-            lo = base + static_cast<uint32_t>((static_cast<uint64_t>(span) * xs_rank[d]) / xs_n[g]);
-            hi = base + static_cast<uint32_t>((static_cast<uint64_t>(span) * (xs_rank[d] + 1)) / xs_n[g]);
-        }
+        const uint32_t lo = static_cast<uint32_t>((num_cores * d) / ctx.n_drisc);
+        const uint32_t hi = static_cast<uint32_t>((num_cores * (d + 1)) / ctx.n_drisc);
         const uint32_t my_cores = hi - lo;
         if (my_cores == 0) {
             continue;
@@ -1090,26 +816,6 @@ bool StreamingProfiler::boot_device(
         CoreCoord drisc_phys{};  // NOC0 coords of the relay core, for the socket and the log line
         uint32_t region = 0;     // usable L1 on the relay core
         ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(ctx.device, banks[d]);
-        if (const auto& sub_sel = relay_subchannels(); d < sub_sel.size()) {
-            // Forced placement. Validated against the same reserved set the picker honours, so a
-            // requested subchannel that is a worker/eth endpoint is refused rather than silently
-            // double-booking a core.
-            const uint32_t nsub = soc.get_grid_size(tt::CoreType::DRAM).y;
-            TT_FATAL(sub_sel[d] < nsub, "relay {} subchannel {} >= {}", d, sub_sel[d], nsub);
-            const size_t chan = soc.get_channel_for_dram_view(static_cast<int>(banks[d]));
-            const tt::umd::CoreCoord tc = soc.get_dram_core_for_channel(
-                static_cast<int>(chan), static_cast<int>(sub_sel[d]), tt::CoordSystem::TRANSLATED);
-            bool reserved = false;
-            for (const auto& c : soc.dram_view_worker_cores.at(banks[d])) {
-                reserved = reserved || (c.x == tc.x && c.y == tc.y);
-            }
-            for (const auto& c : soc.dram_view_eth_cores.at(banks[d])) {
-                reserved = reserved || (c.x == tc.x && c.y == tc.y);
-            }
-            TT_FATAL(!reserved, "relay {} subchannel {} is a reserved worker/eth endpoint", d, sub_sel[d]);
-            ctx.drisc_logical[d] =
-                soc.get_logical_dram_core_for_subchannel(static_cast<int>(banks[d]), static_cast<int>(sub_sel[d]));
-        }
         {
             const uint32_t nsub = soc.get_grid_size(tt::CoreType::DRAM).y;
             const size_t chan = soc.get_channel_for_dram_view(static_cast<int>(banks[d]));
@@ -1139,11 +845,10 @@ bool StreamingProfiler::boot_device(
         ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
         log_info(
             tt::LogMetal,
-            "[streaming profiler] relay {} at virtual ({},{}) owns band {} = cores [{}, {}) of {}",
+            "[streaming profiler] relay {} at virtual ({},{}) owns cores [{}, {}) of {}",
             d,
             ctx.drisc_virtual[d].x,
             ctx.drisc_virtual[d].y,
-            sl,
             lo,
             hi,
             num_cores);
@@ -1159,7 +864,7 @@ bool StreamingProfiler::boot_device(
         // done(64) + stop(64) + results(256) + handshake(64).
         constexpr uint32_t kMiscBytes = 1024;
         const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
-        const uint32_t nstage = nstage_cap(region > fixed ? (region - fixed) / slot_bytes : 0);
+        const uint32_t nstage = std::min(region > fixed ? (region - fixed) / slot_bytes : 0u, kMaxStageSlots);
         if (nstage == 0) {
             log_warning(tt::LogMetal, "[streaming profiler] Device {}: DRISC L1 too small; skipping", device_id);
             disarm_producers(mesh_device, device_id);
@@ -1177,30 +882,6 @@ bool StreamingProfiler::boot_device(
         // host-written socket config land in this L1 instead of being forwarded to GDDR; the kernel
         // restores NOC2AXI on the host's word.
 
-        // TT_METAL_STREAMING_PROFILER_NIU_TEST isolates the NIU mode flip from everything else the relay
-        // does: flip, optionally restore, then bail before any socket, kernel or egress exists. The flip
-        // is the only thing a relay writes that outlives the process, since NIU_CFG_0 persists until a
-        // chip reset.
-        //   =leave -> stay in stream mode, exactly as a run that dies before the stop=2 handshake leaves it
-        //   =flip  -> restore NOC2AXI immediately (the clean-teardown control)
-        const char* niu_test = std::getenv("TT_METAL_STREAMING_PROFILER_NIU_TEST");
-        if (niu_test != nullptr && *niu_test != '\0') {
-            const bool restore = std::string_view(niu_test) != "leave";
-            if (restore) {
-                set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 0);
-            }
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] NIU TEST: DRISC {} logical ({},{}) flipped to stream mode and {} "
-                "-- no socket, no kernel, no egress",
-                d,
-                ctx.drisc_logical[d].x,
-                ctx.drisc_logical[d].y,
-                restore ? "RESTORED to NOC2AXI" : "LEFT IN STREAM MODE");
-            disarm_producers(mesh_device, device_id);
-            return false;
-        }
-
         // A static TLB window skips UMD's per-access TLB reconfigure on the socket's per-read ack write:
         // measured 171 ns/write static against 382 ns dynamic.
         //
@@ -1212,7 +893,7 @@ bool StreamingProfiler::boot_device(
         // (MEM_DRISC_L1_BASE = 0), and Strict ordering matches what workers get.
         //
         // Best-effort: a window is a finite device resource, and losing the race only costs the ~210 ns.
-        if (!no_static_tlb() && !cluster.is_mock_or_emulated()) {
+        if (!cluster.is_mock_or_emulated()) {
             auto* tlb_manager = cluster.get_driver()->get_chip(device_id)->get_tlb_manager();
             const tt_xy_pair tlb_core(ctx.drisc_virtual[d].x, ctx.drisc_virtual[d].y);
             if (!tlb_manager->is_tlb_mapped(tlb_core)) {
@@ -1382,9 +1063,8 @@ bool StreamingProfiler::boot_device(
                 {"stop_addr", ctx.stop_addr[d]},
                 {"socket_config_addr", ctx.sockets[sk]->get_config_buffer_address()},
                 {"max_cores", kMaxCores},
-                // d&2 splits the pushers across two of the four unicast request VCs;
-                // TT_METAL_STREAMING_PROFILER_RELAY_VCS overrides the assignment per relay.
-                {"write_vc", d < relay_vcs().size() ? relay_vcs()[d] : ((d & 2u) ? 0u : 1u)},
+                // d&2 splits the pushers across two of the four unicast request VCs.
+                {"write_vc", (d & 2u) ? 0u : 1u},
                 {"ship_min_pct", ship_min_pct()},
                 // The bounce slots cost the kernel a staging generation, so the spool needs the full slot
                 // count; a smaller L1 falls back to direct push rather than tripping the kernel's geometry
@@ -1408,8 +1088,10 @@ bool StreamingProfiler::boot_device(
                 *ctx.relay_program[d],
                 "tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp",
                 ctx.drisc_logical[d],
+                // Every relay egresses on NOC 0 (reads take the other): NOC 1 egress runs ~2x the service
+                // interval, so a relay parked there takes essentially every producer stall.
                 DramConfig{
-                    .noc = (relay_noc_override() < 0 ? false : relay_noc_override() == 1) ? NOC::NOC_1 : NOC::NOC_0,
+                    .noc = NOC::NOC_0,
                     .defines = {{"STREAMING_PROFILER_RELAY_KERNEL", "1"}},
                     .named_compile_args = cargs});
             std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
@@ -1599,9 +1281,9 @@ void StreamingProfiler::stop() {
     spool_buffer_.reset();
 }
 
-// One MMIO pass per worker core: the producer-owned stall counters, which nothing downstream can lose and
-// so stay valid even under NO_DECODE, and each lane's own tail against the receiver's consumed-words
-// mirror, which is the direct assertion that the stop-path sweep-to-empty held.
+// One MMIO pass per worker core: the producer-owned stall counters, which nothing downstream can lose, and
+// each lane's own tail against the receiver's consumed-words mirror, which is the direct assertion that the
+// stop-path sweep-to-empty held.
 void StreamingProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_index) {
     if (ctx.core_virt.empty()) {
         return;
@@ -1610,7 +1292,7 @@ void StreamingProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
     const auto& hal = MetalContext::instance().hal();
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     std::vector<uint32_t> heads;
-    if (receiver_ != nullptr && !streaming_profiler::env_flag("TT_METAL_STREAMING_PROFILER_NO_DECODE")) {
+    if (receiver_ != nullptr) {
         heads = receiver_->final_lane_heads(device_index);
     }
     std::vector<uint32_t> cv(kernel_profiler::SPSC_CONTROL_END, 0);

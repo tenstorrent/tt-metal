@@ -21,7 +21,6 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -166,12 +165,8 @@ inline constexpr uint8_t kZS16DMask[3] = {0x24, 0x49, 0x92};
 // behind this check. Keeping the attribute off the walk, the emitters and ingest makes the guarantee
 // structural: outside the kernels the compiler cannot emit AVX-512 at all, so a host without it
 // (Rome/Milan, post-ADL Intel client) runs the AVX2/scalar tier instead of faulting.
-// TT_METAL_STREAMING_PROFILER_NO_AVX512=1 forces the fallback tier, for testing it on capable hosts.
 inline bool spsc_host_avx512() {
     static const bool v = [] {
-        if (std::getenv("TT_METAL_STREAMING_PROFILER_NO_AVX512") != nullptr) {
-            return false;
-        }
         return __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") &&
                __builtin_cpu_supports("avx512vl") && __builtin_cpu_supports("avx512dq");
     }();

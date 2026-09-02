@@ -284,16 +284,8 @@ int main(int argc, char** argv) {
             [empty_stats](const streaming_profiler::StreamingProfilerRecordBatch& b) { (*empty_stats)(b); });
     }
 
-    // TT_METAL_SLOW_DISPATCH_MODE=1 takes the whole run off the command queue, which the Tensix-BRISC relay
-    // control (TT_METAL_STREAMING_PROFILER_RELAY_TENSIX) needs: it parks a resident program on a worker core,
-    // and fast dispatch will not allow that.
     const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
-
-    // TT_METAL_STREAMING_PROFILER_NUM_CQS sets the hardware command-queue count: each extra CQ adds dispatch
-    // cores driving the PCIe tile the relay's egress shares.
-    const char* nq = std::getenv("TT_METAL_STREAMING_PROFILER_NUM_CQS");
-    const size_t num_cqs = (nq != nullptr && *nq != '\0') ? (size_t)std::strtoul(nq, nullptr, 10) : 1;
 
     int device_id = 0;
     // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC (e.g. 2x4) opens the whole mesh in one process, giving the
@@ -307,10 +299,10 @@ int main(int argc, char** argv) {
             distributed::MeshDeviceConfig(distributed::MeshShape(rows, cols)),
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
-            num_cqs);
+            /*num_command_queues=*/1);
     } else {
         mesh_device = distributed::MeshDevice::create_unit_mesh(
-            device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+            device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1);
     }
     if (clkprobe) {
         clock_probe(mesh_device);

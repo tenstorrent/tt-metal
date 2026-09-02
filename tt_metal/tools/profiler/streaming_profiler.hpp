@@ -91,9 +91,8 @@ private:
     };
 
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    // Put this DRISC's NIU into stream mode (1) or back to NOC2AXI (0).
-    static void set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream);
-    // Flip several DRISC NIUs in one program launch; doing them one per launch hangs bring-up (see the .cpp).
+    // Put these DRISCs' NIUs into stream mode (1) or back to NOC2AXI (0), in one program launch; doing
+    // them one per launch hangs bring-up (see the .cpp).
     static void set_drisc_niu_mode(IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream);
     // Set PROFILER_TERMINATE on every worker so producers stop blocking on a full ring. Required on every
     // path where the relay does not come up: producers are armed by TT_METAL_DEVICE_PROFILER independently

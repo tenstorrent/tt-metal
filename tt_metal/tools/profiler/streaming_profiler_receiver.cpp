@@ -142,9 +142,6 @@ StreamingProfilerReceiver::StreamingProfilerReceiver(std::vector<ReceiverDeviceC
     TT_FATAL(
         std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
         "StreamingProfilerRawRecMeta bit-field layout does not match the vectorized packer");
-    no_decode_ = env_flag("TT_METAL_STREAMING_PROFILER_NO_DECODE");
-    read_only_ = env_flag("TT_METAL_STREAMING_PROFILER_READ_ONLY");
-    die_after_ = env_u32("TT_METAL_STREAMING_PROFILER_WRITER_DIE_AFTER", 0);
     watchdog_ = std::chrono::seconds(env_u32("TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S", 120));
     // The ring is the capture's elastic buffer (the FIFO only lands frames), so its size bounds how far
     // a capture can outrun its consumers before per-consumer drops start: at ~9.8 wire bytes per zone,
@@ -214,7 +211,7 @@ void StreamingProfilerReceiver::start() {
         std::clamp<uint32_t>(env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", 2), 1, streams_.size());
     nthreads_ = nthreads;
     // The audit attaches before ingest starts so its readers see the ring from line 0.
-    if (!no_decode_ && !read_only_ && env_u32("TT_METAL_STREAMING_PROFILER_AUDIT", 1) != 0) {
+    {
         std::lock_guard<std::mutex> lk(consumers_mu_);
         auto c = std::make_unique<Consumer>();
         c->name = "audit";
@@ -270,31 +267,6 @@ bool StreamingProfilerReceiver::ingest_pass(Stream& s) {
     const uint32_t np = std::min(avail, kMaxPagesPerPass);
     if (s.first_data_tsc == 0) {
         s.first_data_tsc = tsc_now();
-    }
-    if (no_decode_) {
-        s.sock->pop(np, true);
-        s.last_commit_tsc = tsc_now();
-        s.pages += np;
-        s.passes++;
-        return true;
-    }
-    if (read_only_) {
-        const auto v = s.sock->peek(np);
-        const uint64_t t0 = tsc_now();
-        uint64_t acc = 0;
-        for (size_t i = 0; i < v.first_bytes / 4; i += 16) {
-            acc += v.first[i];
-        }
-        for (size_t i = 0; i < v.second_bytes / 4; i += 16) {
-            acc += v.second[i];
-        }
-        s.checksum ^= acc;
-        s.decode_ticks += tsc_now() - t0;
-        s.sock->pop(np, true);
-        s.last_commit_tsc = tsc_now();
-        s.pages += np;
-        s.passes++;
-        return true;
     }
 
     const auto view = s.sock->peek(np);
@@ -405,7 +377,6 @@ void StreamingProfilerReceiver::decode_thread(std::vector<Stream*> streams) {
     set_os_thread_name(name);
     prctl(PR_SET_TIMERSLACK, 1000);  // default 50 us slack would round every probe sleep up to it
     IdleBackoff backoff(kProbeSleepCapUs);
-    uint64_t data_passes = 0;
     for (Stream* s : streams) {
         s->last_progress = std::chrono::steady_clock::now();
     }
@@ -420,7 +391,6 @@ void StreamingProfilerReceiver::decode_thread(std::vector<Stream*> streams) {
             all_retired = false;
             if (ingest_pass(*s)) {
                 any = true;
-                data_passes++;
                 s->last_progress = std::chrono::steady_clock::now();
             } else if (
                 !s->producers_done.load(std::memory_order_relaxed) && !s->watchdog_fired &&
@@ -435,14 +405,6 @@ void StreamingProfilerReceiver::decode_thread(std::vector<Stream*> streams) {
             }
         }
         if (all_retired) {
-            break;
-        }
-        if (die_after_ != 0 && data_passes >= die_after_) {
-            log_warning(
-                tt::LogMetal,
-                "[streaming profiler receiver] {}: TEST HOOK exiting after {} passes; acks stop here",
-                name,
-                data_passes);
             break;
         }
         if (any) {

@@ -1598,16 +1598,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         log_info(tt::LogMetal, "[streaming profiler] enabled -- legacy realtime profiler is disabled for this run.");
         return;
     }
-    // Same exclusion for an externally supplied DRISC relay, which reads the same rings. It needs a
-    // variable of its own because TT_METAL_STREAMING_PROFILER would also boot the built-in relay, swapping
-    // one competing consumer for another.
-    const char* dd = std::getenv("TT_METAL_DRISC_PROFILER");
-    if (dd != nullptr && *dd != '\0' && *dd != '0') {
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] TT_METAL_DRISC_PROFILER set -- legacy realtime profiler is disabled for this run.");
-        return;
-    }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 

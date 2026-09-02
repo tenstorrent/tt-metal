@@ -2956,18 +2956,13 @@ void DeviceProfiler::pollDebugDumpResults(
 #endif
 }
 
-// True when an external consumer is draining the worker profiler rings itself. The DRAM profiler's
-// per-program control-buffer reset rewinds the ring tail, which duplicates zones for such a consumer, so
-// it stands down whenever one of these relays is enabled.
+// True when the streaming profiler is draining the worker profiler rings itself. The DRAM profiler's
+// per-program control-buffer reset rewinds the ring tail, which duplicates zones for that consumer, so it
+// stands down whenever the relay is enabled.
 static bool external_ring_relay_active() {
     static const bool active = [] {
-        for (const char* var : {"TT_METAL_STREAMING_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
-            const char* s = std::getenv(var);
-            if (s != nullptr && *s != '\0' && *s != '0') {
-                return true;
-            }
-        }
-        return false;
+        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER");
+        return s != nullptr && *s != '\0' && *s != '0';
     }();
     return active;
 }
