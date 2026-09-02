@@ -12,6 +12,7 @@ import statistics
 import time
 from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -297,75 +298,53 @@ def _trace_wall_samples_ms(
     layer: ttKDA,
     hidden: ttnn.Tensor,
     repetitions: int,
-    case: KimiK3TestCase,
-    golden_output: torch.Tensor,
-    golden_state: KDAReferenceState,
-    tensor_parallel_axis: int,
-    layout: str,
-) -> tuple[list[float], dict[str, float]]:
-    state = _allocate_state(layer)
-    warm_output, warm_state = layer.forward(hidden, state)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(warm_output)
-    _deallocate_state(warm_state)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    output, next_state = layer.forward(hidden, state)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    trace_pcc = check_kimi_k3_accuracy(
-        f"Kimi-K3 layer 1 T={case.hidden.shape[1]} {layout} trace replay",
-        case,
-        golden_output,
-        golden_state,
-        next_state,
-        output,
-        mesh_device,
-        tensor_parallel_axis,
-        pcc_threshold=_PCC_THRESHOLD,
-    )
-    samples_ms = []
-    for _ in range(_TIMING_SAMPLES):
-        start = time.perf_counter()
-        for _ in range(repetitions):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+) -> tuple[list[float], dict[str, float] | None]:
+    state = None
+    warm_output = None
+    warm_state = None
+    trace_id = None
+    output = None
+    next_state = None
+    try:
+        state = _allocate_state(layer)
+        warm_output, warm_state = layer.forward(hidden, state)
         ttnn.synchronize_device(mesh_device)
-        samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.deallocate(output)
-    _deallocate_state(state)
-    _deallocate_state(next_state)
-    return samples_ms, trace_pcc
+        ttnn.deallocate(warm_output)
+        warm_output = None
+        _deallocate_state(warm_state)
+        warm_state = None
 
-
-def _trace_wall_samples_without_accuracy(
-    mesh_device: ttnn.MeshDevice,
-    layer: ttKDA,
-    hidden: ttnn.Tensor,
-    repetitions: int,
-) -> list[float]:
-    state = _allocate_state(layer)
-    warm_output, warm_state = layer.forward(hidden, state)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(warm_output)
-    _deallocate_state(warm_state)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    output, next_state = layer.forward(hidden, state)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    samples_ms = []
-    for _ in range(_TIMING_SAMPLES):
-        start = time.perf_counter()
-        for _ in range(repetitions):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output, next_state = layer.forward(hidden, state)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.deallocate(output)
-    _deallocate_state(state)
-    _deallocate_state(next_state)
-    return samples_ms
+        validation = validate_first_replay(next_state, output) if validate_first_replay is not None else None
+
+        samples_ms = []
+        for _ in range(_TIMING_SAMPLES):
+            start = time.perf_counter()
+            for _ in range(repetitions):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
+        return samples_ms, validation
+    finally:
+        try:
+            if trace_id is not None:
+                ttnn.release_trace(mesh_device, trace_id)
+        finally:
+            if warm_output is not None:
+                ttnn.deallocate(warm_output)
+            if warm_state is not None:
+                _deallocate_state(warm_state)
+            if output is not None:
+                ttnn.deallocate(output)
+            if state is not None:
+                _deallocate_state(state)
+            if next_state is not None:
+                _deallocate_state(next_state)
 
 
 @pytest.mark.parametrize(
@@ -433,17 +412,24 @@ def test_kimi_k3_layer_1_perf(
     _deallocate_state(initial_state)
     _deallocate_state(state)
 
+    validate_trace_replay = partial(
+        check_kimi_k3_accuracy,
+        f"Kimi-K3 layer 1 T={case.hidden.shape[1]} {layout} trace replay",
+        case,
+        golden_output,
+        golden_state,
+        mesh_device=mesh_device,
+        tensor_parallel_axis=tensor_parallel_axis,
+        pcc_threshold=_PCC_THRESHOLD,
+    )
     samples_ms, trace_pcc = _trace_wall_samples_ms(
         mesh_device,
         layer,
         hidden_tt,
         repetitions,
-        case,
-        golden_output,
-        golden_state,
-        tensor_parallel_axis,
-        layout,
+        validate_first_replay=validate_trace_replay,
     )
+    assert trace_pcc is not None
     first_wall_ms = samples_ms[0]
     median_wall_ms = statistics.median(samples_ms)
     tail_wall_ms = max(samples_ms)
@@ -508,7 +494,7 @@ def test_synthetic_kimi_k3_perf(
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
-    samples_ms = _trace_wall_samples_without_accuracy(mesh_device, layer, hidden_tt, _REPETITIONS)
+    samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
     median_wall_ms = statistics.median(samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
