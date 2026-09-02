@@ -1009,10 +1009,19 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
 class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
     """EXAONE-4.5 (text decoder) for vLLM integration.
 
-    Named after the HF architecture string so the vLLM TT plugin can map it
-    directly. The checkpoint is multimodal, but ModelArgs runs its text
-    decoder only (``force_text_only``): hybrid LLLG sliding/full attention
-    (via :class:`HybridAttentionForCausalLM`), post-norm decoder, NoPE
+    Named after the HF architecture string. Note that the vLLM TT plugin
+    does NOT pick this class up automatically: the plugin prepends ``TT``
+    to the checkpoint architecture and its built-in registry has no EXAONE
+    entry, so serving requires registering
+    ``TTExaone4_5_ForConditionalGeneration`` -> this class in the vLLM
+    ``ModelRegistry`` of the engine-core process. tt-inference-server does
+    this via an ``EXTRA_MODELS_DIR`` plugin bundle (see
+    tenstorrent/tt-inference-server#5023); direct plugin users must supply
+    an equivalent registration.
+
+    The checkpoint is multimodal, but ModelArgs runs its text decoder only
+    (``force_text_only``): hybrid LLLG sliding/full attention (via
+    :class:`HybridAttentionForCausalLM`), post-norm decoder, NoPE
     full-attention layers. Vision inputs are not yet wired through vLLM —
     this serves text-only requests.
     """
