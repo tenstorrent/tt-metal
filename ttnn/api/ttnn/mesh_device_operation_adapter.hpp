@@ -810,6 +810,43 @@ public:
             std::size_t tensor_idx;
         };
 
+        // Shared by both spec adapters: the SPMD one and the per-range MeshWorkload one.
+        struct SpecSharedVariables {
+            std::vector<ResolvedTensorBinding> bindings;
+            // Op-owned tensors produced by the factory, parked here so the (move-only) MeshTensors
+            // outlive the cache miss and every program on the occupied ranges can reference them.
+            // Shared ownership keeps the device allocation alive for the life of the cache entry.
+            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+        };
+
+        // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
+        template <typename CachedWorkload>
+        static void refresh_tensor_args(
+            CachedWorkload& cached_workload,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            const auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+
+                // Reproduce the cache-miss enumeration: fresh io tensors, then the
+                // parked op-owned tensors (stable addresses, retrieved from the cache).
+                auto mesh_tensors = io_mesh_tensors;
+                if (sv.op_owned_tensors) {
+                    for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
+                        mesh_tensors.push_back(std::cref(op_owned_tensor));
+                    }
+                }
+
+                tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
+                for (const auto& b : sv.bindings) {
+                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                }
+                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
+            }
+        }
+
         // Metal 2.0's MakeMeshWorkloadFromSpecs needs a MeshDevice; pull it from the first device
         // tensor reachable from tensor_args, falling back to tensor_return_value for output-only
         // ops (e.g. rand) whose tensor_args carry no input tensor.
@@ -880,14 +917,21 @@ public:
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
-        struct shared_variables_t {
-            std::vector<ResolvedTensorBinding> bindings;
-            // Op-owned tensors produced by the factory, parked here so the
-            // (move-only) MeshTensors outlive the cache miss and every program
-            // on the occupied ranges can reference them. Shared ownership keeps
-            // the device allocation alive for the life of the cache entry.
-            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
-        };
+        // MeshWorkloadSpecFactoryConcept keys on &T::create_mesh_workload_artifacts, which is
+        // ill-formed for an overload set, so such a factory lands here and is silently replicated.
+        static_assert(
+            !requires(
+                const operation_attributes_t& attrs,
+                const tensor_args_t& tensor_args,
+                tensor_return_value_t& tensor_return_value,
+                const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+                SpecFactory::create_mesh_workload_artifacts(attrs, tensor_args, tensor_return_value, tensor_coords);
+            },
+            "This factory is callable as create_mesh_workload_artifacts but did not match "
+            "MeshWorkloadSpecFactoryConcept, so its per-coordinate programs would be silently replaced by one "
+            "spec replicated across the mesh. Declare exactly one create_mesh_workload_artifacts signature.");
+
+        using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         // Resolve one artifacts' tensor bindings and park its op-owned tensors. Consumes
@@ -952,26 +996,7 @@ public:
             const operation_attributes_t& /*attrs*/,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
-            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-
-                // Reproduce the cache-miss enumeration: fresh io tensors, then the
-                // parked op-owned tensors (stable addresses, retrieved from the cache).
-                auto mesh_tensors = io_mesh_tensors;
-                if (sv.op_owned_tensors) {
-                    for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
-                        mesh_tensors.push_back(std::cref(op_owned_tensor));
-                    }
-                }
-
-                tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
-                for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
-                }
-                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
-            }
+            SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
         }
     };
 
@@ -979,7 +1004,7 @@ public:
     // cache-hit path calls the factory's override_runtime_arguments and applies the returned
     // ProgramRunArgs via UpdateProgramRunArgs instead of the base's tensor-only UpdateTensorArgs.
     // The miss path applies create_program_artifacts' run args, not the override, so per-coordinate
-    // run args must come from a per-coordinate create_program_artifacts.
+    // run args must come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
     template <CustomProgramSpecFactoryConcept CustomSpecFactory>
     struct CustomProgramSpecMeshWorkloadFactoryAdapter : ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory> {
         using Base = ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory>;
@@ -1020,11 +1045,7 @@ public:
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
-        struct shared_variables_t {
-            std::vector<ResolvedTensorBinding> bindings;
-            // Workload-scoped, shared by every range: see MeshWorkloadArtifacts.
-            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
-        };
+        using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static consteval bool has_override_runtime_arguments() {
@@ -1036,6 +1057,12 @@ public:
                 WorkloadSpecFactory::override_runtime_arguments(attrs, tensor_args, tensor_return_value, coord);
             };
         }
+
+        // Otherwise a near-miss signature leaves run args stale on every hit with nothing to say why.
+        static_assert(
+            !detail::HasSpecRuntimeArgsOverride<WorkloadSpecFactory> || has_override_runtime_arguments(),
+            "override_runtime_arguments must take (operation_attributes_t, tensor_args_t, tensor_return_value_t, "
+            "const std::optional<MeshCoordinate>&) to be called on the cache-hit path.");
 
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
@@ -1061,13 +1088,29 @@ public:
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramRunArgs> run_params;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (auto& per_coord : artifacts.programs) {
+                // Metal catches overlapping ranges but never sees an exact duplicate, and it only
+                // checks the mesh extent, so equality and tensor_coords containment land here.
+                for (const auto& coord : per_coord.range) {
+                    const bool covered = std::any_of(
+                        tensor_coords.ranges().begin(),
+                        tensor_coords.ranges().end(),
+                        [&coord](const auto& tensor_range) { return tensor_range.contains(coord); });
+                    TT_FATAL(
+                        covered,
+                        "create_mesh_workload_artifacts returned range {} covering {}, which is outside tensor_coords "
+                        "{}: that program would bind tensors the device holds no shard of",
+                        per_coord.range,
+                        coord,
+                        tensor_coords);
+                }
+                const auto [_, inserted] = program_specs.emplace(per_coord.range, std::move(per_coord.spec));
+                TT_FATAL(inserted, "create_mesh_workload_artifacts returned range {} twice", per_coord.range);
                 shared_variables.emplace(
                     per_coord.range,
                     shared_variables_t{
                         .bindings =
                             SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
                         .op_owned_tensors = op_owned_tensors});
-                program_specs.emplace(per_coord.range, std::move(per_coord.spec));
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1083,8 +1126,8 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             if constexpr (has_override_runtime_arguments()) {
+                const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                     auto run_args = WorkloadSpecFactory::override_runtime_arguments(
                         attrs,
@@ -1094,21 +1137,7 @@ public:
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {
-                const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                    auto mesh_tensors = io_mesh_tensors;
-                    if (sv.op_owned_tensors) {
-                        for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
-                            mesh_tensors.push_back(std::cref(op_owned_tensor));
-                        }
-                    }
-                    tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
-                    for (const auto& b : sv.bindings) {
-                        fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
-                    }
-                    tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
-                }
+                SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
             }
         }
     };

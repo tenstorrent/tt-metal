@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <gmock/gmock.h>
 #include <type_traits>
 
@@ -473,6 +474,57 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
         }
         EXPECT_EQ(static_cast<const void*>(sv.op_owned_tensors.get()), first_resources) << "range " << range;
     }
+}
+
+// Same per-coordinate mapping, but with an override so the cache-hit path takes the
+// UpdateProgramRunArgs branch instead of the tensor-only refresh.
+struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
+    static std::atomic<int> override_calls;
+
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const Op::operation_attributes_t& attrs,
+        const Op::tensor_args_t& tensor_args,
+        Op::tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+        ++override_calls;
+        return Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value).run_params;
+    }
+};
+std::atomic<int> PerCoordProdAllFactoryWithOverride::override_calls{0};
+
+TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterAppliesDescriptorOnCacheHit) {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    using Adapter =
+        device_operation::MeshDeviceOperationAdapter<Op>::MeshWorkloadSpecFactoryAdapter<PerCoordProdAllFactory>;
+    using OverrideAdapter = device_operation::MeshDeviceOperationAdapter<Op>::MeshWorkloadSpecFactoryAdapter<
+        PerCoordProdAllFactoryWithOverride>;
+    static_assert(!Adapter::has_override_runtime_arguments());
+    static_assert(OverrideAdapter::has_override_runtime_arguments());
+
+    auto input = make_tensor_with_num_shards(8, mesh_device_.get());
+    Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
+    Op::tensor_args_t tensor_args{.input = input};
+    auto output = Op::create_output_tensors(attrs, tensor_args);
+
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    // Tensor-refresh branch: a second apply must not disturb the per-coordinate mapping.
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+    const auto ranges_before = cached.workload.get_programs().size();
+    Adapter::apply_descriptor(cached, attrs, tensor_args, output);
+    EXPECT_EQ(cached.workload.get_programs().size(), ranges_before);
+    for (const auto& [range, program] : cached.workload.get_programs()) {
+        EXPECT_TRUE(cached.shared_variables.contains(range)) << "range " << range;
+    }
+
+    // Override branch: called once per range, not once for the whole workload.
+    PerCoordProdAllFactoryWithOverride::override_calls = 0;
+    auto override_cached = OverrideAdapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+    const auto override_ranges = override_cached.workload.get_programs().size();
+    EXPECT_GT(override_ranges, 1u);
+    OverrideAdapter::apply_descriptor(override_cached, attrs, tensor_args, output);
+    EXPECT_EQ(PerCoordProdAllFactoryWithOverride::override_calls.load(), static_cast<int>(override_ranges));
 }
 
 TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterProgramsOnUniformTensorCoords) {
