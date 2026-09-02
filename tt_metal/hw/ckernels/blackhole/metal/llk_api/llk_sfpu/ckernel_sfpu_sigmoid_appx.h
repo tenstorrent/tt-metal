@@ -39,6 +39,9 @@ constexpr int SIGMOID_APPX_LUT6_MOD = SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE2 | SFPLU
 // bf16 encoding of 0.5, the immediate SFPADDI recentres the odd table with.
 constexpr std::uint32_t SIGMOID_APPX_HALF_BF16 = 0x3F00;
 
+// Argument order below, since none of it is named at the call site: TTI_SFPLOAD /
+// TTI_SFPSTORE take (VD, Mod0, AddrMod, dest_reg_addr), TTI_SFPLUTFP32 takes (VD, instr_mod1),
+// and the trailing 0 on TTI_SFPADDI is instr_mod1.
 template <int K, int ITERATIONS>
 sfpi_inline void _sigmoid_appx_lut6_step_() {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
@@ -56,9 +59,11 @@ sfpi_inline void _sigmoid_appx_lut6_step_() {
     TTI_SFPADDI(SIGMOID_APPX_HALF_BF16, p_sfpu::LREG7, 0);
 
     // Adjacent to the SFPADDI it depends on: the one stall left in the body. Nothing independent
-    // can go here -- the table owns LReg[0..2] and LReg[4..6], the LUT reads LReg[3], and
-    // SFPLUTFP32 can only write VD < 8, so LReg[7] is the single staging register and no second
-    // datum can be in flight. The next load is already covering the LUT.
+    // is left to cover it here, because this schedule keeps one datum in flight. Two are possible
+    // -- SFPLUTFP32's VD is free, so a second datum's lookup can write LReg[3] in place and act
+    // as a second staging register, which is what the Wormhole kernel does for 1.32x there. It is
+    // not done here because Blackhole already issues this body at 4 slots per datum and the win
+    // would be whatever hardware stall remains, which has not been measured.
     TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_7, 2 * K);
 }
 
