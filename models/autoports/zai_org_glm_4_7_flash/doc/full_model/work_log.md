@@ -554,4 +554,17 @@ Two things changed after that sweep, both at commit time and both re-verified:
 
 ## FM-011b — checkpoint
 
-Stage review verdict and commit SHAs are appended below by the stage owner.
+Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
+
+| commit | contents |
+|---|---|
+| `ba10cee4e60` | parent: optimized-decoder stage |
+| `59cd8b4204a` | full-model stage: `tt/model.py`, `tt/generator.py`, six test modules, five probes, `doc/full_model/` (62 artifacts), the updated `doc/context_contract.json`, the fresh AIME24 reference and `readiness_autoregressive/`, and the two additive `models/common/readiness_check/` fixes |
+| (this commit) | records the SHA above |
+
+No other repo was touched: `vllm` is out of scope for this stage. The only
+files outside `models/autoports/zai_org_glm_4_7_flash/` are the five
+`models/common/readiness_check/` modules described in FM-008, all additive with
+defaults preserved. Unrelated dirty files in the checkout (`.env`,
+`model_cache/`, `tt_cache/`, `models/tt_dit/...`, various HTML/notes at the repo
+root) were left untouched and are not in the commit.
