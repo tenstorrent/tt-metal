@@ -517,10 +517,13 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     // TODO #20966: Remove single device support and branches + dynamic_cast
     auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
+        const auto sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout);
         if (address.has_value()) {
-            return AnyBuffer{CreateBuffer(config, *address)};
+            return AnyBuffer{Buffer::create(
+                config.device, *address, config.size, config.page_size, config.buffer_type, sharding_args)};
         }
-        return AnyBuffer{CreateBuffer(config)};
+        return AnyBuffer{
+            Buffer::create(config.device, config.size, config.page_size, config.buffer_type, sharding_args)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
         .size = config.size,
@@ -538,9 +541,10 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config,
     auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
-            return AnyBuffer{CreateBuffer(config, *address)};
+            return AnyBuffer{
+                Buffer::create(config.device, *address, config.size, config.page_size, config.buffer_type)};
         }
-        return AnyBuffer{CreateBuffer(config)};
+        return AnyBuffer{Buffer::create(config.device, config.size, config.page_size, config.buffer_type)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
         .size = config.size,

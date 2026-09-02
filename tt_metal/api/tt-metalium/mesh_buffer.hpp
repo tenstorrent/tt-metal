@@ -206,8 +206,10 @@ private:
 class AnyBuffer {
 public:
     AnyBuffer() = default;
+    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
     static AnyBuffer create(
         const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
+    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
     static AnyBuffer create(
         const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
