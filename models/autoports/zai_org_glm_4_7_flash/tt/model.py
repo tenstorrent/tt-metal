@@ -775,7 +775,7 @@ class GLM47FlashModel:
         finally:
             ttnn.deallocate(hidden)
 
-    def warmup_terminal_shapes(self, physical_lengths=None):
+    def warmup_terminal_shapes(self, physical_lengths=None, logits_chunk: int = 320):
         """Compile the terminal slice/norm/LM-head programs on dummy activations.
 
         `ttnn.slice` keys its program on the start offset, so the terminal
@@ -788,10 +788,14 @@ class GLM47FlashModel:
 
         Runs on a zero activation rather than a real prefill, so it costs
         program compilation and about a millisecond of device time per offset
-        instead of 124 prefills. Prompts longer than one chunk still have an
-        offset past the last bucket and still compile on first use; bounding
-        that needs the terminal path to slice the last chunk first, which is
-        stage-07 work.
+        instead of one prefill per offset. Prompts longer than one chunk still
+        have a tile offset past the last bucket and still compile on first
+        use; bounding that needs the terminal path to slice the last chunk
+        first, which is stage-07 work.
+
+        ``logits_chunk`` must match the default ``prefill_forward`` passes to
+        ``_logits_host_rows``, or the all-positions walk warmed here is not the
+        one that runs.
         """
         lengths = sorted({int(n) for n in (physical_lengths or self.prefill_buckets)})
         for rows in lengths:
@@ -805,8 +809,15 @@ class GLM47FlashModel:
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            for s0 in range(0, rows, TILE):
-                slab = self._slice_rows(dummy, s0, s0 + TILE)
+            # Two families, both keyed on the physical length only:
+            #  * every whole-tile slab, used by prefill_forward_last_logits_device
+            #    and by the at-most-one-tile host path (the low-level
+            #    prefill_forward);
+            #  * the chunk walk prefill_logits uses over the whole prompt.
+            slabs = {(s0, s0 + TILE) for s0 in range(0, rows, TILE)}
+            slabs |= set(self._host_logits_walk(rows, 0, rows, logits_chunk))
+            for s0, s1 in sorted(slabs):
+                slab = self._slice_rows(dummy, s0, s1)
                 normed = self._final_norm_prefill(slab)
                 if slab is not dummy:
                     ttnn.deallocate(slab)
@@ -832,42 +843,70 @@ class GLM47FlashModel:
             raise ValueError(f"{rows} rows cannot be padded down to {SAMPLER_ROWS}")
         return ttnn.pad(x, [(0, 0), (0, 0), (0, SAMPLER_ROWS - rows), (0, 0)], 0.0)
 
+    def _host_logits_walk(self, phys, first_row, last_row, chunk):
+        """The slab boundaries ``_logits_host_rows`` will use, as ``(s0, s1)``.
+
+        Every boundary is a multiple of 32 and the walk ends on a multiple of
+        32, so no slab size depends on the *logical* prompt length: the
+        program family is a function of the bucketed physical length only.
+        Getting that wrong is what made every new prompt length compile a fresh
+        slice/pad/row-slice triple while the decode traces were live, and pay a
+        trace recapture for it (work log FM-018).
+
+        A request for at most one tile of rows (the low-level
+        ``prefill_forward``, which returns the final position) walks exactly
+        the tile(s) holding them. A request for the whole prompt
+        (``prefill_logits``) walks to the physical length, which costs at most
+        one bucket of padded rows and makes the walk identical for every
+        logical length in that bucket.
+        """
+        chunk = max(TILE, (chunk // TILE) * TILE)
+        tile_ceil = -(-last_row // TILE) * TILE
+        end = phys if (last_row - first_row) > TILE else min(tile_ceil, phys)
+        out = []
+        s0 = (first_row // TILE) * TILE
+        while s0 < end:
+            s1 = min(s0 + chunk, end)
+            if s1 - s0 > TILE and _mcast_2d_pc(s1 - s0, self.hidden, self.vocab_size) is None:
+                s1 = min(s0 + TILE, end)  # small tail: one tile at a time on the decode config
+            out.append((s0, s1))
+            s0 = s1
+        return out
+
     def _logits_host_rows(self, hidden, seq, first_row, last_row, chunk):
         """Norm + LM head over ``[first_row, last_row)``, returned on host.
 
-        Walks tile-aligned slabs so every ``ttnn.slice`` offset is a multiple of
-        32, and never materialises the whole ``[1, 1, S, 154880]`` logits slab.
+        Walks the tile-aligned slabs of :meth:`_host_logits_walk`, and never
+        materialises the whole ``[1, 1, S, 154880]`` logits slab.
         """
         import torch
 
-        chunk = max(TILE, (chunk // TILE) * TILE)
+        phys = int(hidden.shape[2])
         pieces = []
-        s0 = (first_row // TILE) * TILE
-        while s0 < last_row:
-            s1 = min(s0 + chunk, seq)
-            if s1 - s0 > TILE and _mcast_2d_pc(s1 - s0, self.hidden, self.vocab_size) is None:
-                s1 = min(s0 + TILE, seq)  # small tail: one tile at a time on the decode config
+        for s0, s1 in self._host_logits_walk(phys, first_row, last_row, chunk):
+            lo = max(first_row, s0) - s0
+            hi = min(last_row, s1) - s0
+            if hi <= lo:
+                continue
             slab = self._slice_rows(hidden, s0, s1)
             normed = self._final_norm_prefill(slab)
             if slab is not hidden:
                 ttnn.deallocate(slab)
-            if s1 - s0 <= TILE:
-                normed = self._pad_to_sampler_rows(normed)
             logits = self.lm_head_prefill(normed)
             ttnn.deallocate(normed)
-            lo = max(first_row, s0) - s0
-            hi = min(last_row, s1) - s0
-            if hi - lo < logits.shape[2]:
-                # Move only the requested rows: the full 32-row tile of a
-                # 154880-wide bf16 logits slab is 9.9 MB over PCIe (~3.5 ms),
-                # and the common single-row case needs 310 KB of it.
-                wanted = ttnn.slice(logits, [0, 0, lo, 0], [1, 1, hi, self.vocab_size])
-                ttnn.deallocate(logits)
-                logits, lo, hi = wanted, 0, hi - lo
+            # Trimmed on the host, always. A device-side row slice would be
+            # keyed on the logical length, and pinning its *size* to 1 to fix
+            # that traded one problem for a worse one: the program is
+            # single-core, so warming it while L1 was empty placed its static
+            # circular buffers where the captured decode trace's L1 logits
+            # later sit, and the first real call died with "Statically
+            # allocated circular buffers in program N clash with L1 buffers".
+            # The cost of not slicing is one 32-row tile (9.9 MB, ~3.4 ms)
+            # instead of one row (310 KB) on the single-position path, which is
+            # 0.6% of a 600 ms prefill (work log FM-018).
             host = ttnn.to_torch(logits).to(torch.float32)[0, 0]
             ttnn.deallocate(logits)
             pieces.append(host[lo:hi, : self.vocab_size])
-            s0 = s1
         return torch.cat(pieces, dim=0).unsqueeze(0)
 
     # ------------------------------------------------------------------ decode

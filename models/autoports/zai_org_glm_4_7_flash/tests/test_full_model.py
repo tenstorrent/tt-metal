@@ -556,6 +556,61 @@ def test_single_chunk_prompt_shape_does_not_recapture(gen):
     assert gen.counters["model_trace_replays"] == 5
 
 
+def test_host_logits_paths_compile_nothing_at_an_unaligned_length(gen):
+    """The two *host*-logits entry points must be length-independent too.
+
+    `prefill_logits` (the readiness accuracy gate) and the low-level
+    `prefill_forward` (what a vLLM adapter drives) go through
+    `_logits_host_rows`, which used to slice `[s0, seq)`, pad a non-tile tail
+    and then slice the wanted rows on device: three programs keyed on the
+    logical prompt length, compiled while the decode traces were live, and a
+    trace recapture to clean up after them. The walk is now tile-aligned at
+    both ends and the single-row slice has a fixed size, so both families are
+    warmed at construction (work log FM-018).
+    """
+    import torch as _torch
+
+    seq = 251  # 251 % 32 = 27: neither a bucket, nor a tile multiple, nor used elsewhere
+    ids = _prompt_ids(gen, seq)
+    gen._maybe_recapture_after_compile()  # absorb anything an earlier test compiled
+    gen.reset()
+    gen.reset_counters()
+    entries = gen.mesh_device.num_program_cache_entries()
+
+    logits = gen.prefill_logits(ids)
+    assert logits.shape == (1, seq, gen.model.vocab_size), logits.shape
+    assert _torch.isfinite(logits).all()
+    assert gen.mesh_device.num_program_cache_entries() == entries, "prefill_logits compiled a new program"
+    assert gen.counters["trace_recaptures"] == 0
+
+    low = gen.prefill_forward(
+        _torch.tensor([ids], dtype=_torch.int32),
+        page_table=gen._page_table_torch,
+        kv_cache=gen._kv_cache,
+        prompt_lens=[seq],
+    )
+    assert low.shape == (1, 1, gen.model.vocab_size), low.shape
+    assert gen.mesh_device.num_program_cache_entries() == entries, "low-level prefill_forward compiled a new program"
+    assert gen.counters["trace_recaptures"] == 0
+    # the two paths agree on the final position
+    assert int(low[0, 0].argmax()) == int(logits[0, -1].argmax())
+
+
+def test_low_level_prefill_rejects_the_old_slot_kwarg(gen, expect_error):
+    """``user_id=`` used to vanish into ``**kwargs`` and prefill slot 0."""
+    import torch as _torch
+
+    ids = _prompt_ids(gen, 40)
+    with expect_error(TypeError, "user_ids"):
+        gen.prefill_forward(
+            _torch.tensor([ids], dtype=_torch.int32),
+            page_table=gen._page_table_torch,
+            kv_cache=gen._kv_cache,
+            prompt_lens=[40],
+            user_id=0,
+        )
+
+
 def test_first_use_multi_chunk_shape_recaptures_and_stays_correct(gen):
     """A first-use *multi-chunk* prompt does still recapture, and correctly.
 

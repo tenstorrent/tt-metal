@@ -75,10 +75,14 @@ def main():
             for label in ("first_request", "second_request"):
                 gen.reset()
                 gen.reset_counters()
+                programs_before = dev.num_program_cache_entries()
                 t0 = time.perf_counter()
                 _, timing = gen.generate(ids, 2, enable_trace=True, stop_on_eos=False, return_timing=True)
                 wall = time.perf_counter() - t0
                 row[label] = {
+                    # What actually triggers the recapture, recorded rather
+                    # than inferred from the recapture count.
+                    "new_programs_compiled": dev.num_program_cache_entries() - programs_before,
                     # What the readiness runners measure: wall clock from the
                     # generate() call to the first token being handed back.
                     "harness_style_ttft_ms": round(

@@ -218,19 +218,22 @@ def test_recapture_mid_decode_leaves_a_deeper_slot_untouched(gen):
     if BATCH < 2:
         pytest.skip("needs batch > 1")
     kv_cache = gen._kv_cache
-    seq, steps = 64, 6
-    tokens = torch.zeros(BATCH, seq, dtype=torch.int32)
-    for user in range(BATCH):
-        tokens[user] = torch.tensor(_prompt_ids(gen, seq, salt=user), dtype=torch.int32)
+    steps = 6
+    # Mixed depths on purpose: the hazard is a warm pass writing a row at one
+    # slot's position into a slot sitting somewhere else, so every slot has a
+    # different prompt length and therefore a different decode position.
+    lens = [33 + 17 * i for i in range(BATCH)]
+    width = max(lens)
+    tokens = torch.zeros(BATCH, width, dtype=torch.int32)
+    for user, plen in enumerate(lens):
+        tokens[user, :plen] = torch.tensor(_prompt_ids(gen, plen, salt=user), dtype=torch.int32)
 
     def run(recapture_after=None):
         gen.reset()
-        logits = gen.prefill_forward(
-            tokens, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=[seq] * BATCH
-        )
+        logits = gen.prefill_forward(tokens, page_table=gen._page_table_torch, kv_cache=kv_cache, prompt_lens=lens)
         first = torch.argmax(logits[:, 0], dim=-1).tolist()
         gen.set_decode_tokens(first)
-        gen.set_decode_positions([seq] * BATCH)
+        gen.set_decode_positions(lens)
         out = [first]
         for step in range(steps):
             if step == recapture_after:
@@ -242,6 +245,27 @@ def test_recapture_mid_decode_leaves_a_deeper_slot_untouched(gen):
     control = run()
     with_recapture = run(recapture_after=3)
     assert with_recapture == control, (control, with_recapture)
+    assert len(set(lens)) == BATCH, "the point of this test is that no two slots share a position"
+
+
+def test_generate_leaves_other_slots_inactive(gen):
+    """A single-user `generate` must not activate the other 31 slots.
+
+    ``reset()`` marks every slot inactive, and `generate` used to overwrite
+    that with ``[seq] + [0] * (B - 1)``: position 0 is *active*, so every other
+    row went through `paged_update_cache` and the RoPE lookup on every step
+    (work log FM-018). Checked on the device position tensor, not the host
+    mirror.
+    """
+    if BATCH < 2:
+        pytest.skip("needs batch > 1")
+    seq = 64
+    gen.reset()
+    out = gen.generate(_prompt_ids(gen, seq), 4, enable_trace=True, stop_on_eos=False)
+    assert len(out) == 4
+    pos = [int(v) for v in ttnn.to_torch(gen._pos_dev).reshape(-1).tolist()]
+    assert pos[0] == seq + 3, pos[:4]
+    assert all(v == -1 for v in pos[1:]), pos[:8]
 
 
 def test_batch_decode_positions_pad_inactive_slots(gen):

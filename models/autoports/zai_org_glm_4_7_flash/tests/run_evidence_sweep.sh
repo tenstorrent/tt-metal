@@ -17,8 +17,11 @@
 #
 # About 85 minutes on one Blackhole p150, of which test_full_context.py (last,
 # on purpose) is 40. Every step prints "<name>=<exit code>"; anything other
-# than 0 means the sweep's evidence is incomplete.
+# than 0 means the sweep's evidence is incomplete. Those exit codes and the
+# per-run watcher fault counts are the sweep's own verdict, so its stdout is
+# teed into doc/full_model/logs/sweep_run.log rather than left in a terminal.
 set -x
+exec > >(tee "$(git rev-parse --show-toplevel)/models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/sweep_run.log") 2>&1
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 cd "$(git rev-parse --show-toplevel)" || exit 1
 D=models/autoports/zai_org_glm_4_7_flash
@@ -67,6 +70,7 @@ rm -rf /tmp/glm47_coldhome
 # per-suite row cites, the combined one proves they share a session cleanly.
 $P -m pytest $D/tests/test_full_model.py -q -s -p no:randomly > $L/pytest_full_model_only.log 2>&1; echo "mainonly=$?"
 $P -m pytest $D/tests/test_full_model.py $D/tests/test_prefill_padding.py -q -s -p no:randomly > $L/pytest_full_model.log 2>&1; echo "main=$?"
+$P -m pytest $D/tests/test_prefill_padding.py -q -s -p no:randomly > $L/pytest_prefill_padding.log 2>&1; echo "padding=$?"
 $P -m pytest $D/tests/test_full_model_perf.py -q -s -p no:randomly > $L/pytest_full_model_perf.log 2>&1; echo "perf=$?"
 GLM47_FM_BATCH=32 GLM47_FM_BATCH_SEQ=8192 $P -m pytest $D/tests/test_full_model_batch.py -q -s -p no:randomly > $L/pytest_full_model_batch32.log 2>&1; echo "batch=$?"
 

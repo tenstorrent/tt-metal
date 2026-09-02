@@ -107,6 +107,19 @@ class _SamplingArgs:
         self.sampling_dp = 1
 
 
+def _reject_user_id_kwarg(kwargs) -> None:
+    """``user_id=`` used to disappear into ``**kwargs`` and prefill slot 0.
+
+    Both low-level entry points take ``**kwargs`` so the shared readiness
+    harness can pass whatever it likes, which meant a caller naming a slot the
+    old way was silently ignored. Named explicitly rather than by rejecting
+    every unknown key, so the harness keeps working (work log FM-018).
+    """
+    for key in ("user_id", "slot", "slot_id", "user"):
+        if key in kwargs:
+            raise TypeError(f"unexpected keyword {key!r}: name slots with user_ids=[...]")
+
+
 def _new_counters() -> Dict[str, int]:
     return {
         "model_trace_replays": 0,
@@ -664,6 +677,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         """
         import torch
 
+        _reject_user_id_kwarg(kwargs)
         toks = torch.as_tensor(tokens)
         if toks.dim() == 1:
             toks = toks.unsqueeze(0)
@@ -721,6 +735,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         """
         import torch
 
+        _reject_user_id_kwarg(kwargs)
         toks = torch.as_tensor(tokens).reshape(-1)
         pos = torch.as_tensor(start_pos).reshape(-1)
         if self._tokens_dev is None:
@@ -850,7 +865,11 @@ class GLM47FlashGenerator(_ReadinessGenerator):
                 self._maybe_recapture_after_compile()
             t_ready = time.perf_counter()
             predictions = [first]
-            self.set_decode_positions([seq] + [0] * (self.max_batch_size - 1))
+            # Only this request's slot is active. `0` would be an active
+            # position, so a single-user generate on a many-slot model would
+            # drive every other row through the cache update and the RoPE
+            # lookup on every step (work log FM-018).
+            self.set_decode_positions([seq])
             if next_input is not None:
                 forced = int(next_input(0, first))
                 self.set_decode_tokens([forced] + [0] * (self.max_batch_size - 1))
