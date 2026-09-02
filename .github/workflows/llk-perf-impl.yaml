@@ -14,6 +14,16 @@ on:
         required: false
         default: true
         type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
+      only-group:
+        description: "Run only this split group (1-5). Empty runs every group."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -34,7 +44,8 @@ jobs:
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      # An unset trim step yields "", which is falsy, so the full matrix wins.
+      matrix: ${{ steps.trim.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
     steps:
@@ -80,6 +91,25 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+      - name: Keep only one split group
+        id: trim
+        if: ${{ inputs.only-group != '' }}
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          ONLY_GROUP: ${{ inputs.only-group }}
+        run: |
+          # One shard instead of ten. A change to this workflow can then be
+          # tested end to end without occupying every perf machine for two
+          # hours. Fails loud on a group number that matches nothing, so a typo
+          # cannot silently run no tests at all.
+          FILTER='import json, os, sys
+          rows = json.loads(os.environ["MATRIX"])
+          group = os.environ["ONLY_GROUP"]
+          keep = [r for r in rows if str(r.get("split_group")) == group]
+          if not keep:
+              sys.exit("no matrix row with split_group=" + group)
+          print("matrix=" + json.dumps(keep))'
+          python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
 
   compile-quasar-perf:
     if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
@@ -187,3 +217,72 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
+
+  upload-perf-data:
+    name: "Upload perf data to the warehouse"
+    needs: [llk-perf-exec]
+    # always(): a shard that failed still produced Parquets worth keeping.
+    # The job is not shielded: a refused login fails it, and fails the run. That
+    # is the behaviour the scheduled nightly will have when the default flips.
+    if: ${{ always() && inputs.upload-to-warehouse }}
+    runs-on: ubuntu-latest
+    steps:
+      # The upload action is a local action, so the repo has to be on disk
+      # before it can be resolved. Checkout also clears the workspace, so it
+      # must come before the artifacts are downloaded into it.
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Download this run's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: perf-data-*
+          path: perf-data
+      - name: Collect the run Parquets
+        run: |
+          mkdir -p generated/llk_perf
+          # One Parquet per shard, already named <run_id>-<arch>-<job_index>,
+          # so a flat copy cannot collide. generated/<producer>/ is where every
+          # other producer in this repo stages its upload.
+          #
+          # Prefix every name with llk_perf_. The upload lands in a remote
+          # directory this repo shares between producers, where a bare
+          # <run_id>-<arch>-<shard> says nothing about who owns the file. The
+          # prefix is greppable, it is what an ingest rule can key on, and it
+          # matches what helpers.perf.backfill sends for the older nights.
+          find perf-data -name '*.parquet' | while read -r f; do
+            cp "$f" "generated/llk_perf/llk_perf_$(basename "$f")"
+          done
+          ls -l generated/llk_perf
+          if [ -z "$(ls -A generated/llk_perf)" ]; then
+            echo "::error::no run Parquet in the perf-data artifacts"
+            exit 1
+          fi
+      # LLK perf has its own SFTP writer and its own ingest bucket
+      # (data_iac#655: user llk-perf-run, home data-pipeline-llk-perf-run-ingest).
+      # Only that bucket has the llk_perf_run wrangler behind it
+      # (data_airflow dags/pipelines/llk_perf_run), which loads the file into
+      # LLK_PERF.{RUNS,TEST_EXECUTIONS,MEASUREMENTS}. Another producer's writer
+      # would put the file in a bucket where nothing reads it.
+      # Host and user are literals on purpose: neither is a credential, and the
+      # warehouse owner has to be able to read what we connect as. Only the key
+      # is a secret.
+      #
+      # The user is "llk-perf-run-writer", not "llk-perf-run". data_iac's
+      # aws_transfer_user sets user_name = "${block.name}-${block.permission}"
+      # (resources/aws_sftp/main.tf L127-134, comment: `user_name ex: cicd + "-"
+      # + reader`), so "llk-perf-run" is only the project tag. Verified: this
+      # user and host uploaded the first 30 files on 2026-09-02.
+      #
+      # SFTP_LLK_PERF_WRITER_KEY must hold a key made only for CI, added to
+      # llk-perf-run's authorized_clients in data_iac. Never a personal key: a
+      # repo secret is readable by any workflow anyone can push to this repo.
+      - name: Upload perf data
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/llk_perf_batchfile.txt
+          username: "llk-perf-run-writer"
+          hostname: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"

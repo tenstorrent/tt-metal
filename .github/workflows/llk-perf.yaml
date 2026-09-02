@@ -21,6 +21,16 @@ on:
         required: false
         default: true
         type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
+      only-group:
+        description: "Run only this split group (1-5). Empty runs every group."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -41,6 +51,12 @@ jobs:
       architecture: ${{ inputs.architecture || 'all' }}
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      # Off for the scheduled nightly until the warehouse key is authorised. A
+      # scheduled run has no inputs, so the expression falls through to false.
+      # Turning it on for every night is this one expression -> true.
+      upload-to-warehouse: ${{ inputs.upload-to-warehouse || false }}
+      # Empty for a scheduled run, which therefore keeps every group.
+      only-group: ${{ inputs.only-group || '' }}
     secrets: inherit
 
   llk-perf-summary:
