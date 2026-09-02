@@ -419,14 +419,38 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
     if (eligibility.has_program_config || eligibility.has_user_core_grid) {
         return ResolutionReason::ExplicitOverride;
     }
-    if (eligibility.has_bias || eligibility.has_activation || eligibility.transpose_a || eligibility.transpose_b ||
-        eligibility.has_unsupported_tile_metadata || eligibility.has_optional_output || eligibility.has_output_tile ||
-        eligibility.has_global_cb || eligibility.has_sub_device || eligibility.has_bcast_batch ||
-        eligibility.untilize_out || eligibility.input_a_sharded || eligibility.input_b_sharded ||
-        eligibility.output_sharded || eligibility.input_b_batched ||
+    // Decline only what the key cannot tell apart. A returned entry carries a
+    // program config, so serving a call is safe exactly when every call that maps
+    // to one key needs one config. Two distinct reasons were previously merged
+    // into a single condition, which cost coverage for no safety:
+    //
+    //   * these are UNDER-KEYED, so distinct calls would collide on one entry and
+    //     silently receive a recipe measured for the other. They must be declined.
+    //       has_activation  -- the key stores only a bool, never which activation,
+    //                          so relu and gelu produce an identical key.
+    //       *_sharded       -- MemoryLayout has a single enumerator, Interleaved,
+    //                          so a shard spec is not representable at all.
+    //       global_cb, sub_device, optional_output, output_tile,
+    //       unsupported_tile_metadata -- not represented in the key in any form.
+    //       has_bias        -- keyed as a bool only; bias length follows N, so this
+    //                          is probably safe to admit, but "probably" is not a
+    //                          basis for handing out a config. Left declined until
+    //                          measured.
+    if (eligibility.has_bias || eligibility.has_activation || eligibility.has_unsupported_tile_metadata ||
+        eligibility.has_optional_output || eligibility.has_output_tile || eligibility.has_global_cb ||
+        eligibility.has_sub_device || eligibility.input_a_sharded || eligibility.input_b_sharded ||
+        eligibility.output_sharded ||
         (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
         return ResolutionReason::UnsupportedSemantics;
     }
+    //   * transpose_a, transpose_b, untilize_out, bcast_batch and run_batched are
+    //     FULLY KEYED (KeyDescriptor fields of the same name; run_batched carries
+    //     input_b_batched and is re-checked in validate_v1_request_envelope). A
+    //     call that sets one keys to its own entry, so a collision is impossible
+    //     and declining it bought nothing -- it only guaranteed we could never
+    //     serve those shapes even once measured. They now fall through to lookup:
+    //     absent measurements they simply miss and fall back, which is the same
+    //     outcome the fence produced, and once swept they are served correctly.
     return ResolutionReason::CertifiedMatch;
 }
 

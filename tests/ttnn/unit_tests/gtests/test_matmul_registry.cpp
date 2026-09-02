@@ -269,12 +269,18 @@ TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBefore
     EXPECT_EQ(
         resolve_with_compact_table_for_testing(linear, linear_eligibility, metadata(), {&entry, 1}).reason,
         ResolutionReason::UnsupportedSemantics);
+    // transpose_b is a KeyDescriptor field, so a transposed call keys to its own
+    // entry rather than colliding with the untransposed one. It is therefore not
+    // declined before lookup -- it goes through and misses, which is what lets the
+    // table serve transposed shapes once they are measured. Declining it here used
+    // to guarantee they could never be served at all.
     linear_eligibility = eligibility(OperationDomain::Linear);
     linear_eligibility.transpose_b = true;
     linear.transpose_b = true;
+    EXPECT_EQ(preflight_v1_eligibility(linear_eligibility), ResolutionReason::CertifiedMatch);
     EXPECT_EQ(
         resolve_with_compact_table_for_testing(linear, linear_eligibility, metadata(), {&entry, 1}).reason,
-        ResolutionReason::UnsupportedSemantics);
+        ResolutionReason::EmptyRegistry);
 
     auto addmm = request(OperationDomain::Addmm);
     auto addmm_eligibility = eligibility(OperationDomain::Addmm);
