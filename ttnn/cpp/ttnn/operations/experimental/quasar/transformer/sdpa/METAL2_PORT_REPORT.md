@@ -91,24 +91,31 @@ were left untouched (out of scope; no CB idioms).
   invisible on WH/BH tests. Worth a one-line note in the CB→DFB whitelist §C that the DFB peek adds
   the uncached offset on Quasar DM.
 
-## Scope decision — `cb_*` local-variable naming deliberately NOT renamed
+## `cb_*` → `dfb_*` local-variable rename (whitelist rule 1 readability sweep)
 
-Whitelist rule 1 allows a *limited* `cb_* → dfb_*` variable rename "to keep the kernel readable."
-The four helper headers still hold **hundreds** of kernel-internal `cb_*` locals / params /
-constants (`cb_qkt_im`, `cb_mask_in`, `out_cb`, `cb_id`, `cb_exp_max_diff`, …) inherited from the
-pre-fork legacy code. These were **not** renamed, deliberately:
+Done as a **second commit** on this branch (the compliance fix landed first, so the two are
+reviewable separately). ~100 distinct kernel-internal `cb_*` identifiers (`cb_qkt_im`, `cb_mask_in`,
+`out_cb`, `cb_id`, bare `cb`, the `sdpa_cb_*_out_of_line` / `cb_push_back_hold_wr_ptr` helper names,
+`INVALID_CB`, …) were renamed to their `dfb_*` equivalents across all 10 fork kernel files, plus a
+`CB`/`CBs`→`DFB`/`DFBs` comment sweep.
 
-- They are **not** one of the three compliance gaps the audit found — the rule-1 *requirement*
-  (no `CircularBuffer` **type**/reference, no `circular_buffer.h`) is fully met (0 hits).
-- The **dangerous** self-audit case — a `cb_`-prefixed **`DataflowBufferSpec` name** escaping to the
-  generated header as `dfb::cb_*` — is **absent**: every DFB spec name is already clean
-  (`dfb::q_in`, `dfb::k_in`, `dfb::attention_sink`, …). These `cb_*` are purely local.
-- Renaming them is a **1000+-line, purely-cosmetic churn** through the core flash-attention compute
-  loop, which would bury the actual compliance diff in review and carry real typo-bug risk across
-  hundreds of sites for zero behavioral or Gen2-correctness benefit.
+**Not a blanket find-and-replace** — an explicit vetted map, because a naive `s/cb/dfb/` would corrupt
+lookalikes. Method:
+- Enumerated the unique identifier list; **excluded** non-buffer lookalikes that merely contain "cb":
+  the `srca_*` / `srcb_*` **source-register** template params (only their trailing `_cb` → `_dfb`; the
+  `srcb` register name is preserved), the `reconfig_data_format_srcb` LLK call, and the sanctioned
+  `get_local_cb_interface` framework free function (kept — audit-blessed).
+- Collision-checked every `old → new`: no duplicate targets, no `new` pre-existing in a scope holding
+  its `old`. One file-level flag (bare `dfb` from the Gap-2 edit vs bare `cb` params in
+  `compute_streaming.hpp`) was verified a false positive — disjoint function scopes.
+- Applied per-identifier with word-boundary matching (`\bOLD\b`), so `cb_out` never touches
+  `cb_out_im_A`, and bare `\bcb\b` never touches `srcb` / `get_local_cb_interface`.
 
-Recommended as a **separate readability-only cleanup PR** if desired. The `run_safe_pytest`/Watcher
-baseline in this PR is the natural guard for it.
+**Residual `cb` tokens after the sweep are all legitimate non-buffer references** (`srcb`/`SrcB`
+source register, `reconfig_data_format_srcb`, `get_local_cb_interface`) — **zero** circular-buffer
+`cb_*` identifiers remain. No `DataflowBufferSpec` name was affected (they were already clean:
+`dfb::q_in`, `dfb::k_in`, …). Re-verified on WH: prefill 3/3 + chunked 3/3 still pass, kernels
+JIT-recompiled with the new names.
 
 ## Open items for downstream
 
