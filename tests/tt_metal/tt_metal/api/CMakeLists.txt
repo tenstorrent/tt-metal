@@ -78,8 +78,30 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
-# Per-core allocation tests need their own binary so TT_METAL_ALLOCATOR_MODE_HYBRID
+# The hybrid-allocator suites need their own binaries so TT_METAL_ALLOCATOR_MODE_HYBRID
 # env var is set before the RunTimeOptions singleton caches it.
+add_executable(
+    unit_tests_range_lockstep_allocation
+    allocator/test_range_lockstep_allocation.cpp
+    allocator/test_range_lockstep_allocation_host.cpp
+)
+target_include_directories(
+    unit_tests_range_lockstep_allocation
+    BEFORE
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}
+)
+target_link_libraries(unit_tests_range_lockstep_allocation PRIVATE test_metal_common_libs)
+target_precompile_headers(unit_tests_range_lockstep_allocation REUSE_FROM metal_test_pch)
+set_target_properties(
+    unit_tests_range_lockstep_allocation
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+
 add_executable(unit_tests_per_core_allocation allocator/test_per_core_allocation.cpp)
 target_include_directories(
     unit_tests_per_core_allocation
