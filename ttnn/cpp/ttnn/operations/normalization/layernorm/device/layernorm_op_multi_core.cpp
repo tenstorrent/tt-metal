@@ -51,15 +51,21 @@ struct LayerNormCbFootprint {
     std::uint64_t scaler = 0;
     std::uint64_t epsilon = 0;
     std::uint64_t variance = 0;
+    std::uint64_t accumulate = 0;
     std::uint64_t row_major_staging = 0;
 
     constexpr std::uint64_t total() const {
         return input + residual_input + output + centred_values + squared_values + gamma + beta + residual_values +
-               affine_intermediate + final_intermediate + mean + scaler + epsilon + variance + row_major_staging;
+               affine_intermediate + final_intermediate + mean + scaler + epsilon + variance + accumulate +
+               row_major_staging;
     }
 
     constexpr bool fits(std::uint64_t usable_l1_bytes) const { return total() < usable_l1_bytes; }
 };
+
+constexpr bool uses_centred_values_buffer(bool rms_norm, bool fuse_pre_add, bool large_tensor) {
+    return !rms_norm || fuse_pre_add || large_tensor;
+}
 
 // Kernel identities within the ProgramSpec.
 const m2::KernelSpecName READER{"reader"};
@@ -270,7 +276,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             .residual_input =
                 residual.has_value() ? static_cast<std::uint64_t>(plan.residual_tiles) * residual_tile_size : 0,
             .output = static_cast<std::uint64_t>(plan.output_tiles) * output_tile_size,
-            .centred_values = (!rms_norm || residual.has_value())
+            .centred_values = uses_centred_values_buffer(rms_norm, residual.has_value(), plan.large_tensor)
                                   ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
                                   : 0,
             .squared_values =
@@ -288,6 +294,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             .scaler = sfpu_statistics ? 0 : static_cast<std::uint64_t>(scaler_tiles) * bfloat16_tile_size,
             .epsilon = static_cast<std::uint64_t>(epsilon_tiles) * bfloat16_tile_size,
             .variance = static_cast<std::uint64_t>(variance_tiles) * intermediate_tile_size,
+            .accumulate = plan.large_tensor && !sfpu_statistics ? intermediate_tile_size : 0,
             .row_major_staging = row_major_staging,
         };
     };
@@ -675,7 +682,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     add_dfb(EX2, im2_t, single_tile_size, interm_data_format);
 
     // x - E[x].
-    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed)) {
         add_dfb(XMM, im0_t, single_tile_size, interm_data_format);
     }
 
