@@ -191,7 +191,9 @@ TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
+        /*created_with_nd_shard_spec=*/true,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     EXPECT_EQ(user_config, tensor_config);
 }
 
@@ -204,7 +206,9 @@ TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);
+        /*created_with_nd_shard_spec=*/false,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     EXPECT_EQ(user_config, tensor_config);
 }
 
@@ -216,13 +220,17 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
+        /*created_with_nd_shard_spec=*/true,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);
+        /*created_with_nd_shard_spec=*/false,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     EXPECT_EQ(nd_config, legacy_config);
 }
 
@@ -232,14 +240,18 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
+        /*created_with_nd_shard_spec=*/true,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_b_,
-        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
-                                                // operator.
+        /*created_with_nd_shard_spec=*/false,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);  // This is not a realistic scenario, but it's here to test the equality
+                                               // operator.
     EXPECT_NE(nd_config, legacy_config);
 }
 
@@ -249,14 +261,18 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
         BufferType::L1,
         shard_spec_a_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
+        /*created_with_nd_shard_spec=*/true,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
         TensorMemoryLayout::ND_SHARDED,
         BufferType::L1,
         shard_spec_b_,
         nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
-                                                // operator.
+        /*created_with_nd_shard_spec=*/false,
+        /*per_core_allocation=*/false,
+        /*range_lockstep_allocation=*/false);  // This is not a realistic scenario, but it's here to test the equality
+                                               // operator.
     EXPECT_NE(nd_config, legacy_config);
 }
 
