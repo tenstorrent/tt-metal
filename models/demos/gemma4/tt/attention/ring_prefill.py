@@ -42,10 +42,14 @@ The sliding case needs the generalized validation in
 head_dim to GPT-OSS's values, which Gemma4 does not match.
 """
 
+from dataclasses import dataclass
+
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import cp_degree
+
+from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
 
 TILE_HEIGHT = 32
 
@@ -110,6 +114,124 @@ def init_ring_kv_cache(
         )
 
     return [_zeros(), _zeros()]
+
+
+@dataclass(frozen=True)
+class PackedRingKVCache:
+    """One physical global-attention cache with overlapping K and V views."""
+
+    kv: ttnn.Tensor
+
+
+def init_packed_ring_kv_cache(
+    mesh_device,
+    mesh_config,
+    num_local_kv_heads,
+    max_seq_len,
+    num_layers=1,
+    num_users=1,
+    cache_dtype=ttnn.bfloat8_b,
+):
+    """Allocate the global [Krot128 | Vordered512] CP-sharded cache."""
+    cp = cp_degree(mesh_config)
+    seq_local = ring_cache_seq_len(max_seq_len, cp)
+    shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
+    cache = ttnn.from_torch(
+        torch.zeros(shape),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=cache_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return PackedRingKVCache(cache)
+
+
+def write_chunk_to_packed_ring_cache(
+    cache,
+    packed_kv,
+    mesh_config,
+    kv_actual_global,
+    layer_idx=0,
+    num_layers=1,
+    slot_idx=0,
+    ccl_manager=None,
+):
+    """Append one packed global-attention chunk to its CP-local history."""
+    chunk = packed_kv if packed_kv.dtype == cache.dtype else ttnn.typecast(packed_kv, cache.dtype)
+    if ccl_manager is not None:
+        slot_t, kv_t = ccl_manager.get_ring_metadata()
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            chunk,
+            slot_t,
+            kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=mesh_config.sp_axis,
+        )
+    else:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            chunk,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=mesh_config.sp_axis,
+        )
+    if chunk is not packed_kv:
+        chunk.deallocate(True)
+
+
+def ring_packed_prefill_attention(
+    tt_q,
+    cache_kv,
+    mesh_device,
+    mesh_config,
+    ccl_manager,
+    num_local_kv_heads,
+    max_seq_len,
+    logical_n,
+    kv_actual_global,
+    scale=1.0,
+    compute_kernel_config=None,
+    program_config=None,
+    layer_idx=0,
+    num_layers=1,
+):
+    """Attend from two transient logical views of the single packed cache."""
+    cache_shape = tuple(cache_kv.shape)
+    cache_k = ttnn.slice(
+        cache_kv, (0, 0, 0, 0), cache_shape[:-1] + (GLOBAL_HEAD_DIM,), memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cache_v = ttnn.slice(
+        cache_kv,
+        (0, 0, 0, GLOBAL_ROTARY_DIM),
+        cache_shape[:-1] + (GLOBAL_PACKED_DIM,),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ring_prefill_attention(
+        tt_q,
+        cache_k,
+        cache_v,
+        mesh_device,
+        mesh_config,
+        ccl_manager,
+        num_local_kv_heads,
+        GLOBAL_HEAD_DIM,
+        max_seq_len,
+        logical_n,
+        kv_actual_global,
+        scale=scale,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+    )
+    cache_k.deallocate(True)
+    cache_v.deallocate(True)
+    return out
 
 
 def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size=64, k_chunk_size=128):
