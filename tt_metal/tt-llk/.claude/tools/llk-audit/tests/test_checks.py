@@ -1048,6 +1048,130 @@ def test_srcreg_cleardvalid_and_supported_forms():
     assert len(out) == 1 and out[0].hint == "DVALID_CLEAR", out
 
 
+@case
+def test_srcreg_dest_to_src_missing_math_drain():
+    # The real WH shape before the fix: MOVD2A gated on SRCA_VLD alone. The wait
+    # indexes MatrixUnit.SrcABank live, so a bank-flipping FPU op still in flight
+    # makes it pass vacuously -> the move writes the bank the unpacker owns.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+        # 3 more MOVD2As follow in the real code; only the first is reported.
+        macro(F, 130, "TTI_MOVD2A", "TTI_MOVD2A(0, 4, addrmod, 0, 4)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN", out
+    assert out[0].line == 120, out
+
+
+@case
+def test_srcreg_dest_to_src_with_math_drain_is_clean():
+    # The fixed form: MATH | SRCB_VLD drains the FPU pipe first -> no finding.
+    # Also covers the WAIT_SFPU-carrying variant used by the experimental LLKs.
+    F = "tt_llk_blackhole/common/inc/cmath_common.h"
+    for cond in (
+        "p_stall::MATH | p_stall::SRCB_VLD",
+        "p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD",
+    ):
+        facts = [
+            fn("move_d2b_fixed_face", F, 100, 200),
+            macro(
+                F,
+                110,
+                "TTI_STALLWAIT",
+                f"TTI_STALLWAIT(p_stall::STALL_MATH, {cond})",
+                func="m",
+            ),
+            macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, addrmod, 0, 0)", func="m"),
+        ]
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DEST_TO_SRC"
+        ]
+        assert out == [], (cond, out)
+
+
+@case
+def test_srcreg_dest_to_src_wait_in_caller_is_recall_not_flag():
+    # No STALLWAIT in this function: the gate may be in the caller or in the MOP
+    # that replays the move. Must be a RECALL candidate, never a hard flag.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_sdpa_custom_mm.h"
+    facts = [
+        fn("_move_only_", F, 100, 200),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNSEEN", out
+
+
+@case
+def test_srcreg_dest_to_src_direction_and_opcode_exclusions():
+    # MOVA2D/MOVB2D read Src (Src->Dest) and DO auto-wait -> not this class.
+    # TT_OP_MOVD2A is an opcode VALUE, not an issued instruction -> excluded.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_a2d_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVA2D", "TTI_MOVA2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 130, "TTI_MOVB2D", "TTI_MOVB2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 140, "TT_OP_MOVD2A", "", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert out == [], out
+
+
+@case
+def test_srcreg_dest_to_src_unrelated_stall():
+    # A preceding STALLWAIT that gates on neither the bank nor the FPU pipe must
+    # not be credited as the gate.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
+    facts = [
+        fn("reuse_dest_as_src", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 

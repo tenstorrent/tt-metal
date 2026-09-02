@@ -717,6 +717,31 @@ SRCREG_DVALID_OPS = {
     "CLEARDVALID": "DVALID_CLEAR",
 }
 
+# Dest->Src moves. These WRITE a Src bank from Dest, so the Wait Gate's automatic
+# `AllowedClient == MatrixUnit` wait — which covers only Matrix Unit instructions
+# that READ Src — does not apply to them (MOVD2A.md / MOVD2B.md say so explicitly
+# and direct software to STALLWAIT). MOVA2D/MOVB2D are the opposite direction
+# (Src->Dest, i.e. Src READERS) and are deliberately NOT listed.
+DEST_TO_SRC_MOVE_SUBSTR = ("MOVD2A", "MOVD2B")
+
+# STALLWAIT wait-condition tokens for "the target Src bank is owned by the Matrix
+# Unit" (C10/C11 on WH; the same named constants encode different bit VALUES per
+# arch, which is why this matches by NAME and never by number).
+SRC_BANK_VLD_TOKENS = ("SRCA_VLD", "SRCB_VLD")
+
+
+def is_dest_to_src_move(name: str) -> bool:
+    """True for an ISSUED Dest->Src move macro (TTI_MOVD2A / TT_MOVD2B / ...).
+
+    Excludes ``TT_OP_*`` (opcode-VALUE constants, not an issued instruction) —
+    consistent with classify_srcreg_macro."""
+    if not (name.startswith("TTI_") or name.startswith("TT_")) or name.startswith(
+        "TT_OP_"
+    ):
+        return False
+    up = name.upper()
+    return any(tok in up for tok in DEST_TO_SRC_MOVE_SUBSTR)
+
 
 def classify_srcreg_macro(name: str):
     """Return (op_token, role) for a dvalid ISSUE macro, or (None, None).
