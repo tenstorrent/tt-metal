@@ -13,8 +13,10 @@ from contextlib import contextmanager
 import pytest
 import torch
 from loguru import logger
+from safetensors.torch import load_file
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
@@ -35,6 +37,12 @@ except ModuleNotFoundError:
 MODEL_DTYPE = ttnn.bfloat16
 PAGE_BLOCK_SIZE = 64
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
+# Without an L1_SMALL region the CCL ops allocate their global semaphores in main L1
+# (all_gather_unicast_factory.cpp:50 logs "Allocating semaphores in L1, which may fragment
+# L1 ... Configure an L1_SMALL region to mitigate this"). On this 8x4 mesh the first
+# all_reduce after the CP all_gather then hung in create_global_semaphore. Allocation
+# placement only -- no effect on numerics.
+L1_SMALL_SIZE = int(os.environ.get("GEMMA4_PREFILL_L1_SMALL_SIZE", 24576))
 
 
 def _model_path():
@@ -220,6 +228,57 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
     return torch.cat(rows, dim=-2)
 
 
+# ── Reference PCC against the GPU golden traces ───────────────────────────────
+
+# The replacement for the deleted models/demos/gemma4/tests/cpu_prefill_reference.py:
+# per-chunk post-final-norm hidden states captured from HuggingFace/PyTorch on an
+# RTX PRO 6000, one safetensors file per chunk, keyed "hidden_final" at fp32.
+_PCC_REF_KEY = "hidden_final"
+
+
+def _pcc_ref_dir():
+    """Directory holding ``chunk_{i:05d}.safetensors``, or None when unset.
+
+    Off unless ``GEMMA4_PCC_REF_DIR`` points somewhere, so a machine without the
+    5.3 GB reference package still runs the test for timings and finiteness.
+    """
+    ref = os.environ.get("GEMMA4_PCC_REF_DIR")
+    return pathlib.Path(ref) if ref else None
+
+
+def _chunk_pcc(ref_dir, chunk_idx, hidden, hidden_size):
+    """PCC of one chunk's hidden states against the golden, or None if unavailable.
+
+    Both sides are already post-final-norm — ``_lm_head_deferred`` stops the traced
+    graph at exactly the point the golden's recorded transform ended — so they are
+    compared directly. Applying the norm again here reports ~0.53 and looks like a
+    catastrophic failure when nothing is wrong.
+    """
+    path = ref_dir / f"chunk_{chunk_idx:05d}.safetensors"
+    if not path.exists():
+        logger.warning(f"[pcc] chunk {chunk_idx}: no reference at {path}, skipped")
+        return None
+
+    # Force both sides to fp32 before comp_pcc sees them. comp_pcc casts *calculated*
+    # to the golden's dtype, so a bf16 golden would silently downcast the fp32 device
+    # tensor and fold a rounding of our own making into the measurement.
+    ref = load_file(str(path))[_PCC_REF_KEY].float()
+    dev = hidden.reshape(-1, hidden_size).float()
+
+    if dev.numel() != ref.numel():
+        logger.error(
+            f"[pcc] chunk {chunk_idx}: element mismatch — device {tuple(dev.shape)} "
+            f"({dev.numel()}) vs golden {tuple(ref.shape)} ({ref.numel()}). The CP gather "
+            f"ordering or the chunk size disagrees with the reference; correlating across "
+            f"mismatched layouts would produce a number that means nothing."
+        )
+        return None
+
+    # pcc=0.0 so the boolean is always True: run 1 measures, it does not gate.
+    _, value = comp_pcc(ref, dev, pcc=0.0)
+    return value
+
+
 def _identity_page_table(mesh_device, paged_config, mesh_config=None):
     """Single-user page table mapping virtual block i to physical block i.
 
@@ -336,7 +395,10 @@ _SLIDING_WINDOW_TOKENS = 1024
 # because hidden 5376/32 = 168 makes the embedding all-gather's page 336 B, not 64 B
 # aligned, so it falls back to composite_all_gather and deadlocks (GALAXY_1x32_HANG.md).
 # The tensor cache is tagged by TP, so each mesh needs its own (_tp4_ / _tp8_).
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric(
+    [(8, 4), (4, 8)],
+    device_params_extra={"trace_region_size": TRACE_REGION_SIZE, "l1_small_size": L1_SMALL_SIZE},
+)
 # Legality depends on the mesh -- the halo rule needs chunk >= window * cp -- so illegal
 # combinations skip on that arithmetic rather than reaching ring_joint's TT_FATAL after a
 # 90 s model load. Bigger is faster with sharply diminishing returns; the sweep shows where
@@ -540,8 +602,8 @@ def test_prefill_long_context_traced(
     # Ring reads are counted in Python, and a replay runs no Python — so the counter can
     # only be read at capture, where it confirms the ring graph really is inside the
     # recorded trace. During replay it stays 0 by construction, so this says nothing about
-    # whether the replays are numerically right -- nothing here does, until the replacement
-    # reference lands.
+    # whether the replays are numerically right — the per-chunk PCC against the GPU golden
+    # traces does that, when GEMMA4_PCC_REF_DIR is set.
     captured_ring_calls = ring_prefill.ring_attention_calls()
     assert captured_ring_calls >= len(model.layers), (
         f"only {captured_ring_calls} ring calls recorded while capturing, expected >= {len(model.layers)} "
@@ -556,6 +618,7 @@ def test_prefill_long_context_traced(
     try:
         per_chunk = []
         stage_s, readback_s = 0.0, 0.0
+        pcc_ref_dir, pcc_values = _pcc_ref_dir(), []
         t_run = time.time()
         for chunk_idx in range(n_chunks):
             t_stage = time.time()
@@ -578,6 +641,20 @@ def test_prefill_long_context_traced(
                 hidden = _cp_gather_torch(out, mesh_device, mesh_config)
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
+                if pcc_ref_dir is not None:
+                    if not pcc_values:
+                        # Once, before any reshape. _cp_gather_torch concatenates CP rows
+                        # along dim -2, so confirm the gather produced exactly one chunk's
+                        # rows: a near-zero PCC on every chunk points here, at the
+                        # sequence ordering, well before it points at the model.
+                        logger.info(
+                            f"[pcc] device hidden {tuple(hidden.shape)} dtype {hidden.dtype} — "
+                            f"{hidden.numel()} elements, expected {chunk * model_args.dim}"
+                        )
+                    value = _chunk_pcc(pcc_ref_dir, chunk_idx, hidden, model_args.dim)
+                    pcc_values.append((chunk_idx, value))
+                    if value is not None:
+                        logger.info(f"[pcc] chunk {chunk_idx}: {value:.6f}")
             # Cumulative device and wall alongside the per-chunk cost, so the run can be
             # read without summing the column by hand. These are the same two totals the
             # DEVICE/TOTAL summary lines report at the end: device is execute_trace +
@@ -590,6 +667,18 @@ def test_prefill_long_context_traced(
         total_s = time.time() - t_run
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
+
+    # Every chunk in one block, so the trend across chunks is readable without grepping
+    # a run log. The trend is the diagnostic: flat is healthy, declining points at the
+    # history read or positional drift, a lone outlier at that chunk.
+    if pcc_values:
+        measured = [v for _, v in pcc_values if v is not None]
+        logger.info(f"[pcc] ── {len(measured)}/{len(pcc_values)} chunks measured ──")
+        for idx, value in pcc_values:
+            logger.info(f"[pcc]   chunk {idx:2d}: {'skipped' if value is None else f'{value:.6f}'}")
+        if measured:
+            mean = sum(measured) / len(measured)
+            logger.info(f"[pcc] min={min(measured):.6f} max={max(measured):.6f} mean={mean:.6f}")
 
     ring_chunks = per_chunk[1:]
     device_s = sum(per_chunk)
@@ -618,6 +707,43 @@ def test_prefill_long_context_traced(
         f"[traced_perf] ring-depth cost: first={ring_chunks[0] * 1000:.1f}ms -> last={ring_chunks[-1] * 1000:.1f}ms "
         f"= {ring_chunks[-1] / ring_chunks[0]:.2f}x over {len(ring_chunks) - 1} extra chunks of history"
     )
+
+    # ── KV cache readback, for PCC against the GPU kv_post_transform traces ───────
+    # Read ONCE at the end rather than per chunk: the ring cache accumulates and is never
+    # cleared, so after the last chunk it holds every chunk's K/V. One 262144-row read
+    # instead of 32.
+    #
+    # Layout. Each rank's cache is [1, n_kv_local, max_seq/cp, head_dim] and holds only
+    # ITS OWN tokens: cache row (c*slab + i) on rank r is global token
+    # (c*chunk + r*slab + i). So the composer concatenates rows (CP) on the token dim and
+    # columns (TP) on the head dim, giving rank-major token order -- which is NOT global
+    # order, and is unshuffled below.
+    kv_dump = os.environ.get("GEMMA4_KV_DUMP_DIR")
+    if kv_dump:
+        import numpy as np
+
+        layer_idx = int(os.environ.get("GEMMA4_KV_DUMP_LAYER", "0"))
+        out_dir = pathlib.Path(kv_dump)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        attn = model.layers[layer_idx].self_attn
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1))
+        slab = chunk // cp
+        for name, tt in (("k", attn.ring_kv_cache[0]), ("v", attn.ring_kv_cache[1])):
+            # [1, H_total, cp * seq_local, D], token dim ordered rank-major
+            full = ttnn.to_torch(tt, mesh_composer=composer).float()
+            _, heads, rows_all, hd = full.shape
+            seq_local = rows_all // cp
+            # -> [1, H, cp, seq_local, D] so rank and cache-row are separate axes
+            full = full.reshape(1, heads, cp, seq_local, hd)
+            logger.info(f"[kv] layer {layer_idx} {name}: gathered {tuple(full.shape)} (H={heads} cp={cp} D={hd})")
+            for c in range(n_chunks):
+                # rank-major slab for this chunk -> global token order
+                blk = full[:, :, :, c * slab : (c + 1) * slab, :]  # [1,H,cp,slab,D]
+                blk = blk.permute(0, 2, 3, 1, 4).reshape(1, cp * slab, heads, hd)
+                blk = blk.permute(0, 2, 1, 3).contiguous()  # [1, H, chunk, D]
+                np.save(out_dir / f"{name}_layer{layer_idx:02d}_chunk{c:05d}.npy", blk.numpy())
+            del full
+        logger.info(f"[kv] wrote layer {layer_idx} K/V for {n_chunks} chunks to {out_dir}")
 
     # No value check here. A trace records the values live at capture, so a per-chunk scalar
     # frozen at capture would make every replay attend over chunk 0's prefix -- a failure
@@ -656,7 +782,10 @@ def _perf_signposts(layer_type, chunk_idx):
 # Same override test_batched_prefill_perf uses for the same reason.
 @pytest.mark.timeout(7200)
 # Mesh is a test arg; see the traced test for why TP=32 is absent.
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric(
+    [(8, 4), (4, 8)],
+    device_params_extra={"trace_region_size": TRACE_REGION_SIZE, "l1_small_size": L1_SMALL_SIZE},
+)
 # Warm replays before the measured one. analyze_ops_perf.py skips 2 + this many
 # invocations (eager compile + capture + warmups) to find the measured replay, so the two
 # move together.

@@ -439,7 +439,11 @@ def _fabric_router_config():
     """Fabric router tuning applied alongside the fabric config."""
 
     config = ttnn.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = 8192
+    # GEMMA4_FABRIC_PACKET_BYTES overrides the widened packet; 0 leaves ttnn's default
+    # (4352). Kept as a knob because a mismatched packet size is a hang suspect.
+    _pkt = int(os.environ.get("GEMMA4_FABRIC_PACKET_BYTES", "8192"))
+    if _pkt:
+        config.max_packet_payload_size_bytes = _pkt
     return config
 
 
