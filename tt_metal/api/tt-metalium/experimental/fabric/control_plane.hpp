@@ -206,10 +206,8 @@ public:
     std::vector<FabricNodeId> get_canonical_intramesh_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
-    // Whether the mesh declares express links and their ring decomposition was validated.
-    // TODO: per-line rings, where a line with dead chords falls back to the base policy, would make a
-    // MeshId-scoped answer ill-defined; this and the ring predicates below would need a per-line form.
-    // Liveness is a PSD question, answerable at derivation time via TopologyMapper's asic id mapping.
+    // Whether the mesh has a validated express-ring topology. Mesh-scoped; per-line link liveness is
+    // not represented.
     bool express_routing_enabled(MeshId mesh_id) const;
 
     // Whether a protected ring family covers this node along the given dimension. Ring state is only
