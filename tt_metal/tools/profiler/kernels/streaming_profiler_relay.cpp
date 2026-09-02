@@ -120,6 +120,11 @@ constexpr uint32_t kHeadWord = kCvReadBytes / 4u;
 constexpr uint32_t kXyWord = kHeadWord + kNumRisc;
 static_assert((kXyWord + 1u) * 4u <= kRecordBytes, "the core record overflows its 64 bytes");
 constexpr uint32_t kBounceBase0 = kStageBase + kNGens * kGenSlots * kSlotBytes;
+constexpr uint32_t kGenBytes = kGenSlots * kSlotBytes;
+// Staging base of each generation, indexed rather than multiplied.
+static_assert(kNGens <= 4, "kGenBase covers four generations");
+constexpr uint32_t kGenBase[4] = {
+    kStageBase, kStageBase + kGenBytes, kStageBase + 2 * kGenBytes, kStageBase + 3 * kGenBytes};
 constexpr uint32_t kBounceBytes = ((kNStage - kNGens * kGenSlots) * kSlotBytes / 2u) & ~(kPageBytes - 1u);
 static_assert(kBounceBase0 % kPageBytes == 0, "bounces start on a page");
 static_assert(
@@ -757,7 +762,6 @@ void kernel_main() {
         // scanned just in time as the ship list runs low. No lambda here: a by-reference capture costs sweep time
         // at the saturation boundary.
         uint32_t gen = 0;
-        uint32_t gen_base = kStageBase;
         uint32_t pend_n = 0;  // frames staged for gen pend_gen and not yet shipped; 0 = none pending
         uint32_t pend_gen = 0;
         uint32_t n_ship = 0;
@@ -873,7 +877,7 @@ void kernel_main() {
                 retire_gen(gen);
                 n = (n_ship - cur) < kGenSlots ? (n_ship - cur) : kGenSlots;
                 batch = &ship_list[cur];
-                const uint32_t pk = issue_batch(batch, n, gen_base, ring_base);
+                const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
                 if (pk < min_peak) {
                     min_peak = pk;
                 }
@@ -895,7 +899,7 @@ void kernel_main() {
             }
 
             if (pend_n != 0) {
-                emit_slots(kStageBase + pend_gen * (kGenSlots * kSlotBytes), pend_n);
+                emit_slots(kGenBase[pend_gen], pend_n);
                 if constexpr (kSpool) {
                     gen_dma_mark[pend_gen] = pump.dma_issued;
                 }
@@ -928,7 +932,6 @@ void kernel_main() {
             pend_n = n;
             pend_gen = gen;
             gen = gen + 1u == kNGens ? 0u : gen + 1u;
-            gen_base = gen == 0u ? kStageBase : gen_base + kGenSlots * kSlotBytes;
         }
         // Enter only when the scan would have shipped every core anyway; a core dropping below either bound leaves
         // the mode.
