@@ -210,41 +210,57 @@ N300 (medians of 3 captures):
 
 ### 3.4 ECAPA SpeakerEncoder
 
-> ## READ THIS FIRST — the host fusion is default OFF because it breaks generation
+> ## Generation runaways here are a `--ref-text` bug, not an encoder bug
 >
-> `QWEN3_TTS_SE_HOST_FUSE=1` shifts the speaker embedding by only **0.74 % relRMS**, and
-> yet on the English demo text it never emits EOS and runs to the 256-frame cap —
-> **20.5 s of garbled audio**, at seed 42 *and* seed 7, where the unfused path stops at
-> 86 frames / 6.9 s. Systematic, not sampling luck.
+> Symptom: 20.5 s of garbled audio, `Generated 256 code frames` — i.e. the
+> `max_new_tokens` cap, so EOS never fired. It reproduces with **every** encoder
+> config including the unmodified one, and the trigger is a reference transcript that
+> does not match the reference audio:
 >
-> **Root cause of the miss: the accuracy tests used synthetic random weights.** Against
-> `_synthetic_sd()` the fusion measured a 1e-6 PCC delta and looked numerically free.
-> With the real 1.7B weights it is 7,400x that. Never gate an ECAPA numerics change on
-> synthetic weights, and never gate one on PCC alone — gate it on generated frame count
-> for at least two texts and two seeds.
+> ```
+> --ref-text "Jason, can we take a look at the review slides"   # WRONG
+> jim_reference.txt: "So basically you put up the high level overview slides."
+> ```
 >
-> Real 1.7B weights, jim_reference.wav, embedding vs the fp32 reference:
+> Omit `--ref-text` and the demo reads `jim_reference.txt`, which is correct. With the
+> mismatch the in-context alignment is broken, EOS becomes unreliable, and the result is
+> a coin flip that a sub-1 % embedding change is enough to flip:
 >
-> | fuse | asp | conv | PCC vs ref | relRMS vs ref | relRMS vs baseline | generation |
-> |---|---|---|---|---|---|---|
-> | 0 | 0 | 0 | 0.999634 | 2.72 % | — baseline | 86 frames, 6.9 s |
-> | 0 | 1 | 0 | 0.999628 | 2.74 % | 0.77 % | 83 frames, 6.6 s |
-> | 1 | 0 | 0 | 0.999610 | 2.81 % | 0.74 % | **256 = cap, 20.5 s** |
-> | 1 | 1 | 0 | 0.999611 | 2.80 % | 0.83 % | **256 = cap, 20.5 s** |
-> | 1 | 1 | 1 | 0.998370 | 5.72 % | 3.74 % | untested — assume broken |
+> | prompt | ref-text | fuse=0 asp=0 | fuse=1 asp=1 |
+> |---|---|---|---|
+> | en_long | **mismatched** | 86 ok | **256 CAP** |
+> | en_short | **mismatched** | **256 CAP** | - |
+> | en_long | correct | 75 / 92 ok | 73 / 73 ok |
+> | en_short | correct | 16 / 17 ok | 19 / 19 ok |
+> | en_mid | correct | 48 ok | 43 ok |
+> | en_long / en_short | correct, `+conv` | - | 108 / 18 ok |
+> | en_long / en_short | correct, traced | - | 108 / 18 ok |
 >
-> Note the baseline is itself **2.72 %** off the fp32 reference, and that `asp=1` perturbs
-> the embedding by 0.77 % — indistinguishable from `fuse=1`'s 0.74 % — yet generates
-> correctly. So perturbation *magnitude* does not predict the failure. The model's EOS
-> behaviour on this input is hypersensitive to sub-1 % embedding changes, and which side
-> of the cliff a config lands on is not something PCC can tell you.
+> Note row 2: the **unmodified** encoder runs away on a short prompt under the mismatched
+> ref-text, at seed 42 and seed 7. So the fusion never caused this; it only changed which
+> prompts land on which side of an already-broken conditioning.
 >
-> Consequences for the numbers below: they are **wall-clock and op-count results only**.
-> The `fuse` and `+asp` rows are still accurate as performance measurements. `+asp` alone
-> is the only change currently on by default, and it has been generation-checked on one
-> English text at one seed plus one Japanese text — which is thinner validation than it
-> deserves. The `fuse`, `+conv` and traced rows are behind flags that default off.
-
+> Two lessons kept from getting this wrong once:
+>
+> * **Never gate an ECAPA numerics change on synthetic weights.** Against
+>   `_synthetic_sd()` the fusion measures a 1e-6 PCC delta; with the real 1.7B weights it
+>   is 0.74 % relRMS. Real-weight numbers are in the table below.
+> * **PCC cannot predict generation.** `asp=1` perturbs the embedding by 0.77 % and
+>   `fuse=1` by 0.74 % — indistinguishable — and under a broken ref-text one ran away and
+>   the other did not. Frame count over several prompts and seeds is the only gate that
+>   sees this, and a runaway must be checked against the *unmodified* baseline before it
+>   is attributed to a change.
+>
+> Real 1.7B weights, jim_reference.wav, embedding vs the fp32 reference (the baseline is
+> itself 2.72 % off, so these are all reshuffles of a similar-sized error):
+>
+> | fuse | asp | conv | PCC vs ref | relRMS vs ref | relRMS vs baseline |
+> |---|---|---|---|---|---|
+> | 0 | 0 | 0 | 0.999634 | 2.72 % | - baseline |
+> | 0 | 1 | 0 | 0.999628 | 2.74 % | 0.77 % |
+> | 1 | 0 | 0 | 0.999610 | 2.81 % | 0.74 % |
+> | 1 | 1 | 0 | 0.999611 | 2.80 % | 0.83 % |
+> | 1 | 1 | 1 | 0.998370 | 5.72 % | 3.74 % |
 Runs **once per request** off the reference audio, so this is time-to-first-audio, not RTF.
 
 `SpeakerEncoder.forward`, warm, N300, mel T=384 — interleaved A/B over 24 samples each so
