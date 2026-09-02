@@ -17,8 +17,10 @@ using namespace tt::tt_metal;
 
 std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
 
+namespace {
 // Persistent generator for the unseeded path, so consecutive calls advance instead of repeating.
 std::mt19937 default_rng(std::random_device{}());
+}  // namespace
 
 auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
