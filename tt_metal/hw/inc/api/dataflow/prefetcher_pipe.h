@@ -18,7 +18,7 @@
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-#include <new>
+#include <optional>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -486,7 +486,7 @@ public:
     // If bind_relay() was called, waits until compute has consumed num_entries first.
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
         if (interface_.receiver.relay_id != RELAY_DFB_INVALID) {
-            ASSERT(relay_dfb_ != nullptr);
+            ASSERT(relay_dfb_.has_value());
             wait_relay_consumed(num_entries);
         }
         pop_front_impl(num_entries, noc);
@@ -535,9 +535,9 @@ public:
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        ASSERT(relay_dfb_ == nullptr);
+        ASSERT(!relay_dfb_.has_value());
         align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
-        relay_dfb_ = new (relay_dfb_storage_) DataflowBuffer(RelayDFBBindingToken{iface.relay_id});
+        relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
         const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
         relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
         return RelayView(*relay_dfb_);
@@ -549,8 +549,7 @@ private:
     uint8_t prefetcher_pipe_id_ = 0;
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-    DataflowBuffer* relay_dfb_ = nullptr;
-    alignas(DataflowBuffer) unsigned char relay_dfb_storage_[sizeof(DataflowBuffer)];
+    std::optional<DataflowBuffer> relay_dfb_;
     uint16_t relay_entries_acked_checkpoint_ = 0;
 
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {

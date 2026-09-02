@@ -16,7 +16,7 @@
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-#include <new>
+#include <optional>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -42,7 +42,8 @@ namespace experimental {
 // CrossNodeDFB: device-side kernel class for a globally-allocated ring FIFO shared across
 // kernels within a single program (WH/BH only).
 // Not persistent across programs: firmware resets fifo ptrs and credit counters on every
-// program init. Cross-program persistence is GlobalDFB.
+// program init. The receiver destructor ASSERTs
+// that unread credits are zero; the sender destructor does not wait (see barrier()).
 //
 // entry_size is fixed at Create for the life of a CrossNodeDFB. Mid-flight entry_size
 // reconfiguration (remote CB / prefetcher style) is intentionally omitted here — CrossNode
@@ -124,6 +125,23 @@ public:
             region + REMOTE_DFB_REGION_HEADER_WORDS + remote_dfb_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         setup_cross_node_dfb_interface(
             interface_, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1], /*relay_dfb_id=*/slot[2]);
+    }
+
+    // Receiver: unread credits must be zero (forgotten pop_front). Does not wait —
+    // Sender does not join here; use barrier() if this kernel must stall until all receivers ack.
+    FORCE_INLINE ~CrossNodeDFB() {
+        volatile tt_l1_ptr uint32_t* l1_config =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
+        if (static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER])) {
+            return;
+        }
+        invalidate_l1_cache();
+        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        volatile tt_l1_ptr uint32_t* acked_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_acked_ptr);
+        volatile tt_l1_ptr uint32_t* sent_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_acked_ptr - L1_ALIGNMENT);
+        ASSERT(*sent_ptr == *acked_ptr);
     }
 
     // -----------------------------------------------------------------------
@@ -278,7 +296,7 @@ public:
     // If bind_relay() was called, waits until compute has consumed num_entries first.
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
         if (interface_.receiver.relay_id != RELAY_DFB_INVALID) {
-            ASSERT(relay_dfb_ != nullptr);
+            ASSERT(relay_dfb_.has_value());
             wait_relay_consumed(num_entries);
         }
         pop_front_impl(num_entries, noc);
@@ -309,8 +327,8 @@ public:
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        ASSERT(relay_dfb_ == nullptr);
-        relay_dfb_ = new (relay_dfb_storage_) DataflowBuffer(RelayDFBBindingToken{iface.relay_id});
+        ASSERT(!relay_dfb_.has_value());
+        relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
         const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
         relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
         return RelayView(*relay_dfb_);
@@ -342,8 +360,7 @@ private:
     CrossNodeDFBInterface interface_;
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-    DataflowBuffer* relay_dfb_ = nullptr;
-    alignas(DataflowBuffer) unsigned char relay_dfb_storage_[sizeof(DataflowBuffer)];
+    std::optional<DataflowBuffer> relay_dfb_;
     uint16_t relay_entries_acked_checkpoint_ = 0;
 
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
