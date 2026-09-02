@@ -6,7 +6,8 @@
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
-#   category: Identifier to group tests for selective execution.
+#   tags: Optional labels; the subcategories input on tt-train-tests.yaml is expanded to
+#     --include-tag flags to select on these.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #
@@ -20,7 +21,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -31,7 +32,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -42,7 +43,7 @@
       timeout: 45
     bh_p150b_civ2:
       timeout: 35
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -53,7 +54,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -62,7 +63,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 40
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -71,7 +72,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 60
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -80,7 +81,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 90
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -92,7 +93,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -103,7 +104,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -112,7 +113,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 40
-  category: pretraining
+  tags: [pretraining]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -122,7 +123,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 45
-  category: finetuning
+  tags: [finetuning]
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
@@ -131,6 +132,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 10
-  category: finetuning
+  tags: [finetuning]
   owner_id: U07K00A281X # Kevin Wu
   team: train

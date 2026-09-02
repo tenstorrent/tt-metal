@@ -20,7 +20,7 @@ on:
         required: false
         type: string
         default: ''
-        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+        description: "Comma-separated category filter. Expanded into --include-tag flags; keeps only entries whose `tags` field intersects this list."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -39,8 +39,8 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.filter-categories.outputs.matrix }}
-      sim-libs: ${{ steps.filter-categories.outputs.sim-libs }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_unit_tests.yaml
     steps:
@@ -64,24 +64,16 @@ jobs:
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
+          INCLUDE_ARGS=()
+          IFS=',' read -ra CATS <<< "${{ inputs.additional_test_categories }}"
+          for c in "${CATS[@]}"; do
+            [[ -n "$c" ]] && INCLUDE_ARGS+=(--include-tag "$c")
+          done
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
-      - name: Filter matrix by additional_test_categories
-        id: filter-categories
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          categories='${{ inputs.additional_test_categories }}'
-          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
-          {
-            echo "matrix<<EOF"
-            echo "$filtered"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          # prepare_test_matrix.py's sim-libs covers the pre-filter matrix; recompute from the
-          # filtered one so fetch-ttsim does not download libs for legs this run dropped.
-          echo "sim-libs=$(echo "$filtered" | jq -c '[.[].ttsim_lib // empty] | unique')" >> "$GITHUB_OUTPUT"
+            ./.github/sku_config.yaml \
+            "${INCLUDE_ARGS[@]}"
 
   fetch-ttsim:
     needs: load-test-matrix

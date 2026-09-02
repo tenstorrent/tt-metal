@@ -4,18 +4,21 @@ Build a filtered test matrix based on enabled SKUs.
 
 This script:
 1. Loads test definitions from a YAML file
-2. Filters tests based on enabled SKUs (comma-separated string)
-3. Optionally intersects with --sku-allowlist (change gating)
-4. Optionally rewrites SKUs to merge_queue_sku when --event is merge_group
-5. Adds runs_on labels from the SKU configuration
-6. Annotates each entry with weights-cache-mode from sku_config.yaml
+2. Optionally filters entries by `tags` via --include-tag (allowlist) / --exclude-tag
+   (denylist)
+3. Filters tests based on enabled SKUs (comma-separated string)
+4. Optionally intersects with --sku-allowlist (change gating)
+5. Optionally rewrites SKUs to merge_queue_sku when --event is merge_group
+6. Adds runs_on labels from the SKU configuration
+7. Annotates each entry with weights-cache-mode from sku_config.yaml
    (used by the Blackhole demo pipeline so the per-job container volume mount can
    pick the right cache source)
-7. Outputs the filtered matrix as JSON
+8. Outputs the filtered matrix as JSON
 
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
         [--event EVENT] [--sku-allowlist LIST]
+        [--include-tag TAG] [--exclude-tag TAG]
 
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
 key that appears under any test entry's skus mapping in the tests YAML. An empty / placeholder
@@ -26,6 +29,24 @@ rewritten to that concrete prio SKU before runs_on lookup.
 
 --sku-allowlist: omit for no extra filter; empty string skips all tests (matrix=[]
 exit 0); otherwise comma-separated logical SKUs intersected with coverage.
+
+--include-tag: repeatable; keep only entries whose `tags` intersect this set. Omit for
+no filter (keep everything). This is the one mechanism for both intended uses: a caller
+opting into extra coverage (e.g. the L2 nightly `additional_test_categories` dispatch
+input, formerly a separate per-caller jq step keyed on a `category` field) and a caller
+that only wants a specific slice of a shared list.
+
+--exclude-tag: repeatable; drops entries whose `tags` contain the tag. For lists shared
+by callers with different builds, where some entries cannot run under every build (e.g.
+profiler entries needing ENABLE_TRACY=ON, which a coverage build disables).
+
+Both flags run before SKU resolution, so a filtered-out entry contributes nothing,
+including under ALL_SKUS_IN_TESTS. Both are validated against the tags actually present
+in the loaded file: a tag that matches nothing is a hard error (exit 1), not a silently
+empty or under-filtered matrix — this is what catches a typo'd tag name. The one
+exception is an empty / placeholder tests file (no entries at all), which still resolves
+to matrix=[] rather than failing, consistent with how ALL_SKUS_IN_TESTS already treats
+placeholder files.
 
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
@@ -99,6 +120,95 @@ def apply_sku_allowlist(enabled_skus, sku_allowlist):
     filtered = [s for s in enabled_skus if s in allow]
     print(f"SKU allowlist {allow} → {filtered}")
     return filtered
+
+
+def normalize_tags(raw_tags):
+    """Normalize a test entry's `tags` field: absent/None -> [], bare string -> [string],
+    list -> as-is."""
+    if not raw_tags:
+        return []
+    if isinstance(raw_tags, str):
+        return [raw_tags]
+    return list(raw_tags)
+
+
+def collect_known_tags(tests):
+    """Union of tags actually present across all entries.
+
+    This is the vocabulary --include-tag/--exclude-tag are validated against, so a
+    typo'd tag name fails loudly instead of silently producing an empty or
+    under-filtered matrix.
+    """
+    known = set()
+    for test in tests:
+        known.update(normalize_tags(test.get("tags")))
+    return known
+
+
+def validate_requested_tags(requested, known_tags, flag_name):
+    unknown = sorted(set(requested) - known_tags)
+    if unknown:
+        print(
+            f"::error::{flag_name} references unknown tag(s) {unknown}; tags present in this file: {sorted(known_tags)}"
+        )
+        sys.exit(1)
+
+
+def apply_tag_filters(tests, include_tags, exclude_tags):
+    """
+    Filter tests by `tags` before SKU resolution: --include-tag keeps only entries with
+    a matching tag (allowlist), --exclude-tag drops entries with a matching tag
+    (denylist), applied in that order so excludes always win when both are given.
+
+    An empty tests list (placeholder / not-yet-populated YAML) is passed through
+    unfiltered rather than validated, matching how the rest of the script treats
+    placeholder files as vacuously correct.
+
+    Args:
+        tests: List of test dictionaries
+        include_tags: None/empty for no filter; else an iterable of tags to allowlist
+        exclude_tags: None/empty for no filter; else an iterable of tags to denylist
+
+    Returns:
+        Filtered list of test dictionaries (possibly empty)
+    """
+    if not tests:
+        return tests
+
+    known_tags = collect_known_tags(tests)
+    if include_tags:
+        validate_requested_tags(include_tags, known_tags, "--include-tag")
+    if exclude_tags:
+        validate_requested_tags(exclude_tags, known_tags, "--exclude-tag")
+
+    kept = tests
+
+    if include_tags:
+        include_set = set(include_tags)
+        next_kept = []
+        for test in kept:
+            tags = set(normalize_tags(test.get("tags")))
+            if tags & include_set:
+                next_kept.append(test)
+            else:
+                print(
+                    f"Not including test '{test.get('name', 'Unnamed Test')}' (tags {sorted(tags)} not in --include-tag set)"
+                )
+        kept = next_kept
+
+    if exclude_tags:
+        exclude_set = set(exclude_tags)
+        next_kept = []
+        for test in kept:
+            tags = set(normalize_tags(test.get("tags")))
+            matched = exclude_set & tags
+            if matched:
+                print(f"Excluding test '{test.get('name', 'Unnamed Test')}' (tagged {','.join(sorted(matched))})")
+                continue
+            next_kept.append(test)
+        kept = next_kept
+
+    return kept
 
 
 def resolve_sku_for_event(sku_name, sku_config, event):
@@ -361,6 +471,24 @@ def main(argv=None):
         help="Omit for no filter; empty string skips all; else CSV of logical SKUs",
     )
     parser.add_argument(
+        "--include-tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="Repeatable allowlist: keep only entries whose `tags` intersect this set. "
+        "Omit for no filter (keep everything). Validated against tags actually present "
+        "in the file; an unmatched tag is a hard error.",
+    )
+    parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        default=None,
+        metavar="TAG",
+        help="Repeatable denylist: drop entries whose `tags` intersect this set. For "
+        "callers sharing a list with others whose build cannot run every entry. Applied "
+        "after --include-tag. Validated against tags actually present in the file.",
+    )
+    parser.add_argument(
         "--allow-missing-cmd",
         action="store_true",
         help="Allow entries without a `cmd` key (for pipelines that build the command "
@@ -376,9 +504,14 @@ def main(argv=None):
         print(f"Event: '{args.event}'")
     if args.sku_allowlist is not None:
         print(f"SKU allowlist: '{args.sku_allowlist}'")
+    if args.include_tag:
+        print(f"Include tags: {args.include_tag}")
+    if args.exclude_tag:
+        print(f"Exclude tags: {args.exclude_tag}")
 
     sku_config = load_sku_config(args.sku_config_yaml_path)
     tests = load_tests(args.tests_yaml_path)
+    tests = apply_tag_filters(tests, args.include_tag, args.exclude_tag)
 
     if args.enabled_skus.strip().upper() == ALL_SKUS_IN_TESTS:
         enabled_skus = collect_skus_from_tests(tests)

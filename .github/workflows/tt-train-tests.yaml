@@ -54,7 +54,7 @@ on:
         required: false
         type: string
         default: ''
-        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+        description: "Comma-separated category filter. Expanded into --include-tag flags; keeps only entries whose `tags` field intersects this list."
       per-test-timeout:
         required: false
         type: string
@@ -81,7 +81,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
@@ -115,24 +115,17 @@ jobs:
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
+          INCLUDE_ARGS=()
+          IFS=',' read -ra CATS <<< "${{ inputs.subcategories }}"
+          for c in "${CATS[@]}"; do
+            [[ -n "$c" ]] && INCLUDE_ARGS+=(--include-tag "$c")
+          done
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
-
-      - name: Filter matrix by subcategories
-        if: ${{ inputs.subcategories != '' }}
-        id: filter-categories
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          categories='${{ inputs.subcategories }}'
-          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
-          {
-            echo "matrix<<EOF"
-            echo "$filtered"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+            --event "${{ github.event_name }}" \
+            "${INCLUDE_ARGS[@]}"
 
   tt-train-tests:
     needs: [load-test-matrix]

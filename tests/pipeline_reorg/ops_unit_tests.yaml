@@ -8,10 +8,9 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
-#     dispatch input. On dispatch the impl filters this matrix to entries whose
-#     category appears in the comma-separated list; on schedule the filter is
-#     bypassed and every entry runs.
+#   tags: Optional labels; --include-tag/--exclude-tag select on these. Used by
+#     tt-metal-l2-nightly.yaml's additional_test_categories dispatch input, expanded
+#     to repeated --include-tag flags by the impl workflow.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -32,7 +31,7 @@
       timeout: 150
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
-  category: conv
+  tags: [conv]
 
 - name: ttnn nightly matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -49,7 +48,7 @@
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
-  category: matmul
+  tags: [matmul]
 
 - name: ttnn nightly fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -64,7 +63,7 @@
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
-  category: fused
+  tags: [fused]
 
 - name: ttnn nightly reduction tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -81,7 +80,7 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
-  category: reduction
+  tags: [reduction]
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
@@ -93,7 +92,7 @@
       timeout: 65
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
-  category: experimental
+  tags: [experimental]
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
@@ -105,7 +104,7 @@
       timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
-  category: experimental
+  tags: [experimental]
 
 - name: ttnn attn_res_weighted_reduce_nc unit tests
   # The test file sits in a directory no group suite globs, so this row is the only thing
@@ -136,7 +135,7 @@
       timeout: 5
   owner_id: U09L76N1MAT  # Nenad Babin
   team: ttnn
-  category: experimental
+  tags: [experimental]
 
 - name: ttnn nightly experimental generalized MoE gate op tests
   cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
@@ -147,7 +146,7 @@
       timeout: 10
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
-  category: experimental
+  tags: [experimental]
 
 - name: ttnn nightly pool tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -162,7 +161,7 @@
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
-  category: pool
+  tags: [pool]
 
 - name: ttnn nightly eltwise tests group 1
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -175,7 +174,7 @@
       timeout: 75
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
-  category: eltwise
+  tags: [eltwise]
 
 - name: ttnn nightly eltwise tests group 2
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -188,7 +187,7 @@
       timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
-  category: eltwise
+  tags: [eltwise]
 
 - name: ttnn nightly eltwise tests group 3
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -201,7 +200,7 @@
       timeout: 45
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
-  category: eltwise
+  tags: [eltwise]
 
 - name: ttnn nightly eltwise tests group 4
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -214,7 +213,7 @@
       timeout: 55
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
-  category: eltwise
+  tags: [eltwise]
 
 - name: ttnn nightly transformers tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -229,7 +228,7 @@
       timeout: 30
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: ttnn
-  category: transformers
+  tags: [transformers]
 
 - name: ttnn nightly moreh tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -244,7 +243,7 @@
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
-  category: moreh
+  tags: [moreh]
 
 - name: ttnn nightly misc (rand and ssm) tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -259,7 +258,7 @@
       timeout: 15
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
-  category: misc
+  tags: [misc]
 
 - name: ttnn nightly sdpa tests
   # MLA decode / prefill stress are split out into the sdpa stress entry below; this entry runs the rest of the
@@ -278,7 +277,7 @@
       timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
-  category: sdpa
+  tags: [sdpa]
 
 - name: ttnn nightly sdpa stress tests
   cmd: |
@@ -294,7 +293,7 @@
       timeout: 55
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
-  category: sdpa
+  tags: [sdpa]
 
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -311,7 +310,7 @@
       timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: data_movement
+  tags: [data_movement]
 
 # The post-commit data_movement / ccl / point_to_point suites are re-run nightly
 # to cover the long tail that the PR gate skips. One bucket per suite (these
@@ -340,7 +339,7 @@
       timeout: 80
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: data_movement
+  tags: [data_movement]
 
 - name: ttnn n300 ccl tests
   cmd: |
@@ -353,7 +352,7 @@
       timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: data_movement
+  tags: [data_movement]
 
 - name: blackhole host to device smoke tests
   cmd: 'pytest tests/ttnn/unit_tests/operations/ccl/test_send_recv_async_hd.py -xv -m "not disable_fast_runtime_mode" --timeout=300'
@@ -364,7 +363,7 @@
       timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: data_movement
+  tags: [data_movement]
 
 - name: ttnn nightly point_to_point tests (post-commit suite)
   # 12 tests (4 skipped), measured in single-digit seconds on every SKU.
@@ -380,7 +379,7 @@
       timeout: 5
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: data_movement
+  tags: [data_movement]
 
 - name: ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
@@ -391,7 +390,7 @@
       timeout: 60
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
-  category: ccl
+  tags: [ccl]
 
 - name: Galaxy CCL tests
   cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
@@ -400,7 +399,7 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: ccl
+  tags: [ccl]
 
 - name: Galaxy MoE tests
   cmd: |
@@ -411,7 +410,7 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-  category: ccl
+  tags: [ccl]
 
 - name: BH Galaxy CCL tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
@@ -420,7 +419,7 @@
       timeout: 40
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
-  category: ccl
+  tags: [ccl]
 
 - name: ttnn nightly docs examples tests
   # docs_examples runs on viommu-stable SKUs.
@@ -436,7 +435,7 @@
       timeout: 20
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
-  category: docs_examples
+  tags: [docs_examples]
 
 # --- C++ ttnn unit tests ---
 
@@ -453,7 +452,7 @@
       timeout: 45
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
-  category: cpp_accessor
+  tags: [cpp_accessor]
 
 - name: Nightly TTNN university lab examples
   cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast'
@@ -468,4 +467,4 @@
       timeout: 45
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
-  category: cpp_lab_examples
+  tags: [cpp_lab_examples]
