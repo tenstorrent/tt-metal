@@ -819,13 +819,18 @@ _UNPACR_NOP_OPERAND_IDX = {
     "quasar": (2, 3),
 }
 
-# The Wormhole-shaped packed constants are ALSO defined in Blackhole's and Quasar's
-# ckernel_instr_params.h, but those arches take the controls as separate operands and
-# size the last one at 2 bits. Passing UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) as
-# Blackhole's Unpack_Pop puts bit 0 and bit 4 = Bank_Clr_Ctrl into the word - an
-# unintended BOTH-BANKS clear - while the wait bit (bit 5) stays clear. TTI_UNPACR_NOP
-# never calls TT_UNPACR_NOP_VALID, so the operand overflow is silent. Off Wormhole the
-# constant is therefore never a guard; it is a defect.
+# The Wormhole-shaped packed constants are ALSO defined, byte-identically, in
+# BLACKHOLE's ckernel_instr_params.h (p_unpacr_nop), even though Blackhole takes the
+# controls as separate operands and sizes the last one at 2 bits. Passing
+# UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) as Blackhole's Unpack_Pop puts bit 0 and
+# bit 4 = Bank_Clr_Ctrl into the word - an unintended BOTH-BANKS clear - while the
+# wait bit (bit 5) stays clear. TTI_UNPACR_NOP never calls TT_UNPACR_NOP_VALID, so the
+# operand overflow is silent. The same header gives itself its own SET_DVALID (0x1,
+# against Wormhole's packed 0b111), which is what marks these three as un-migrated
+# Wormhole holdovers - and matches its own "bits do not match for UNPACR_NOP" TODO.
+# Quasar has no p_unpacr_nop at all (it uses p_unpacr) and defines none of these, so
+# the check is inert there; it stays keyed on the operand-form arches rather than
+# naming Blackhole, so a future Quasar copy of the constants is caught too.
 _WH_PACKED_WAIT = "UNP_ZEROSRC_STALL_RESET_WR_RDY"
 _WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
 
