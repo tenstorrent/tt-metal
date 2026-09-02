@@ -191,7 +191,7 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 
 inline void _llk_math_sub_bcast_cols_compensated_init_()
 {
-    eltwise_binary_configure_addrmod_custom<BroadcastType::COL>();
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_3);
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
@@ -230,9 +230,9 @@ inline void _llk_math_sub_bcast_cols_compensated_(
         // Accumulate x - anchor into the correction already in DEST.
         for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
         {
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
         }
 
