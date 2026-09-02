@@ -53,10 +53,12 @@ emits `DUMMY_PUBLISH_SERIALIZING` — a publication in the default form, with no
 wait-like bit, no preceding `SRCA_CLR`/`SRCB_CLR` stall, and no preceding instruction
 that already owned that register's bank (a real `UNPACR`, or a wait-like `ZEROSRC`).
 That is a **throughput/parity** candidate, never corruption — see 5(b). Ownership is
-tracked per Src register and is spent by each `SET_DVALID`. The two genuine encoding
-defects it does flag are `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` (wait-like bit together
-with a both-banks clear) and `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` (a
-Wormhole-shaped packed `UNP_ZEROSRC_*` constant on BH/QSR). Recalled only inside
+tracked per Src register and is spent by each `SET_DVALID`. The three genuine defects
+it does flag are `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED` (a bare `SET_DVALID`, which
+performs no wait of its own, with nothing before it to inherit one from),
+`DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` (wait-like bit together with a both-banks clear)
+and `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` (a Wormhole-shaped packed
+`UNP_ZEROSRC_*` constant on Blackhole). Recalled only inside
 functions whose NAME marks them as dummy-bank publishers (`*dummy_valid*`,
 `*dummy_unpack*`, `*switch_to_reduce*`, `*reuse_dest*`, `*dest_reuse*`). A publisher
 named otherwise (e.g. rmsnorm's `*_mop_config_`, which builds the publication as a
@@ -136,7 +138,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 - **Bare `SET_DVALID` that inherits no wait** → CORRUPTION (hands over a bank the Matrix Unit may still own; `SET_DVALID` performs no wait of its own).
 - **Dummy publication in the default form** (waits on the Matrix-Unit bank) → **NOT corruption** — a throughput/parity observation: the stronger, serializing wait costs unpack/math overlap. Report it separately from the math-side verdict even when both are present at the same op, and label it as throughput, not a race.
 - **Dummy publication with the wait-like bit AND a both-banks clear** → CORRUPTION (clears a bank the Matrix Unit still owns).
-- **Wormhole-shaped packed `UNP_ZEROSRC_*` constant used on BH/QSR** → CORRUPTION (silently sets `Bank_Clr_Ctrl` instead of the wait bit).
+- **Wormhole-shaped packed `UNP_ZEROSRC_*` constant used on Blackhole** → CORRUPTION (silently sets `Bank_Clr_Ctrl` instead of the wait bit; Quasar defines none of these constants, so the trap is Blackhole-only today).
 - **Cross-thread contention on bank state / unmediated Dst|LReg sharing** → RACE (hand the semaphore half to `semaphore-handshake-audit`).
 - **Risk only on an experimental/unused path or value-invariant** → LATENT — say so.
 
