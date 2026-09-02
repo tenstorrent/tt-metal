@@ -20,10 +20,18 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         # HuggingFace path
         tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
         config = AutoConfig.from_pretrained(hf_model_name)
-        # Qwen only: add rope scaling to the config
+        # Qwen only: add rope scaling to the config, but only when the requested length
+        # exceeds the model's own trained window -- applying YaRN below that changes the
+        # reference away from how the model actually runs short sequences.
         # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
-        if "Qwen" in hf_model_name:
-            config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
+        native = getattr(getattr(config, "text_config", config), "max_position_embeddings", 32768)
+        if "Qwen" in hf_model_name and total_length > native:
+            scaling = {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": native}
+            # transformers >= 5 renamed rope_scaling -> rope_parameters and type -> rope_type
+            if getattr(config, "rope_parameters", None) is not None:
+                config.rope_parameters = {**config.rope_parameters, **scaling}
+            else:
+                config.rope_scaling = {**scaling, "type": "yarn"}
         model = AutoModelForCausalLM.from_pretrained(
             hf_model_name, config=config, torch_dtype=torch.float32 if device == "cpu" else None, device_map="auto"
         )
