@@ -14,15 +14,18 @@ from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 def test_common_prefill_runtime_traced(mesh_device, tmp_path):
     adapter = get_adapter("gemma4_31b")
     hf_config = adapter.load_hf_config()
+    max_seq_len = int(os.environ.get("GEMMA4_COMMON_TEST_MAX_SEQ_LEN", "16384"))
+    num_users = int(os.environ.get("GEMMA4_COMMON_TEST_NUM_USERS", "2"))
+    serialize_migration_table = os.environ.get("GEMMA4_COMMON_TEST_SERIALIZE_TABLE", "1") == "1"
     params = PrefillRunParams(
         mesh_shape=(8, 4),
         num_layers=60,
         first_layer_idx=0,
         is_first_rank=True,
         is_last_rank=True,
-        max_seq_len=16384,
+        max_seq_len=max_seq_len,
         chunk_size=8192,
-        num_users=2,
+        num_users=num_users,
         capacity_factor=8,
         num_links=2,
         gate_mode_name="DEVICE_FP32",
@@ -54,8 +57,9 @@ def test_common_prefill_runtime_traced(mesh_device, tmp_path):
     runtime.prefill_chunk(socket_shaped_tokens(1), caches, slot_id=1, actual_start=0, actual_end=8192)
     runtime.prefill_chunk(socket_shaped_tokens(2), caches, slot_id=0, actual_start=8192, actual_end=16384)
 
-    table_path = runtime.build_kv_chunk_table(caches, path=str(tmp_path / "gemma4_kv.pb"))
-    assert os.path.getsize(table_path) > 0
+    if serialize_migration_table:
+        table_path = runtime.build_kv_chunk_table(caches, path=str(tmp_path / "gemma4_kv.pb"))
+        assert os.path.getsize(table_path) > 0
     runtime.release_trace()
 
     class AckCounter:
