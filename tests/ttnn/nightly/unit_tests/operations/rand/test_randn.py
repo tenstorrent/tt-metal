@@ -229,3 +229,25 @@ def test_randn_with_compute_kernel_options(shape, dtype, device, compute_kernel_
 
     torch_tensor = ttnn.to_torch(tensor)
     assert check_standard_normal_distribution(torch_tensor, dtype), "Random values do not look standard normal!"
+
+
+def test_randn_unseeded_calls_differ(device):
+    """Consecutive unseeded randn calls must draw independent samples.
+
+    The unseeded path used to build a fresh std::mt19937 from std::time(nullptr) on every
+    dispatch. std::time has one-second resolution, so every call made within the same
+    wall-clock second was given an identical seed and returned a bitwise-identical tensor.
+    """
+    outputs = [ttnn.to_torch(ttnn.randn((256, 256), device=device, dtype=ttnn.bfloat16)) for _ in range(4)]
+
+    duplicates = [
+        (i, j) for i in range(len(outputs)) for j in range(i + 1, len(outputs)) if torch.equal(outputs[i], outputs[j])
+    ]
+    assert not duplicates, f"unseeded randn returned identical tensors for call pairs {duplicates}"
+
+
+def test_randn_same_seed_is_reproducible(device):
+    """An explicit seed must still give reproducible output."""
+    a = ttnn.to_torch(ttnn.randn((256, 256), device=device, dtype=ttnn.bfloat16, seed=1234))
+    b = ttnn.to_torch(ttnn.randn((256, 256), device=device, dtype=ttnn.bfloat16, seed=1234))
+    assert torch.equal(a, b), "randn with the same explicit seed must be reproducible"
