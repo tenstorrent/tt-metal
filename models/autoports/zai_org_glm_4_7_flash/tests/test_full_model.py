@@ -28,6 +28,7 @@ import torch
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.generator import GREEDY, build_generator
+from models.autoports.zai_org_glm_4_7_flash.tt.model import source_manifest
 from models.common.readiness_check.schema import load_reference
 from models.common.sampling import SamplingParams
 
@@ -484,6 +485,109 @@ def test_reset_clears_cache_and_state(gen):
     assert gen.generate(a_ids, 8, enable_trace=True, stop_on_eos=False) == a
 
 
+def test_reset_zeroes_cache_rows_the_request_never_wrote(gen):
+    """``reset()`` really zeroes, including the rows attention never reads.
+
+    This is the observable form of a real hazard the trace allocation tracker
+    caught (work log FM-016): the shared cache-reset zero *source* used to be
+    allocated lazily on the first reset, i.e. after the decode traces were
+    captured, which Metal flags as an unsafe allocation because a replay can
+    write over a post-capture buffer. A corrupted zero source would leave
+    garbage in the cache instead of zeros, and no existing test could see it,
+    because attention only ever reads rows that prefill or decode has already
+    written. Reading a far, untouched row after a traced generation plus a
+    reset is what makes it visible.
+    """
+    model = gen.model
+    gen.reset()
+    gen.generate(_prompt_ids(gen, 64), 8, enable_trace=True, stop_on_eos=False)
+    gen.reset()
+    cache = gen._kv_cache[0]
+    blocks = int(cache.shape[0])
+    # A block no request in this test came near, and the last one.
+    for block in (blocks // 2, blocks - 1):
+        row = ttnn.slice(
+            cache, [block, 0, 0, 0], [block + 1, 1, int(cache.shape[2]), int(cache.shape[3])], [1, 1, 1, 1]
+        )
+        host = ttnn.to_torch(row).to(torch.float32)
+        ttnn.deallocate(row)
+        assert torch.count_nonzero(host) == 0, (block, float(host.abs().max()))
+    assert model is gen.model
+
+
+def test_first_use_prompt_shape_recaptures_traces_and_stays_correct(gen):
+    """A prompt shape that compiles programs after capture triggers a recapture.
+
+    The terminal slice/pad of the prefill depends on ``seq mod 32``, so a
+    logical length that was not warmed at construction compiles new programs
+    while the decode traces are live. Metal then treats those program buffers
+    as unsafe for the trace's lifetime, so the generator re-captures. What has
+    to hold is that the recapture is (a) triggered and (b) invisible in the
+    output: the same prompt run again, now with everything cached, must give
+    the identical tokens from the newly captured traces.
+    """
+    seq = 173  # 173 % 32 = 13, not a bucket and not warmed at build
+    ids = _prompt_ids(gen, seq)
+    gen.reset()
+    gen.reset_counters()
+    first = gen.generate(ids, 6, enable_trace=True, stop_on_eos=False)
+    recaptures = gen.counters["trace_recaptures"]
+    assert recaptures >= 1, "an unwarmed prompt shape must recapture before replaying"
+
+    gen.reset()
+    gen.reset_counters()
+    again = gen.generate(ids, 6, enable_trace=True, stop_on_eos=False)
+    assert again == first, (first, again)
+    assert gen.counters["trace_recaptures"] == 0, "the second request at a cached shape must not recapture"
+    # And the recapture did not disturb the split-sampling contract.
+    assert gen.counters["full_logits_readbacks"] == 0
+    assert gen.counters["host_argmax_calls"] == 0
+    assert gen.counters["model_trace_replays"] == 5
+
+
+def test_sampling_trace_is_captured_on_demand_if_capture_skipped_it(gen):
+    """A generator whose first capture happened in host-sampling mode must not
+    keep sampling untraced forever.
+
+    ``capture_decode_trace`` skips the sampling capture when
+    ``host_sampling`` is set, and nothing captured it afterwards, so
+    ``build_generator(host_sampling=True)`` followed by on-device sampling ran
+    the sampler untraced for the rest of the process: right tokens, silently
+    slower, no error. A second full model does not fit alongside this one, so
+    the condition is reproduced on this generator by releasing the sampling
+    trace and clearing the flag, which is exactly the state that path leaves.
+    Leaves the generator with both traces captured, as it found it.
+    """
+    ids = _prompt_ids(gen, 64)
+    gen.reset()
+    expected = gen.generate(ids, 4, enable_trace=True, stop_on_eos=False)
+
+    gen.sampling.reset_trace()
+    gen._sampling_traced = False
+    gen.reset()
+    gen.reset_counters()
+    got = gen.generate(ids, 4, enable_trace=True, stop_on_eos=False)
+
+    assert gen._sampling_traced, "on-device sampling must not stay untraced"
+    assert gen.counters["trace_recaptures"] == 1
+    assert got == expected, (expected, got)
+    assert gen.counters["full_logits_readbacks"] == 0
+    assert gen.counters["host_argmax_calls"] == 0
+
+
+def test_decode_positions_accept_fewer_rows_than_slots(gen, expect_error):
+    """Fixed slots: a caller driving fewer active rows may omit the inactive
+    ones instead of spelling out the -1s, and too many is still an error."""
+    slots = gen.max_batch_size
+    gen.set_decode_positions([7])
+    assert gen._host_positions == [7] + [-1] * (slots - 1)
+    gen.set_decode_positions([7] * slots)
+    assert gen._host_positions == [7] * slots
+    with expect_error(ValueError, "at most"):
+        gen.set_decode_positions([0] * (slots + 1))
+    gen.reset()
+
+
 # --------------------------------------------------------------------- helpers
 
 
@@ -529,6 +633,10 @@ def _write_stats(name, stats):
     out.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(out.read_text()) if out.is_file() else {}
     data[name] = stats
+    # Both halves are written by separate tests through read-modify-write, so
+    # the manifest is refreshed on every write and a mixed-session file would
+    # show it (FM-016).
+    data["source_manifest"] = source_manifest([__file__])
     out.write_text(json.dumps(data, indent=2) + "\n")
 
 

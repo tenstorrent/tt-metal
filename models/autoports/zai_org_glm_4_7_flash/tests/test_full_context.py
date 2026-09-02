@@ -143,6 +143,13 @@ def test_full_context_prefill_and_decode(gen):
     prefill_s = time.perf_counter() - started
     print(f"  prefill complete in {prefill_s:.1f}s ({prompt_len / prefill_s:.1f} tok/s)", flush=True)
 
+    # This prefill went through the model-level entry point (for the per-layer
+    # progress callback), which has no post-compile hook, and a 202733-token
+    # prompt compiles programs no bucket warmed. Re-capture before replaying
+    # over them: work log FM-016.
+    recaptured = gen._maybe_recapture_after_compile(warm_at=prompt_len)
+    print(f"  post-prefill trace recapture: {recaptured}", flush=True)
+
     # The final prompt position's logits must be a real distribution, not drift.
     host_row = ttnn.to_torch(logits).to(torch.float32)[0, 0, row, : model.vocab_size]
     assert torch.isfinite(host_row).all()
@@ -229,6 +236,7 @@ def test_full_context_prefill_and_decode(gen):
             "expected_in_top5": answer_tok in answer_top5.indices.tolist(),
             "margin_over_mean": round(answer_margin, 3),
         },
+        "post_prefill_trace_recapture": bool(recaptured),
         "counters": {"periodic_phase": periodic_counters, "end_of_run": dict(gen.counters)},
     }
     DOC_DIR.mkdir(parents=True, exist_ok=True)

@@ -61,6 +61,13 @@ def reduced(device):
     )
     gen = GLM47FlashGenerator(model)
     gen._ensure_owned_state()
+    # Warm before capturing, as build_generator does. Without it the first
+    # prefill compiles programs under the live traces, the generator correctly
+    # re-captures, and Tracy's post-processing then cannot match the released
+    # trace's device rows ("Device data missing: Op N not present in
+    # cpp_device_perf_report.csv"). Warming also makes the profiled path the
+    # steady-state one, which is what the report quotes.
+    gen.warmup_prefill([PREFILL_S])
     gen.capture_decode_trace()
     gen.reset()
     yield gen

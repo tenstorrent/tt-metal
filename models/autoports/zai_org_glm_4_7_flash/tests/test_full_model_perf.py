@@ -68,6 +68,21 @@ def _prompt_ids(gen, seq):
     return ids[:seq]
 
 
+def _compile_probe_ids(gen, seq):
+    """The prompt text ``tests/measure_cold_compile.py`` uses, kept in sync by
+    hand so the two probes' prefill numbers can be compared at one shape.
+
+    Without this the report has two prefill-only numbers for prompt 128 and no
+    way to tell whether the gap is measurement or MoE expert routing, which
+    depends on prompt content (FM-016).
+    """
+    text = "Tenstorrent builds AI accelerators. A plain in-distribution prompt for the compile-cost probe. " * 400
+    ids = gen.tokenizer.encode(text, add_special_tokens=True)
+    while len(ids) < seq:
+        ids = ids + ids
+    return ids[:seq]
+
+
 def test_capacity_json(built):
     gen, _ = built
     model = gen.model
@@ -167,12 +182,63 @@ def test_full_model_perf(built):
     cold_ids = _prompt_ids(gen, 3000)  # one 2048 chunk + a 1024 bucket tail, not warmed at build
     gen.reset()
     t0 = time.perf_counter()
-    gen._prefill_and_sample_first(cold_ids)
+    gen._prefill_and_sample_first(cold_ids, recapture=False)
     cold_ttft_s = time.perf_counter() - t0
+    # That prefill compiled programs while the decode traces were live, so the
+    # generator re-captures before replaying over them (FM-016). Timed on its
+    # own: it is a one-time cost for this shape, not part of TTFT.
+    t0 = time.perf_counter()
+    recaptured = gen._maybe_recapture_after_compile(warm_at=3000)
+    cold_recapture_s = time.perf_counter() - t0
     gen.reset()
     t0 = time.perf_counter()
-    gen._prefill_and_sample_first(cold_ids)
+    gen._prefill_and_sample_first(cold_ids, recapture=False)
     warm_ttft_3000_s = time.perf_counter() - t0
+
+    # ---- what TTFT is made of ----
+    # `measure_cold_compile.py` times `prefill_forward_last_logits_device`
+    # alone between device syncs and reads lower than TTFT at the same prompt
+    # and physical shape. Rather than report two numbers for one row, split the
+    # first-token path into its parts on the same prompts, with the same syncs,
+    # so the difference is attributed instead of merely visible (FM-016).
+    def ttft_parts(prompt_ids, seq):
+        gen.reset()  # drains; the request boundary is not part of TTFT
+        t0 = time.perf_counter()
+        logits, row = model.prefill_forward_last_logits_device(
+            prompt_ids, kv_cache=gen._kv_cache, page_table=gen._page_table_dev, seq_len=seq
+        )
+        ttnn.synchronize_device(model.mesh_device)
+        prefill_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        gen.sampling.sample(logits=logits, tt_out_tok=gen._prefill_tokens_dev, enable_trace=False)
+        ttnn.synchronize_device(model.mesh_device)
+        sampler_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        int(ttnn.to_torch(gen._prefill_tokens_dev).reshape(-1)[row].item())
+        readback_s = time.perf_counter() - t0
+        ttnn.deallocate(logits)
+        gen.reset()
+        t0 = time.perf_counter()
+        gen._prefill_and_sample_first(prompt_ids, recapture=False)
+        whole_s = time.perf_counter() - t0
+        return {
+            "prompt_len": seq,
+            "physical_len": model.prefill_physical_len(seq),
+            "prefill_only_ms": round(prefill_s * 1000, 1),
+            "untraced_prefill_sampler_ms": round(sampler_s * 1000, 1),
+            "first_token_readback_ms": round(readback_s * 1000, 2),
+            "first_token_path_ms": round(whole_s * 1000, 1),
+            "unattributed_ms": round((whole_s - prefill_s - sampler_s - readback_s) * 1000, 1),
+        }
+
+    breakdown = [ttft_parts(ids, PROMPT_LEN), ttft_parts(cold_ids, 3000)]
+    # Same shape, different prompt content: MoE prefill routes to different
+    # experts, so this is what separates a measurement gap from a workload gap
+    # when comparing against compile_cost.json.
+    same_shape_other_text = ttft_parts(_compile_probe_ids(gen, PROMPT_LEN), PROMPT_LEN)
+    same_shape_other_text["prompt_text"] = "the one measure_cold_compile.py uses"
+    breakdown.append(same_shape_other_text)
+    reset_ms = round(timing["reset_s"] * 1000, 1)
 
     n_moe = sum(1 for layer in model.layers if layer.layer_kind == "moe")
     n_dense = len(model.layers) - n_moe
@@ -189,12 +255,21 @@ def test_full_model_perf(built):
         },
         "setup_s": timings,
         "ttft_ms": {
+            "definition": (
+                "time to first token: prefill plus the untraced prefill sampler plus the one-word token "
+                "readback. The request-boundary cache reset is drained before the clock starts and is "
+                "reported separately as request_boundary_reset_ms; ttft_breakdown_ms attributes the rest."
+            ),
             "prompt_128_warmed": round(timing["ttft_s"] * 1000, 1),
             "prompt_128_physical": model.prefill_physical_len(PROMPT_LEN),
             "prompt_3000_first_call": round(cold_ttft_s * 1000, 1),
             "prompt_3000_second_call": round(warm_ttft_3000_s * 1000, 1),
             "prompt_3000_physical": model.prefill_physical_len(3000),
+            "request_boundary_reset_ms": reset_ms,
+            "first_use_shape_trace_recapture_ms": round(cold_recapture_s * 1000, 1),
+            "first_use_shape_trace_recapture_fired": bool(recaptured),
         },
+        "ttft_breakdown_ms": breakdown,
         "prefill_tokens_per_s": {
             "prompt_128": round(PROMPT_LEN / timing["ttft_s"], 1),
             "prompt_3000": round(3000 / warm_ttft_3000_s, 1),

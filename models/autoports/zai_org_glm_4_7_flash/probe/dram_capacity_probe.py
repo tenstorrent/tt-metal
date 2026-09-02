@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import ttnn
+from models.autoports.zai_org_glm_4_7_flash.tt.model import source_manifest
 
 OUT = Path(__file__).resolve().parents[1] / "doc" / "full_model" / "dram_capacity.json"
 
@@ -52,6 +53,7 @@ def main():
         ttnn.close_device(dev)
 
     payload = {
+        "source_manifest": source_manifest([__file__]),
         "device_id": 0,
         "chunk_mib": args.chunk_mib,
         "allocatable_mib": total_mib,

@@ -123,6 +123,7 @@ def _new_counters() -> Dict[str, int]:
         "full_logits_readbacks": 0,
         "host_argmax_calls": 0,
         "kv_cache_resets": 0,
+        "trace_recaptures": 0,
     }
 
 
@@ -171,6 +172,9 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self._bound_cache = None
         self._decode_trace_id = None
         self._decode_logits = None
+        #: num_program_cache_entries() at capture time; see
+        #: _maybe_recapture_after_compile.
+        self._program_cache_entries_at_capture = None
         self._sampling_traced = False
         self._sampling_params = GREEDY
 
@@ -324,8 +328,13 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         import torch
 
         pos = torch.as_tensor(positions, dtype=torch.int32).reshape(-1)
-        if pos.numel() != self._pos_dev.shape[0]:
-            raise ValueError(f"expected {self._pos_dev.shape[0]} positions, got {pos.numel()}")
+        slots = int(self._pos_dev.shape[0])
+        if pos.numel() > slots:
+            raise ValueError(f"expected at most {slots} positions, got {pos.numel()}")
+        if pos.numel() < slots:
+            # Fixed slots: a caller driving fewer active rows than slots leaves
+            # the rest inactive rather than having to spell out the -1s.
+            pos = torch.cat([pos, torch.full((slots - pos.numel(),), -1, dtype=torch.int32)])
         # The paged cache and page table only represent [0, max_seq_len). A
         # decode step past that indexes off the end of the page table, and the
         # resulting out-of-range paged_update_cache wedges the device rather
@@ -378,13 +387,18 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             advance_positions=advance_positions,
         )
 
-    def capture_decode_trace(self, *, kv_cache=None, warm=True):
+    def capture_decode_trace(self, *, kv_cache=None, warm=True, warm_at=0):
         """Warm, capture the model decode trace, then capture the sampling trace.
 
-        Runs entirely on dummy state (token 0 at position 0 of a fresh cache)
-        so the program cache, the sampler pre-compile and both captures all
-        happen before any request touches the model. ``reset()`` afterwards
-        clears the row the warm pass wrote.
+        Runs entirely on dummy state (token 0 at position ``warm_at`` of a
+        fresh cache) so the program cache, the sampler pre-compile and both
+        captures all happen before any request touches the model. ``reset()``
+        afterwards clears the row the warm pass wrote.
+
+        ``warm_at`` exists for :meth:`recapture_decode_traces`, which runs
+        mid-request: the warm pass writes one cache row, and the only row it
+        may write then is the one the next decode step is about to overwrite
+        anyway.
         """
         if self._decode_trace_id is not None:
             return
@@ -392,8 +406,12 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         if cache is None:
             raise RuntimeError("bind_decode_state must run before capture_decode_trace")
 
+        # Before capture, so the cache-reset zero source is not a post-capture
+        # allocation a replay could overwrite (see prepare_cache_reset).
+        self.model.prepare_cache_reset(cache)
+
         self.set_decode_tokens([0] * self.max_batch_size)
-        self.set_decode_positions([0] * self.max_batch_size)
+        self.set_decode_positions([int(warm_at)] * self.max_batch_size)
 
         if warm:
             warm_logits = self._decode_logits_device(kv_cache=cache)
@@ -408,7 +426,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         # The warm pass advanced the device positions and consumed the token
         # buffer; restore the exact capture-time state before recording.
         self.set_decode_tokens([0] * self.max_batch_size)
-        self.set_decode_positions([0] * self.max_batch_size)
+        self.set_decode_positions([int(warm_at)] * self.max_batch_size)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._decode_logits = self._decode_logits_device(kv_cache=cache)
@@ -418,6 +436,65 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         if self.sampling is not None and not self.host_sampling:
             self.sampling.capture_trace(logits=self._decode_logits, tt_out_tok=self._tokens_dev, skip_precompile=True)
             self._sampling_traced = True
+
+        # Baseline for _maybe_recapture_after_compile: anything cached after
+        # this point was compiled while the traces were live.
+        self._program_cache_entries_at_capture = self.mesh_device.num_program_cache_entries()
+
+    def recapture_decode_traces(self, *, warm_at=0):
+        """Release and re-capture both decode traces.
+
+        Needed after a program is compiled *while a trace is live*. Metal
+        registers a trace as active from ``end_mesh_trace`` until it is
+        released and flags every allocation made in that window as unsafe
+        (``mesh_device.cpp``, ``trace_allocation_tracker.cpp``), because a
+        post-capture buffer can land on an address the trace's own freed
+        intermediates used and a replay then writes over it. A newly cached
+        program keeps a device buffer for the process lifetime, so compiling
+        one after capture leaves a permanently unsafe buffer. Re-capturing
+        after the compile puts the trace intermediates back on the safe side
+        of the program buffers instead of arguing about which addresses
+        collide.
+
+        Cheap: 0.3 s on a warm cache, against the >1 s the compile that
+        triggered it already cost. Verified with
+        ``TT_METAL_TRACE_ALLOC_TRACKING=1`` in ``probe/trace_alloc_probe.py``.
+        """
+        saved_tokens = self.read_decode_tokens(self.max_batch_size)
+        saved_positions = list(self._host_positions) if self._host_positions is not None else None
+        if self._decode_trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._decode_trace_id)
+            self._decode_trace_id = None
+        if self._decode_logits is not None:
+            ttnn.deallocate(self._decode_logits)
+            self._decode_logits = None
+        if self.sampling is not None:
+            self.sampling.reset_trace()
+        self._sampling_traced = False
+        self._program_cache_entries_at_capture = None
+        self.capture_decode_trace(warm_at=warm_at)
+        self.set_decode_tokens(saved_tokens)
+        if saved_positions is not None:
+            self.set_decode_positions(saved_positions)
+        self.counters["trace_recaptures"] += 1
+
+    def _maybe_recapture_after_compile(self, warm_at=0):
+        """Re-capture if the program cache grew while the traces were live.
+
+        The trigger is exact rather than heuristic: ``num_program_cache_entries``
+        is compared against its value at capture time. On the shipped path a
+        single-chunk prompt never trips it, because ``warmup_prefill`` compiles
+        every bucket shape *before* capture; a first-use multi-chunk prompt
+        does, because its chunk-offset-dependent programs cannot be enumerated
+        cheaply (99 offsets at the full context).
+        """
+        if self._decode_trace_id is None or self._program_cache_entries_at_capture is None:
+            return False
+        now = self.mesh_device.num_program_cache_entries()
+        if now <= self._program_cache_entries_at_capture:
+            return False
+        self.recapture_decode_traces(warm_at=warm_at)
+        return True
 
     def warmup_prefill(self, lengths=None):
         """Compile the prefill programs for each prefill bucket up front.
@@ -487,9 +564,32 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         self.counters["model_trace_replays"] += 1
 
+    def _ensure_sampling_trace(self):
+        """Capture the sampling trace if it is missing but usable.
+
+        ``capture_decode_trace`` skips it when the generator is in
+        host-sampling mode at capture time, and nothing captured it later, so
+        a generator built with ``host_sampling=True`` and then switched back to
+        on-device sampling ran the sampler *untraced* for the rest of the
+        process: correct tokens, silently slower, no error. Capturing here
+        closes that.
+
+        It goes through :meth:`recapture_decode_traces` rather than capturing
+        the sampling trace alone, because ``SamplingGenerator.precompile``
+        allocates device buffers and doing that while the model trace is live
+        is exactly the unsafe-allocation hazard the recapture exists to avoid.
+        """
+        if self._sampling_traced or self.sampling is None or self.host_sampling:
+            return
+        if self._decode_trace_id is None:
+            return
+        active = [p for p in (self._host_positions or []) if p >= 0]
+        self.recapture_decode_traces(warm_at=max(active) if active else 0)
+
     def decode_step_traced(self):
         """One traced token-out decode step. Returns nothing; the sampled token
         is already in the persistent decode token tensor."""
+        self._ensure_sampling_trace()
         self.replay_decode_trace()
         if self.host_sampling or self.sampling is None:
             self._host_sample_into_tokens(self._decode_logits)
@@ -552,6 +652,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             outs.append(logits)
         if not isinstance(page_table, ttnn.Tensor):
             ttnn.deallocate(pt_dev)
+        self._maybe_recapture_after_compile(warm_at=max(int(p) for p in prompt_lens))
         if return_all_logits:
             width = max(o.shape[1] for o in outs)
             padded = [
@@ -638,14 +739,20 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self._ensure_owned_state()
         self.reset()
         seq = len(prompt_token_ids)
-        return self.model.prefill_forward(
-            prompt_token_ids,
-            kv_cache=self._kv_cache,
-            page_table=self._page_table_dev,
-            user_id=0,
-            seq_len=seq,
-            return_all_logits=True,
-        )
+        try:
+            return self.model.prefill_forward(
+                prompt_token_ids,
+                kv_cache=self._kv_cache,
+                page_table=self._page_table_dev,
+                user_id=0,
+                seq_len=seq,
+                return_all_logits=True,
+            )
+        finally:
+            # The all-positions host path compiles its own tile-aligned slabs,
+            # so it can leave program buffers on the unsafe side of a live
+            # trace even though it never replays one itself (FM-016).
+            self._maybe_recapture_after_compile(warm_at=seq)
 
     def generate(
         self,
@@ -686,19 +793,35 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             if enable_trace and self._decode_trace_id is None:
                 self.capture_decode_trace()
                 self.reset()
+            t_reset = time.perf_counter()
             self.reset()
-
             t_start = time.perf_counter()
             # ---- prefill + first token (sampled on device from the prefill logits) ----
-            first = self._prefill_and_sample_first(prompt_token_ids)
+            first = self._prefill_and_sample_first(prompt_token_ids, recapture=False)
             t_first = time.perf_counter()
+            # A first-use prefill shape compiles programs while the traces are
+            # live (the terminal slice/pad depends on seq mod 32, and a
+            # multi-chunk prompt adds chunk-offset programs); re-capture before
+            # any replay so those program buffers are not on the unsafe side of
+            # the traces. No-op on a shape warmed at construction. Timed
+            # separately: it is a one-time setup cost for that shape and
+            # belongs in neither TTFT nor the decode rate.
+            if enable_trace:
+                self._maybe_recapture_after_compile(warm_at=seq)
+            t_ready = time.perf_counter()
             predictions = [first]
             self.set_decode_positions([seq] + [0] * (self.max_batch_size - 1))
             if next_input is not None:
                 forced = int(next_input(0, first))
                 self.set_decode_tokens([forced] + [0] * (self.max_batch_size - 1))
             elif stop_on_eos and first in self.model.eos_token_ids:
-                elapsed = {"ttft_s": t_first - t_start, "decode_s": 0.0, "decode_tokens": 0}
+                elapsed = {
+                    "reset_s": t_start - t_reset,
+                    "ttft_s": t_first - t_start,
+                    "recapture_s": t_ready - t_first,
+                    "decode_s": 0.0,
+                    "decode_tokens": 0,
+                }
                 return (predictions, elapsed) if return_timing else predictions
 
             # ---- decode loop ----
@@ -726,14 +849,19 @@ class GLM47FlashGenerator(_ReadinessGenerator):
 
         if return_timing:
             timing = {
+                # The request-boundary cache reset is reported separately, not
+                # folded into TTFT: it is drained before the clock starts.
+                "reset_s": t_start - t_reset,
                 "ttft_s": t_first - t_start,
-                "decode_s": t_end - t_first,
+                # Zero unless this prompt shape compiled programs after capture.
+                "recapture_s": t_ready - t_first,
+                "decode_s": t_end - t_ready,
                 "decode_tokens": len(predictions) - 1,
             }
             return predictions, timing
         return predictions
 
-    def _prefill_and_sample_first(self, prompt_token_ids, user_id: int = 0):
+    def _prefill_and_sample_first(self, prompt_token_ids, user_id: int = 0, *, recapture: bool = True):
         """Prefill and pick the first generated token with the same on-device
         sampler the decode loop uses.
 
@@ -741,6 +869,12 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         tile, so the sampled tokens go to a scratch output and the wanted one
         is placed in decode slot 0 (a one-word request-boundary refresh, not a
         per-token host step).
+
+        ``recapture=False`` is for :meth:`generate`, which runs the same
+        post-compile recapture itself so it can time it apart from TTFT. Every
+        other caller wants the default: a first-use prefill shape compiles
+        programs while the traces are live, and replaying over those program
+        buffers is the unsafe-allocation hazard in work log FM-016.
         """
         import torch
 
@@ -767,12 +901,24 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         toks = [0] * self.max_batch_size
         toks[user_id] = token
         self.set_decode_tokens(toks)
+        if recapture:
+            self._maybe_recapture_after_compile(warm_at=len(prompt_token_ids))
         return token
 
     def reset(self) -> None:
-        """Wipe per-prompt state. Keeps weights, device buffers and traces."""
+        """Wipe per-prompt state. Keeps weights, device buffers and traces.
+
+        Drains before returning. Zeroing the full-context cache enqueues 47
+        device-to-device copies of a 118 MiB buffer, and leaving them in flight
+        made every later measurement in the same call ambiguous: the request's
+        TTFT absorbed the drain of work that belongs to the request boundary
+        (work log FM-016). One synchronization per request is cheap and makes
+        the contract ("the cache is zeroed") true on return.
+        """
         self._ensure_owned_state()
         self.model.reset_kv_cache(self._kv_cache if self._kv_cache is not None else self._bound_cache)
+        ttnn.synchronize_device(self.mesh_device)
+        self.counters["device_synchronizations"] += 1
         self.counters["kv_cache_resets"] += 1
         self.set_decode_tokens([0] * self.max_batch_size)
         self.set_decode_positions([0] * self.max_batch_size)

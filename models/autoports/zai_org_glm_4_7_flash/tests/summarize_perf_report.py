@@ -19,6 +19,8 @@ import csv
 import json
 from pathlib import Path
 
+from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest
+
 #: One LM-head matmul runs exactly once per decode step and once per prefill.
 ANCHOR = "MatmulDeviceOperation 32 x 2048 x 154880"
 
@@ -78,7 +80,7 @@ def main():
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
     out = args.out or (args.tracy_dir.parent / "perf_report_summary.json")
-    summary = {}
+    summary = {"source_manifest": source_manifest([__file__])}
     for name in ("decode_model", "decode_tokenout", "prefill"):
         path = args.tracy_dir / f"{name}_perf_report.csv"
         if not path.is_file():

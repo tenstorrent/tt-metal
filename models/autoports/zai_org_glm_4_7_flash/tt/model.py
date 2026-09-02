@@ -90,6 +90,7 @@ from pathlib import Path
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.functional_decoder import TILE, PagedCacheConfig, _ck
 from models.autoports.zai_org_glm_4_7_flash.tt.optimized_decoder import OptimizedDecoder, _mcast_2d_pc, _rect_grid
+from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest  # noqa: F401
 
 DEFAULT_HF_MODEL_ID = "zai-org/GLM-4.7-Flash"
 #: Env var pointing at a local HF snapshot directory (same knob the decoder tests use).
@@ -184,35 +185,6 @@ class ShardedCheckpoint:
         for handle in self._handles.values():
             handle.__exit__(None, None, None)
         self._handles.clear()
-
-
-def source_manifest(extra_paths=()):
-    """sha256 prefixes of the stage-owned source, for stamping evidence files.
-
-    Every generated artifact carries this, so a log or JSON can be tied to the
-    exact source that produced it instead of to a timestamp.
-    """
-    import hashlib
-
-    root = Path(__file__).resolve().parents[1]
-    paths = [
-        root / "tt" / "model.py",
-        root / "tt" / "generator.py",
-        root / "tt" / "optimized_decoder.py",
-        root / "tt" / "fused_decoder.py",
-        root / "tt" / "functional_decoder.py",
-        *(Path(p) for p in extra_paths),
-    ]
-    manifest = {}
-    for path in paths:
-        if not path.is_file():
-            continue
-        try:
-            key = str(path.resolve().relative_to(root))
-        except ValueError:
-            key = path.name
-        manifest[key] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    return manifest
 
 
 def load_hf_config(snapshot_dir):
@@ -498,6 +470,24 @@ class GLM47FlashModel:
         self._cache_zeros_buf = (key, buf)
         return buf
 
+    def prepare_cache_reset(self, kv_cache):
+        """Materialize the cache-reset zero buffer *before* any trace capture.
+
+        ``reset_kv_cache`` allocates this buffer lazily on first use, which
+        lands it after the decode traces are captured. Metal then treats it as
+        an unsafe allocation for the whole life of those traces
+        (``mesh_device.cpp`` registers a trace as active at ``end_mesh_trace``
+        and keeps allocations unsafe until it is released), because a replay
+        rewrites the addresses the trace's own intermediates used. A corrupted
+        zero source would make ``reset()`` fill the caches with garbage instead
+        of zeros. Allocating it up front removes the hazard rather than
+        arguing about it: verified with ``TT_METAL_TRACE_ALLOC_TRACKING=1``
+        (``probe/trace_alloc_probe.py``).
+        """
+        caches = list(_iter_layer_caches(kv_cache))
+        if caches:
+            self._cache_zeros(caches[0])
+
     def default_page_table(self, batch=None):
         """Identity page table ``[batch, blocks_per_user]`` (torch int32)."""
         import torch
@@ -750,10 +740,19 @@ class GLM47FlashModel:
         """Prefill one user and keep the final-position logits on device.
 
         Returns ``(logits, row)`` where ``logits`` is ``[1, 1, 32, vocab]`` (the
-        tile of prompt positions containing the last one, zero-padded to the 32
-        sampler rows) and ``row`` is the index of the final prompt position in
-        it. Lets the same on-device sampler pick the first generated token, so
-        prefill and decode share exactly one sampling implementation.
+        full 32-row tile of prompt positions containing the last one) and
+        ``row`` is the index of the final prompt position in it. Lets the same
+        on-device sampler pick the first generated token, so prefill and decode
+        share exactly one sampling implementation.
+
+        The slice is a *whole* tile deliberately. Slicing ``[s0, seq)`` instead
+        made the program depend on the prompt length twice over, through the
+        slice size and through the pad that followed it, so every new logical
+        length compiled two programs; with a fixed 32 rows there is one program
+        per tile offset, and the pad disappears. Row ``row`` is bit-identical
+        either way: the final norm is per-row and the LM head is a per-row
+        matmul, so the extra rows in the tile cannot reach it. Only ``row`` is
+        ever read. See work log FM-016.
         """
         hidden, seq = self.run_layer_stack_prefill(
             input_ids,
@@ -765,16 +764,56 @@ class GLM47FlashModel:
         )
         try:
             s0 = ((seq - 1) // TILE) * TILE
-            slab = self._slice_rows(hidden, s0, seq)
+            slab = self._slice_rows(hidden, s0, s0 + TILE)
             normed = self._final_norm_prefill(slab)
             if slab is not hidden:
                 ttnn.deallocate(slab)
-            normed = self._pad_to_sampler_rows(normed)
+            normed = self._pad_to_sampler_rows(normed)  # no-op: the tile is already 32 rows
             logits = self.lm_head_prefill(normed)
             ttnn.deallocate(normed)
             return logits, (seq - 1) - s0
         finally:
             ttnn.deallocate(hidden)
+
+    def warmup_terminal_shapes(self, physical_lengths=None):
+        """Compile the terminal slice/norm/LM-head programs on dummy activations.
+
+        `ttnn.slice` keys its program on the start offset, so the terminal
+        path has one program per 32-row tile offset into the prefill
+        activation. For a prompt inside one chunk that is
+        ``4 + 8 + 16 + 32 + 64 = 124`` offsets across the five buckets, and
+        compiling them here, *before* the decode traces are captured, is what
+        stops a first-use prompt length from compiling under a live trace and
+        forcing a trace recapture (work log FM-016).
+
+        Runs on a zero activation rather than a real prefill, so it costs
+        program compilation and about a millisecond of device time per offset
+        instead of 124 prefills. Prompts longer than one chunk still have an
+        offset past the last bucket and still compile on first use; bounding
+        that needs the terminal path to slice the last chunk first, which is
+        stage-07 work.
+        """
+        lengths = sorted({int(n) for n in (physical_lengths or self.prefill_buckets)})
+        for rows in lengths:
+            rows = (rows // TILE) * TILE
+            if rows < TILE:
+                continue
+            dummy = ttnn.zeros(
+                (1, 1, rows, self.hidden),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for s0 in range(0, rows, TILE):
+                slab = self._slice_rows(dummy, s0, s0 + TILE)
+                normed = self._final_norm_prefill(slab)
+                if slab is not dummy:
+                    ttnn.deallocate(slab)
+                logits = self.lm_head_prefill(normed)
+                ttnn.deallocate(normed)
+                ttnn.deallocate(logits)
+            ttnn.deallocate(dummy)
 
     def _slice_rows(self, hidden, s0, s1):
         if s0 == 0 and s1 == hidden.shape[2]:
@@ -783,8 +822,9 @@ class GLM47FlashModel:
 
     def _pad_to_sampler_rows(self, x):
         """Zero-extend the logical row count to the 32 rows ``ttnn.sampling``
-        wants. Inside one tile this is ``fill_implicit_tile_padding`` + a view,
-        so it moves the 31 pad rows only and consumes ``x``."""
+        wants, with ``ttnn.pad``. Within one tile only the pad rows are
+        written; the padded rows are never read back, only the logical row is
+        (``prefill_forward_last_logits_device`` returns its index)."""
         rows = x.shape[2]
         if rows == SAMPLER_ROWS:
             return x
