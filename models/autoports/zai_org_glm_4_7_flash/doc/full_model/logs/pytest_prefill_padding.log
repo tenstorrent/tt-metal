@@ -1,0 +1,158 @@
+2026-09-01 17:07:32.408 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[17] 2026-09-01 17:07:34.077 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-01 17:07:34.077 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-01 17:07:34.077 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-01 17:07:34.077 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-01 17:07:34.090 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-01 17:07:34.090 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-01 17:07:34.125 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-01 17:07:34.125 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-01 17:07:34.125 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-01 17:07:34.125 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-01 17:07:34.126 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-01 17:07:34.380 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-01 17:07:34.482 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-01 17:07:34.482 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-01 17:07:34.482 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-01 17:07:34.482 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-01 17:07:34.482 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-01 17:07:34.522 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+seq=17 physical bucketed=128 block-aligned=64 argmax disagreements=0/17 pcc=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[65] seq=65 physical bucketed=128 block-aligned=128 argmax disagreements=0/65 pcc=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[129] seq=129 physical bucketed=256 block-aligned=192 argmax disagreements=1/129 pcc=0.99998413
+  pos 112: 75173 vs 8708, gaps 0.0625 / 0 = 1.00 / 0.00 bf16 ULP
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[154] seq=154 physical bucketed=256 block-aligned=192 argmax disagreements=2/154 pcc=0.99998002
+  pos 112: 75173 vs 8708, gaps 0.0625 / 0 = 1.00 / 0.00 bf16 ULP
+  pos 148: 4568 vs 4101, gaps 0.0625 / 0.1875 = 1.00 / 3.00 bf16 ULP
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[700] seq=700 physical bucketed=1024 block-aligned=704 argmax disagreements=0/700 pcc=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2049] seq=2049 physical bucketed=2176 block-aligned=2112 argmax disagreements=0/2049 pcc=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2600] seq=2600 physical bucketed=3072 block-aligned=2624 argmax disagreements=0/2600 pcc=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[154] pad-token invariance: max |delta| = 0.000e+00
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2049] pad-token invariance: max |delta| = 0.000e+00
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2600] pad-token invariance: max |delta| = 0.000e+00
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_padded_cache_rows_cannot_reach_decode 2026-09-01 17:08:15.480 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.480 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:15.526 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-01 17:08:15.526 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.526 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:15.541 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.541 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:15.779 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-01 17:08:15.825 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.825 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:15.830 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.830 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:15.838 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 17:08:15.838 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 17:08:16.076 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
+pad=0     : [98885, 14344, 48364, 1662, 26, 27182, 7451, 61267, 42589, 25794, 26186, 67221, 61586, 25794, 26186, 67221, 61586, 25794, 26186, 67221, 61586, 25794, 22061, 27182]
+pad=12345 : [98885, 14344, 48364, 1662, 26, 27182, 7451, 61267, 42589, 25794, 26186, 67221, 61586, 25794, 26186, 67221, 61586, 25794, 26186, 67221, 61586, 25794, 22061, 27182]
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+12.10s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[17]
+11.60s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2600]
+4.95s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2049]
+2.50s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2600]
+2.12s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2049]
+1.47s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[700]
+1.35s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_padded_cache_rows_cannot_reach_decode
+0.84s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[129]
+0.80s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[154]
+0.76s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[17]
+0.74s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[154]
+0.71s call     models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[65]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2600]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[129]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[154]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[700]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_padded_cache_rows_cannot_reach_decode
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[65]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2600]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2049]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2049]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[154]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[17]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[65]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[129]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[154]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[700]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2049]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_bucketed_prefill_matches_block_aligned_prefill[2600]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[154]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2049]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_pad_token_value_cannot_reach_a_real_position[2600]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py::test_padded_cache_rows_cannot_reach_decode
+======================= 11 passed, 2 warnings in 43.02s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7cdbddc1f908 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7cdbddfd6838 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function "clear_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_numpy"
+ - leaked function "to_torch"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function "device_coords"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-01 17:08:17.744 | info     |    BuildKernels | JIT cache stats: 1494/1597 hits (93.6%) [1494 cached, 1125 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-01 17:08:17.744 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-01 17:08:17.767 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-01 17:08:17.767 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-01 17:08:18.104 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-01 17:08:18.104 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-01 17:08:18.104 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

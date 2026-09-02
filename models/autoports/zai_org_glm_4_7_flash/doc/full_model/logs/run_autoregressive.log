@@ -1,0 +1,111 @@
+2026-09-01 23:04:25.406 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-01 23:04:25.439 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-01 23:04:25.439 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-01 23:04:25.439 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-01 23:04:25.439 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-01 23:04:25.451 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-01 23:04:25.452 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-01 23:04:25.512 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-01 23:04:25.512 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-01 23:04:25.512 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-01 23:04:25.512 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-01 23:04:25.514 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-01 23:04:25.721 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-01 23:04:25.825 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-01 23:04:25.825 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-01 23:04:25.825 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-01 23:04:25.825 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-01 23:04:25.825 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-01 23:04:25.865 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+Prompt (20 tokens):
+[gMASK]<sop><|user|>Explain the difference between supervised and unsupervised learning in simple terms.<|assistant|><think>
+
+Running HF reference on cpu...
+Loading weights:   0%|          | 0/751 [00:00<?, ?it/s]Loading weights:   2%|▏         | 17/751 [00:00<00:08, 84.38it/s]Loading weights:   4%|▍         | 33/751 [00:00<00:08, 85.75it/s]Loading weights:   7%|▋         | 49/751 [00:00<00:07, 88.99it/s]Loading weights:   9%|▊         | 65/751 [00:00<00:07, 90.87it/s]Loading weights:  11%|█         | 81/751 [00:00<00:07, 93.51it/s]Loading weights:  13%|█▎        | 97/751 [00:01<00:06, 95.55it/s]Loading weights:  15%|█▌        | 113/751 [00:01<00:06, 96.11it/s]Loading weights:  17%|█▋        | 129/751 [00:01<00:06, 97.45it/s]Loading weights:  19%|█▉        | 145/751 [00:01<00:06, 98.50it/s]Loading weights:  21%|██▏       | 161/751 [00:01<00:05, 99.00it/s]Loading weights:  24%|██▎       | 177/751 [00:01<00:05, 99.25it/s]Loading weights:  26%|██▌       | 193/751 [00:02<00:05, 100.18it/s]Loading weights:  28%|██▊       | 209/751 [00:02<00:05, 100.91it/s]Loading weights:  30%|██▉       | 225/751 [00:02<00:05, 101.67it/s]Loading weights:  32%|███▏      | 241/751 [00:02<00:05, 101.82it/s]Loading weights:  34%|███▍      | 257/751 [00:02<00:04, 102.34it/s]Loading weights:  36%|███▋      | 273/751 [00:02<00:04, 102.52it/s]Loading weights:  38%|███▊      | 289/751 [00:02<00:04, 102.38it/s]Loading weights:  41%|████      | 305/751 [00:03<00:04, 102.28it/s]Loading weights:  43%|████▎     | 321/751 [00:03<00:04, 101.96it/s]Loading weights:  45%|████▍     | 337/751 [00:03<00:04, 101.88it/s]Loading weights:  47%|████▋     | 353/751 [00:03<00:03, 101.91it/s]Loading weights:  49%|████▉     | 369/751 [00:03<00:03, 101.73it/s]Loading weights:  51%|█████▏    | 385/751 [00:03<00:03, 101.80it/s]Loading weights:  53%|█████▎    | 401/751 [00:04<00:03, 101.94it/s]Loading weights:  56%|█████▌    | 417/751 [00:04<00:03, 101.96it/s]Loading weights:  58%|█████▊    | 433/751 [00:04<00:03, 101.84it/s]Loading weights:  60%|█████▉    | 449/751 [00:04<00:02, 101.93it/s]Loading weights:  62%|██████▏   | 465/751 [00:04<00:02, 101.76it/s]Loading weights:  64%|██████▍   | 481/751 [00:04<00:02, 101.90it/s]Loading weights:  66%|██████▌   | 497/751 [00:04<00:02, 102.04it/s]Loading weights:  68%|██████▊   | 513/751 [00:05<00:02, 102.13it/s]Loading weights:  70%|███████   | 529/751 [00:05<00:02, 102.15it/s]Loading weights:  73%|███████▎  | 545/751 [00:05<00:02, 102.04it/s]Loading weights:  75%|███████▍  | 561/751 [00:05<00:01, 102.08it/s]Loading weights:  77%|███████▋  | 577/751 [00:05<00:01, 101.90it/s]Loading weights:  79%|███████▉  | 593/751 [00:05<00:01, 101.96it/s]Loading weights:  81%|████████  | 609/751 [00:06<00:01, 102.08it/s]Loading weights:  83%|████████▎ | 625/751 [00:06<00:01, 102.21it/s]Loading weights:  85%|████████▌ | 641/751 [00:06<00:01, 102.15it/s]Loading weights:  87%|████████▋ | 657/751 [00:06<00:00, 101.93it/s]Loading weights:  90%|████████▉ | 673/751 [00:06<00:00, 101.83it/s]Loading weights:  92%|█████████▏| 689/751 [00:06<00:00, 101.86it/s]Loading weights:  94%|█████████▍| 705/751 [00:07<00:00, 102.18it/s]Loading weights:  96%|█████████▌| 721/751 [00:07<00:00, 102.44it/s]Loading weights:  98%|█████████▊| 737/751 [00:07<00:00, 102.26it/s]Loading weights: 100%|██████████| 751/751 [00:07<00:00, 102.38it/s]
+2026-09-01 23:08:38.163 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:38.163 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:38.392 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:38.392 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:38.788 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:38.788 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:39.537 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:39.537 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:41.267 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:41.267 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:42.753 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:42.753 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:42.849 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-01 23:08:42.849 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:42.849 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:43.049 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-01 23:08:43.049 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-01 23:08:48.910 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+HF produced 256 tokens.
+Building TT generator...
+building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/47]
+  layer 1 (moe) built [2/47]
+  layer 2 (moe) built [3/47]
+  layer 3 (moe) built [4/47]
+  layer 4 (moe) built [5/47]
+  layer 5 (moe) built [6/47]
+  layer 6 (moe) built [7/47]
+  layer 7 (moe) built [8/47]
+  layer 8 (moe) built [9/47]
+  layer 9 (moe) built [10/47]
+  layer 10 (moe) built [11/47]
+  layer 11 (moe) built [12/47]
+  layer 12 (moe) built [13/47]
+  layer 13 (moe) built [14/47]
+  layer 14 (moe) built [15/47]
+  layer 15 (moe) built [16/47]
+  layer 16 (moe) built [17/47]
+  layer 17 (moe) built [18/47]
+  layer 18 (moe) built [19/47]
+  layer 19 (moe) built [20/47]
+  layer 20 (moe) built [21/47]
+  layer 21 (moe) built [22/47]
+  layer 22 (moe) built [23/47]
+  layer 23 (moe) built [24/47]
+  layer 24 (moe) built [25/47]
+  layer 25 (moe) built [26/47]
+  layer 26 (moe) built [27/47]
+  layer 27 (moe) built [28/47]
+  layer 28 (moe) built [29/47]
+  layer 29 (moe) built [30/47]
+  layer 30 (moe) built [31/47]
+  layer 31 (moe) built [32/47]
+  layer 32 (moe) built [33/47]
+  layer 33 (moe) built [34/47]
+  layer 34 (moe) built [35/47]
+  layer 35 (moe) built [36/47]
+  layer 36 (moe) built [37/47]
+  layer 37 (moe) built [38/47]
+  layer 38 (moe) built [39/47]
+  layer 39 (moe) built [40/47]
+  layer 40 (moe) built [41/47]
+  layer 41 (moe) built [42/47]
+  layer 42 (moe) built [43/47]
+  layer 43 (moe) built [44/47]
+  layer 44 (moe) built [45/47]
+  layer 45 (moe) built [46/47]
+  layer 46 (moe) built [47/47]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+  prefill programs warmed in 4.6s
+  decode + sampling traces captured in 0.3s
+Running TT autoregressive generation...
+TT produced 256 tokens.
+
+Saved HF completion → /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/hf_completion.txt
+Saved TT completion → /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/tt_completion.txt
+Saved metadata     → /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/autoregressive_meta.json
+2026-09-01 23:08:49.692 | info     |    BuildKernels | JIT cache stats: 1227/1227 hits (100.0%) [1227 cached, 593 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-01 23:08:49.692 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-01 23:08:49.747 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-01 23:08:49.747 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-01 23:08:50.246 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-01 23:08:50.246 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-01 23:08:50.246 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

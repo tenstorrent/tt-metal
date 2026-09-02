@@ -202,5 +202,57 @@
    "evidence": "doc/optimized_decoder/README.md, doc/optimized_decoder/long_context_*.json, doc/optimized_decoder/perf_summary.json",
    "date": "2026-09-01"
   }
+ },
+ "current_supported_context": 202752,
+ "current_supported_context_source": "full_model stage: whole 47-layer stack + full-context paged latent cache resident on one Blackhole p150-class chip",
+ "capability_reduction": "none",
+ "full_model": {
+  "supported_context": 202752,
+  "max_valid_position": 202751,
+  "capability_reduction": "none",
+  "batch_1_context": 202752,
+  "measured_allocatable_dram_gib": 31.5,
+  "measured_allocatable_dram_evidence": "512 MiB DRAM allocations on device 0 until OOM: 31.5 GiB allocated, bank size 4272341376 B x 8 banks (doc/full_model/work_log.md, FM-001)",
+  "dram_budget_gib": {
+   "weights_decoder_layers": 16.382,
+   "weights_token_embedding_bf16": 0.591,
+   "weights_lm_head_bf8": 0.314,
+   "weights_rope_tables": 0.097,
+   "cache_reset_zero_buffer": 0.116,
+   "weights_plus_persistent_scratch": 17.498,
+   "kv_cache_batch1_202752_bf8": 5.431,
+   "sampler_penalty_buffers": 0.092,
+   "resident_total": 23.022,
+   "trace_region_reserved": 0.326,
+   "headroom": 8.152
+  },
+  "kv_cache_bytes_per_token_per_layer_bf8": 612,
+  "kv_cache_bytes_per_token_all_47_layers_bf8": 28764,
+  "batch_contract": {
+   "primary": "batch 1 at the full advertised 202752 context (measured, resident)",
+   "largest_tested_batch": 32,
+   "batch_32_context": 8192,
+   "limit": "batch x context is bounded by DRAM: 28764 B/token across 47 layers. Of the 31.5 GiB the allocator hands out (probe/dram_capacity_probe.py), 17.498 GiB is weights + persistent scratch, 0.092 GiB is the sampler's penalty buffers and 0.326 GiB is the reserved trace region, leaving ~13.58 GiB = ~507k total cached tokens. batch 32 x 8192 = 262144 tokens = 7.022 GiB measured resident and fits; batch 32 x 202752 would need 173.8 GiB and is a hard physical limit, not a design choice.",
+   "evidence": "doc/full_model/README.md, tests/test_full_model_batch.py, doc/full_model/logs/pytest_full_model_batch32.log",
+   "batch_32_measured_gib": 24.462
+  },
+  "notes": [
+   "Prefill lengths are bucketed to (128, 256, 512, 1024, 2048) and longer prompts to whole 2048-token chunks plus a bucketed tail; this only pads the physical prefill. The logical prompt length is unrestricted up to 202752 and padded positions are proven not to reach a real one (tests/test_prefill_padding.py: bit-identical logits and generated tokens under two different pad token values, single-chunk and multi-chunk).",
+   "Every layer shares one RoPE table set: 47 private copies would add 2.4 GiB of byte-identical data at this context. The decode RoPE index is derived from the current position on device, so there is one position state tensor and an inactive (-1) slot stays pinned at index 0."
+  ],
+  "provenance": {
+   "stage": "full-model",
+   "evidence": "doc/full_model/README.md, doc/full_model/accuracy.json, doc/full_model/perf.json, doc/full_model/logs/",
+   "date": "2026-09-01"
+  },
+  "dram_budget_bytes": {
+   "weights_plus_persistent_scratch": 18788830464,
+   "kv_cache_batch1_202752_bf8": 5831958528,
+   "sampler_penalty_buffers": 99123200,
+   "resident_total": 24719912192,
+   "measured_allocatable": 33822867456,
+   "headroom_after_trace_region": 8752955264
+  },
+  "evidence": "doc/full_model/capacity.json and doc/full_model/dram_capacity.json (both written on hardware by tests/test_full_model_perf.py and probe/dram_capacity_probe.py); doc/full_model/full_context.json is the 202751-token prefill + decode run through the whole 47-layer stack"
  }
 }

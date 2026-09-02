@@ -118,6 +118,25 @@ def _resolve_prompt_text(
     raise ValueError(f"Prompt source {prompt_source!r} does not provide a direct prompt")
 
 
+def _flatten_token_ids(prompt_tokens) -> list[int]:
+    """Normalize the several shapes tokenizers return into a flat id list.
+
+    ``apply_chat_template(tokenize=True)`` returns a plain list on transformers
+    4.x but a ``BatchEncoding`` on 5.x, and either form may carry a batch
+    dimension or be a torch tensor.
+    """
+    if hasattr(prompt_tokens, "keys") and "input_ids" in prompt_tokens:
+        prompt_tokens = prompt_tokens["input_ids"]
+    if hasattr(prompt_tokens, "tolist"):
+        prompt_tokens = prompt_tokens.tolist()
+    prompt_tokens = list(prompt_tokens)
+    if prompt_tokens and isinstance(prompt_tokens[0], (list, tuple)):
+        if len(prompt_tokens) != 1:
+            raise ValueError(f"expected a single tokenized sequence, got {len(prompt_tokens)}")
+        prompt_tokens = list(prompt_tokens[0])
+    return [int(token_id) for token_id in prompt_tokens]
+
+
 def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: bool) -> list[int]:
     if chat_template:
         if not hasattr(tokenizer, "apply_chat_template"):
@@ -130,9 +149,10 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
+    prompt_tokens = _flatten_token_ids(prompt_tokens)
     if not prompt_tokens:
         raise ValueError("Prompt tokenization produced no tokens")
-    return [int(token_id) for token_id in prompt_tokens]
+    return prompt_tokens
 
 
 def _normal_token_ids(token_ids) -> list[int]:

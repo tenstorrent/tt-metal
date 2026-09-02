@@ -1,0 +1,808 @@
+2026-09-01 17:04:34.583 | INFO     | __main__:main:412 - Using port 8086
+2026-09-01 17:04:34.583 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-09-01 17:04:34.699 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/stisi/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/stisi/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-09-01 17:04:34.705 | INFO     | __main__:main:430 - Test process started
+2026-09-01 17:04:35.622 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_decode 2026-09-01 17:04:37.633 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-01 17:04:37.633 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-01 17:04:37.633 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-01 17:04:37.633 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-01 17:04:37.646 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-01 17:04:37.646 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-01 17:04:37.731 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-01 17:04:37.731 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-01 17:04:37.731 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-01 17:04:37.731 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-01 17:04:37.733 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-01 17:04:37.965 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-01 17:04:38.071 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-01 17:04:38.071 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-01 17:04:38.071 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-01 17:04:38.071 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-01 17:04:38.071 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-01 17:04:38.117 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-01 17:04:38.124 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+Building ncrisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DRM_INTERLEAVED=1 -DSRC_SHARDED=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary/6557838394978978822/" -DKERNEL_COMPILE_TIME_ARGS=2,64 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_unary/6557838394978978822/ncrisc/ncrisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_unary/6557838394978978822/ncrisc/ncrisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_sfpu/17732481817334097622/" -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc2/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc2/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp:6,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_sfpu/17732481817334097622/" -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc0/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc0/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp:6,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDST_SHARDED=0 -DRM_INTERLEAVED=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary/9920584993278234912/" -DKERNEL_COMPILE_TIME_ARGS=2,64 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_unary/9920584993278234912/brisc/brisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_unary/9920584993278234912/brisc/brisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_sfpu/17732481817334097622/" -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc1/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_sfpu/17732481817334097622/trisc1/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_typecast_rm_chunked/8496600806650402197/" -DKERNEL_COMPILE_TIME_ARGS=2,64 -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_typecast_rm_chunked/8496600806650402197/ncrisc/ncrisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_typecast_rm_chunked/8496600806650402197/ncrisc/ncrisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/13341547942932766165/" -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc2/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc2/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:15,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:5,
+                 from ../chlkc_pack.cpp:2,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/13341547942932766165/" -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc0/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc0/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/dataflow_buffer.inl:18,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:5,
+                 from ../chlkc_unpack.cpp:2,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_typecast_rm_chunked/9914234949765236166/" -DKERNEL_COMPILE_TIME_ARGS=2,64 -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_typecast_rm_chunked/9914234949765236166/brisc/brisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_typecast_rm_chunked/9914234949765236166/brisc/brisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="eltwise_typecast/13341547942932766165/" -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc1/trisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/eltwise_typecast/13341547942932766165/trisc1/trisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DSKIP_MCAST=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_bmm_tile_layout_in1_sender_writer_padding/3649801410889692720/" -DKERNEL_COMPILE_TIME_ARGS=1,4840,19360,44,44,4,176,16,1,1,0,0,0,0,309760,1,1,0,0,1,4840,4,4840,44,4840,4,1,4,4840,0,0,0,0,2,1088,0,0,2,2048 -include named_ct_arg_map_generated.h -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/3649801410889692720/brisc/brisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/3649801410889692720/brisc/brisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary_interleaved_start_id_metal2/11230534325127217978/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_unary_interleaved_start_id_metal2/11230534325127217978/ncrisc/ncrisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_unary_interleaved_start_id_metal2/11230534325127217978/ncrisc/ncrisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary_interleaved_start_id_metal2/16676116300027922992/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_unary_interleaved_start_id_metal2/16676116300027922992/brisc/brisck.6998804166577108009_132449.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_unary_interleaved_start_id_metal2/16676116300027922992/brisc/brisck.6998804166577108009_132449.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-01 17:04:45.604 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-01 17:04:46.149 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.150 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.150 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.150 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.151 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.151 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.151 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.152 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.152 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.153 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.153 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.153 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.154 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.154 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.155 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.155 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.156 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.156 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.157 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.157 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.157 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.158 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.158 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.159 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.159 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.159 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.160 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.160 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.161 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.161 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.161 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.162 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.162 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.163 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.163 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.164 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 9, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.164 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 9, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.165 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 9, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.165 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 9, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.165 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 9, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.166 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 10, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.166 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 10, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.167 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 10, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.167 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 10, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.167 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 10, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.168 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 11, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.168 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 11, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.169 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 11, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.169 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 11, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.170 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 11, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.170 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.171 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.171 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.171 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.172 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.172 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.173 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.173 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.173 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.174 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.174 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.175 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.175 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.176 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.176 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.176 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.177 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.177 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.178 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.178 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.179 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.179 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.180 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.180 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.180 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.181 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.181 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.182 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.182 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.182 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.183 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.183 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.184 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.184 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.185 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.185 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 9, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.185 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 9, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.186 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 9, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.186 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 9, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.187 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 2, 9, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.191 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.192 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.192 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.193 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.193 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.193 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.194 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.194 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.195 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.195 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.195 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.196 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.196 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.197 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.197 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.198 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.198 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.199 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.199 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.199 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.200 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.200 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.201 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.201 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.202 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.202 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.203 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.203 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.204 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.204 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.204 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.205 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.205 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.206 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.206 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 3, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.213 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.213 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.214 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.214 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.215 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.215 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.215 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.216 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.216 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.217 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.217 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.218 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.218 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.219 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.219 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.219 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.220 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.220 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.221 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.221 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.222 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.222 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.223 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.223 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.223 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.224 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.224 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.225 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.225 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.226 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.226 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.227 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.227 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.228 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.228 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 4, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.235 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.235 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.236 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.236 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.237 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.237 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.237 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.238 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.238 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.239 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.239 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.240 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.240 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.241 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.241 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.241 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.242 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.242 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.243 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.243 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.244 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.244 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.245 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.245 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.246 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.246 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.246 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.247 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.247 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.248 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.248 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.249 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.249 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.250 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.250 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 5, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.257 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.257 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.258 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.258 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.258 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.259 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.259 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.260 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.260 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.260 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.261 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.261 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.262 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.262 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.263 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.263 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.264 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.264 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.264 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.265 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.265 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 6, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.266 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 6, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.266 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 6, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.267 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 6, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.267 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 6, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.268 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 7, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.268 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 7, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.269 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 7, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.269 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 7, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.269 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 7, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.270 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 8, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.270 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 8, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.271 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 8, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.271 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 8, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.272 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 6, 8, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.278 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.279 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.279 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.280 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.280 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.280 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.281 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.281 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.282 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.282 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.282 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.283 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.284 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.284 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.284 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.285 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 5, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.285 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 5, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.286 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 5, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.286 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 5, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.287 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 7, 5, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.299 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.300 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.300 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.301 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.301 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.301 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 3, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.302 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 3, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.303 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 3, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.303 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 3, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.303 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 3, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.304 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 4, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.304 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 4, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.305 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 4, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.305 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 4, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.305 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 10, 4, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1696)
+2026-09-01 17:04:46.374 | INFO     | tracy:signpost:49 - PERF_FM_DECODE_MODEL
+2026-09-01 17:04:46.571 | INFO     | tracy:signpost:49 - PERF_FM_DECODE_MODEL_END
+2026-09-01 17:04:46.579 | INFO     | tracy:signpost:49 - PERF_FM_DECODE_TOKENOUT
+2026-09-01 17:04:46.845 | INFO     | tracy:signpost:49 - PERF_FM_DECODE_TOKENOUT_END
+building 2 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
+  layer 0 (dense) built [1/2]
+  layer 1 (moe) built [2/2]
+  decode rope tables (ROW_MAJOR) built
+  embedding table uploaded
+  lm head uploaded
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_reduced_decode.json: {'variant': 'reduced full model: HF layers 0 (dense) + 1 (moe), real embedding/norm/LM head/sampler', 'layers': [0, 1], 'context_allocated': 8192, 'decode_position': 128, 'iterations': 8, 'traced_model_only_ms': 1.933, 'traced_token_out_ms': 3.017, 'sampling_ms': 1.084, 'wall_clock_note': 'measured before the signposted windows, with no profiler flushes in the loop', 'signposts': ['PERF_FM_DECODE_MODEL', 'PERF_FM_DECODE_MODEL_END', 'PERF_FM_DECODE_TOKENOUT', 'PERF_FM_DECODE_TOKENOUT_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_prefill 2026-09-01 17:04:47.110 | INFO     | tracy:signpost:49 - PERF_FM_PREFILL
+2026-09-01 17:04:47.121 | INFO     | tracy:signpost:49 - PERF_FM_PREFILL_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_reduced_prefill.json: {'variant': 'reduced full model: HF layers 0 (dense) + 1 (moe), real embedding/norm/LM head', 'layers': [0, 1], 'prompt_len': 128, 'physical_prefill_len': 128, 'wall_ms': 11.19, 'signposts': ['PERF_FM_PREFILL', 'PERF_FM_PREFILL_END']}
+PASSED2026-09-01 17:04:47.148 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-01 17:04:48.296 | info     |           Metal | Device kernel duration perf summary (device=1): count=6214, min=177ns, avg=18367.6ns, max=3346384ns (profiler_analysis.cpp:727)
+2026-09-01 17:04:48.296 | info     |           Metal | Device kernel duration perf histogram (device=1): (buckets=10, bucket_size=334700ns, range=[0..3347000), underflow(<0ns)=0, overflow(>=3347000ns)=0) (profiler_analysis.cpp:770)
+2026-09-01 17:04:48.296 | info     |           Metal |   [           0 ..       334700) |########################################|     6163 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [      334700 ..       669400) |                                        |        6 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [      669400 ..      1004100) |                                        |       39 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     1004100 ..      1338800) |                                        |        0 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     1338800 ..      1673500) |                                        |        0 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     1673500 ..      2008200) |                                        |        2 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     2008200 ..      2342900) |                                        |        1 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     2342900 ..      2677600) |                                        |        0 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     2677600 ..      3012300) |                                        |        0 (profiler_analysis.cpp:775)
+2026-09-01 17:04:48.296 | info     |           Metal |   [     3012300 ..      3347000) |                                        |        3 (profiler_analysis.cpp:775)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.18s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_decode
+5.26s teardown models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_prefill
+1.04s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_decode
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_prefill
+0.08s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_prefill
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_decode
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py::test_profile_prefill
+======================== 2 passed, 2 warnings in 15.39s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x77650a74cc08 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7765304e24a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function "get_dtype"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "__init__"
+ - leaked function "__eq__"
+ - leaked function "create_matmul_attributes"
+ - leaked function "memory_config"
+ - leaked function ""
+ - leaked function "item"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-01 17:04:54.046 | info     |    BuildKernels | JIT cache stats: 671/684 hits (98.1%) [671 cached, 175 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-01 17:04:54.046 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-01 17:04:54.068 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-01 17:04:54.068 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-01 17:04:54.487 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-01 17:04:54.487 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-01 17:04:54.487 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 19.06 s
+Zones: 4,540,370
+Elapsed time: 18.92 s
+Saving trace... done!
+Trace size 39 MB (17.79% ratio)
+2026-09-01 17:04:54.956 | INFO     | __main__:main:469 - Copying /home/stisi/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/stisi/tt-metal/build/profiler/build_wasm/traces/no_randomly_2026_09_01_17_04_54.tracy
+2026-09-01 17:04:54.967 | INFO     | __main__:main:472 - Copied /home/stisi/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/stisi/tt-metal/build/profiler/build_wasm/traces/no_randomly_2026_09_01_17_04_54.tracy
+2026-09-01 17:04:54.968 | INFO     | __main__:main:481 - embed.tracy -> traces/no_randomly_2026_09_01_17_04_54.tracy
+2026-09-01 17:04:54.968 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-09-01 17:04:54.968 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-09-01 17:04:54.968 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-09-01 17:04:56.645 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/stisi/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-09-01 17:04:56.716 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/stisi/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-09-01 17:04:56.716 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+2026-09-01 17:04:58.496 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-09-01 17:04:58.496 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-09-01 17:05:03.491 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-09-01 17:05:03.491 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-09-01 17:05:03.645 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-09-01 17:05:05.158 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/stisi/tt-metal/generated/profiler/reports/2026_09_01_17_05_03/ops_perf_results_2026_09_01_17_05_03.csv

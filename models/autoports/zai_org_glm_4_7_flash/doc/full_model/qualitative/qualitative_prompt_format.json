@@ -1,0 +1,15 @@
+{
+  "hf_model_id": "zai-org/GLM-4.7-Flash",
+  "hf_snapshot_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering": "tokenizer.apply_chat_template(messages, add_generation_prompt=True)",
+  "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+  "num_prompts": 6,
+  "generation": {
+    "greedy": true,
+    "max_new_tokens": 128
+  },
+  "note": "GLM-4.7-Flash is a reasoning/instruct checkpoint: the chat template ends in <|assistant|><think>, so completions open with a reasoning trace before the answer. Raw-completion prompts would not be a valid quality verdict for this checkpoint."
+}

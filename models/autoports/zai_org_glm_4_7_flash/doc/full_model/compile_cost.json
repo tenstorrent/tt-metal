@@ -1,0 +1,41 @@
+{
+  "kernel_cache": "/tmp/glm47_coldhome/.cache/tt-metal-cache",
+  "build": {
+    "prefill_programs_warmed_s": 71.2,
+    "decode_+_sampling_traces_captured_s": 21.1,
+    "build_total_s": 264.84
+  },
+  "prefill": {
+    "prompt_128": {
+      "physical_len": 128,
+      "warmed_at_build": true,
+      "first_call_ms": 218.0,
+      "repeat_calls_ms": [
+        339.9,
+        339.9,
+        339.9,
+        339.9
+      ],
+      "repeat_mean_ms": 339.9,
+      "repeat_spread_pct": 0.0,
+      "first_minus_repeat_mean_ms": -121.9
+    },
+    "prompt_3000": {
+      "physical_len": 3072,
+      "warmed_at_build": false,
+      "first_call_ms": 6779.6,
+      "repeat_calls_ms": [
+        6281.1,
+        6469.7,
+        6470.3,
+        6470.7
+      ],
+      "repeat_mean_ms": 6422.9,
+      "repeat_spread_pct": 3.0,
+      "first_minus_repeat_mean_ms": 356.6
+    }
+  },
+  "kernel_cache_state": "cold - the run log records 'JIT cache stats: 0/1237 hits (0.0%)'",
+  "warm_arm": "doc/full_model/compile_cost_warm.json (same script, default HOME; log records 1237/1237 hits (100.0%))",
+  "read": "Compare the two arms at the SAME call index, not first-vs-repeat within one arm. Construction: 264.8 s cold vs 179.0 s warm, of which prefill warmup 71.2 vs 4.6 s and trace capture 21.1 vs 0.3 s. First request at an un-warmed prefill shape (prompt 3000 -> physical 3072): 6779.6 ms cold vs 5388.3 ms warm, i.e. the cold JIT cache costs +1391 ms inside that first request. First request at a shape construction already warmed (prompt 128): 218.0 vs 217.4 ms, i.e. nothing, which is what warming is supposed to buy. Within either arm the four warm repeats are stable to 0.0% but sit systematically above the first call (339.9 vs 218.0 ms at prompt 128), so first-minus-repeat is not a compile measurement; that anomaly is recorded in doc/full_model/work_log.md FM-010."
+}

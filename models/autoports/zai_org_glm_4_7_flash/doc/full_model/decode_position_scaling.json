@@ -1,0 +1,42 @@
+{
+  "layers": "0,1",
+  "cache_context": 202752,
+  "note": "The cache is allocated but not filled; the flash MLA decode reads it regardless, so these are honest timings of the op's work at each cur_pos even though the contents are zeros.",
+  "rows": [
+    {
+      "position": 128,
+      "eager_ms": 13.5,
+      "traced_ms": 1.81
+    },
+    {
+      "position": 2048,
+      "eager_ms": 3.4,
+      "traced_ms": 1.89
+    },
+    {
+      "position": 8192,
+      "eager_ms": 3.33,
+      "traced_ms": 2.03
+    },
+    {
+      "position": 32768,
+      "eager_ms": 3.3,
+      "traced_ms": 2.61
+    },
+    {
+      "position": 65536,
+      "eager_ms": 3.85,
+      "traced_ms": 3.4
+    },
+    {
+      "position": 131072,
+      "eager_ms": 5.46,
+      "traced_ms": 4.96
+    },
+    {
+      "position": 202751,
+      "eager_ms": 7.1,
+      "traced_ms": 6.64
+    }
+  ]
+}

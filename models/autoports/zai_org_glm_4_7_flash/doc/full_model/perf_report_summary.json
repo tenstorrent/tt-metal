@@ -1,0 +1,290 @@
+{
+  "decode_model": {
+    "csv": "decode_model_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 8,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 1264,
+    "ops_per_step": 158.0,
+    "device_us_per_step": 1708.1,
+    "op_to_op_gap_us_per_step": 20378.2,
+    "top_ops": [
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 872.84,
+        "pct": 51.1,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+        "us_per_step": 131.65,
+        "pct": 7.7,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 52.72,
+        "pct": 3.1,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
+        "us_per_step": 51.66,
+        "pct": 3.0,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SdpaDecodeDeviceOperation",
+        "us_per_step": 49.87,
+        "pct": 2.9,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 10240 x 2048",
+        "us_per_step": 47.33,
+        "pct": 2.8,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 5120 x 2048",
+        "us_per_step": 45.0,
+        "pct": 2.6,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+        "us_per_step": 39.08,
+        "pct": 2.3,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 36.85,
+        "pct": 2.2,
+        "calls_per_step": 13.0
+      },
+      {
+        "op": "UntilizeCodegenDeviceOperation",
+        "us_per_step": 30.56,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 1536 x 2048",
+        "us_per_step": 30.26,
+        "pct": 1.8,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "FillPadDeviceOperation",
+        "us_per_step": 30.2,
+        "pct": 1.8,
+        "calls_per_step": 5.0
+      },
+      {
+        "op": "TransposeDeviceOperation",
+        "us_per_step": 25.5,
+        "pct": 1.5,
+        "calls_per_step": 8.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 24.28,
+        "pct": 1.4,
+        "calls_per_step": 19.0
+      }
+    ]
+  },
+  "decode_tokenout": {
+    "csv": "decode_tokenout_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 8,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 1600,
+    "ops_per_step": 200.0,
+    "device_us_per_step": 2752.6,
+    "op_to_op_gap_us_per_step": 27049.2,
+    "top_ops": [
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 873.49,
+        "pct": 31.7,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "TopkLargeIndicesDeviceOperation",
+        "us_per_step": 664.89,
+        "pct": 24.2,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+        "us_per_step": 132.36,
+        "pct": 4.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "TopkRouteFinishDeviceOperation",
+        "us_per_step": 82.03,
+        "pct": 3.0,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 80.53,
+        "pct": 2.9,
+        "calls_per_step": 23.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 73.3,
+        "pct": 2.7,
+        "calls_per_step": 25.0
+      },
+      {
+        "op": "TopkRoutePrepDeviceOperation",
+        "us_per_step": 68.27,
+        "pct": 2.5,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 52.72,
+        "pct": 1.9,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
+        "us_per_step": 51.27,
+        "pct": 1.9,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SdpaDecodeDeviceOperation",
+        "us_per_step": 49.85,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 10240 x 2048",
+        "us_per_step": 47.32,
+        "pct": 1.7,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 5120 x 2048",
+        "us_per_step": 45.03,
+        "pct": 1.6,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "CopyDeviceOperation",
+        "us_per_step": 40.52,
+        "pct": 1.5,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+        "us_per_step": 40.3,
+        "pct": 1.5,
+        "calls_per_step": 4.0
+      }
+    ]
+  },
+  "prefill": {
+    "csv": "prefill_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 1,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 110,
+    "ops_per_step": 110.0,
+    "device_us_per_step": 10444.7,
+    "op_to_op_gap_us_per_step": 427.6,
+    "top_ops": [
+      {
+        "op": "SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072",
+        "us_per_step": 3069.94,
+        "pct": 29.4,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048",
+        "us_per_step": 1982.44,
+        "pct": 19.0,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 876.5,
+        "pct": 8.4,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 768 x 256",
+        "us_per_step": 702.25,
+        "pct": 6.7,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "UnaryDeviceOperation",
+        "us_per_step": 464.84,
+        "pct": 4.5,
+        "calls_per_step": 7.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 451.09,
+        "pct": 4.3,
+        "calls_per_step": 14.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 512 x 256",
+        "us_per_step": 435.49,
+        "pct": 4.2,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 322.68,
+        "pct": 3.1,
+        "calls_per_step": 22.0
+      },
+      {
+        "op": "PermuteDeviceOperation",
+        "us_per_step": 321.24,
+        "pct": 3.1,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 5120 x 2048",
+        "us_per_step": 237.79,
+        "pct": 2.3,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 10240 x 2048",
+        "us_per_step": 231.98,
+        "pct": 2.2,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 215.87,
+        "pct": 2.1,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 192 x 512",
+        "us_per_step": 190.48,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 2048 x 10240",
+        "us_per_step": 148.88,
+        "pct": 1.4,
+        "calls_per_step": 2.0
+      }
+    ]
+  }
+}

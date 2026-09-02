@@ -1,0 +1,40 @@
+{
+  "kernel_cache": "/home/stisi/.cache/tt-metal-cache",
+  "build": {
+    "prefill_programs_warmed_s": 4.6,
+    "decode_+_sampling_traces_captured_s": 0.3,
+    "build_total_s": 179.04
+  },
+  "prefill": {
+    "prompt_128": {
+      "physical_len": 128,
+      "warmed_at_build": true,
+      "first_call_ms": 217.4,
+      "repeat_calls_ms": [
+        339.9,
+        339.9,
+        339.8,
+        339.9
+      ],
+      "repeat_mean_ms": 339.8,
+      "repeat_spread_pct": 0.0,
+      "first_minus_repeat_mean_ms": -122.4
+    },
+    "prompt_3000": {
+      "physical_len": 3072,
+      "warmed_at_build": false,
+      "first_call_ms": 5388.3,
+      "repeat_calls_ms": [
+        6469.3,
+        6469.5,
+        6469.3,
+        6470.1
+      ],
+      "repeat_mean_ms": 6469.5,
+      "repeat_spread_pct": 0.0,
+      "first_minus_repeat_mean_ms": -1081.3
+    }
+  },
+  "kernel_cache_state": "warm - the run log records 'JIT cache stats: 1237/1237 hits (100.0%)'",
+  "cold_arm": "doc/full_model/compile_cost.json"
+}

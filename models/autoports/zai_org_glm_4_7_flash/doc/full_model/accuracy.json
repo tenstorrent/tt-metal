@@ -1,0 +1,20 @@
+{
+  "prefill": {
+    "top1": 0.88,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 88,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100
+  },
+  "teacher_forcing": {
+    "top1": 0.85,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 85,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100
+  }
+}

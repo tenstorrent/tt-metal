@@ -1,0 +1,35 @@
+Debugger version mismatch.
+  Installed: 0.3.27
+  Required:  tt-exalens==0.3.30
+Proceeding due to --skip-version-check
+-----------------------------------------------------------------------  ---------------  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+tools/tt-triage.py:18                                                    <module>         main()
+tools/triage/triage.py:1006                                              main             context = _init_ttexalens(args)
+tools/triage/triage.py:879                                               _init_ttexalens  context = init_ttexalens()
+python_env/lib/python3.12/site-packages/ttexalens/tt_exalens_init.py:46  init_ttexalens   umd_api = local_init(init_jtag, noc_id, simulation_directory)
+python_env/lib/python3.12/site-packages/ttexalens/umd_api.py:251         local_init       communicator = UmdApi(init_jtag, noc_id, simulation_directory)
+python_env/lib/python3.12/site-packages/ttexalens/umd_api.py:141         __init__         self.cluster_descriptor, devices = tt_umd.TopologyDiscovery.discover(
+python_env/lib/python3.12/site-packages/ttexalens/umd_api.py:141         __init__         DeviceTimeoutError: MMIO per-op timeout: 4B load took 220639 us (budget=2 ms), 4 of 4 bytes remaining.
+                                                                                          Location: /project/device/pcie/device_memcpy.cpp:38
+                                                                                           1. /home/stisi/tt-metal/python_env/lib/python3.12/site-packages/tt_umd/tt_umd.cpython-312-x86_64-linux-gnu.so(+0x13e594) [0x703942f3e594]
+                                                                                           2. tt::umd::TlbWindow::read_block_reconfigure(void*, tt::xy_pair, unsigned long, unsigned long, tt::umd::NocId, unsigned long)
+                                                                                           3. decltype(auto) tt::umd::SiliconTlbWindow::execute_safe<void (tt::umd::TlbWindow::*)(void*, tt::xy_pair, unsigned long, unsigned long, tt::umd::NocId, unsigned long), void*&, tt::xy_pair&, unsigned long&, unsigned long&, tt::umd::NocId&, unsigned long&>(void (tt::umd::TlbWindow::*&&)(void*, tt::xy_pair, unsigned long, unsigned long, tt::umd::NocId, unsigned long), void*&, tt::xy_pair&, unsigned long&, unsigned long&, tt::umd::NocId&, unsigned long&)
+                                                                                           4. tt::umd::SiliconTlbWindow::safe_read_block_reconfigure(void*, tt::xy_pair, unsigned long, unsigned long, tt::umd::NocId, unsigned long)
+                                                                                           5. tt::umd::PcieProtocol::read_from_device(void*, tt::xy_pair, unsigned long, unsigned long, tt::umd::NocId)
+                                                                                           6. tt::umd::BlackholeTTDevice::wait_eth_core_training(tt::xy_pair, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+                                                                                           7. tt::umd::TopologyDiscovery::wait_eth_cores_training(tt::umd::TTDevice*, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+                                                                                           8. tt::umd::TopologyDiscovery::get_connected_devices()
+                                                                                           9. tt::umd::TopologyDiscovery::create_ethernet_map()
+                                                                                          10. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                                                                                          11. /home/stisi/tt-metal/python_env/lib/python3.12/site-packages/tt_umd/tt_umd.cpython-312-x86_64-linux-gnu.so(+0x1a3c7b) [0x703942fa3c7b]
+                                                                                          12. /home/stisi/tt-metal/python_env/lib/python3.12/site-packages/tt_umd/tt_umd.cpython-312-x86_64-linux-gnu.so(+0x1c10f3) [0x703942fc10f3]
+                                                                                          13. _PyEval_EvalFrameDefault
+                                                                                          14. _PyEval_EvalFrameDefault
+                                                                                          15. PyEval_EvalCode
+                                                                                          16. _PyRun_SimpleFileObject
+                                                                                          17. _PyRun_AnyFileObject
+                                                                                          18. Py_RunMain
+                                                                                          19. /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x703944029d90]
+                                                                                          20. __libc_start_main
+                                                                                          21. _start
+-----------------------------------------------------------------------  ---------------  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

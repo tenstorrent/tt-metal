@@ -1,0 +1,31 @@
+{
+  "vocab_size": 154880,
+  "rows": 32,
+  "iterations": 30,
+  "arms": {
+    "split_topk_greedy": {
+      "force_argmax_active": false,
+      "output_shape": [
+        1,
+        1,
+        1,
+        32
+      ],
+      "matches_torch_argmax": "32/32",
+      "eager_ms": 1.129,
+      "traced_ms": 1.108
+    },
+    "force_argmax": {
+      "force_argmax_active": true,
+      "output_shape": [
+        1,
+        1,
+        1,
+        32
+      ],
+      "matches_torch_argmax": "32/32",
+      "eager_ms": 1.06,
+      "traced_ms": 1.084
+    }
+  }
+}

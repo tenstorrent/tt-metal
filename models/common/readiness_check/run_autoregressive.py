@@ -235,7 +235,12 @@ def _main() -> None:
 
     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
 
-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
+    mesh_device = open_readiness_mesh_device(
+        args.mesh_device,
+        args.fabric_config,
+        trace_region_size=args.trace_region_size,
+        l1_small_size=args.l1_small_size,
+    )
     try:
         run_autoregressive(
             model_dir=args.model_dir.resolve(),

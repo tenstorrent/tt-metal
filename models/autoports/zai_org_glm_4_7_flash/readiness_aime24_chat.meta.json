@@ -1,0 +1,33 @@
+{
+  "artifact": "readiness_aime24_chat.refpt",
+  "sha256": "e21761894be5ab8d8ac4dffbf86fff51ee034967273bdacdf20655474b1703b3",
+  "generated_by": "python -m models.common.readiness_check.generate --hf-model zai-org/GLM-4.7-Flash --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt",
+  "generated_on": "2026-09-01",
+  "hf_model_id": "zai-org/GLM-4.7-Flash",
+  "hf_snapshot_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+  "tokenizer_class": "TokenizersBackend",
+  "tokenizer_has_chat_template": true,
+  "prompt_source": "aime24",
+  "aime24_prompts_file": "models/demos/deepseek_v3/demo/aime_under_8k_prompts.json",
+  "aime24_prompt_index": 0,
+  "chat_template": true,
+  "gen_len": 100,
+  "top_k": 100,
+  "num_entries": 1,
+  "prompt_len_tokens": 154,
+  "generated_len_tokens": 100,
+  "token_ids_meta": {
+    "bos_id": null,
+    "eos_id": 154820,
+    "pad_id": 154820
+  },
+  "hf_dtype": "auto (checkpoint bfloat16)",
+  "hf_device": "cpu",
+  "transformers_version": "5.12.1",
+  "prompt_text": "[gMASK]<sop><|user|>Every morning Aya goes for a $9$-kilometer-long walk and stops at a coffee shop afterwards. When she walks at a constant speed of $s$ kilometers per hour, the walk takes her 4 hours, including $t$ minutes spent in the coffee shop. When she walks $s+2$ kilometers per hour, the walk takes her 2 hours and 24 minutes, including $t$ minutes spent in the coffee shop. Suppose Aya walks at $s+\\frac{1}{2}$ kilometers per hour. Find the number of minutes the walk takes her, including the $t$ minutes spent in the coffee shop.\nPlease reason step by step, and put your final answer within\\boxed\nAnswer:<|assistant|><think>",
+  "hf_continuation_text": "We are given: Aya goes for a 9-kilometer walk. She stops at a coffee shop afterwards. The walk includes time spent in the coffee shop. So total time = walking time + coffee shop time.\n\nLet t be the time spent in coffee shop in minutes. But careful: The problem states: \"including t minutes spent in the coffee shop.\" So t is in minutes. In the first scenario: speed s km/h, total time = 4 hours, including t minutes",
+  "notes": [
+    "Generated fresh for the full-model stage; no earlier GLM-4.7-Flash reference existed in this checkout.",
+    "models/common/readiness_check/generate.py needed a fix first: transformers 5.x returns a BatchEncoding from apply_chat_template(tokenize=True), which the shared harness fed straight into int()."
+  ]
+}

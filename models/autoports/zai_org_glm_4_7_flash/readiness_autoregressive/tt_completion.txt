@@ -1,0 +1,16 @@
+1.  **Analyze the Request:**
+    *   **Topic:** Supervised vs. Unsupervised Learning.
+    *   **Constraint:** Explain in *simple terms*.
+    *   **Goal:** Clear, accessible explanation distinguishing the two concepts.
+
+2.  **Deconstruct the Concepts:**
+    *   *Supervised Learning:* Needs a teacher. Has labels. Input data + Output data. Goal: Map input to output. Examples: Classification (cat/dog), Regression (predict price).
+    *   *Unsupervised Learning:* No teacher. No labels. Just raw data. Goal: Find patterns, structure, or clusters. Examples: Clustering (grouping), Anomaly detection.
+
+3.  **Brainstorm Analogies (The "Simple Terms" Filter):**
+    *   *Analogy 1: Teaching a child.* (Classic, effective).
+        *   Supervised: Flashcards with answers on the back.
+        *   Unsupervised: Showing a pile of toys and asking them to sort themselves.
+    *   *Analogy 2: A GPS.* (Functional).
+        *   Supervised: GPS shows you the way (input) and tells you where to go (output).
+        *   Unsup

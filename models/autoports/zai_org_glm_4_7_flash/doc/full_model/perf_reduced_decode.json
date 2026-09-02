@@ -1,0 +1,20 @@
+{
+  "variant": "reduced full model: HF layers 0 (dense) + 1 (moe), real embedding/norm/LM head/sampler",
+  "layers": [
+    0,
+    1
+  ],
+  "context_allocated": 8192,
+  "decode_position": 128,
+  "iterations": 8,
+  "traced_model_only_ms": 1.892,
+  "traced_token_out_ms": 2.98,
+  "sampling_ms": 1.088,
+  "wall_clock_note": "measured before the signposted windows, with no profiler flushes in the loop",
+  "signposts": [
+    "PERF_FM_DECODE_MODEL",
+    "PERF_FM_DECODE_MODEL_END",
+    "PERF_FM_DECODE_TOKENOUT",
+    "PERF_FM_DECODE_TOKENOUT_END"
+  ]
+}

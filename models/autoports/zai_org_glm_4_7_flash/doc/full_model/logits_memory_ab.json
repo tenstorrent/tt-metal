@@ -1,0 +1,36 @@
+{
+  "dram": {
+    "decode_logits_memory_config": "DRAM",
+    "traced_model_only_ms": 1.813,
+    "traced_token_out_ms": 2.937,
+    "sampling_ms": 1.124,
+    "tokens": [
+      26186,
+      27182,
+      74281,
+      25794,
+      26186,
+      19961,
+      26742,
+      394
+    ]
+  },
+  "l1": {
+    "decode_logits_memory_config": "L1",
+    "traced_model_only_ms": 1.768,
+    "traced_token_out_ms": 2.903,
+    "sampling_ms": 1.135,
+    "tokens": [
+      26186,
+      27182,
+      74281,
+      25794,
+      26186,
+      19961,
+      26742,
+      394
+    ]
+  },
+  "note": "Reduced 2-layer probe at the full 202752-token cache, batch 1, decode position 64. The L1 arm additionally logs ttnn.split 'L1 budget exceeded ... DRAM downgrade' and 'migrating L1 input (9912320 B) to DRAM' inside the captured sampling graph.",
+  "same_tokens": true
+}

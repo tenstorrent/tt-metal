@@ -20,6 +20,13 @@ MESH_SHAPES: dict[str, tuple[int, int]] = {
 
 FABRIC_CONFIG_CHOICES = ("FABRIC_1D", "FABRIC_1D_RING", "FABRIC_2D")
 
+#: ttnn's own defaults are 0/0. A readiness generator must run traced decode
+#: (see contract.py), which needs a non-zero trace region, and several models
+#: need the L1 small allocator for flash-attention style ops. These defaults
+#: keep the readiness CLI usable out of the box; override per model.
+DEFAULT_TRACE_REGION_SIZE = 90_000_000
+DEFAULT_L1_SMALL_SIZE = 32_768
+
 
 def add_mesh_device_args(parser: argparse.ArgumentParser) -> None:
     """Register --mesh-device and --fabric-config on a readiness runner parser."""
@@ -39,9 +46,30 @@ def add_mesh_device_args(parser: argparse.ArgumentParser) -> None:
             "meshes. Omit for single-chip (N150) or when the model does not need fabric."
         ),
     )
+    parser.add_argument(
+        "--trace-region-size",
+        type=int,
+        default=DEFAULT_TRACE_REGION_SIZE,
+        help=(
+            "Bytes reserved for TTNN trace capture/replay. The generator contract requires traced "
+            "decode, and ttnn's own default is 0 (no trace region), so a model whose decode trace "
+            f"does not fit must raise this. Default {DEFAULT_TRACE_REGION_SIZE}."
+        ),
+    )
+    parser.add_argument(
+        "--l1-small-size",
+        type=int,
+        default=DEFAULT_L1_SMALL_SIZE,
+        help=f"Bytes reserved for the L1 small allocator. Default {DEFAULT_L1_SMALL_SIZE}.",
+    )
 
 
-def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None = None) -> Any:
+def open_readiness_mesh_device(
+    mesh_device_label: str,
+    fabric_config: str | None = None,
+    trace_region_size: int = DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = DEFAULT_L1_SMALL_SIZE,
+) -> Any:
     """Open a mesh device, optionally enabling fabric first."""
     import ttnn  # noqa: WPS433 — lazy
 
@@ -60,7 +88,11 @@ def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None
         }[fabric_config]
         ttnn.set_fabric_config(fabric)
 
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*shape),
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
+    )
 
 
 def close_readiness_mesh_device(mesh_device: Any, fabric_config: str | None = None) -> None:

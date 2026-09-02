@@ -1,0 +1,8 @@
+{
+  "device_id": 0,
+  "chunk_mib": 512,
+  "allocatable_mib": 32256,
+  "allocatable_gib": 31.5,
+  "allocatable_bytes": 33822867456,
+  "first_refusal": "Out of Memory: Not enough space to allocate 536870912 B DRAM buffer across 8 banks, where each bank needs to store 67108864 B, but bank size is 4272341376 B (allocated: 4227858432 B, free: 44482944 B, largest free block: 44482944 B)"
+}
