@@ -118,12 +118,17 @@ public:
         bool enable_phase_alias,
         bool x_is_rm);
 
-    std::vector<CbView> cb_layout(bool x_is_rm, uint32_t out_tile, uint32_t idx_page, uint32_t counts_page) const;
+    std::vector<CbView> cb_layout(
+        bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
     std::vector<CbAllocation> cb_allocations(
-        bool x_is_rm, uint32_t out_tile, uint32_t idx_page, uint32_t counts_page, bool enable_phase_alias) const;
-    uint64_t l1_bytes(bool x_is_rm, uint32_t out_tile, bool enable_phase_alias) const;
-    bool phase_cb_alias(uint32_t out_tile) const;
-    uint32_t phase_cb_alias_pages(uint32_t out_tile) const;
+        bool input_is_rm,
+        uint32_t requested_out_tile,
+        uint32_t idx_page,
+        uint32_t counts_page,
+        bool aliases_enabled) const;
+    uint64_t l1_bytes(bool input_is_rm, uint32_t requested_out_tile, bool aliases_enabled) const;
+    bool phase_cb_alias(uint32_t requested_out_tile) const;
+    uint32_t phase_cb_alias_pages(uint32_t requested_out_tile) const;
     std::string describe() const;
 
     uint32_t hgroups;
