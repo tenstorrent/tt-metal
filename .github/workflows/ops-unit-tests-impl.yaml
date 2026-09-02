@@ -84,6 +84,8 @@ jobs:
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           categories='${{ inputs.additional_test_categories }}'
+          # The comparison is exact between commas, strip whitespace first.
+          categories="${categories//[[:space:]]/}"
           filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
           {
             echo "matrix<<EOF"
