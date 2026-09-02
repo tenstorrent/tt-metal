@@ -37,8 +37,9 @@ torus profile, so this needs no cabling-certified descriptor and no fabric bring
 
 Deliberately not covered: the MTP module numerics (``test_mtp.py``), and generation for the last
 chunk -- every window here comes out of an INTERIOR chunk, so no token is ever generated and the LM
-head never runs. The last chunk's generated tail, through the real LM head and the real predictor,
-is ``test_mtp_transformer_chunks.py``'s subject.
+head never runs. The last chunk's generated tail is covered in two places: its geometry, on device
+and row-exact, in ``test_mtp_device_transport.py``, and the whole chain through the real LM head and
+the real predictor in ``test_mtp_transformer_chunks.py``.
 """
 
 from __future__ import annotations

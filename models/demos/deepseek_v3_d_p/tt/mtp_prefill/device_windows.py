@@ -29,13 +29,17 @@ vocab). ``slice(embed(ids)) == embed(slice(ids))`` row-for-row, so the two paths
 construction rather than by measurement -- which is why the ids no longer need a codec to survive a
 bf16 wire.
 
-Deliberately NOT here: generation. ``MTPEmbedSource`` resolves the last chunk's ``K`` trailing
-positions by running the LM head once per level and feeding the sampled token back in. That is a
-host round trip per level by definition, and the runner path exists to avoid host round trips, so
-the device source carries whatever the producer put in those slots (its own pad id) and reports no
-generated tokens. It costs the last ``k`` rows of level ``k`` on the FINAL chunk of a request --
-``K*(K+1)/2`` rows out of ``chunk_size*K`` -- and nothing at all on an interior chunk, where every
-window is a pure prompt slice.
+**3. The last chunk GENERATES the ids the prompt does not have, on device.** Past a request's real
+length the stream has no more tokens, so level ``k``'s window at the last real row has nothing to
+read. ``MTPEmbedSource`` solves that on the host -- LM head, argmax, feed the id back in -- which is
+a host round trip per level, exactly what this path exists to avoid. Here the same chain runs on
+device: ``argmax(lm_head(H^k))`` -> ``embed`` -> SP ``all_gather`` -> a one-hot matmul that writes
+the result into the union at global position ``actual_end + k`` (:class:`MTPDeviceGeneration`).
+Writing it at that ONE position is the whole simplification: every level's window slice then picks
+it up by itself. ``generated_tokens`` still comes back empty -- the ids never leave the device.
+
+Only the FINAL chunk of a request does any of this; an interior chunk's windows are pure prompt
+slices, and the producer says which is which in the 4th PrefillMetadata word.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ from typing import Optional
 
 import ttnn
 
-__all__ = ["MTPUnionEmbedding", "MTPDeviceEmbedSource"]
+__all__ = ["MTPUnionEmbedding", "MTPDeviceEmbedSource", "MTPDeviceGeneration"]
 
 
 class MTPUnionEmbedding:
@@ -73,6 +77,11 @@ class MTPUnionEmbedding:
         self._parts: list = list(parts)
         assert self._parts, "a union needs at least one row block"
         self._rows: Optional[ttnn.Tensor] = None
+        # Set by clear_rows/add_patch: the union AFTER generation patches, as one tensor. Kept beside
+        # _parts rather than replacing them because a middle rank re-packs the blocks it received --
+        # and because .trunk, which is this chunk's model input, must keep pointing at the embedding
+        # the trunk actually ran on.
+        self._patched: Optional[ttnn.Tensor] = None
         rows = sum(int(p.shape[-2]) for p in self._parts)
         assert rows >= self.window_len + self.num_levels, (
             f"union embedding is {rows} rows, needs at least window_len + K = {self.window_len} + "
@@ -114,6 +123,12 @@ class MTPUnionEmbedding:
         return list(self._parts)
 
     @property
+    def overhang(self) -> int:
+        """Rows the union holds past this chip's trunk shard: ``U - window_len``."""
+        assert self._parts, "union embedding already deallocated"
+        return sum(int(p.shape[-2]) for p in self._parts) - self.window_len
+
+    @property
     def trunk(self) -> ttnn.Tensor:
         """This chunk's trunk embedding -- the first ``window_len`` rows, as its own tensor.
 
@@ -143,53 +158,146 @@ class MTPUnionEmbedding:
         ttnn.deallocate(rows)
         return window
 
+    def clear_rows(self, keep_mask: ttnn.Tensor) -> None:
+        """Multiply the union by ``[sp, 1, U, H/tp]`` ``keep_mask`` (zeroing the generation rows)."""
+        self._apply(lambda src: ttnn.multiply(src, keep_mask))
+
+    def add_patch(self, select: ttnn.Tensor, embeddings: ttnn.Tensor) -> None:
+        """Add ``select @ embeddings`` into the union: ``[sp, 1, U, 32*sp] @ [1, 1, 32*sp, H/tp]``.
+
+        ``select`` is one-hot, so this writes one embedding row into the union rows that hold the
+        generated position and leaves every other row exactly as it was.
+        """
+
+        def _patch(src):
+            delta = ttnn.matmul(select, embeddings)
+            out = ttnn.add(src, delta)
+            ttnn.deallocate(delta)
+            return out
+
+        self._apply(_patch)
+
     def deallocate(self) -> None:
         for t in self._parts:
             ttnn.deallocate(t)
         self._parts = []
+        for name in ("_patched", "_rows"):
+            t = getattr(self, name)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    def _current(self) -> tuple:
+        """``(the union as ONE tile tensor, whether the caller must free it)``."""
+        if self._patched is not None:
+            return self._patched, False
+        assert self._parts, "union embedding already deallocated"
+        if len(self._parts) == 1:
+            return self._parts[0], False
+        return ttnn.concat(self._parts, dim=-2), True
+
+    def _apply(self, fn) -> None:
+        """Replace the union with ``fn(union)``, freeing what it replaces and the stale ROW_MAJOR copy.
+
+        Never touches ``_parts``: those are the received/gathered blocks, which the D2D pack and
+        ``.trunk`` still read.
+        """
+        src, temp = self._current()
+        out = fn(src)
+        if temp or src is self._patched:
+            ttnn.deallocate(src)
+        self._patched = out
         if self._rows is not None:
             ttnn.deallocate(self._rows)
             self._rows = None
 
     def _row_major(self) -> ttnn.Tensor:
-        """ROW_MAJOR copy of the JOINED union, materialized once and reused by all K windows.
+        """ROW_MAJOR copy of the JOINED union, materialized once and reused until it is invalidated.
 
         A window starts at row ``k`` for ``k`` in 1..K, which is never a multiple of 32, and
         ``ttnn.slice`` on TILE_LAYOUT only cuts on tile boundaries -- so the rows must be untilized,
         and joined first when they arrived as separate blocks. Kept alive beside the blocks rather
         than replacing them, because a middle rank re-packs the tiled ones -- 2 MiB/chip at the
-        production shape, on a rank that just gave back 453.75.
+        production shape, on a rank that just gave back 453.75. Generation invalidates it once per
+        level (:meth:`_apply`), so the last chunk untilizes ``K`` times instead of once.
         """
         if self._rows is None:
-            assert self._parts, "union embedding already deallocated"
-            joined = self._parts[0] if len(self._parts) == 1 else ttnn.concat(self._parts, dim=-2)
+            joined, temp = self._current()
             self._rows = ttnn.to_layout(joined, ttnn.ROW_MAJOR_LAYOUT)
-            if joined is not self._parts[0]:
+            if temp:
                 ttnn.deallocate(joined)
         return self._rows
+
+
+class MTPDeviceGeneration:
+    """Everything the LAST chunk needs to fill the positions the prompt does not reach.
+
+    Built once per chunk by the caller (it owns the mesh geometry and the LM head) and handed to
+    :class:`MTPDeviceEmbedSource`, which drives it level by level.
+
+    Args:
+        keep_mask: ``[sp, 1, U, H/tp]`` ones, zero on every row generation will write. Applied to
+            the union once, before level 0.
+        selects: ``K`` one-hot ``[sp, 1, U, 32*sp]`` selectors, ``selects[k]`` placing level ``k``'s
+            token at global position ``actual_end + k``. All ``K`` are host-known up front: the
+            source row is the LM head's ``(device_id, token_offset)`` for ``actual_isl - 1``, which
+            is the same row at every level.
+        embed_fn: ``H^k -> [1, 1, 32*sp, H/tp]`` -- lm_head, argmax, embed, SP all-gather. The
+            gathered block is what ``selects[k]`` indexes into.
+    """
+
+    def __init__(self, keep_mask: ttnn.Tensor, selects: list, embed_fn):
+        self.keep_mask = keep_mask
+        self.selects = list(selects)
+        self.embed_fn = embed_fn
+        assert self.selects, "generation needs one selector per level"
+
+    def deallocate(self) -> None:
+        for t in [self.keep_mask, *self.selects]:
+            ttnn.deallocate(t)
+        self.selects = []
 
 
 class MTPDeviceEmbedSource:
     """``TtMTPPredictor.forward``'s ``embeds`` callable, sourced entirely on device.
 
     Drop-in for :class:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows.MTPEmbedSource`:
-    same ``(k, H^k) -> ttnn.Tensor`` signature, same ``generated_tokens`` property. It ignores
-    ``H^k`` -- with no host LM-head round trip there is nothing to derive from it -- so
-    ``generated_tokens`` is always empty and the last chunk's trailing rows carry the producer's pad
-    ids. See this module's header for exactly which rows that is.
+    same ``(k, H^k) -> ttnn.Tensor`` signature, same ``generated_tokens`` property.
+
+    Without ``generation`` (every interior chunk) it ignores ``H^k`` entirely -- each window is a
+    row slice of the union the socket delivered. With it (the last chunk of a request) it runs the
+    device generation chain on ``H^k`` and patches the union before slicing, so level ``k``'s last
+    real row reads the token level ``k`` just generated and the earlier rows read the tokens the
+    earlier levels generated.
+
+    ``generated_tokens`` is empty either way: the ids are argmaxed, embedded and consumed on device
+    and never come back to host. Nothing on the runner path reads them.
     """
 
-    def __init__(self, union: MTPUnionEmbedding, mask_fn=None):
+    def __init__(self, union: MTPUnionEmbedding, mask_fn=None, generation: "Optional[MTPDeviceGeneration]" = None):
         self.union = union
         self.mask_fn = mask_fn
+        self.generation = generation
         self.num_levels = union.num_levels
+        self._next_level = 0
 
     @property
     def generated_tokens(self) -> list:
-        """Always empty: this source never runs the LM head. Kept for interface parity."""
+        """Always empty: the generated ids never leave the device. Kept for interface parity."""
         return []
 
     def __call__(self, k: int, prev_normed):
         assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
+        if self.generation is not None:
+            # Strict level order, once each -- same contract as MTPEmbedSource. The patches are
+            # INCREMENTAL: level k's window reads positions actual_end+k-j for j in 0..k, so every
+            # earlier level's token must already be in the union.
+            assert k == self._next_level, f"generation must run levels in order; expected {self._next_level}, got {k}"
+            self._next_level += 1
+            if k == 0:
+                self.union.clear_rows(self.generation.keep_mask)
+            gathered = self.generation.embed_fn(prev_normed)
+            self.union.add_patch(self.generation.selects[k], gathered)
+            ttnn.deallocate(gathered)
         window = self.union.window(k + 1)
         return self.mask_fn(window) if self.mask_fn is not None else window

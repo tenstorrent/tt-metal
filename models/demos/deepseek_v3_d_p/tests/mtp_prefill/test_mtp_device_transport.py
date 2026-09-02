@@ -26,6 +26,12 @@ host round trip anywhere. Four hardware claims carry it:
    positions -- no shape error, no crash, just every row paired with the wrong hidden.
 4. **The 3-way row-concat pack splits back cleanly.** The union's blocks ride the D2D socket stacked
    UNDER the hidden in one concat, and the receiver cuts the union back out at a fixed row offset.
+5. **The last chunk's generated embeddings land where every level reads them.** Past the request's
+   real length the stream has no ids, so level ``k`` writes ``embed(argmax(lm_head(H^k)))`` into the
+   union at global position ``actual_end + k`` -- one one-hot matmul, patching every chip whose union
+   covers that position -- and each level's own row slice then picks up exactly ``g_0..g_k``. The
+   failure mode is silent: an embedding on a row no window reads, or on a row read at the wrong
+   level, is a draft trained on the wrong token and nothing raises.
 
 **Exact equality, not PCC.** ``embedding`` is a gather: the row it writes is the table row, byte for
 byte, so ``slice(embed(ids)) == embed(slice(ids))`` holds bit-exactly and a correlation would blur
@@ -50,6 +56,11 @@ from models.demos.common.prefill.runners import prefill_producer as producer
 from models.demos.common.prefill.runners.runner_utils import h2d_row_len, mtp_overhang, mtp_union_rows
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
+    build_mtp_generation_keep_mask,
+    build_mtp_generation_select,
+    mtp_generation_union_rows,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
 SP, TP = 8, 4
@@ -69,6 +80,19 @@ UNION_ROWS = mtp_union_rows(CHUNK, SP, K)
 
 METADATA_SIZE_BYTES = 12
 """3 x uint32 [slot_id, actual_start, actual_end] -- what prefill_runner sends."""
+
+SOURCE_ROW = 5 * 32 + 11
+"""The row of the gathered LM-head block that holds the generated token: ``device_id * 32 +
+token_offset``. Fixed here (the real value comes from ``global_to_local_token_id``) and deliberately
+not 0, so a patch that ignored it would show up."""
+
+GENERATION_CASES = [
+    pytest.param(CHUNK, id="ends-on-the-chunk-edge"),
+    pytest.param(L + 10, id="ends-on-the-overhang-seam"),
+]
+"""Real lengths for claim 5. The first is production (56320 = 11 x 5120): the generated positions
+sit in the LAST chip's overhang and exactly one chip holds each. The second ends 10 rows into chip
+1's shard, where chip 0's overhang covers the same positions -- two chips must be patched."""
 
 MESH = [
     pytest.param(
@@ -149,6 +173,27 @@ def _assert_rows(tt, want_ids: torch.Tensor, table: torch.Tensor, shift: int, ro
         assert bad.numel() == 0, (
             f"{what} shift {shift} dev {d} (chip {c}): {bad.numel()}/{rows} rows wrong, first at local "
             f"row {bad[0].item()} -- the window is reading the wrong positions"
+        )
+
+
+def _assert_union_rows(tt, want: torch.Tensor, shift: int, rows: int, what: str) -> None:
+    """Every shard of a window equals ``want[chip, shift : shift + rows]`` in its own TP columns.
+
+    Like :func:`_assert_rows` but against an explicitly built ``[SP, U, HIDDEN]`` union rather than
+    ``table[ids]``, because generation makes some rows something no id maps to.
+    """
+    got = _shards(tt)
+    assert len(got) == SP * TP, f"{what}: expected {SP * TP} device shards, got {len(got)}"
+    per_tp = HIDDEN // TP
+    for d, g in enumerate(got):
+        c, t = d // TP, d % TP
+        exp = want[c, shift : shift + rows, t * per_tp : (t + 1) * per_tp]
+        g = g.reshape(-1, per_tp)
+        assert g.shape == exp.shape, f"{what} dev {d}: shape {tuple(g.shape)} != {tuple(exp.shape)}"
+        bad = (g != exp).any(dim=-1).nonzero().flatten()
+        assert bad.numel() == 0, (
+            f"{what}: dev {d} (chip {c}) has {bad.numel()}/{rows} wrong rows, first at window row "
+            f"{bad[0].item()} = union row {shift + bad[0].item()}"
         )
 
 
@@ -327,4 +372,89 @@ def test_row_concat_pack_survives_the_d2d_split(mesh_device, stream):
     received.deallocate()
     union.deallocate()
     for t in (packed, got_hidden, hidden):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("real_len", GENERATION_CASES)
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_generated_embedding_reaches_every_window_that_reads_it(mesh_device, stream, real_len):
+    """Claim 5: the last chunk's generation writes one row per position and every level picks it up.
+
+    The chain's two halves are separable and only this one is geometry. The LM head, the argmax and
+    the embedding gather are exercised whole by the runner e2e; what a wrong answer here looks like
+    is a *silent* one -- an embedding written to a row no window reads, or to a row some window reads
+    at the wrong level -- so it is measured against an explicitly constructed union, row by row, on
+    all 32 chips. ``embed_fn``'s output is stood in for by a known ``[1, 1, 32*sp, H/tp]`` block per
+    level, which is exactly what the SP all-gather delivers.
+
+    Both cases matter and they are geometrically different: at ``real_len == CHUNK`` (GLM-5.2's
+    56320 = 11 x 5120, the shape the demo actually runs) the generated positions live in the LAST
+    chip's overhang and one chip holds each; at a real length that ends mid-chunk they land on the
+    seam, where two chips' unions overlap and BOTH must be patched or the windows disagree across it.
+    """
+    table = torch.randn(VOCAB, HIDDEN, dtype=torch.float32).to(torch.bfloat16)
+    embed_fn = _embed_fn(mesh_device, table)
+    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device)
+    union = MTPUnionEmbedding.from_ids(tt_ids, tt_overhang, embed_fn, num_levels=K)
+    for t in (tt_ids, tt_overhang):
+        ttnn.deallocate(t)
+    assert union.overhang == OVERHANG, f"union reports overhang {union.overhang}, expected {OVERHANG}"
+
+    geom = dict(
+        mesh_device=mesh_device,
+        sp_factor=SP,
+        chunk_size=CHUNK,
+        mesh_shape=(SP, TP),
+        sp_axis=0,
+        overhang=OVERHANG,
+        chunk_start=0,
+        actual_end=real_len,
+    )
+    rows = [
+        mtp_generation_union_rows(SP, CHUNK, overhang=OVERHANG, chunk_start=0, actual_end=real_len, level=k)
+        for k in range(K)
+    ]
+    keep_mask = build_mtp_generation_keep_mask(**geom, emb_dim_per_chip=HIDDEN // TP, num_levels=K)
+    selects = [build_mtp_generation_select(**geom, level=k, source_row=SOURCE_ROW) for k in range(K)]
+
+    # What the SP all-gather hands each level: 32 rows per chip, replicated across SP, TP-sharded.
+    # Only row SOURCE_ROW is ever read; the rest are the other chips' tiles and must be ignored.
+    gathered_host = [torch.randn(1, 1, ttnn.TILE_SIZE * SP, HIDDEN).to(torch.bfloat16) for _ in range(K)]
+    gathered = [
+        ttnn.from_torch(
+            g.float(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(3)]),
+            ),
+        )
+        for g in gathered_host
+    ]
+
+    # The union this must produce, built here from the ids and the known blocks -- not read back and
+    # re-described. Cleared rows start at zero and level k's patch fills its own.
+    want = torch.stack([table[want_ids[c]] for c in range(SP)]).clone()  # [SP, U, HIDDEN]
+    for k in range(K):
+        for c, u in enumerate(rows[k]):
+            if u is not None:
+                want[c, u] = 0.0
+
+    union.clear_rows(keep_mask)
+    for k in range(K):
+        union.add_patch(selects[k], gathered[k])
+        for c, u in enumerate(rows[k]):
+            if u is not None:
+                want[c, u] = gathered_host[k][0, 0, SOURCE_ROW]
+        window = union.window(k + 1)
+        _assert_union_rows(window, want, k + 1, L, f"level {k} window after generating level {k}")
+        ttnn.deallocate(window)
+
+    patched = {u for r in rows for u in r if u is not None}
+    assert patched, "no union row was patched; the case is vacuous"
+    union.deallocate()
+    for t in (keep_mask, *selects, *gathered):
         ttnn.deallocate(t)

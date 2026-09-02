@@ -23,11 +23,20 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    global_to_local_token_id,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDeviceEmbedSource
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDeviceEmbedSource, MTPDeviceGeneration
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import MTPEmbedSource
-from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_position_zero_mask, prepare_prefill_mtp_window
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
+    build_mtp_generation_keep_mask,
+    build_mtp_generation_select,
+    build_position_zero_mask,
+    prepare_prefill_mtp_window,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -200,6 +209,7 @@ class TtPrefillTransformer(LightweightModule):
         # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
         # take the scalar TP element.
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
+        sp_topology = topology[0] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -354,6 +364,10 @@ class TtPrefillTransformer(LightweightModule):
         self.sp_factor = mesh_device.shape[sp_axis]
         self.tp_factor = mesh_device.shape[tp_axis]
         self.emb_dim_per_chip = config.hidden_size // self.tp_factor
+        # Kept for MTP generation's SP broadcast (mtp_generate_embedding); every other collective
+        # this class owns is TP-axis and took its topology at construction.
+        self.num_links = num_links
+        self.sp_topology = sp_topology
 
         # --- MTP (GLM-5.2, issue #53533) -----------------------------------------------------
         # Injected rather than built here: the predictor owns MTP weights and a full GLM decoder
@@ -511,10 +525,11 @@ class TtPrefillTransformer(LightweightModule):
                         inside the activation. Mutually exclusive with `mtp_tokens`.
             mtp_seed_token: optional t_P for the last chunk, saving one 32-row LM head call. Only pass
                         it when it was produced greedily — see _mtp_next_token_fn. Host path only:
-                        the device path never runs the LM head (see `MTPDeviceEmbedSource`).
-            is_last_chunk: this chunk ends the request, so the K positions its MTP windows read
-                        past `actual_end` have no ids in the prompt. Only the producer knows that
-                        boundary; see CHUNK_METADATA_SIZE_BYTES.
+                        on the device path the ids never leave the device (see `MTPDeviceGeneration`).
+            is_last_chunk: this chunk ends the request, so the K positions its MTP windows read past
+                        `actual_end` have no ids in the prompt and are generated on device instead —
+                        argmax of each level's own LM head, embedded straight back into the union.
+                        Only the producer knows this boundary; see CHUNK_METADATA_SIZE_BYTES.
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
                         than an extra return value, so the trunk's return arity is unchanged whether or
                         not MTP ran — the same reason on_layer_complete is a callback.
@@ -851,6 +866,76 @@ class TtPrefillTransformer(LightweightModule):
 
         return next_token
 
+    def mtp_generate_embedding(self, h_normed: ttnn.Tensor, actual_isl: int) -> ttnn.Tensor:
+        """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded, and
+        SP-broadcast so every chip can read it. The device twin of :meth:`_mtp_next_token_fn`.
+
+        ``TtLMHead.forward`` narrows to the one 32-row tile containing the target row before the
+        vocab matmul, so the whole chain is 32 rows wide: one tile-sized head call, one ``argmax``,
+        one 32-id embedding gather, one 32-row all-gather. It is SP-FRACTURED -- only the chip the
+        target row lives on computes the real logits -- so the gather is what makes the result
+        available to the chips whose union holds the position being written; the caller's one-hot
+        selector picks row ``device_id*32 + token_offset`` out of it and ignores the rest.
+
+        Greedy, like the host source: the MTP chain is a draft, the reference is argmax, and
+        sampling here would make level ``k+1``'s input depend on the trunk's temperature.
+        """
+        assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
+        assert not self.lm_head.is_column_parallel, (
+            "MTP device generation needs the full vocab on every chip to argmax it there; a "
+            "column-parallel LM head leaves vocab/tp per chip, which argmaxes to a per-shard id"
+        )
+        logits, _ = self.lm_head(h_normed, actual_isl - 1)  # [1, 1, 32, vocab], TP-replicated
+        ids = ttnn.argmax(logits, dim=-1, keepdim=False)  # [1, 1, 32] uint32 ROW_MAJOR
+        ttnn.deallocate(logits)
+        emb = self.mtp_embed_ids(ids)  # [1, 1, 32, H/tp] bf16 TILE
+        ttnn.deallocate(ids)
+        if self.sp_factor == 1:
+            return emb
+        gathered = ttnn.all_gather(
+            emb, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
+        )
+        ttnn.deallocate(emb)
+        return gathered
+
+    def _mtp_build_generation(self, union, actual_isl: int, actual_start: int, actual_end: int):
+        """The last chunk's :class:`MTPDeviceGeneration`: one keep mask and ``K`` one-hot selectors.
+
+        All of it is host-known before any level runs. The generated token always comes off the same
+        row -- the last real one -- so ``(device_id, token_offset)`` is the same at every level, and
+        the only thing that changes with ``k`` is WHERE the result is written: global position
+        ``actual_end + k``.
+        """
+        assert not self.is_balanced, (
+            "MTP device generation is block-cyclic only: under is_balanced a chip's union is not a "
+            "contiguous position range, so 'the rows holding position actual_end + k' is not one row "
+            "per chip. Chunked prefill passes is_balanced=False throughout."
+        )
+        assert (
+            actual_end - actual_start == actual_isl
+        ), f"actual_end - actual_start = {actual_end - actual_start} != actual_isl {actual_isl}"
+        device_id, local_token_id = global_to_local_token_id(
+            actual_isl - 1, self.sp_factor, self.seq_len, is_balanced=self.is_balanced
+        )
+        source_row = device_id * ttnn.TILE_SIZE + local_token_id % ttnn.TILE_SIZE
+        geom = dict(
+            mesh_device=self.mesh_device,
+            sp_factor=self.sp_factor,
+            chunk_size=self.seq_len,
+            mesh_shape=self.mesh_shape,
+            sp_axis=self.sp_axis,
+            overhang=union.overhang,
+            chunk_start=actual_start,
+            actual_end=actual_end,
+        )
+        keep_mask = build_mtp_generation_keep_mask(
+            **geom, emb_dim_per_chip=self.emb_dim_per_chip, num_levels=self.num_mtp_levels
+        )
+        selects = [
+            build_mtp_generation_select(**geom, level=k, source_row=source_row) for k in range(self.num_mtp_levels)
+        ]
+        return MTPDeviceGeneration(keep_mask, selects, embed_fn=lambda h: self.mtp_generate_embedding(h, actual_isl))
+
     def run_mtp(
         self,
         h_normed: ttnn.Tensor,
@@ -875,14 +960,14 @@ class TtPrefillTransformer(LightweightModule):
                 each level's own LM head. None when ``union`` is given.
             union: ``MTPUnionEmbedding`` — the on-device alternative to ``mtp_tokens``, where each
                 level's embedding is a row slice of one already-gathered tensor rather than a host
-                list uploaded and gathered per level. It never runs the LM head, so the last chunk's
-                ``K`` trailing positions carry whatever the producer padded them with and
-                ``generated_tokens`` comes back empty.
+                list uploaded and gathered per level. ``generated_tokens`` comes back empty even on
+                the last chunk: the ids are argmaxed, embedded and consumed on device.
             actual_isl: this chunk's real-token count -- both the LM-head row and where the last
                 chunk's generation slots start.
             zero_position_0: True only on the chunk containing absolute position 0.
             is_last_chunk: True only on the chunk that ends the request, where the prompt has no ids
-                past ``actual_end``. Carried here for the levels to use; see #53533.
+                past ``actual_end`` and the ``K`` positions the windows read there must be generated
+                (``union`` path only; ``mtp_tokens`` carries its own generation slots).
             seed_token: ``t_P`` if the caller already has it. Optional; omitting it costs one 32-row
                 LM head call and removes any coupling to the trunk's sampling temperature.
             fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
@@ -893,8 +978,17 @@ class TtPrefillTransformer(LightweightModule):
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
         assert (mtp_tokens is None) != (union is None), "run_mtp takes exactly one of mtp_tokens/union"
+        generation = None
         if union is not None:
-            source = MTPDeviceEmbedSource(union, mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0))
+            if is_last_chunk:
+                generation = self._mtp_build_generation(
+                    union, actual_isl, fwd_kwargs["actual_start"], fwd_kwargs["actual_end"]
+                )
+            source = MTPDeviceEmbedSource(
+                union,
+                mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0),
+                generation=generation,
+            )
         else:
             source = MTPEmbedSource(
                 mtp_tokens,
@@ -910,7 +1004,11 @@ class TtPrefillTransformer(LightweightModule):
         # "got multiple values for argument 'actual_isl'". It cannot already be in fwd_kwargs --
         # a keyword of that name binds to the parameter above, never to **fwd_kwargs.
         fwd_kwargs["actual_isl"] = actual_isl
-        out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
+        try:
+            out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
+        finally:
+            if generation is not None:
+                generation.deallocate()
         return out, source.generated_tokens
 
     def _sample(
