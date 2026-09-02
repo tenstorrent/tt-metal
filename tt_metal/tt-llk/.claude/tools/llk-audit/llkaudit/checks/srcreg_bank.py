@@ -43,6 +43,11 @@ class SrcRegBank(Check):
         "not verified. Quasar's third unpacker / SrcS lane (llk_srcs.h, UNPACR2/"
         "PACR1, *_SRCS_RDY interlocks) is not modeled. Dst/LReg shared-once "
         "overwrite (rides MATH_PACK / mutex::SFPU) is out of scope here. "
+        "On QUASAR the same mask shape is emitted as DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED, "
+        "not as a flag: the pre-flip-pointer mechanism is grounded on the WH/BH bank "
+        "model, and Quasar's own unpack->dest semaphores / AutoTTSync / SrcS lane are "
+        "not confirmed to need the drain — it must be grounded, never inferred by "
+        "cross-arch analogy. "
         "The Dest->Src gate (DEST2SRC_*) reads the wait mask of the nearest TEXTUALLY "
         "preceding STALLWAIT and does NOT model control flow: a stall inside an "
         "`if`/`if constexpr` branch is credited to a move outside it (so a move whose "
@@ -154,14 +159,29 @@ class SrcRegBank(Check):
                     if has_math:
                         continue  # correctly gated
                     if has_vld:
-                        hint, detail = (
-                            "DEST2SRC_NO_MATH_DRAIN",
-                            f"{name} is gated on the Src bank-valid condition but "
-                            "NOT on the FPU-pipeline drain (p_stall::MATH), so the "
-                            "wait can observe the pre-flip bank pointer and the move "
-                            "writes a bank the unpacker still owns — silent wrong "
-                            "values, never a hang",
-                        )
+                        if fb.arch == "quasar":
+                            # The pre-flip-pointer mechanism is grounded on the WH/BH
+                            # bank model. Quasar has its own unpack->dest semaphores,
+                            # HW AutoTTSync and a third SrcS lane, so the same mask
+                            # shape is NOT a confirmed defect there — surface it to be
+                            # grounded, never assert it by cross-arch analogy.
+                            hint, detail = (
+                                "DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED",
+                                f"{name} is gated on the Src bank-valid condition "
+                                "without the FPU-pipeline drain — the WH/BH defect "
+                                "shape, but Quasar's bank model (own semaphores, "
+                                "AutoTTSync, SrcS lane) is not confirmed to need it; "
+                                "ground against the Quasar ISA before judging",
+                            )
+                        else:
+                            hint, detail = (
+                                "DEST2SRC_NO_MATH_DRAIN",
+                                f"{name} is gated on the Src bank-valid condition but "
+                                "NOT on the FPU-pipeline drain (p_stall::MATH), so the "
+                                "wait can observe the pre-flip bank pointer and the "
+                                "move writes a bank the unpacker still owns — silent "
+                                "wrong values, never a hang",
+                            )
                     else:
                         hint, detail = (
                             "DEST2SRC_WAIT_UNRELATED",
