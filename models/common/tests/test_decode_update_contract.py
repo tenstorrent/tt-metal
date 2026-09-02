@@ -97,6 +97,43 @@ def test_non_identity_slot_remap_requires_authoritative_device_state_reload(expe
     assert not fake._slot_state_requires_authoritative_reload
 
 
+def test_partial_sampling_state_rebuild_does_not_clear_slot_remap_invalidation(expect_error):
+    fake, _ = _fake_sampling_generator()
+    remap = [1, 0, *range(2, 32)]
+    params = SamplingParams(temperature=1.0, top_k=1, top_p=1.0)
+
+    SamplingGenerator.apply_slot_remap(fake, remap)
+    SamplingGenerator.apply_decode_state(
+        fake,
+        [params],
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        prompt_tokens="prompt",
+        output_tokens="output",
+        sampling_state_slots=[1, 3],
+    )
+
+    assert fake._slot_state_requires_authoritative_reload
+    with expect_error(ValueError, "requires reload_sampling_params=True and reset_sampling_state=True"):
+        SamplingGenerator.apply_decode_state(
+            fake,
+            [params],
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+
+    SamplingGenerator.apply_decode_state(
+        fake,
+        [params],
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        prompt_tokens="prompt",
+        output_tokens="output",
+    )
+
+    assert not fake._slot_state_requires_authoritative_reload
+
+
 def test_identity_slot_remap_keeps_device_sampling_state_valid():
     fake, calls = _fake_sampling_generator()
     remap = list(range(32))

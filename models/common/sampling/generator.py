@@ -220,8 +220,10 @@ class SamplingGenerator:
         *,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        sampling_state_slots: list[int] | None,
     ) -> None:
-        if reload_sampling_params and reset_sampling_state:
+        """Clear whole-device invalidation only after a whole-device rebuild."""
+        if reload_sampling_params and reset_sampling_state and sampling_state_slots is None:
             self._slot_state_requires_authoritative_reload = False
 
     # ---------------------------------------------------------------------
@@ -310,6 +312,7 @@ class SamplingGenerator:
         self.commit_decode_state_commands(
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
+            sampling_state_slots=sampling_state_slots,
         )
 
     # ---------------------------------------------------------------------

@@ -1693,6 +1693,7 @@ class Generator(WarmupForwardMixin):
         sampling_module.commit_decode_state_commands(
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
+            sampling_state_slots=None,
         )
 
         if formatted_sampling_params is not None and (active_seed_slots is None or active_seed_slots):

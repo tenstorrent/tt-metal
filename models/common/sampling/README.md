@@ -147,10 +147,13 @@ are non-idempotent. Its slot-addressable host RNG state is remapped immediately.
 The sharded device parameter and penalty buffers are instead marked invalid:
 their next activation must command both `reload_sampling_params` and
 `reset_sampling_state`, rebuilding them from authoritative host state before
-they are read. The plugin issues both commands on every layout or sampling-mode
-transition, and the sampling generator rejects a direct caller that attempts a
-partial or absent rebuild. This authoritative rebuild replaces a physical
-remap for those buffers; inactivity alone does not silently accept stale state.
+they are read. A slot-scoped prefill may rebuild only its newly admitted rows,
+but it does not clear the whole-device invalidation; a later decode still needs
+a whole-device penalty reset together with the parameter upload. The plugin
+issues both commands on every layout or sampling-mode transition, and the
+sampling generator rejects a later direct caller that omits that full rebuild.
+This authoritative rebuild replaces a physical remap for those buffers;
+inactivity alone does not silently accept stale state.
 Version-0 adapters retain their historical remap behavior unchanged.
 
 For a merged lane-DP call the remap uses global lane-major slots, while each
