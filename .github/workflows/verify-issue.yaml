@@ -139,14 +139,18 @@ jobs:
         with:
           fetch-depth: 0 # Gate B walks history on the files the report blames
 
-      # The runner's own python3 in a venv, rather than actions/setup-python:
-      # this pool is self-hosted and its tool cache is not guaranteed writable.
+      # uv rather than `python3 -m venv`: this pool's image ships no
+      # python3-venv, so the stdlib path fails on the missing ensurepip. uv
+      # bootstraps its own and needs no root. actions/setup-python is avoided
+      # too — the tool cache on a self-hosted pool is not guaranteed writable.
       - name: Install verifier dependencies
         run: |
           set -euo pipefail
-          python3 -m venv .verifier-venv
-          .verifier-venv/bin/pip install --quiet --upgrade pip
-          .verifier-venv/bin/pip install --quiet -r .github/issue_verifier/requirements-issue-verifier.txt
+          command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv .verifier-venv
+          uv pip install --python .verifier-venv/bin/python \
+            -r .github/issue_verifier/requirements-issue-verifier.txt
           # Native binary install: the tt-metal container has no Node, and the
           # device path below reuses this same command.
           curl -fsSL https://claude.ai/install.sh | bash
@@ -215,14 +219,16 @@ jobs:
           GITHUB_STEP_SUMMARY: ""
         run: |
           set -euo pipefail
-          python3 -m venv .verifier-venv
-          .verifier-venv/bin/pip install --quiet --upgrade pip
-          .verifier-venv/bin/pip install --quiet -r .github/issue_verifier/requirements-issue-verifier.txt
-          .verifier-venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-          curl -fsSL https://claude.ai/install.sh | bash
+          command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-          # The probe shells out to `python3`; point that at the venv so its
-          # scripts can import torch.
+          uv venv .verifier-venv
+          uv pip install --python .verifier-venv/bin/python \
+            -r .github/issue_verifier/requirements-issue-verifier.txt
+          uv pip install --python .verifier-venv/bin/python torch \
+            --index-url https://download.pytorch.org/whl/cpu
+          curl -fsSL https://claude.ai/install.sh | bash
+          # The probe shells out to `python3`; put the venv first so its scripts
+          # can import torch.
           export PATH="$PWD/.verifier-venv/bin:$PATH"
           .verifier-venv/bin/python "$VERIFIER" --stage probe --outdir out --verbose
 
