@@ -86,9 +86,9 @@ class _ScanResult:
 
 @dataclass(frozen=True)
 class _RecurrenceComputeConfig:
-    preparation: ttnn.DeviceComputeKernelConfig | None
-    affine_prefix: ttnn.DeviceComputeKernelConfig | None
-    scan: ttnn.DeviceComputeKernelConfig | None
+    preparation: ttnn.DeviceComputeKernelConfig
+    affine_prefix: ttnn.DeviceComputeKernelConfig
+    scan: ttnn.DeviceComputeKernelConfig
 
 
 def _recurrence_geometry(
@@ -333,6 +333,88 @@ class _LocalGroupedScan(_GroupedScan):
         return _ScanResult(output=output, final_state=final_state)
 
 
+def _distributed_affine_prefix(
+    transform_a: ttnn.Tensor,
+    transform_b: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+    *,
+    sequence_parallel_axis: int,
+    compute_config: ttnn.DeviceComputeKernelConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Compose SP partition affine summaries and return entry/final carries."""
+    shape = tuple(transform_a.shape)
+
+    mesh_device = transform_a.device()
+    mesh_shape = tuple(mesh_device.shape)
+    sp_size = mesh_shape[sequence_parallel_axis]
+    batch_heads, key_dim = shape[0], shape[1]
+    value_dim = transform_b.shape[-1]
+    output_memory = KDA_OUTPUT_MEMORY_CONFIG
+    working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
+
+    # Precision boundary: FP32 composition is transported as BF16.
+    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
+    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
+    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
+    gathered = ttnn.all_gather(
+        packed,
+        dim=0,
+        cluster_axis=sequence_parallel_axis,
+        memory_config=output_memory,
+    )
+
+    carry = ttnn.to_memory_config(initial_state, working_memory)
+    carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
+    entry_states = []
+    for rank in range(sp_size):
+        entry_states.append(carry)
+        transported_rank_a = ttnn.slice(
+            gathered,
+            (rank, 0, 0, 0),
+            (rank + 1, batch_heads, key_dim, key_dim),
+            memory_config=working_memory,
+        )
+        transported_rank_b = ttnn.slice(
+            gathered,
+            (rank, 0, 0, key_dim),
+            (rank + 1, batch_heads, key_dim, key_dim + value_dim),
+            memory_config=working_memory,
+        )
+        # Precision boundary: BF16 collective payload is restored for FP32 carry math.
+        rank_a_for_carry = ttnn.typecast(
+            transported_rank_a,
+            KDA_RECURRENT_STATE_DTYPE,
+            memory_config=working_memory,
+        )
+        rank_b_for_carry = ttnn.typecast(
+            transported_rank_b,
+            KDA_RECURRENT_STATE_DTYPE,
+            memory_config=working_memory,
+        )
+        carry = ttnn.matmul(
+            rank_a_for_carry,
+            carry,
+            memory_config=working_memory,
+            dtype=KDA_RECURRENT_STATE_DTYPE,
+            compute_kernel_config=compute_config,
+        )
+        carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
+
+    replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
+    entry_state = ttnn.mesh_partition(
+        replicated_entries,
+        dim=0,
+        cluster_axis=sequence_parallel_axis,
+        memory_config=output_memory,
+    )
+    final_state = ttnn.to_memory_config(carry, output_memory)
+    entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
+    final_state = ttnn.reshape(final_state, (batch_heads, key_dim, value_dim))
+    return entry_state, final_state
+
+
 class _DistributedGroupedScan(_GroupedScan):
     def __init__(
         self,
@@ -467,85 +549,3 @@ class KDARecurrence:
             (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim),
         )
         return final_state, output
-
-
-def _distributed_affine_prefix(
-    transform_a: ttnn.Tensor,
-    transform_b: ttnn.Tensor,
-    initial_state: ttnn.Tensor,
-    *,
-    sequence_parallel_axis: int,
-    compute_config: ttnn.DeviceComputeKernelConfig | None,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compose SP partition affine summaries and return entry/final carries."""
-    shape = tuple(transform_a.shape)
-
-    mesh_device = transform_a.device()
-    mesh_shape = tuple(mesh_device.shape)
-    sp_size = mesh_shape[sequence_parallel_axis]
-    batch_heads, key_dim = shape[0], shape[1]
-    value_dim = transform_b.shape[-1]
-    output_memory = KDA_OUTPUT_MEMORY_CONFIG
-    working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
-
-    # Precision boundary: FP32 composition is transported as BF16.
-    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
-    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
-    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
-
-    carry = ttnn.to_memory_config(initial_state, working_memory)
-    carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
-    entry_states = []
-    for rank in range(sp_size):
-        entry_states.append(carry)
-        transported_rank_a = ttnn.slice(
-            gathered,
-            (rank, 0, 0, 0),
-            (rank + 1, batch_heads, key_dim, key_dim),
-            memory_config=working_memory,
-        )
-        transported_rank_b = ttnn.slice(
-            gathered,
-            (rank, 0, 0, key_dim),
-            (rank + 1, batch_heads, key_dim, key_dim + value_dim),
-            memory_config=working_memory,
-        )
-        # Precision boundary: BF16 collective payload is restored for FP32 carry math.
-        rank_a_for_carry = ttnn.typecast(
-            transported_rank_a,
-            KDA_RECURRENT_STATE_DTYPE,
-            memory_config=working_memory,
-        )
-        rank_b_for_carry = ttnn.typecast(
-            transported_rank_b,
-            KDA_RECURRENT_STATE_DTYPE,
-            memory_config=working_memory,
-        )
-        carry = ttnn.matmul(
-            rank_a_for_carry,
-            carry,
-            memory_config=working_memory,
-            dtype=KDA_RECURRENT_STATE_DTYPE,
-            compute_kernel_config=compute_config,
-        )
-        carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
-
-    replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
-    entry_state = ttnn.mesh_partition(
-        replicated_entries,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
-    final_state = ttnn.to_memory_config(carry, output_memory)
-    entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
-    final_state = ttnn.reshape(final_state, (batch_heads, key_dim, value_dim))
-    return entry_state, final_state
