@@ -5,8 +5,9 @@
 // perf-debug profiler workload: dispatches kernels that emit 10 differently-named DeviceZoneScopedN zones
 // (with increasing durations) on ALL 5 RISCs of a small core grid, then closes. It does NOT drive the drainer
 // itself -- run it with TT_METAL_STREAMING_PROFILER=1 so the PerfDebugProfiler boots at MeshDevice bring-up
-// and captures these zones (that one switch also implies TT_METAL_DEVICE_PROFILER, arming the kernels'
-// markers). The Tracy sink is opt-in: add TT_METAL_STREAMING_PROFILER_TRACY=1 to verify with a connected
+// and captures these zones (that one switch also compiles the kernels with the streaming producer; do NOT
+// combine it with TT_METAL_DEVICE_PROFILER, the mutually exclusive legacy DRAM profiler). The Tracy sink is
+// opt-in: add TT_METAL_STREAMING_PROFILER_TRACY=1 to verify with a connected
 // tracy-capture. Grid + iteration count are overridable via argv.
 #include <cstdint>
 #include <cstdio>

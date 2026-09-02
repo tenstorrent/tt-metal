@@ -91,7 +91,6 @@ uint32_t crta_count __attribute__((used));
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
-bool zoneValid __attribute__((used)) = true;  // SPSC publish gate; see kernel_profiler.hpp
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));

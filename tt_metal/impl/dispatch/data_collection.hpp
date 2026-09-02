@@ -89,7 +89,7 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(tt::tt_metal::ContextId context_id, uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
-// Multiple callbacks can be registered each callback is called from its own thread.
+// Multiple callbacks can be registered; each callback is called from its own thread.
 // Returns a handle that can be used to unregister the callback.
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
 

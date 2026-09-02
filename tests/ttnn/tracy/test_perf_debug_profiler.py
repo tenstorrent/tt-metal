@@ -7,7 +7,8 @@ perf-debug profiler test (DRISC drain path).
 
 Runs the ``test_perf_debug_zones`` workload -- which emits 10 differently-named DeviceZoneScopedN zones
 (with increasing durations) on all 5 RISCs of a small core grid -- with the perf-debug profiler enabled
-(``TT_METAL_STREAMING_PROFILER=1`` + ``TT_METAL_STREAMING_PROFILER_TRACY=1``) under a connected ``tracy-capture``. Verifies:
+(``TT_METAL_STREAMING_PROFILER=1`` + ``TT_METAL_STREAMING_PROFILER_TRACY=1``; NOT ``TT_METAL_DEVICE_PROFILER``, which is the
+mutually exclusive legacy DRAM profiler) under a connected ``tracy-capture``. Verifies:
 
   * the module leaves DRISC drainers resident at MeshDevice bring-up ("DRISC FILLER/MOVER ... resident
     on logical (x,y)" log lines), and
@@ -83,7 +84,9 @@ def test_perf_debug_zones_capture(gx, gy, iters):
 
     env = dict(os.environ)
     env["TRACY_PORT"] = port
-    env["TT_METAL_STREAMING_PROFILER"] = "1"  # boot the module at bring-up; implies TT_METAL_DEVICE_PROFILER
+    env[
+        "TT_METAL_STREAMING_PROFILER"
+    ] = "1"  # boot the module at bring-up (its own mode; excludes TT_METAL_DEVICE_PROFILER)
     env["TT_METAL_STREAMING_PROFILER_TRACY"] = "1"  # the Tracy sink is opt-in; this test verifies via tracy-capture
     try:
         proc = subprocess.run(

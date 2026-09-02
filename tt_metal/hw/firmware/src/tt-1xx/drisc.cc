@@ -14,7 +14,6 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 uint8_t noc_index;
 
@@ -45,18 +44,14 @@ uint32_t crta_count __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
-#if defined(PROFILE_KERNEL)
-// Streaming-profiler per-RISC state, same block every other FW carries. Without it a DRISC kernel
-// built with PROFILE_KERNEL=1 fails to link: kernel_profiler.hpp only declares these extern, and the
-// kernel resolves them out of the firmware ELF via --just-symbols. The DRISC is the only RISC on a
-// DRAM core, so it plays the BRISC role and defines traceCount too.
+#if defined(PROFILE_STREAMING)
+// Streaming-profiler producer state for DRISC kernels. main has no DRISC profiler at all, so unlike the other
+// firmwares this block is streaming-only: a DRISC kernel built under TT_METAL_STREAMING_PROFILER resolves
+// kernel_profiler::wIndex (and zoneValid, which streaming_profiler.hpp defines itself for FW builds) out of
+// this firmware ELF via --just-symbols. Without it the kernel fails to link.
+#include "tools/profiler/kernel_profiler.hpp"
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
-bool zoneValid __attribute__((used)) = true;  // SPSC publish gate; see kernel_profiler.hpp
-uint32_t stackSize __attribute__((used));
-uint32_t sums[SUM_COUNT] __attribute__((used));
-uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
