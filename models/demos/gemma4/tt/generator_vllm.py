@@ -1197,35 +1197,22 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
             and padded_lens_equal
             and all(n == 0 for n in num_cached_for_plan)
-            # Batched prefill is not safe under bounded sliding: the KV lands in
-            # the right physical blocks but the per-slot decode state does not
-            # follow it, so users prefilled in the same batched call decode
-            # against the wrong ring. Measured on P150x8 / 12B: with batched
-            # prefill on, 8 concurrent identical prompts return 8 different
-            # outputs and a B=1 -> B=32 bucket switch corrupts every user;
-            # forcing the per-user loop makes both cases clean. Unbounded is
-            # unaffected and keeps the batched-prefill TTFT win.
-            # Extended 2026-08-31 from bounded-only to ALL serving modes.
-            # Measured (P150x8/12B unbounded, conc 4-32; same on WH under parity):
-            # the batched flow receives correct per-slot tokens and writes
-            # correct per-slot KV, but returns garbage last-token logits for
-            # the batched users -- distinct prompts 1/4 coherent, and the
-            # corrupt band on both platforms is exactly the shapes where
-            # batching engages (clean at 32x4096 = the 131072 ceiling ->
-            # sequential). The bounded-only rationale above was this same bug
-            # misattributed. Every validated coverage-matrix number ran the
-            # sequential path. Re-enable (debt #1, 7-19x TTFT prize) requires
-            # fixing the batched deferred-lm-head logits extraction behind the
-            # identity gate. Escape hatch for that work: G4_FORCE_BATCH_PREFILL=1.
+            # Batched prefill is opt-in via G4_FORCE_BATCH_PREFILL=1: it works
+            # under BOTH unbounded and bounded sliding since the 2026-09 fixes
+            # (identity-gated, byte-equal vs the sequential/B=1 references):
+            #  - per-layer page tables scattered local->slot rows (below) — the
+            #    non-identity empty_slots KV misplacement, debt #1 bug A;
+            #  - boot-time batched-shape warmup captures (generator_trace) — the
+            #    runtime cold-capture replay corruption, debt #1 bug B;
+            #  - bounded per-slot ring fills deferred after lm_head, full-length
+            #    under modulo, wrap-boundary merged (attention/prefill.py).
+            # Historic exclusion rationales ("per-slot decode state", "deferred
+            # lm-head extraction") are retired — the extraction was always
+            # correct. Default-off pending the open conc32 small-ISL
+            # wave-boundary corruption (~1-3/32 after a prior wave, prefill-mode
+            # independent; repro: wave_smoke) and per-quadrant memory budgets
+            # (see GEMMA4_MAX_BATCHED_PREFILL_USERS / GEMMA4_TAIL_POOL_SLOTS).
             and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
-            # Bounded sliding is allowed here since 2026-09-02: the historic
-            # exclusion's three root causes are fixed in attention/prefill.py —
-            # mid-forward bounded fills corrupted activations on TP (now
-            # deferred after lm_head like B=1), the fill input was capped at
-            # ring capacity (ring held the OLDEST window; now full-length under
-            # modulo), and misaligned tails lacked the wrap-boundary merge.
-            # Verified byte-equal vs the B=1-filled ring and via the identity
-            # battery at sub-window and wrap lengths.
         )
         use_sequential = batch_size > 1 and not will_batch
 

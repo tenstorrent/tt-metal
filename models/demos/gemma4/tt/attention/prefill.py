@@ -247,13 +247,13 @@ def _zero_extend_ring_fill(t, modulo):
     ~1-3/32 outputs continue the prior request's answer or degenerate). One
     fill of the full window makes ring reuse hygienic. Transient runtime
     alloc, post-lm_head same-step — same contract as the merge/left-pad above.
-    Returns (tensor, was_extended); deallocates the input when extended.
+    Returns the (possibly extended) tensor; deallocates the input when extended.
     """
     if not modulo:
-        return t, False
+        return t
     cur = int(t.shape[-2])
     if cur >= int(modulo):
-        return t, False
+        return t
     pad = int(modulo) - cur
     z = ttnn.zeros(
         [1, int(t.shape[1]), pad, int(t.shape[-1])],
@@ -268,7 +268,7 @@ def _zero_extend_ring_fill(t, modulo):
         t.deallocate(True)
     except Exception:
         pass
-    return out, True
+    return out
 
 
 def flush_deferred_bounded_fills(layers):
@@ -287,8 +287,8 @@ def flush_deferred_bounded_fills(layers):
             cfg._deferred_bounded_fill_batched = None
             for p in batched_pending:
                 _mod = p["paged_modulo_kwargs"].get("cache_position_modulo")
-                k_f, _ = _zero_extend_ring_fill(p["k_fill"], _mod)
-                v_f, _ = _zero_extend_ring_fill(p["v_fill"], _mod)
+                k_f = _zero_extend_ring_fill(p["k_fill"], _mod)
+                v_f = _zero_extend_ring_fill(p["v_fill"], _mod)
                 try:
                     ttnn.experimental.paged_fill_cache(
                         p["k_cache"],
@@ -323,8 +323,8 @@ def flush_deferred_bounded_fills(layers):
         try:
             k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
-            k_merged, _ = _zero_extend_ring_fill(k_merged, pending["modulo"])
-            v_merged, _ = _zero_extend_ring_fill(v_merged, pending["modulo"])
+            k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
+            v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
             ttnn.experimental.paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
