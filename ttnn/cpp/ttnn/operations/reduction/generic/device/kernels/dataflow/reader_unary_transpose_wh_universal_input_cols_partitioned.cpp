@@ -7,32 +7,34 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t col_start_tile_id =
-        get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
-    uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
-    uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
+    // Start id in column major order. This should be the start of a column.
+    uint32_t col_start_tile_id = get_arg(args::col_start_tile_id);
+    uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto HtWt = get_arg(args::HtWt);
 
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
-    constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-
-    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
+    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    constexpr bool use_welford = get_arg(args::use_welford) != 0;
+    constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
+    //
+    // The data format has to be a constant expression here (it is a template argument below), so it
+    // is read with the free function rather than off a DataflowBuffer object: DataflowBuffer's
+    // constructor is not constexpr, so no such object is usable in a constant expression.
+    constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
     constexpr uint32_t row_chunk = use_welford ? 1
                                                : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
@@ -40,17 +42,15 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t dfb_id_in2 = tt::CBIndex::c_2;
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
-
-    constexpr auto tensor_args = TensorAccessorArgs<6>();
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
-
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-
+    // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
+    DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
+
+    float scaler_f = __builtin_bit_cast(float, scaler_bits);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+
+    auto tensor_accessor = TensorAccessor(tensor::src);
 
     uint32_t w = curr_col_in_batch;
 

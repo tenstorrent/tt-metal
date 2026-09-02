@@ -199,6 +199,7 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = COMPUTE_KERNEL_PATH,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{

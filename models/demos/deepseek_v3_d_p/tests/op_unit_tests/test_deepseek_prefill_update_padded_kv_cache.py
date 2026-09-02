@@ -25,9 +25,11 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_x_device_params,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     MlaKvCacheFormat,
+    create_sequence_cache_mesh_composer,
     init_kvpe_cache,
     init_mla_kv_cache,
 )
@@ -277,6 +279,149 @@ def _update_kv(
     )
     ttnn.deallocate(slot_t)
     ttnn.deallocate(kv_t)
+
+
+def _full_mesh_update_cases():
+    num_devices = detect_num_devices()
+    mesh = {4: (2, 2), 8: (2, 4), 32: (8, 4)}.get(num_devices)
+    if mesh is None:
+        return [
+            pytest.param(
+                (1, max(num_devices, 1)),
+                marks=pytest.mark.skip(reason=f"no supported 2D full-mesh case for {num_devices} devices"),
+                id=f"unsupported-{num_devices}dev",
+            )
+        ]
+    return [pytest.param(mesh, id=f"{mesh[0]}x{mesh[1]}")]
+
+
+def _stamp_full_mesh_sequence_topology(tensor, mesh_device):
+    full_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(full_shape)
+    ]
+    tensor.update_tensor_topology(
+        ttnn.TensorTopology(full_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+    )
+
+
+@pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_full_mesh_rotated(mesh_device, use_metadata_tensor):
+    """A rotated write preserves canonical row-major sequence order across the complete 2D mesh."""
+    if not is_blackhole():
+        pytest.skip("full-mesh cache update coverage is currently Blackhole-only")
+
+    mesh_factor = mesh_device.get_num_devices()
+    tile = ttnn.TILE_SIZE
+    chunk_local = 2 * tile
+    chunk_global = mesh_factor * chunk_local
+    cache_tokens_local = 4 * chunk_local
+    cache_global = mesh_factor * cache_tokens_local
+    actual_start = chunk_local + tile  # chip 1, one tile into its local slab
+
+    cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=cache_global,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        full_mesh=True,
+    )
+    torch.manual_seed(31)
+    source = torch.randn(1, 1, chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    tt_input = _make_input(
+        source,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    _stamp_full_mesh_sequence_topology(tt_input, mesh_device)
+
+    if use_metadata_tensor:
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=actual_start, slot_idx=0)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=None
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+    else:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            tt_input,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=actual_start,
+            cluster_axis=None,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    composer = create_sequence_cache_mesh_composer(mesh_device, full_mesh=True)
+    input_host = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    expected = torch.zeros(cache_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    boundary_slab = actual_start // chunk_global
+    boundary_chip = (actual_start // chunk_local) % mesh_factor
+    boundary_offset = actual_start % chunk_local
+    for chip in range(mesh_factor):
+        if chip < boundary_chip:
+            local_start = (boundary_slab + 1) * chunk_local
+        elif chip == boundary_chip:
+            local_start = boundary_slab * chunk_local + boundary_offset
+        else:
+            local_start = boundary_slab * chunk_local
+        cache_start = chip * cache_tokens_local + local_start
+        input_start = chip * chunk_local
+        expected[cache_start : cache_start + chunk_local] = input_host[input_start : input_start + chunk_local]
+
+    cache_host = ttnn.to_torch(cache, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    assert torch.equal(cache_host, expected)
+
+
+@pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, expect_error):
+    """cluster_axis=None rejects the legacy cache topology instead of silently mis-addressing it."""
+    if not is_blackhole():
+        pytest.skip("full-mesh cache update coverage is currently Blackhole-only")
+
+    mesh_factor = mesh_device.get_num_devices()
+    chunk_local = 2 * ttnn.TILE_SIZE
+    input_global = mesh_factor * chunk_local
+    input_tensor = _make_input(
+        torch.zeros(1, 1, input_global, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    _stamp_full_mesh_sequence_topology(input_tensor, mesh_device)
+    axis_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=input_global * 4,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    with expect_error(RuntimeError, "cluster_axis=None requires cache and input"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            axis_cache,
+            input_tensor,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=1,
+            kv_actual_global=0,
+            cluster_axis=None,
+        )
 
 
 @pytest.mark.parametrize(
