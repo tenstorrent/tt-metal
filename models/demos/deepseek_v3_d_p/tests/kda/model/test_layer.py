@@ -142,7 +142,7 @@ def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error
         _forward(layer, hidden, layer.allocate_state())
 
 
-def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device: ttnn.Device, expect_error) -> None:
+def test_grouped_scan_rejects_unequal_key_value_dims_at_construction(device: ttnn.Device, expect_error) -> None:
     config = replace(make_config(), head_v_dim=64)
     base_program_config = KDAProgramConfig()
     program_config = replace(
@@ -153,11 +153,9 @@ def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device:
             summary_group_chunks=1,
         ),
     )
-    layer = ttKDA(device, config, random_weights(config), program_config=program_config)
-    hidden = torch.randn(1, 32, config.hidden_size, dtype=torch.bfloat16)
 
     with expect_error(ValueError, "grouped KDA affine prefix currently requires K == V"):
-        _forward(layer, hidden, layer.allocate_state())
+        ttKDA(device, config, random_weights(config), program_config=program_config)
 
 
 def test_batch_greater_than_one_is_rejected_at_state_setup(device: ttnn.Device, expect_error) -> None:

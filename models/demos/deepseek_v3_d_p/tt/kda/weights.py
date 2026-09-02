@@ -321,7 +321,7 @@ def _materialize_kda_weights(
     tensor_parallel_size: int,
     tensor_parallel_axis: int,
     place_on_device: bool,
-) -> KDAWeights | None:
+) -> tuple[dict[str, ttnn.Tensor], tuple[ttnn.Tensor, ...]]:
     if tensor_cache_path is not None:
         tensor_cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -421,14 +421,7 @@ def _materialize_kda_weights(
         )
         for tap, tensor in enumerate(host_taps)
     )
-    if not place_on_device:
-        return None
-    return KDAWeights(
-        **materialized,
-        convolution_taps=convolution_taps,
-        tensor_parallel_size=tensor_parallel_size,
-        tensor_parallel_axis=tensor_parallel_axis,
-    )
+    return materialized, convolution_taps
 
 
 def load_kda_weights(
@@ -458,7 +451,7 @@ def load_kda_weights(
     else:
         host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
 
-    weights = _materialize_kda_weights(
+    materialized, convolution_taps = _materialize_kda_weights(
         host_weights,
         device=device,
         config=config,
@@ -469,5 +462,9 @@ def load_kda_weights(
         tensor_parallel_axis=tensor_parallel_axis,
         place_on_device=True,
     )
-    assert weights is not None
-    return weights
+    return KDAWeights(
+        **materialized,
+        convolution_taps=convolution_taps,
+        tensor_parallel_size=tensor_parallel_size,
+        tensor_parallel_axis=tensor_parallel_axis,
+    )

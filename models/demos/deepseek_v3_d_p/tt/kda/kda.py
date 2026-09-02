@@ -96,6 +96,11 @@ class ttKDA:
         self.sequence_parallel_size = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
+        uses_grouped_scan = (
+            self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
+        )
+        if uses_grouped_scan and config.head_k_dim != config.head_v_dim:
+            raise ValueError("grouped KDA affine prefix currently requires K == V")
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
@@ -351,7 +356,6 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
-        assert output.dtype == self.gated_rms_output_dtype
         output = ttnn.linear(
             output,
             weights.output_projection,
@@ -359,7 +363,6 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            assert self.tt_ccl is not None
             cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
