@@ -194,7 +194,7 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Attention projection weight dtype/fidelity was swept separately from MLP weight dtype/fidelity when QKV, Q/K/V, output projection, or fused attention matmul rows are material. If attention projections remain BFP8 or BF16, the report names the BFP4 attention candidate tried on real weights or recorded real activations, plus the precise correctness, latency, or op-contract blocker.
 -[ ] If dense MLP or expert matmuls are among the largest decode-time consumers: BFP4/LoFi trials for FF1/FF3 or equivalent gate/up projections were run before lower-priority prefill-only advice was pursued to completion. FF2/down BFP4 was also tried or rejected with PCC/runtime evidence.
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
--[ ] DRAM-sharded decode matmuls.
+-[ ] DRAM-sharded decode matmuls. On Blackhole builds with multi-reader support, every material role was measured with one reader and each legal two- or three-reader candidate. The final count is explicit in the model's per-role configuration; the generic default remains one.
 -[ ] Collective topology minimized. Avoidable gather, reshard, all-reduce, reduce-scatter, and all-gather operations have been removed, moved to cheaper boundaries, or justified with before/after evidence.
 -[ ] Fused matmul-CCL ops used where possible, including fused all-gather-matmul or matmul-reduce-scatter patterns when a collective and matmul are adjacent or can be made adjacent. If rejected, the rejection includes an adapted attempt, not only the first API error.
 -[ ] Repeated decode CCLs use persistent or preallocated intermediate/output buffers where the API supports it. If unavailable or slower, the reason and measurement are recorded.
@@ -219,6 +219,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - `models/common/modules/lm_head/lm_head_1d.py`: reusable LM-head output projection with vocab splitting, LM-head dtype, DRAM-sharded weight memory config, input/output memory configs, and decode program config.
 - `models/common/tests/modules/lm_head/test_lm_head_1d.py`: expected LM-head construction, weight splitting, memory config, and PCC checks.
 - `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
+- `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp`, `ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp`, and `tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py`: Blackhole multi-reader DRAM-sharded matmul implementation, legality checks, and focused coverage.
 - `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before optimizing token-out sampling.
 - `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
 - `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
@@ -369,6 +370,37 @@ For a dominant matmul group, dtype/fidelity and block geometry are not independe
 This matters especially when more cores shrink the activation shard and reduce the legal K block. Fewer cores with wider shards can unlock a larger `in0_block_w` or output block and beat a larger-core run even though it uses fewer workers. When `tt-perf-report` marks a dominant row `SLOW`, reports low DRAM utilization, reports no output subblock, shows `in0_block_w<=2`, or the code records a blocker for a larger-core geometry, run a precision-locked smaller-core or residual-grid candidate before accepting the stage.
 
 The final report must make the cross-product explicit: for each material geometry candidate, list dtype/fidelity, core/grid source, input shard shape, `in0_block_w`, `per_core_N`, row latency, whole-layer latency, correctness, and kept/rejected decision. If a candidate is impossible, record the exact TTNN/op-contract blocker. Do not mix evidence from different dtype/fidelity policies to declare a geometry optimized.
+
+### OPT-015: Sweep Blackhole DRAM readers per bank
+
+On tt-metal revisions that include [#54242](https://github.com/tenstorrent/tt-metal/pull/54242), `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` accepts `num_workers_per_dram_bank=1`, `2`, or `3`. Values above one are Blackhole-only. Each additional worker reads and computes a disjoint slice of the same DRAM bank shard through the firmware-approved NOC0 endpoint. This increases the reader/compute worker count; it does not add DRAM channels or use a second physical endpoint.
+
+Set the count directly on the existing DRAM-sharded program config:
+
+```python
+program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    in0_block_w=in0_block_w,
+    per_core_M=per_core_M,
+    per_core_N=per_core_N,
+    num_workers_per_dram_bank=2,
+)
+```
+
+Use this as an explicit per-projection optimization, not a new primitive default. For each material Blackhole decode projection, compare one reader with every legal two- and three-reader candidate under the same real `M x K x N`, weight layout, input shard grid, dtype, math fidelity, program geometry, firmware, trace, and warmed workload. Keep the selected count in the model's existing performance configuration by operation role and validated SKU. Do not infer one count from the architecture, datatype, model family, or another projection, and do not add an exact-shape allowlist to the generic matmul operation.
+
+Check these conditions before running a candidate:
+
+- The DRAM weight shard width per bank, in tiles, must divide evenly by the reader count. Two readers require an even width; three require a multiple of three. For example, a 56-tile-per-bank shard permits two readers but not three.
+- The device must have enough unoccupied worker cores for `dram_bank_count * reader_count`; input-A storage cores are excluded from reader placement. Treat a placement failure as an illegal candidate, not a reason to change the global default.
+- Compute the physical bytes in each reader's row from the stored tile format, including block-float headers. Small per-reader rows can lose more in request, multicast, and synchronization overhead than they gain from parallel reads. A row of at least 4 KiB per reader and an input-A multicast grid of at least 64 cores are useful screening heuristics from P150 sweeps, not universal correctness boundaries.
+- More readers increase input-A multicast fanout and split each bank row more finely. Narrow output widths, small weights, lightly multicast inputs, padding-only width, or already compute-limited kernels can be flat or slower. Three readers are a candidate only when the geometry and traffic justify them; four readers are outside the public operation contract.
+- If padding is required to make a count legal, make it an explicit model tensor contract. The padded channels must be mathematically inert and sliced, masked, or otherwise removed before they affect model output. Do not require callers to add padding merely because a faster reader count exists.
+
+Use the production precision pairing when ranking candidates. For LLM decode this normally includes BFP8/HiFi2 and BFP4/LoFi; do not compare a one-reader result at one dtype or fidelity with a multi-reader result at another. Verify the measured profiler row shows the intended weight dtype, fidelity, and reader count.
+
+Measure in two layers. First, run an isolated, alternating-order one/two/three-reader microbenchmark with the exact model tensor and shard geometry; record device time, physical and logical GB/s, percent of the target SKU's declared DRAM peak, output PCC or exact agreement, and repeated-run stability. If a candidate is unexpectedly flat or slow, record per-bank tiles, per-reader physical row bytes, NOC burst splitting, input multicast cores, and math-versus-reader time before classifying the cause. Second, integrate the winner and rerun traced layer and full-model timing plus the focused model/SKU CI. An isolated matmul win is not accepted if surrounding layout, multicast, or end-to-end time regresses.
+
+Llama 3.1 8B on P150 is a reference integration, not a universal selector: explicit two-reader settings for its decode QKV, attention output, gate/up, and down projections improved the batch-32 full-model result from 32.75 to 42.08 t/s/u with flat TTFT. Adjacent Llama and Qwen projection shapes also produced flat and regressing cases in broad sweeps. Therefore always keep the one-reader control and choose the reader count from same-shape evidence.
 
 ## Matmul Choices
 
