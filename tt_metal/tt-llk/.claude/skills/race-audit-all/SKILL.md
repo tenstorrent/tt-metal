@@ -63,8 +63,9 @@ skill's ttnn-widened grep).
 `srcreg-bank` recalls the dvalid control points, the raw-`SETDVALID`-on-BH flag and
 both halves of the Dest->Src gate (`DEST2SRC_*` flags the math side, which is the
 corruption half; on the unpack side `DUMMY_PUBLISH_SERIALIZING` is a
-throughput/parity candidate, while `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` and
-`DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` are real encoding defects) — but not the
+throughput/parity candidate, while `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED`,
+`DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` and `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` are
+real encoding defects) — but not the
 bank-flip lockstep verdict — and `mailbox-sync` recalls only the
 IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
 and fan-outs) is covered by the skill's ttnn-widened grep unless a kernel capture
