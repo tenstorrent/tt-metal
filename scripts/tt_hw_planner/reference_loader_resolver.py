@@ -7,15 +7,22 @@ GGUF, or trust_remote_code variants).
 The blocker lives in the common loading layer (capture + the PCC test's `_build_torch_reference`), so
 the fix does too. When `from_pretrained` fails, the bring-up loop calls `resolve(...)`, which inspects
 the repo (file list + `library` tag + config), asks an LLM to write ONE model-local
-`tests/pcc/_reference_loader.py` exposing `load_reference_model(model_id) -> nn.Module`, and validates
-it imports. The generated PCC-test template imports that loader as a fallback, so every per-component
-test (and the global PCC gate) picks it up automatically.
+`tests/pcc/_reference_loader.py` exposing `load_reference_model(model_id) -> nn.Module`. The generated
+PCC-test template imports that loader as a fallback, so every per-component test (and the global PCC
+gate) picks it up automatically.
+
+What validation here does and does NOT mean: the loader is checked STRUCTURALLY — it parses and it
+really defines `load_reference_model(model_id)`. It is not executed, and nothing proves the reference
+it returns is numerically right; for these checkpoints there is by definition no golden to compare
+against, which is the reason the loader had to be written at all. A reference that loads cleanly but
+computes the wrong thing will still be the yardstick every later PCC score is measured against.
 
 OFF BY DEFAULT: `resolve` is a no-op unless `TT_HW_PLANNER_LOADER_RESOLVER=1` (or `enabled=True`).
 Correctness is still gated by PCC — the resolver only produces a loader; it never weakens a test.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -25,7 +32,13 @@ from pathlib import Path
 from typing import List, Optional
 
 _LOADER_FILENAME = "_reference_loader.py"
+_LOADER_FUNC = "load_reference_model"
 _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
+
+# Set by a loader that had to fall back to random weights (prompt strategy 5). Machine-readable on
+# purpose: the fallback used to be recorded in a module docstring, which nothing reads, so a run
+# could be scored against a reference unrelated to the shipped weights with no trace in the result.
+_RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
 
 
 def is_enabled(enabled: Optional[bool] = None) -> bool:
@@ -121,7 +134,9 @@ def build_prompt(model_id: str, demo_dir: Path, failure_text: str) -> str:
         f"path for config-less custom architectures.\n"
         f"  5. ONLY if real weights are truly unusable: build the module from AutoConfig with random "
         f"weights (valid for per-component structural PCC, since the ttnn port reads the same module). "
-        f"State this limitation in a module docstring.\n\n"
+        f"If and ONLY if you take this path, set `{_RANDOM_WEIGHTS_FLAG} = True` at module level, so "
+        f"the run can report that PCC was scored against structure and not against the real weights. "
+        f"Do not set it on any other path.\n\n"
         f"The loader must be import-safe (no side effects at import) and deterministic. After writing, "
         f"run a quick self-check that `load_reference_model('{model_id}')` returns a module and a "
         f"forward runs. Do NOT edit any test file or weaken any assertion — only write "
@@ -145,17 +160,66 @@ def _extract_and_write(demo_dir: Path, text: str) -> bool:
         return False
 
 
-def _validates(demo_dir: Path) -> bool:
+def _loader_ast(demo_dir: Path):
+    """Parsed loader module, or None when it is missing or does not parse."""
     p = loader_path(demo_dir)
     if not p.is_file():
-        return False
+        return None
     try:
-        import ast
+        return ast.parse(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- unparseable is just "not a valid loader"
+        return None
 
-        ast.parse(p.read_text(encoding="utf-8"))
-        return "def load_reference_model" in p.read_text(encoding="utf-8")
-    except Exception:
+
+def _defines_loader(tree) -> bool:
+    """Is there a REAL module-level `def load_reference_model(model_id)`?
+
+    Was `"def load_reference_model" in source`, which the name merely being MENTIONED satisfied: a
+    file whose only occurrence was in a comment or a docstring -- so it defined nothing at all --
+    passed the gate and was banked as a resolved loader. Require the actual definition, and require
+    it to take the model id, so a zero-arg stub is not mistaken for the real thing either.
+    """
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == _LOADER_FUNC:
+            a = node.args
+            return bool(a.posonlyargs or a.args or a.vararg)
+    return False
+
+
+def uses_random_weights(demo_dir: Path) -> bool:
+    """Did the loader fall back to random weights instead of the shipped checkpoint?
+
+    Such a reference validates STRUCTURE only: every per-component PCC score is then measured
+    against a model whose weights mean nothing, so a port can score 1.0 while reproducing noise.
+    That is a legitimate last resort (prompt strategy 5), but it has to travel with the result
+    rather than sit in a docstring, so callers can surface it.
+    """
+    tree = _loader_ast(demo_dir)
+    if tree is None:
         return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == _RANDOM_WEIGHTS_FLAG for t in node.targets
+        ):
+            return bool(getattr(node.value, "value", False) is True)
+    return False
+
+
+def _validates(demo_dir: Path) -> bool:
+    tree = _loader_ast(demo_dir)
+    return tree is not None and _defines_loader(tree)
+
+
+def _resolved(demo_dir: Path, reason: str) -> dict:
+    """Success payload, carrying the random-weight caveat when one applies."""
+    out = {"resolved": True, "path": str(loader_path(demo_dir)), "reason": reason}
+    if uses_random_weights(demo_dir):
+        out["random_weights"] = True
+        out["caveat"] = (
+            "reference built from RANDOM weights, not the shipped checkpoint: PCC against it "
+            "verifies STRUCTURE only and does not bound numerical correctness"
+        )
+    return out
 
 
 def resolve(
@@ -174,7 +238,7 @@ def resolve(
     if not is_enabled(enabled):
         return {"resolved": False, "reason": f"disabled (set {_ENV_FLAG}=1 to enable)"}
     if has_loader(demo_dir) and _validates(demo_dir):
-        return {"resolved": True, "path": str(loader_path(demo_dir)), "reason": "loader already present"}
+        return _resolved(demo_dir, "loader already present")
     loader_path(demo_dir).parent.mkdir(parents=True, exist_ok=True)
     prompt = build_prompt(model_id, demo_dir, failure_text)
     repo_root = Path(__file__).resolve().parents[2]
@@ -206,8 +270,8 @@ def resolve(
     except Exception as exc:  # noqa: BLE001
         return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
     if _validates(demo_dir):
-        return {"resolved": True, "path": str(loader_path(demo_dir)), "reason": "loader written"}
-    return {"resolved": False, "reason": "agent did not produce a valid _reference_loader.py"}
+        return _resolved(demo_dir, "loader written")
+    return {"resolved": False, "reason": f"agent did not produce a valid {_LOADER_FILENAME}"}
 
 
 if __name__ == "__main__":
