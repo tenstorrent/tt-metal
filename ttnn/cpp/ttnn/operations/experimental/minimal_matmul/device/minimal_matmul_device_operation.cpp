@@ -77,7 +77,56 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
-    TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        // Fused concat: in0's K = input_tensor (prefix) + optional_input_tensor (suffix); the split
+        // point is input_tensor's K width. The two sources must be concatenable on K (differ only on
+        // the last axis) and their K's must sum to the weight's K (weight stacked [W_prefix; W_suffix]).
+        const auto& second_input = tensor_args.optional_input_tensor.value();
+        TT_FATAL(
+            second_input.device() == act_tensor.device(),
+            "minimal_matmul fused concat: second input must be on the same device as activation");
+        // The suffix is read tile-by-tile through the same in0 path (in3), so it must be TILE layout
+        // and share the activation's dtype (the in0 reads use the activation's tile size for both
+        // sources — a differing dtype would read the wrong number of bytes per tile).
+        TT_FATAL(
+            second_input.layout() == Layout::TILE, "minimal_matmul fused concat requires TILE layout for second input");
+        TT_FATAL(
+            dtype_supported(second_input.dtype()),
+            "minimal_matmul fused concat supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for second input");
+        TT_FATAL(
+            second_input.dtype() == act_tensor.dtype(),
+            "minimal_matmul fused concat: second-input dtype ({}) must match activation dtype ({})",
+            second_input.dtype(),
+            act_tensor.dtype());
+        const auto& opt_logical = second_input.logical_shape();
+        TT_FATAL(
+            opt_logical.rank() == a_logical.rank(),
+            "minimal_matmul fused concat: second-input rank ({}) must match input rank ({})",
+            opt_logical.rank(),
+            a_logical.rank());
+        for (int i = 0; i < static_cast<int>(a_logical.rank()) - 1; ++i) {
+            TT_FATAL(
+                opt_logical[i] == a_logical[i],
+                "minimal_matmul fused concat: inputs must differ only on the K (last) axis; dim {} "
+                "differs (input={}, second={})",
+                i,
+                a_logical[i],
+                opt_logical[i]);
+        }
+        // Seam lands at prefix's padded-K tile boundary: weight must be per-segment tile-padded.
+        const uint32_t prefix_padded_K = act_tensor.padded_shape()[-1];
+        const uint32_t suffix_padded_K = second_input.padded_shape()[-1];
+        const uint32_t weight_padded_K = weight_tensor.padded_shape()[-2];
+        TT_FATAL(
+            prefix_padded_K + suffix_padded_K == weight_padded_K,
+            "minimal_matmul fused concat: prefix_padded_K({}) + suffix_padded_K({}) must equal "
+            "weight_padded_K({}) — use prepare_weight_for_concatenated_input to build the weight.",
+            prefix_padded_K,
+            suffix_padded_K,
+            weight_padded_K);
+    } else {
+        TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    }
     TT_FATAL(M > 0 && K > 0 && N > 0, "minimal_matmul dimensions must be positive");
 
     // Validate chunks and dim parameters
@@ -85,6 +134,31 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const int32_t dim = operation_attributes.dim;
     TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
+
+    // Validate fused SwiGLU constraints. The weight packs gate/up tile-pairs along N, so
+    // its width must be an even number of tiles; the matmul output collapses each pair to
+    // one tile (silu(gate)*up).
+    if (operation_attributes.fuse_swiglu) {
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with a unary fused_activation");
+        TT_FATAL(
+            !operation_attributes.fused_ternary_scalar.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with fused ternary (addcmul)");
+        TT_FATAL(
+            N % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires weight width N={} to be a multiple of 2*TILE_WIDTH={}",
+            N,
+            2 * tt::constants::TILE_WIDTH);
+        // For chunked split each chunk must hold whole gate/up pairs, so the per-chunk weight
+        // width must be a multiple of 2 tiles (the output per-chunk width is a multiple of 1 tile).
+        TT_FATAL(
+            (N / chunks) % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires per-chunk weight width N/chunks={} to be a multiple of "
+            "2*TILE_WIDTH={}",
+            N / chunks,
+            2 * tt::constants::TILE_WIDTH);
+    }
 
     if (chunks > 1) {
         // Validate N is divisible by chunks
@@ -215,21 +289,24 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    const uint32_t N = in1_input_tensor_shape[-1];
+    // For SwiGLU the weight is a [gate|up] matrix of width 2*N; the op emits silu(gate)*up
+    // of width N, so the output along the last dim is half the weight width.
+    const uint32_t N = operation_attributes.fuse_swiglu ? (in1_input_tensor_shape[-1] / 2) : in1_input_tensor_shape[-1];
     const int32_t chunks = operation_attributes.chunks;
 
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
     // Create specs for output tensors
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;
@@ -267,7 +344,9 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
-    const std::optional<Tensor>& fused_ternary_input_b) {
+    const std::optional<Tensor>& fused_ternary_input_b,
+    bool fuse_swiglu,
+    const std::optional<Tensor>& optional_input_tensor) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -288,12 +367,13 @@ std::vector<Tensor> minimal_matmul(
             .fused_ternary_scalar = fused_ternary_scalar,
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
-            .dim = dim},
+            .dim = dim,
+            .fuse_swiglu = fuse_swiglu},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
             .fused_ternary_input_b = fused_ternary_input_b});
 }

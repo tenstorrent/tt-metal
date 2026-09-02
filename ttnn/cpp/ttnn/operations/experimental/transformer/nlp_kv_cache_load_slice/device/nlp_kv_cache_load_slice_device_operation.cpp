@@ -12,8 +12,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input;
-    TT_FATAL(
-        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to unpad need to be on device!");
+    TT_FATAL(input_tensor_a.storage_type() == ttnn::StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.layout() == tt::tt_metal::Layout::TILE,
@@ -97,7 +96,7 @@ NlpKVCacheLoadSliceDeviceOperation::spec_return_value_t NlpKVCacheLoadSliceDevic
     auto mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(out_shape),
         tt::tt_metal::TensorLayout(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));

@@ -35,7 +35,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must be height sharded");
 }
 
-TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.input.logical_shape();
     const int B = shape[1];
@@ -46,7 +46,7 @@ TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const auto alignment_elements = compute_alignment_requirement_in_elements(tensor_args.input);
     const auto output_channels = tt::round_up(C, alignment_elements);
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape({1, 1, B * HW, output_channels}),
         TensorLayout(args.dtype, PageConfig(Layout::ROW_MAJOR), args.memory_config));
 }

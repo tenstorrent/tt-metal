@@ -67,7 +67,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    compute_kernel_hw_startup(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         rotated_in_interm_cb_obj.reserve_back(Wt);
@@ -93,7 +93,7 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
+        mul_bcast_rows_init(rotated_in_interm_cb, sin_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // sin_interim = rotated * sin
@@ -116,7 +116,7 @@ void kernel_main() {
 
         sin_interm_cb_obj.wait_front(Wt);
         cos_interm_cb_obj.wait_front(Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim

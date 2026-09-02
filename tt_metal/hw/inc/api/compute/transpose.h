@@ -35,6 +35,7 @@ namespace ckernel {
  * | icb      | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
@@ -53,7 +54,7 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else if (is_8bit_int) {
         // 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct path,
@@ -63,30 +64,24 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE,
               true /*is_int_fpu_en*/>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     }
 #else
-    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559) and no int-FPU 8-bit integer
-    // reconstruct path; reject formats that would otherwise silently take the wrong path. UInt32 is
-    // treated as unpack-to-dest on WH/BH and Int8/UInt8 (low nibble 0xE) need the int-FPU path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    LLK_ASSERT(!is_8bit_int, "8-bit integer transpose not supported on Quasar");
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
 #endif
 
 #endif
@@ -105,11 +100,12 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  *
  * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
- * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | icb            | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
+ * | itile          | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     LLK_SAN_FUNCTION();
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
@@ -123,22 +119,52 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(idst, icb)));
     }
 #else
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
     UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));
     MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
 #endif
 #endif
+}
+
+// clang-format off
+/**
+ * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on `ntiles` consecutive tiles from the input
+ * CB, writing each result to a consecutive DST register slot. This is the uniform block entry point for
+ * the transpose op group: its body is a simple loop over `transpose_tile`, so it inherits
+ * `transpose_tile`'s semantics and requires the same initialization (`transpose_init`, preceded once by
+ * `compute_kernel_hw_startup(icb, ocb)`) to have been called first. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47483.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                  | Type     | Valid Range                                    | Required |
+ * |----------------|--------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb            | The identifier of the circular buffer (CB) containing A      | uint32_t | 0 to 31                                        | True     |
+ * | start_itile    | The index of the first tile A within the CB                  | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst     | The index of the first destination tile in DST REG           | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles         | The number of consecutive tiles to transpose                 | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void transpose_block(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles) {
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        transpose_tile<is_fp32_dest_acc_en>(icb, start_itile + i, start_idst + i);
+    }
 }
 
 }  // namespace ckernel

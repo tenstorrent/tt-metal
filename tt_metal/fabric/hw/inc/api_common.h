@@ -6,7 +6,15 @@
 
 #include <cstdint>
 #include <type_traits>
+
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+
+namespace tt::tt_fabric {
+// Forward declaration to avoid pulling the full V2 sender header into this widely-included file.
+template <bool EAGER_STAGING, uint8_t NUM_BUFFERS>
+class FabricMuxV2Sender;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric::common::experimental {
 
@@ -172,11 +180,22 @@ struct is_edm_sender<tt::tt_fabric::WorkerToFabricEdmSender> : std::true_type {}
 template <typename T>
 constexpr bool is_edm_sender_v = is_edm_sender<T>::value;
 
+// Type trait to detect if a type is a FabricMuxV2Sender (transient self-poll Mux V2)
+template <typename T>
+struct is_fabric_mux_v2_sender : std::false_type {};
+
+template <bool E, uint8_t N>
+struct is_fabric_mux_v2_sender<tt::tt_fabric::FabricMuxV2Sender<E, N>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_fabric_mux_v2_sender_v = is_fabric_mux_v2_sender<T>::value;
+
 template <typename FabricSenderType>
 struct CheckFabricSenderType {
     static_assert(
-        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
-        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType> ||
+            is_fabric_mux_v2_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender, WorkerToFabricMuxSender, or FabricMuxV2Sender");
 };
 
 // ========================
@@ -275,7 +294,8 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
         }
     }
 
-    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
+    constexpr bool update_payload_size = has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize);
+    if constexpr (update_payload_size) {
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 
@@ -289,7 +309,9 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
             accumulated += chunk;
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = chunk;
         }
-        ASSERT(accumulated < payload_size);
+        if constexpr (update_payload_size) {
+            ASSERT(accumulated < payload_size);
+        }
         for (uint8_t i = chunk_size_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = 0;
         }
@@ -412,37 +434,44 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
 /**
  * Opens fabric routing-plane connections for all headers associated with the given route.
  * Reads connection parameters from runtime arguments and initializes headers with routing metadata.
+ * Use the same WORKER_HANDSHAKE_NOC for the connection's packet traffic and close handshake.
  *
  * Return value: None
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC for open        | uint8_t                                        | False    |
  * | connection_manager                    | Connection manager to build and open    | RoutingPlaneConnectionManager&                 | True     |
  * | num_connections_to_build              | Number of connections to build/open     | uint32_t                                       | True     |
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
  */
 // clang-format on
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
     size_t& rt_arg_idx) {
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
-        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
+        WORKER_HANDSHAKE_NOC>(rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off
 /**
  * Closes all connections owned by the provided connection manager.
+ * WORKER_HANDSHAKE_NOC must match the NoC used to open the connections.
  *
  * Return value: None
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC used for open   | uint8_t                                        | False    |
  * | connection_manager                    | Connection manager to be closed         | RoutingPlaneConnectionManager&                 | True     |
  */
 // clang-format on
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc()>
 FORCE_INLINE void close_connections(tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager) {
-    connection_manager.close();
+    connection_manager.close<WORKER_HANDSHAKE_NOC>();
 }
 
 }  // namespace tt::tt_fabric::common::experimental

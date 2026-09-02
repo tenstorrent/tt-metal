@@ -26,6 +26,6 @@ struct MLAQKVAssembleBwInputs {
 using operation_attributes_t = MLAQKVAssembleBwParams;
 using tensor_args_t = MLAQKVAssembleBwInputs;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::mla_qkv_assemble_bw::device

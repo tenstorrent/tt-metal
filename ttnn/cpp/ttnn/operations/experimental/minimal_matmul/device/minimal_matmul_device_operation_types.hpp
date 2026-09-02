@@ -34,13 +34,19 @@ struct MinimalMatmulParams {
     DeviceComputeKernelConfig compute_kernel_config;
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
     int32_t dim = -1;    // Dimension to split along (default -1)
+
+    // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
+    // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
+    bool fuse_swiglu = false;
 };
 
 struct MinimalMatmulInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
-    std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
+    // Second in0 source. AG-fused matmul: this device's local pre-gather slice. Fused concat: the
+    // suffix half of in0's K (input_tensor is the prefix half; the weight is stacked [W_prefix; W_suffix]).
+    std::optional<Tensor> optional_input_tensor;
 
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)

@@ -123,6 +123,8 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
+    runtime_args_0.reserve(num_input_tensors * 4);
+    runtime_args_1.reserve(num_input_tensors * 4);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);

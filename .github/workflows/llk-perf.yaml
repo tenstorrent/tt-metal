@@ -5,6 +5,22 @@ on:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to run performance tests on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
+          - quasar
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   checks: write
@@ -12,14 +28,19 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   llk-perf-tests:
     name: "LLK perf tests"
     uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      # Scheduled runs have no dispatch inputs, so retain the existing behavior.
+      architecture: ${{ inputs.architecture || 'all' }}
+      # Nightly runs always use speed-of-light; manual runs use the checkbox.
+      speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
     secrets: inherit
 
   llk-perf-summary:
@@ -27,7 +48,7 @@ jobs:
     if: always()
     needs:
       - llk-perf-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check perf test results
         uses: re-actors/alls-green@release/v1
@@ -36,7 +57,7 @@ jobs:
 
   report-status:
     name: "Report status"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: always()
     needs: llk-perf-summary
     steps:

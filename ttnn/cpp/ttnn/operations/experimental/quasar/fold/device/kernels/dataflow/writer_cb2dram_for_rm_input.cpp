@@ -44,7 +44,7 @@ void kernel_main() {
             uint32_t idx = 0;
             for (uint32_t i = 0; i < patch_size; i++) {
                 for (uint32_t j = 0; j < (stick_nbytes / 2); j++) {
-                    patch_data[idx++] = *(volatile uint16_t*)(l1_addr + j * 2);
+                    patch_data[idx++] = *(volatile uint16_t*)(uintptr_t)(l1_addr + j * 2);
                 }
                 l1_addr += aligned_stick_nbytes_dram;
             }

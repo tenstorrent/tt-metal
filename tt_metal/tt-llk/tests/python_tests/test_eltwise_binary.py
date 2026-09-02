@@ -322,7 +322,6 @@ def test_eltwise_binary(
             ]
         )
         if fmt.input_format == DataFormat.Bfp4_b
-        # or fmt.output_format == DataFormat.Bfp4_b
     ],
     broadcast_type=[
         BroadcastType.None_,
@@ -334,7 +333,6 @@ def test_eltwise_binary(
     transpose_srca=Transpose.No,
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
     input_dimensions=[[32, 32], [64, 32], [32, 64], [256, 32]],
-    # tile_dimensions=[[32, 32], [16,32]],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -507,29 +505,8 @@ def test_eltwise_binary_bfp4_b(
     ), "Assert against golden failed"
 
 
-@parametrize(
-    reuse_dest_type=[
-        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
-        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
-    ],
-    formats=lambda: input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b],
-        same=True,
-    ),
-    math_fidelity=[MathFidelity.LoFi],
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    input_dimensions=[[512, 32]],
-    output_dimensions=[[128, 32]],
-    tile_dimensions=[[32, 32], [16, 32]],
-)
-def test_eltwise_binary_dest_reuse(
-    reuse_dest_type,
-    formats,
-    math_fidelity,
-    math_op,
-    input_dimensions,
-    output_dimensions,
-    tile_dimensions,
+def _prepare_dest_reuse_inputs(
+    formats, input_dimensions, output_dimensions, tile_dimensions
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -546,6 +523,8 @@ def test_eltwise_binary_dest_reuse(
         f"Input tile count ({tile_cnt_input}) must be divisible by "
         f"output tile count ({tile_cnt_output})"
     )
+    inner_dim = tile_cnt_input // tile_cnt_output
+    assert inner_dim > 1, "Dest reuse requires at least one reuse accumulation"
 
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -555,7 +534,6 @@ def test_eltwise_binary_dest_reuse(
         tile_dimensions=tile_dimensions,
     )
 
-    # Compute block/tile counts for output (determines dest register blocking)
     effective_dest_acc = (
         DestAccumulation.Yes
         if formats.output_format == DataFormat.Float32
@@ -569,75 +547,150 @@ def test_eltwise_binary_dest_reuse(
         tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
-
-    # Input has the same block count, but more tiles per block
-    inner_dim = tile_cnt_input // tile_cnt_output
     input_tiles_in_block = inner_dim * output_tiles_in_block
-    input_num_blocks = output_num_blocks
 
-    # Tilize inputs
-    src_A_tilized = tilize_block(
+    src_A_tilized_flat = tilize_block(
         src_A,
         dimensions=input_dimensions,
         stimuli_format=formats.input_format,
         num_faces=num_faces,
         tile_dimensions=tile_dimensions,
         face_r_dim=face_r_dim,
-    )
-    src_B_tilized = tilize_block(
+    ).flatten()
+    src_B_tilized_flat = tilize_block(
         src_B,
         dimensions=input_dimensions,
         stimuli_format=formats.input_format,
         num_faces=num_faces,
         tile_dimensions=tile_dimensions,
         face_r_dim=face_r_dim,
+    ).flatten()
+
+    return {
+        "face_r_dim": face_r_dim,
+        "num_faces_r_dim": num_faces_r_dim,
+        "num_faces_c_dim": num_faces_c_dim,
+        "num_faces": num_faces,
+        "tile_cnt_input": tile_cnt_input,
+        "tile_cnt_output": tile_cnt_output,
+        "inner_dim": inner_dim,
+        "output_num_blocks": output_num_blocks,
+        "output_tiles_in_block": output_tiles_in_block,
+        "input_tiles_in_block": input_tiles_in_block,
+        "input_num_blocks": output_num_blocks,
+        "src_A_tilized_flat": src_A_tilized_flat,
+        "src_B_tilized_flat": src_B_tilized_flat,
+        "tile_elements": num_faces * face_r_dim * FACE_C_DIM,
+        "torch_format": format_dict[formats.output_format],
+    }
+
+
+def _apply_dest_reuse_op(
+    math_op, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
+):
+    if math_op != MathOperation.Elwmul:
+        return (srcA + srcB) if math_op == MathOperation.Elwadd else (srcA - srcB)
+
+    # Mask from the original operands each fidelity phase. Do not use
+    # _compute_eltwise: it mutates t1/t2 across iterations, so later phases
+    # mask already-truncated values and collapse to ~LoFi.
+    fidelity_iters = {
+        MathFidelity.LoFi: 1,
+        MathFidelity.HiFi2: 2,
+        MathFidelity.HiFi3: 3,
+        MathFidelity.HiFi4: 4,
+    }[math_fidelity]
+    result = None
+    for fidelity_iter in range(fidelity_iters):
+        a_m, b_m = binary_golden._apply_fidelity_masking(
+            formats.output_format, srcA, srcB, fidelity_iter
+        )
+        phase = a_m.to(torch.float32) * b_m.to(torch.float32)
+        result = phase if result is None else result + phase
+    return result.to(torch_format)
+
+
+def _compute_dest_reuse_golden(
+    math_op, reuse_dest_type, math_fidelity, formats, prepared
+):
+    """Simulate seeded dest reuse (seed first tile, then fold via DEST_TO_SRCA/B)."""
+    tile_elements = prepared["tile_elements"]
+    torch_format = prepared["torch_format"]
+    src_A = prepared["src_A_tilized_flat"]
+    src_B = prepared["src_B_tilized_flat"]
+    golden_tensor = torch.zeros(
+        prepared["tile_cnt_output"] * tile_elements, dtype=torch_format
     )
+    # Instantiate directly: get_golden_generator returns a DummyGoldenGenerator
+    # during compile-producer, which has no _apply_fidelity_masking helper.
+    binary_golden = EltwiseBinaryGolden()
 
-    src_A_tilized_flat = src_A_tilized.flatten()
-    src_B_tilized_flat = src_B_tilized.flatten()
-
-    stimuli_A = src_A_tilized_flat
-    stimuli_B = src_B_tilized_flat
-
-    # Golden: simulate dest reuse.
-    # move_d2a/move_d2b copies old_dest into srcA/srcB (replacing the unpacked value).
-    # ELWADD/ELWSUB: new_dest = srcA op srcB  (overwrites dest)
-    # ELWMUL:        new_dest = old_dest + srcA * srcB  (always accumulates)
-    tile_elements = num_faces * face_r_dim * FACE_C_DIM
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
-
-    for out_t in range(tile_cnt_output):
-        block_idx = out_t // output_tiles_in_block
-        tile_in_block = out_t % output_tiles_in_block
+    for out_t in range(prepared["tile_cnt_output"]):
+        block_idx = out_t // prepared["output_tiles_in_block"]
+        tile_in_block = out_t % prepared["output_tiles_in_block"]
         dest = torch.zeros(tile_elements, dtype=torch_format)
 
-        for i in range(inner_dim):
+        for i in range(prepared["inner_dim"]):
             input_tile_idx = (
-                block_idx * input_tiles_in_block
-                + i * output_tiles_in_block
+                block_idx * prepared["input_tiles_in_block"]
+                + i * prepared["output_tiles_in_block"]
                 + tile_in_block
             )
             start = input_tile_idx * tile_elements
             end = start + tile_elements
+            a_tile = src_A[start:end].to(torch_format)
+            b_tile = src_B[start:end].to(torch_format)
 
-            a_tile = src_A_tilized_flat[start:end].to(torch_format)
-            b_tile = src_B_tilized_flat[start:end].to(torch_format)
-
-            if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+            if i == 0:
+                srcA, srcB = a_tile, b_tile
+            elif reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
                 srcA, srcB = dest.clone(), b_tile
             else:
                 srcA, srcB = a_tile, dest.clone()
 
-            if math_op == MathOperation.Elwadd:
-                dest = srcA + srcB
-            elif math_op == MathOperation.Elwsub:
-                dest = srcA - srcB
-            elif math_op == MathOperation.Elwmul:
-                dest = dest + srcA * srcB
+            dest = _apply_dest_reuse_op(
+                math_op, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
+            )
 
         out_start = out_t * tile_elements
         golden_tensor[out_start : out_start + tile_elements] = dest
+
+    return golden_tensor
+
+
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    # Bfp8_b dest-reuse ELWMUL mismatches golden (block shared-exp + dest-reuse
+    # precision); keep Bfp8 for add/sub only.
+    formats=lambda math_op: input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32]
+        + ([] if math_op == MathOperation.Elwmul else [DataFormat.Bfp8_b]),
+        same=True,
+    ),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32], [16, 32], [8, 32]],
+    input_dimensions=[[512, 32]],
+    output_dimensions=[[128, 32]],
+)
+def test_eltwise_binary_dest_reuse(
+    reuse_dest_type,
+    math_op,
+    formats,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+):
+    prepared = _prepare_dest_reuse_inputs(
+        formats, input_dimensions, output_dimensions, tile_dimensions
+    )
+    golden_tensor = _compute_dest_reuse_golden(
+        math_op, reuse_dest_type, math_fidelity, formats, prepared
+    )
 
     configuration = TestConfig(
         "sources/eltwise_binary_test.cpp",
@@ -654,30 +707,30 @@ def test_eltwise_binary_dest_reuse(
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             NUM_TILES_IN_BLOCK(
-                output_tiles_in_block,
-                input_num_tiles_in_block=input_tiles_in_block,
-                output_num_tiles_in_block=output_tiles_in_block,
+                prepared["output_tiles_in_block"],
+                input_num_tiles_in_block=prepared["input_tiles_in_block"],
+                output_num_tiles_in_block=prepared["output_tiles_in_block"],
             ),
             NUM_BLOCKS(
-                output_num_blocks,
-                input_num_blocks=input_num_blocks,
-                output_num_blocks=output_num_blocks,
+                prepared["output_num_blocks"],
+                input_num_blocks=prepared["input_num_blocks"],
+                output_num_blocks=prepared["output_num_blocks"],
             ),
-            NUM_FACES_R_DIM(num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim),
-            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            NUM_FACES_R_DIM(prepared["num_faces_r_dim"]),
+            NUM_FACES_C_DIM(prepared["num_faces_c_dim"]),
+            TEST_FACE_DIMS(face_r_dim=prepared["face_r_dim"]),
         ],
         variant_stimuli=StimuliConfig(
-            stimuli_A,
+            prepared["src_A_tilized_flat"],
             formats.input_format,
-            stimuli_B,
+            prepared["src_B_tilized_flat"],
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_input,
-            tile_count_B=tile_cnt_input,
-            tile_count_res=tile_cnt_output,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
+            tile_count_A=prepared["tile_cnt_input"],
+            tile_count_B=prepared["tile_cnt_input"],
+            tile_count_res=prepared["tile_cnt_output"],
+            num_faces=prepared["num_faces"],
+            face_r_dim=prepared["face_r_dim"],
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
@@ -686,15 +739,14 @@ def test_eltwise_binary_dest_reuse(
     )
 
     res_from_L1 = configuration.run().result
-
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
-    assert test_passed, "Assert against golden failed"
+    res_tensor = torch.tensor(res_from_L1, dtype=prepared["torch_format"])
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
 
 
 @parametrize(

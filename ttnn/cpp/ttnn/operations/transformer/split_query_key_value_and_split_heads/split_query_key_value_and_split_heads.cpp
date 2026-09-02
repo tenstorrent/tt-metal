@@ -80,7 +80,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         static_cast<int>(input_tensor.layout()));
 
     TT_FATAL(
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE,
         "Invalid storage type: input tensor must be on a device, but found {}.",
         static_cast<int>(input_tensor.storage_type()));
 
@@ -223,6 +223,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         num_heads,
         num_kv_heads.value_or(num_heads),
         transpose_key,
+        /*kv_tied=*/false,
         memory_config.value_or(input_tensor.memory_config()));
     return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
         outputs, sequence_size, sequence_size_padded, transpose_key, memory_config);

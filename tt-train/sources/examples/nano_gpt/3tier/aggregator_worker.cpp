@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
         socket_manager, workers_and_aggregator_ctx, aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
 
     uint32_t global_step = 0;
-    for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+    for (uint32_t epoch = 0; config.num_epochs == 0 || epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
             send_aggregated_gradients_from_workers_to_optimizer(
                 socket_manager,

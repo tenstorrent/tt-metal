@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
@@ -339,6 +340,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -414,8 +416,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
-    std::vector<CoreRange> termination_master_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     if (num_mux_cores_per_direction_per_link) {
         uint32_t core_id = 0;
         for (uint32_t link = 0; link < num_links; link++) {
@@ -427,10 +430,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                     const auto& worker_core = all_cores[core_id++];
                     sender_worker_core_ranges.emplace_back(worker_core);
-
-                    if (worker == 0) {
-                        termination_master_core_ranges.emplace_back(worker_core);
-                    }
                 }
             }
         }
@@ -500,8 +499,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
     const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
-        ? ttnn::get_math_fidelity(compute_kernel_config)
-        : tt::tt_metal::MathFidelity::HiFi4;
+                                                         ? ttnn::get_math_fidelity(compute_kernel_config)
+                                                         : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
@@ -509,13 +508,38 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t max_target_noc_addresses_per_packet = 4;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = std::min(4 * num_tiles_to_write_per_packet, max_dst_size);
     uint32_t cb_num_pages = 2 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+
+    // Contiguous fast path: when enabled, the intermediate is a chunk-paged row-major staging tensor
+    // and the writer sends whole chunks with fused-unicast writes instead of scatter. The sizing must
+    // match compute_output_specs exactly, so both derive it from the same helper. Which layout applies
+    // is read off the intermediate tensor actually in use (either caller-provided or the one
+    // compute_output_specs sized), so this cannot disagree with what was allocated. See
+    // rs-contiguous-interm-design.
+    const auto staging = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
+        input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor, intermediate_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (use_contiguous_interm) {
+        TT_FATAL(
+            staging.tile_granularity == tile_granularity,
+            "contiguous-interm tile_granularity mismatch: {} vs {}",
+            staging.tile_granularity,
+            tile_granularity);
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        TT_FATAL(
+            staging.page_bytes % dram_alignment == 0,
+            "contiguous-interm page bytes ({}) must be a multiple of DRAM alignment ({}); otherwise the "
+            "device page stride (aligned_page_size) would not match chunk_id*page_bytes addressing",
+            staging.page_bytes,
+            dram_alignment);
+    }
 
     // input_tensor from reader -> compute
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -561,7 +585,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<size_t> mux_termination_signal_addresses;
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
@@ -570,29 +593,17 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto num_full_size_channels = num_workers_per_direction;
-    constexpr auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        0,
+    // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
+    // client channels (one channel per sender worker). The V2 mux auto-terminates once all of its
+    // clients close their connections, so no explicit termination signalling is required. The mux
+    // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
+    // needs the src/dst fabric node ids + link for the direction it forwards to).
+    tt::tt_fabric::FabricMuxV2Config mux_config(
+        static_cast<uint8_t>(num_workers_per_direction),
+        static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
-    auto mux_kernel_id = 0;
-    if (num_mux_cores_per_direction_per_link) {
-        // Fabric mux kernel
-        mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-    }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
         ring_index,
@@ -616,12 +627,30 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Wt,
         fuse_op,
         normalized_dim);
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring reader. chunks_per_channel is only read
+        // by the chunk-paged branch, but the named arg must always be present for the kernel to
+        // compile, so it is passed unconditionally.
+        reader_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
+        reader_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+    }
 
     // Positional args: TensorAccessorArgs
     std::vector<uint32_t> reader_compile_args;
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    if (normalized_dim != 0) {
+        TT_FATAL(
+            !use_contiguous_interm || penult_intermediate_tensor.has_value(),
+            "contiguous-interm path requires a penult intermediate staging tensor");
+        // Penult intermediate staging accessor. Only the chunk-paged branch reads it; the tiled branch gets the
+        // output tensor's args as a placeholder (paired with a null address below) so that both
+        // branches share one compile-time/runtime arg layout.
+        const auto& penult_intermediate_accessor_source =
+            use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(reader_compile_args);
+    }
 
     std::string reader_kernel_path = normalized_dim == 0
                                          ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -656,16 +685,23 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Ht,
         slice_Wt,
         normalized_dim);
-
-    // Positional args: fabric_mux, routing info, TensorAccessorArgs
-    std::vector<uint32_t> writer_compile_args;
-    if (num_mux_cores_per_direction_per_link) {
-        append_fabric_mux_connection_ct_args(
-            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-            mux_kernel_config,
-            num_workers_per_direction,
-            writer_compile_args);
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring writer. The chunk-paged sizing args are
+        // only read by that branch, but must always be present for the kernel to compile.
+        writer_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
+        writer_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+        writer_named_compile_args["interm_tiles_per_packet"] = staging.interm_tiles_per_packet;
     }
+
+    // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
+    // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
+    std::vector<uint32_t> writer_compile_args;
+    // Each TensorAccessorArgs always emits args_config and aligned_page_size; a sharded accessor reserves the
+    // extra space for its own shape/bank words when appending.
+    constexpr uint32_t min_args_per_tensor_accessor = 2;
+    writer_compile_args.reserve(
+        unicast_forward_args.size() + mcast_forward_args.size() + unicast_backward_args.size() +
+        mcast_backward_args.size() + 2 * min_args_per_tensor_accessor);
 
     writer_compile_args.insert(writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
@@ -673,6 +709,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    if (normalized_dim != 0) {
+        // See the reader above: placeholder accessor args keep one arg layout for both branches.
+        const auto& penult_intermediate_accessor_source =
+            use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(writer_compile_args);
+    }
 
     std::string writer_kernel_path = normalized_dim == 0
                                          ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -713,29 +755,20 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();
-    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            CoreCoord termination_master_logical_core = CoreCoord{0, 0};
             CoreCoord mux_virtual_core = CoreCoord{0, 0};
             if (mux_connection_valid(dir) && num_mux_cores_per_direction_per_link) {
                 auto mux_logical_core = *((mux_core_iter++)->begin());
                 mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
 
-                std::vector<uint32_t> mux_rt_args = {};
+                // Create the V2 mux kernel on this core, forwarding toward this direction's neighbor
+                // (forward_coord when dir==1, backward_coord when dir==0).
                 const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-                if (dir) {  // forward
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                } else {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-
-                termination_master_logical_core = *((termination_master_core_iter++)->begin());
+                const auto dst_node_id =
+                    mesh_device->get_fabric_node_id(dir ? forward_coord.value() : backward_coord.value());
+                tt::tt_fabric::add_fabric_mux_v2_to_program(
+                    program, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -796,6 +829,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_to_read,                      // start_tiles_to_read
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
+                        // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout
+                        use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
                 }
                 if (fuse_op) {
@@ -803,9 +838,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
-
-                CoreCoord termination_master_virtual_core =
-                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 // Writer RT args
                 std::vector<uint32_t> writer_rt_args;
@@ -815,6 +847,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         output_tensor.buffer()->address(),                           // output_tensor_address
                         virtual_core.x,                                              // this core.x
                         virtual_core.y,                                              // this core.y
+                        opposite_core_coord.x,                                       // opposite direction core.x
+                        opposite_core_coord.y,                                       // opposite direction core.y
                         semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
                         semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
                         barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
@@ -846,19 +880,25 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_row_offset,         // start_row_offset
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
+                        // penult_intermediate_tensor_address; 0 (unread) on the tiled staging layout. Precedes
+                        // the mux/fabric-connection args appended after this block.
+                        use_contiguous_interm ? penult_intermediate_tensor->buffer()->address() : 0,
                     };
                 }
                 if (num_mux_cores_per_direction_per_link) {
-                    append_fabric_mux_connection_rt_args(
-                        mux_connection_valid(dir),
+                    // V2 fabric mux client connection: this worker is channel `worker` on its
+                    // direction's mux. Two per-worker semaphores (flow control + teardown) back the
+                    // connection; append_client_connection_rt_args serializes exactly the client args
+                    // the device-side FabricMuxV2Sender::build_from_args expects.
+                    const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                    const auto teardown_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                    mux_config.append_client_connection_rt_args(
                         mux_virtual_core,
-                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_kernel_config,
-                        core,
-                        worker,
-                        worker == 0,
-                        termination_master_virtual_core,
-                        program,
+                        static_cast<uint8_t>(worker),
+                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
+                            .flow_control_sem_id = flow_control_sem_id,
+                            .teardown_sem_id = teardown_sem_id,
+                        },
                         writer_rt_args);
                 }
                 if (!num_mux_cores_per_direction_per_link) {
@@ -919,7 +959,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output) {
+    const Tensor& output,
+    const std::optional<Tensor>& penult_intermediate) {
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -944,25 +985,33 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     worker_reader_sender_runtime_args[2] = output.buffer()->address();
                     worker_reader_sender_runtime_args[3] = semaphore.at(dir).address();
                     worker_reader_sender_runtime_args[4] = semaphore.at(!dir).address();
+                    if (penult_intermediate.has_value()) {
+                        // Contiguous staging layout only, and it must be patched: the penult intermediate is
+                        // an op output now, so it is reallocated on every invocation and its address is
+                        // not stable across program-cache hits. Index 11 — see the reader RT arg list in
+                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the fused-op args
+                        // are appended after it, so the position is fixed.
+                        worker_reader_sender_runtime_args[11] = penult_intermediate->buffer()->address();
+                    }
                 }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                if (normalized_dim == 0) {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
-                    }
-                } else {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
-                    }
+                // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
+                // dim-0 and non-dim-0 writer arg lists agree up to index 15.
+                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
+                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
+                }
+                if (penult_intermediate.has_value()) {
+                    // Index 16 — see the writer RT arg list in
+                    // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
+                    // connection args are appended after it, so the position is fixed. Only the
+                    // non-dim-0 layout has this arg, and penult_intermediate is only set there
+                    // (reduce_scatter_use_contiguous_interm returns false for scatter dim 0).
+                    worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
                 }
             }
         }
@@ -973,6 +1022,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    // Unused (Line never takes the Ring-only contiguous penult intermediate path); present only for call-signature
+    // parity with build_ring_reduce_scatter_minimal_async_program_artifacts.
+    [[maybe_unused]] const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1063,8 +1115,23 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    const bool use_fabric_2d_neighbor_barrier =
+        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // A logical line embedded in a 2D fabric can turn at an intermediate device. A single line
+    // multicast range follows the physical direction selected by its first hop, so it cannot
+    // represent such a turn. The reduce-scatter data path already relays through immediate logical
+    // neighbors; use the same one-hop connectivity for its startup barrier on Fabric2D.
+    const uint32_t barrier_targets_forward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_forward, 1u) : num_targets_forward;
+    const uint32_t barrier_targets_backward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_backward, 1u) : num_targets_backward;
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        sender_device_coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        barrier_targets_forward,
+        barrier_targets_backward,
+        mesh_device);
 
     uint32_t num_cores_per_link = ttnn::experimental::ccl::reduce_scatter_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
@@ -1077,8 +1144,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -1101,8 +1171,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     // Extract compute kernel config parameters
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
     const tt::tt_metal::MathFidelity math_fidelity = compute_kernel_config.has_value()
-        ? ttnn::get_math_fidelity(compute_kernel_config)
-        : tt::tt_metal::MathFidelity::HiFi4;
+                                                         ? ttnn::get_math_fidelity(compute_kernel_config)
+                                                         : tt::tt_metal::MathFidelity::HiFi4;
     // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
@@ -1204,7 +1274,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
-
     // KERNEL CREATION
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -1325,6 +1394,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         num_workers_per_direction,
         sender_writer_compile_args);
 
+    sender_writer_compile_args.push_back(
+        use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
+                                       : ring_size - 1);  // barrier_target_count
+
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     sender_writer_compile_args.insert(
@@ -1369,8 +1442,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             input_tensor_B,
             slice_B,
             slice_C,
-            normalized_dim)
-    };
+            normalized_dim)};
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1612,6 +1684,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1635,6 +1708,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1660,6 +1734,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1683,6 +1758,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1719,7 +1795,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     const Tensor& input,
     const Tensor& intermed,
-    const Tensor& output) {
+    const Tensor& output,
+    const std::optional<Tensor>& penult_intermediate) {
     ::ttnn::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
         program,
         reader_kernel_id,
@@ -1735,7 +1812,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
         semaphore,
         input,
         intermed,
-        output);
+        output,
+        penult_intermediate);
 }
 
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -1799,6 +1877,15 @@ RingReduceScatterMeshWorkloadFactory::create_at(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
+    // Contiguous staging layout only: the penult intermediate the 2nd-last iteration stages one
+    // direction's contribution into, instead of scatter-writing it directly into the tiled output
+    // tensor. compute_output_specs declares it as a third output on exactly the configurations that use
+    // it (and create_output_tensors either allocates it or adopts the caller's persistent buffer), so
+    // its presence here is the signal that the contiguous layout is in play — the factory never
+    // allocates it. Absent on the tiled layout (Linear, Ring with scatter dim 0, or a caller-provided
+    // input-shaped intermediate). See rs-contiguous-interm-design.
+    const std::optional<Tensor> penult_intermediate_tensor =
+        tensor_return_value.size() > 2 ? std::optional<Tensor>(tensor_return_value.at(2)) : std::nullopt;
 
     const auto forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
@@ -1815,6 +1902,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        penult_intermediate_tensor,
         mesh_coordinate,
         forward_coord,
         backward_coord,
@@ -1846,11 +1934,15 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     const auto& input = tensor_args.input_tensor;
     const auto& intermediate = tensor_return_value.at(0);
     const auto& output = tensor_return_value.at(1);
+    // See create_at: index 2 exists exactly on the contiguous staging layout. It is reallocated per
+    // invocation like the intermediate, so its address has to be re-published to the kernels here.
+    const std::optional<Tensor> penult_intermediate =
+        tensor_return_value.size() > 2 ? std::optional<Tensor>(tensor_return_value.at(2)) : std::nullopt;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
             program,
             shared_vars.reader_kernel_id,
             shared_vars.writer_kernel_id,
@@ -1865,7 +1957,8 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             operation_attributes.semaphore,
             input,
             intermediate,
-            output);
+            output,
+            penult_intermediate);
     }
 }
 
@@ -1911,6 +2004,7 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        /*penult_intermediate_tensor=*/std::nullopt,
         mesh_coordinate,
         forward_coord,
         backward_coord,
@@ -1950,7 +2044,7 @@ void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             operation_attributes.topology == ttnn::ccl::Topology::Linear,
             "LineReduceScatterMeshWorkloadFactory expects Linear topology");
 
-        line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
             program,
             shared_vars.reader_kernel_id,
             shared_vars.writer_kernel_id,

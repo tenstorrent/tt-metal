@@ -35,6 +35,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    // MIN reduce is lowered to math_op=MAX + negate=true, whose fused compute kernels rely on the
+    // negative_tile LLK. That LLK is an unported empty stub on Quasar, so reject negate on ALL paths
+    // before any factory is selected.
+    TT_FATAL(
+        !operation_attributes.negate,
+        "Quasar reduction does not support negate (MIN reduce): negative_tile is unported on Quasar.");
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
@@ -79,16 +85,15 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
-        // INT32 MIN/MAX is supported via the SFPU reduce path (format deduced from input CB in
-        // compute_kernel_lib::reduce and reduce_{h,w}_neg; MIN uses the dedicated reduce_{h,w}_neg kernels).
-        const bool is_int32_max_reduce =
-            tensor_args.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+        // INT32 reduce routes to the sfpu_reduce path, which is an unported empty stub on Quasar.
+        // Reject INT32 explicitly before any factory is selected.
+        TT_FATAL(
+            tensor_args.dtype() != DataType::INT32,
+            "INT32 reduce uses the sfpu_reduce path which is unported on Quasar.");
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
-                is_int32_max_reduce,
-            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN) - got {}.",
+                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");

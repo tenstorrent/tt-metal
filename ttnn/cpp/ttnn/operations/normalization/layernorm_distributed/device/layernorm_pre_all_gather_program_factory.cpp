@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
+#include "layernorm_distributed_metal2_helpers.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <map>
 #include <string>
 
 using uint32_t = std::uint32_t;
@@ -18,11 +20,68 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace m2 = tt::tt_metal::experimental;
+using namespace ttnn::prim::layernorm_distributed_metal2;
+
+// ---- Pre 1D spec names ----
+const m2::KernelSpecName PRE1D_READER{"pre1d_reader"};
+const m2::KernelSpecName PRE1D_WRITER{"pre1d_writer"};
+const m2::KernelSpecName PRE1D_COMPUTE{"pre1d_compute"};
+
+const m2::DFBSpecName PRE1D_INPUT{"pre1d_input"};
+const m2::DFBSpecName PRE1D_REDUCE{"pre1d_reduce"};
+const m2::DFBSpecName PRE1D_RESIDUAL{"pre1d_residual"};
+const m2::DFBSpecName PRE1D_FUSED{"pre1d_fused"};
+const m2::DFBSpecName PRE1D_X2{"pre1d_x2"};
+const m2::DFBSpecName PRE1D_OUT{"pre1d_out"};
+
+const m2::TensorParamName PRE1D_INPUT_T{"pre1d_input_t"};
+const m2::TensorParamName PRE1D_RESIDUAL_T{"pre1d_residual_t"};
+const m2::TensorParamName PRE1D_OUTPUT_T{"pre1d_output_t"};
+
+// ---- Pre 2D spec names ----
+const m2::KernelSpecName PRE2D_READER{"pre2d_reader"};
+const m2::KernelSpecName PRE2D_WRITER{"pre2d_writer"};
+const m2::KernelSpecName PRE2D_COMPUTE_MERGE{"pre2d_compute_merge"};
+const m2::KernelSpecName PRE2D_COMPUTE_WORKER{"pre2d_compute_worker"};
+
+const m2::DFBSpecName PRE2D_INPUT{"pre2d_input"};
+const m2::DFBSpecName PRE2D_REDUCE{"pre2d_reduce"};
+const m2::DFBSpecName PRE2D_RESIDUAL{"pre2d_residual"};
+const m2::DFBSpecName PRE2D_FUSED{"pre2d_fused"};
+const m2::DFBSpecName PRE2D_X2{"pre2d_x2"};
+const m2::DFBSpecName PRE2D_X2_MERGE{"pre2d_x2_merge"};
+const m2::DFBSpecName PRE2D_PARTIAL_OUT{"pre2d_partial_out"};
+const m2::DFBSpecName PRE2D_ZERO{"pre2d_zero"};
+const m2::DFBSpecName PRE2D_OUT_FINAL{"pre2d_out_final"};
+
+const m2::SemaphoreSpecName PRE2D_REDUCER{"pre2d_reducer"};
+
+const m2::TensorParamName PRE2D_INPUT_T{"pre2d_input_t"};
+const m2::TensorParamName PRE2D_RESIDUAL_T{"pre2d_residual_t"};
+const m2::TensorParamName PRE2D_OUTPUT_T{"pre2d_output_t"};
+
+constexpr const char* PRE_READER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp";
+constexpr const char* PRE_WRITER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "writer_unary_interleaved_start_id_blocked.cpp";
+constexpr const char* PRE2D_READER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "reader_layernorm_preallgather_2d.cpp";
+constexpr const char* PRE2D_COMPUTE_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+    "layernorm_pre_allgather_2d.cpp";
+
+}  // namespace
+
 // =============================================================================
 // LayerNormPreAllGatherProgramFactory - Normal (non-Welford, non-2D) operation
 // =============================================================================
 
-tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::create_program_artifacts(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
@@ -40,6 +99,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
 
+    const auto& input_mesh = a.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
+
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
@@ -52,17 +114,19 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "Ht: {}", Ht);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-
     uint32_t block_size = 1;
     uint32_t writer_block_size = 1;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scaler_cb_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format = cb_data_format;
+    // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
+    // Quasar has no SFPU Accurate reduce; fall back to FPU.
+    const bool unpack_fp32_active =
+        (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
+         !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
@@ -121,38 +185,157 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
     log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        block_size,
-    };
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    if (fuse_pre_add) {
-        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
-    }
-
-    std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> compute_defines;
-    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
-    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
-
-    std::vector<uint32_t> compute_args = {Wt, block_size};
-
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_pre_allgather.cpp";
 
-    // Build runtime args per core.  Buffer base addresses are bound via
-    // emplace_runtime_args() so the framework patches them on cache hits.
-    KernelDescriptor reader_kernel_desc;
-    KernelDescriptor writer_kernel_desc;
-    KernelDescriptor compute_kernel_desc;
-    reader_kernel_desc.runtime_args.reserve(num_cores);
-    writer_kernel_desc.runtime_args.reserve(num_cores);
-    compute_kernel_desc.runtime_args.reserve(num_cores);
+    // The residual buffers exist only on the fused path, and the kernel-side handle for a buffer exists
+    // only where the host binds it, so a kernel's source must not contain the text `dfb::res` when
+    // there is no residual. That means this define is emitted only when the path is taken, and the
+    // kernels gate on `#ifdef`. Emitting it always as "0" or "1" and testing it with `#if` would not
+    // work: the text naming the unbound handle would still reach the compiler.
+    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
+    if (fuse_pre_add) {
+        fuse_defines.emplace("FUSE_PRE_ADD", "1");
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    dfbs.push_back(make_dfb(PRE1D_INPUT, in0_tiles, in_single_tile_size, in_data_format));
+    dfbs.push_back(make_dfb(PRE1D_REDUCE, in1_tiles, scaler_tile_size, scaler_cb_data_format));
+    if (fuse_pre_add) {
+        // Residual b. Sized in the residual's own data format so a residual with a different dtype
+        // than the input is read correctly; add_tiles handles the per-operand format.
+        dfbs.push_back(make_dfb(PRE1D_RESIDUAL, res_tiles, inb_single_tile_size, inb_data_format));
+        // Fused a + b (the compute kernel writes into this and reads it back downstream)
+        dfbs.push_back(make_dfb(PRE1D_FUSED, fused_tiles, single_tile_size, cb_data_format));
+    }
+    dfbs.push_back(make_dfb(PRE1D_X2, intermed0_tiles, single_tile_size, cb_data_format));
+    dfbs.push_back(make_dfb(PRE1D_OUT, out0_tiles, out_single_tile_size, out_data_format));
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelSpec reader{
+        .unique_id = PRE1D_READER,
+        .source = PRE_READER_KERNEL,
+        .compiler_options = {.defines = fuse_defines},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_REDUCE,
+                    .accessor_name = "reduce",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"}},
+        .compile_time_args = {{"blk", block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    if (fuse_pre_add) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = PRE1D_RESIDUAL_T, .accessor_name = "res_src"});
+    }
+
+    m2::KernelSpec writer{
+        .unique_id = PRE1D_WRITER,
+        .source = PRE_WRITER_KERNEL,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_OUTPUT_T, .accessor_name = "dst"}},
+        .compile_time_args = {{"blk", writer_block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    m2::KernelSpec compute{
+        .unique_id = PRE1D_COMPUTE,
+        .source = compute_kernel_file,
+        .compiler_options = {.defines = fuse_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_INPUT,
+                    .accessor_name = "in0",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_REDUCE,
+                    .accessor_name = "reduce",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .compile_time_args =
+            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
+        .hw_config = compute_hw,
+    };
+    // x^2 and the fused a + b are private to the compute kernel: it packs into them and unpacks them
+    // back, so it is the buffer's only endpoint on both sides.
+    bind_self_loop(compute, PRE1D_X2, "x2");
+    if (fuse_pre_add) {
+        bind_self_loop(compute, PRE1D_FUSED, "fused");
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
+    // explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for the
+    // sums), and the FPU reads its operands out of SrcA/SrcB, so SrcA/B is the mode for all of them.
+    // The intermediates are Float16_b whatever the Dest width, so only the inputs can qualify.
+    if (compute_gen1.enable_32_bit_dest) {
+        auto unpack_operand = [&](const m2::DFBSpecName& dfb) {
+            if (unpack_fp32_active) {
+                unpack_via_dest(compute_gen1, dfb);
+            } else {
+                unpack_via_src(compute_gen1, dfb);
+            }
+        };
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_operand(PRE1D_INPUT);
+        }
+        if (scaler_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, PRE1D_REDUCE);
+        }
+        if (cb_data_format == tt::DataFormat::Float32) {
+            unpack_operand(PRE1D_X2);
+            if (fuse_pre_add) {
+                unpack_operand(PRE1D_FUSED);
+            }
+        }
+        if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
+            unpack_operand(PRE1D_RESIDUAL);
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = PRE1D_INPUT_T, .spec = input_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = PRE1D_OUTPUT_T, .spec = output_mesh.tensor_spec()});
+    if (fuse_pre_add) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = PRE1D_RESIDUAL_T, .spec = b->mesh_tensor().tensor_spec()});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime arguments
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelRunArgs reader_run{.kernel = PRE1D_READER};
+    m2::KernelRunArgs writer_run{.kernel = PRE1D_WRITER};
+    m2::KernelRunArgs compute_run{.kernel = PRE1D_COMPUTE};
 
     uint32_t curr_row = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -170,129 +353,47 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(a.buffer());
-        reader_args.push_back(num_tile_rows_per_core);
-        reader_args.push_back(Wt);
-        reader_args.push_back(in_tile_offset);
-        if (fuse_pre_add) {
-            reader_args.push_back(b->buffer());
-        }
-        reader_kernel_desc.emplace_runtime_args(core, reader_args);
-        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
-        writer_kernel_desc.emplace_runtime_args(
-            core, {output.buffer(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
+        m2::AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            core,
+            {{"NCHt", num_tile_rows_per_core}, {"Wt", Wt}, {"tile_offset", in_tile_offset}});
+        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
+        m2::AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            core,
+            {{"num_tiles", num_tile_rows_per_core * out0_tiles}, {"tile_offset", out_tile_offset}});
 
         curr_row += num_tile_rows_per_core;
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
+    //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
+    m2::ProgramSpec spec{
+        .name = "layernorm_pre_all_gather",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {PRE1D_READER, PRE1D_WRITER, PRE1D_COMPUTE}, .target_nodes = all_cores}},
+    };
 
-    // Reader kernel
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer kernel
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Compute kernel
-    compute_kernel_desc.kernel_source = compute_kernel_file;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
-    ////////////////////////////////////////////////////////////////////////////
-    // c_in0 -> a
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in0_tiles * in_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = in_data_format,
-            .page_size = in_single_tile_size}}}});
-
-    // c_in1 -> reduce scalar
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in1_tiles * scaler_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = scaler_cb_data_format,
-            .page_size = scaler_tile_size}}}});
-
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args.emplace(PRE1D_INPUT_T, input_mesh);
+    run_args.tensor_args.emplace(PRE1D_OUTPUT_T, output_mesh);
     if (fuse_pre_add) {
-        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
-        // dtype than the input is read correctly; add_tiles handles the per-operand format.
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = res_tiles * inb_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = inb_data_format,
-                .page_size = inb_single_tile_size}}}});
-        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = fused_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size}}}});
+        run_args.tensor_args.emplace(PRE1D_RESIDUAL_T, b->mesh_tensor());
     }
 
-    // LN and RMS shared intermediates
-    // c_intermed0 -> x^2
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed0_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // Output
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = out0_tiles * out_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-            .data_format = out_data_format,
-            .page_size = out_single_tile_size}}}});
-
-    return program_descriptor;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 // =============================================================================
 // LayerNormPreAllGather2DProgramFactory - 2D core grid operation
 // =============================================================================
 
-tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::create_program_artifacts(
     const LayerNormPreAllGatherParams& operation_attributes,
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
@@ -311,19 +412,24 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
 
     uint32_t num_tile_rows = NC * Ht;
 
-    IDevice* device = a.device();
+    const auto& input_mesh = a.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    IDevice* device = a.device();
 
     uint32_t block_size = 1;
     uint32_t writer_block_size = 1;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scaler_cb_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format = cb_data_format;
+    // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
+    // Quasar has no SFPU Accurate reduce; fall back to FPU.
+    const bool unpack_fp32_active =
+        (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
+         !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
@@ -379,40 +485,226 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
 
     std::vector<CoreRange> merge_core_ranges_vec;
+    merge_core_ranges_vec.reserve(cores_x);
     for (uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
         merge_core_ranges_vec.emplace_back(CoreRange(merge_core, merge_core));
     }
-    CoreRangeSet merge_cores(merge_core_ranges_vec);
+    CoreRangeSet merge_cores(std::move(merge_core_ranges_vec));
 
-    // Translate CreateSemaphore(...) to SemaphoreDescriptor with id 0.
-    constexpr uint32_t reducer_semaphore_id = 0;
+    // Everything below the merge row. The compute kernel is instantiated separately over this set
+    // because only the merge row produces into the final output buffer, and a buffer whose producer
+    // covers nodes its consumer does not is rejected: a local buffer needs one producer and one
+    // consumer on every node it lives on.
+    CoreRangeSet worker_cores;
+    if (cores_y > 1) {
+        worker_cores = CoreRangeSet(std::vector{CoreRange({0, 1}, {cores_x - 1, cores_y - 1})});
+    }
+    const bool has_worker_cores = worker_cores.num_cores() > 0;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        block_size,
-        reducer_semaphore_id,
-        cores_y,
-    };
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
     if (fuse_pre_add) {
-        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
+        fuse_defines.emplace("FUSE_PRE_ADD", "1");
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    dfbs.push_back(make_dfb(PRE2D_INPUT, in0_tiles, in_single_tile_size, in_data_format));
+    dfbs.push_back(make_dfb(PRE2D_REDUCE, in1_tiles, scaler_tile_size, scaler_cb_data_format));
+    if (fuse_pre_add) {
+        // Residual b. Sized in the residual's own data format so a residual with a different dtype
+        // than the input is read correctly; add_tiles handles the per-operand format.
+        dfbs.push_back(make_dfb(PRE2D_RESIDUAL, res_tiles, inb_single_tile_size, inb_data_format));
+        // Fused a + b (the compute kernel writes into this and reads it back downstream)
+        dfbs.push_back(make_dfb(PRE2D_FUSED, fused_tiles, single_tile_size, cb_data_format));
+    }
+    dfbs.push_back(make_dfb(PRE2D_X2, intermed0_tiles, single_tile_size, cb_data_format));
+    // Cross-core merge buffer. Each of the cores_y worker rows writes one partial-stat tile into this
+    // buffer on the merge core, and the merge core's compute wait_front/add_tiles/pop_front over
+    // cores_y tiles. Size it by the gather count (cores_y), NOT the per-core width
+    // (tiles_per_core_y): when cores_y > tiles_per_core_y (i.e. cores_y^2 > Wt, e.g. grid.y=8 with
+    // Wt=32 -> cores_y=8, tiles_per_core_y=4) the old sizing was too small and workers with
+    // y >= tiles_per_core_y wrote past the allocation, corrupting adjacent SRAM (with a matching
+    // over-read on the compute side).
+    dfbs.push_back(make_dfb(PRE2D_X2_MERGE, cores_y, single_tile_size, cb_data_format));
+    dfbs.push_back(make_dfb(PRE2D_PARTIAL_OUT, out0_tiles, single_tile_size, cb_data_format));
+    dfbs.push_back(make_dfb(PRE2D_ZERO, out0_tiles, single_tile_size, cb_data_format));
+    dfbs.push_back(make_dfb(PRE2D_OUT_FINAL, out0_tiles, out_single_tile_size, out_data_format));
 
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> compute_defines;
-    reader_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
-    compute_defines["FUSE_PRE_ADD"] = fuse_pre_add ? "1" : "0";
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelSpec reader{
+        .unique_id = PRE2D_READER,
+        .source = PRE2D_READER_KERNEL,
+        .compiler_options = {.defines = fuse_defines},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_REDUCE,
+                    .accessor_name = "reduce",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_X2_MERGE,
+                    .accessor_name = "x2_merge",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_ZERO,
+                    .accessor_name = "zero",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_PARTIAL_OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            },
+        .semaphore_bindings = {m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_REDUCER, .accessor_name = "reducer"}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_INPUT_T, .accessor_name = "src"}},
+        .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    if (fuse_pre_add) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = PRE2D_RESIDUAL_T, .accessor_name = "res_src"});
+    }
 
-    std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
+    m2::KernelSpec writer{
+        .unique_id = PRE2D_WRITER,
+        .source = PRE_WRITER_KERNEL,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = PRE2D_OUT_FINAL, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_OUTPUT_T, .accessor_name = "dst"}},
+        .compile_time_args = {{"blk", writer_block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
-    // Build runtime args per core.  Buffer base addresses are bound via
-    // emplace_runtime_args() so the framework patches them on cache hits.
-    KernelDescriptor reader_kernel_desc;
-    KernelDescriptor writer_kernel_desc;
-    KernelDescriptor compute_kernel_desc;
+    // Two instances of the one compute source, over disjoint node sets: the merge row additionally
+    // reduces the column's partials into the final output buffer, so only it binds that buffer. The
+    // merge flag is a compile-time define rather than a runtime arg because it selects which buffers
+    // are bound, and an unbound handle cannot be named even on a dead branch.
+    auto make_compute = [&](const m2::KernelSpecName& unique_id, bool is_merge_core) {
+        auto defines = fuse_defines;
+        if (is_merge_core) {
+            defines.emplace("IS_MERGE_CORE", "1");
+        }
+        m2::KernelSpec compute{
+            .unique_id = unique_id,
+            .source = PRE2D_COMPUTE_KERNEL,
+            .compiler_options = {.defines = std::move(defines), .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {
+                    m2::DFBBinding{
+                        .dfb_spec_name = PRE2D_INPUT,
+                        .accessor_name = "in0",
+                        .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                    m2::DFBBinding{
+                        .dfb_spec_name = PRE2D_REDUCE,
+                        .accessor_name = "reduce",
+                        .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                    m2::DFBBinding{
+                        .dfb_spec_name = PRE2D_X2_MERGE,
+                        .accessor_name = "x2_merge",
+                        .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                    m2::DFBBinding{
+                        .dfb_spec_name = PRE2D_ZERO,
+                        .accessor_name = "zero",
+                        .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                    m2::DFBBinding{
+                        .dfb_spec_name = PRE2D_PARTIAL_OUT,
+                        .accessor_name = "out",
+                        .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                },
+            .compile_time_args =
+                {{"NCHt", tiles_per_core_x},
+                 {"Wt", tiles_per_core_y},
+                 {"blk", block_size},
+                 {"num_cores_y", cores_y},
+                 {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+            .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        };
+        bind_self_loop(compute, PRE2D_X2, "x2");
+        if (fuse_pre_add) {
+            bind_self_loop(compute, PRE2D_FUSED, "fused");
+            compute.dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = PRE2D_RESIDUAL,
+                .accessor_name = "res",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        if (is_merge_core) {
+            compute.dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = PRE2D_OUT_FINAL,
+                .accessor_name = "out_final",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        }
+        auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
+        // The reduce scaler and the FPU merge's zero tile are always consumed through SrcA/SrcB.
+        if (compute_gen1.enable_32_bit_dest) {
+            auto unpack_operand = [&](const m2::DFBSpecName& dfb) {
+                if (unpack_fp32_active) {
+                    unpack_via_dest(compute_gen1, dfb);
+                } else {
+                    unpack_via_src(compute_gen1, dfb);
+                }
+            };
+            if (in_data_format == tt::DataFormat::Float32) {
+                unpack_operand(PRE2D_INPUT);
+            }
+            if (scaler_cb_data_format == tt::DataFormat::Float32) {
+                unpack_via_src(compute_gen1, PRE2D_REDUCE);
+            }
+            if (cb_data_format == tt::DataFormat::Float32) {
+                unpack_operand(PRE2D_X2);
+                if (fuse_pre_add) {
+                    unpack_operand(PRE2D_FUSED);
+                }
+                // The merge sums the column's partials on the SFPU when accurate, add_tiles
+                // otherwise; dfb::zero is only the FPU path's operand.
+                unpack_operand(PRE2D_X2_MERGE);
+                unpack_via_src(compute_gen1, PRE2D_ZERO);
+            }
+            if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
+                unpack_operand(PRE2D_RESIDUAL);
+            }
+        }
+        return compute;
+    };
+
+    m2::Group<m2::KernelSpec> kernels;
+    kernels.push_back(std::move(reader));
+    kernels.push_back(std::move(writer));
+    kernels.push_back(make_compute(PRE2D_COMPUTE_MERGE, /*is_merge_core=*/true));
+    if (has_worker_cores) {
+        kernels.push_back(make_compute(PRE2D_COMPUTE_WORKER, /*is_merge_core=*/false));
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = PRE2D_INPUT_T, .spec = input_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = PRE2D_OUTPUT_T, .spec = output_mesh.tensor_spec()});
+    if (fuse_pre_add) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = PRE2D_RESIDUAL_T, .spec = b->mesh_tensor().tensor_spec()});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime arguments
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelRunArgs reader_run{.kernel = PRE2D_READER};
+    m2::KernelRunArgs writer_run{.kernel = PRE2D_WRITER};
 
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
@@ -425,160 +717,54 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
-            KernelDescriptor::RTArgList reader_args;
-            reader_args.push_back(a.buffer());
-            reader_args.push_back(tiles_per_core_x);
-            reader_args.push_back(tiles_per_core_y);
-            reader_args.push_back(in_tile_offset);
-            reader_args.push_back(static_cast<uint32_t>(is_merge_core));
-            reader_args.push_back(static_cast<uint32_t>(merge_core.x));
-            reader_args.push_back(static_cast<uint32_t>(merge_core.y));
-            reader_args.push_back(y);
-            if (fuse_pre_add) {
-                reader_args.push_back(b->buffer());
-            }
-            reader_kernel_desc.emplace_runtime_args(core, reader_args);
-            compute_kernel_desc.emplace_runtime_args(core, {static_cast<uint32_t>(is_merge_core)});
+            m2::AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                core,
+                {{"NCHt", tiles_per_core_x},
+                 {"Wt", tiles_per_core_y},
+                 {"tile_offset", in_tile_offset},
+                 {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
+                 {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},
+                 {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
+                 {"y", y}});
             if (is_merge_core) {
-                writer_kernel_desc.emplace_runtime_args(
-                    core, {output.buffer(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
+                m2::AddRuntimeArgsForNode(
+                    writer_run.runtime_arg_values,
+                    core,
+                    {{"num_tiles", num_tile_rows_per_core * out0_tiles}, {"tile_offset", out_tile_offset}});
             }
         }
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
+    //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
-
-    // Semaphore: reducer_semaphore_id (id 0)
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reducer_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
-
-    // Reader kernel
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_layernorm_preallgather_2d.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer kernel (only on merge cores)
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = merge_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Compute kernel
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_pre_allgather_2d.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = std::move(compute_args);
-    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
-    ////////////////////////////////////////////////////////////////////////////
-    // c_in0 -> a
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in0_tiles * in_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = in_data_format,
-            .page_size = in_single_tile_size}}}});
-
-    // c_in1 -> reduce scalar
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in1_tiles * scaler_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = scaler_cb_data_format,
-            .page_size = scaler_tile_size}}}});
-
-    if (fuse_pre_add) {
-        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
-        // dtype than the input is read correctly; add_tiles handles the per-operand format.
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = res_tiles * inb_single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = inb_data_format,
-                .page_size = inb_single_tile_size}}}});
-        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
-        program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = fused_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size}}}});
+    m2::Group<m2::WorkUnitSpec> work_units;
+    work_units.push_back(m2::WorkUnitSpec{
+        .name = "merge", .kernels = {PRE2D_READER, PRE2D_WRITER, PRE2D_COMPUTE_MERGE}, .target_nodes = merge_cores});
+    if (has_worker_cores) {
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "worker", .kernels = {PRE2D_READER, PRE2D_COMPUTE_WORKER}, .target_nodes = worker_cores});
     }
 
-    // LN and RMS shared intermediates
-    // c_intermed0 -> x^2
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = intermed0_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
+    m2::ProgramSpec spec{
+        .name = "layernorm_pre_all_gather_2d",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dfbs),
+        .semaphores = {m2::SemaphoreSpec{.unique_id = PRE2D_REDUCER, .target_nodes = all_cores}},
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
 
-    // c_intermed1 (CB 15)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = tiles_per_core_y * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+    run_args.tensor_args.emplace(PRE2D_INPUT_T, input_mesh);
+    run_args.tensor_args.emplace(PRE2D_OUTPUT_T, output_mesh);
+    if (fuse_pre_add) {
+        run_args.tensor_args.emplace(PRE2D_RESIDUAL_T, b->mesh_tensor());
+    }
 
-    // c_out (CB 16) - per-core partial output
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = out0_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_zero (CB 13)
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = out0_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
-
-    // c_out_final (CB 14) - only on merge cores
-    program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = out0_tiles * out_single_tile_size,
-        .core_ranges = merge_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-            .data_format = out_data_format,
-            .page_size = out_single_tile_size}}}});
-
-    return program_descriptor;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

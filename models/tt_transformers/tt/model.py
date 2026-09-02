@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -152,9 +153,16 @@ class Transformer(LightweightModule):
         )
 
         # Initialize on-device sampling if supported
-        # Sampling on device is supported only if each device has maximum logits size of 64*1024
-        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        # Sampling on device is supported only if each device holds at most TOPK_MAX_WIDTH logits.
+        # On a single device TTSampling cuts the padded vocab into as many same-device chunks as
+        # needed (power-of-two, each <= TOPK_MAX_WIDTH), so any vocab it can cut tile-aligned is
+        # supported (#53064); anything it cannot falls back to host sampling.
+        padded_vocab_size = getattr(self.args, "padded_vocab_size", None) or self.args.vocab_size
+        if list(self.mesh_device.shape) != [1, 1]:
+            vocab_fits_on_device = padded_vocab_size // self.args.num_devices <= TOPK_MAX_WIDTH
+        else:
+            vocab_fits_on_device = TTSampling.num_single_device_vocab_splits(padded_vocab_size) is not None
+        self._supports_on_device_sampling = prefetcher is None and vocab_fits_on_device
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -163,6 +171,66 @@ class Transformer(LightweightModule):
             )
         else:
             self.sampling = None
+
+    def update_weights(
+        self,
+        hf_state_dict: dict[str, ttnn.Tensor],
+        *,
+        hf_rope: bool = False,
+    ) -> None:
+        """In-place replace every weight from an HF-keyed dict of on-device 4D
+        ttnn tensors (replicated, DRAM-interleaved, TILE, bf16). Keys follow HF
+        safetensors naming; shapes are HF Linear/gamma/embedding wrapped in two
+        leading unit dims.
+
+        Strict by construction: every required key must be present (missing ->
+        ``KeyError``) and every provided key consumed by exactly one leaf
+        ``.update()`` (extras -> ``ValueError``). No "loose" mode -- silent
+        partial updates are an expensive class of bug.
+
+        ``hf_rope=False`` (default): caller has already permuted Q/K rows into
+        this model's convention (right for the ttml -> TTT transfer, both store
+        Meta-permuted rows). ``hf_rope=True`` defers HF -> Meta permutation to
+        ``Attention.update`` (currently raises -- kernel not wired up).
+
+        Tied embeddings: the protocol still requires both
+        ``model.embed_tokens.weight`` and ``lm_head.weight`` (typically the same
+        source tensor), keeping dispatch one-to-one with device buffers.
+
+        Every existing buffer keeps its device allocation, so captured traces
+        and the prefetcher's recorded addresses stay valid.
+        """
+        unconsumed = set(hf_state_dict.keys())
+
+        def consume(key: str) -> ttnn.Tensor:
+            if key not in hf_state_dict:
+                raise KeyError(f"Transformer.update_weights: missing required HF key {key!r}")
+            unconsumed.discard(key)
+            return hf_state_dict[key]
+
+        # Top-level (always required).
+        self.embd.update(embed_tokens=consume("model.embed_tokens.weight"))
+        self.norm.update(weight=consume("model.norm.weight"))
+        self.lm_head.update(weight=consume("lm_head.weight"))
+
+        # Per-layer: prefix-strip into a layer-local dict, dispatch.
+        for i, block in enumerate(self.layers):
+            prefix = f"model.layers.{i}."
+            layer_dict = {}
+            for key in list(hf_state_dict.keys()):
+                if key.startswith(prefix):
+                    layer_dict[key[len(prefix) :]] = hf_state_dict[key]
+                    unconsumed.discard(key)
+            block.update_weights(layer_dict, hf_rope=hf_rope)
+
+        if unconsumed:
+            sample = sorted(unconsumed)[:10]
+            raise ValueError(
+                f"Transformer.update_weights: {len(unconsumed)} HF key(s) not "
+                f"consumed by any leaf .update(). This usually means a typo, "
+                f"a stray weight, or a layer-index off-by-one. "
+                f"Showing up to 10: {sample}"
+            )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
@@ -252,6 +320,20 @@ class Transformer(LightweightModule):
         )
         return self._apply_norm_and_lm_head(user_tokens)
 
+    def _apply_final_logit_softcapping(self, logits):
+        """Gemma-2 final logit soft-capping: logits -> tanh(logits / cap) * cap.
+
+        No-op unless args.final_logit_softcapping is set (only Gemma-2 sets it), so
+        this leaves every other model's output path unchanged.
+        """
+        cap = self.args.final_logit_softcapping
+        if cap is None or cap <= 0:
+            return logits
+        logits = ttnn.multiply(logits, 1.0 / cap)
+        logits = ttnn.tanh(logits)
+        logits = ttnn.multiply(logits, cap)
+        return logits
+
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
         x = self.norm(
@@ -261,6 +343,7 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
+        logits = self._apply_final_logit_softcapping(logits)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
@@ -943,6 +1026,7 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        x = self._apply_final_logit_softcapping(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

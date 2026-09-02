@@ -244,6 +244,55 @@ def test_move_sharded_custom_grid(device):
     )
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_move_sharded_program_cache(dtype, device):
+    """Cache-hit correctness for the sharded factory: reallocate inputs each iteration so buffer
+    addresses (and the address-derived reader args chunk = dst_addr - src_addr) differ on every hit,
+    while the program stays a single cache entry. Guards the override_runtime_arguments re-derivation."""
+    torch.manual_seed(2024)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    core_count = min(8, compute_grid_size.x * compute_grid_size.y)
+    height_per_core = 128
+    width = 64
+    shape = [1, 1, core_count * height_per_core, width]
+    layout = ttnn.ROW_MAJOR_LAYOUT
+    shard_grid = get_shard_grid_from_num_cores(core_count, device)
+    shard_spec = ttnn.ShardSpec(shard_grid, [height_per_core, width], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+    # A varying number of live dummy shards shifts the allocator so src/dst land at different
+    # addresses (hence a different chunk size) on each iteration while the hash is unchanged.
+    for n_dummy in [0, 1, 2, 1]:
+        dummies = [
+            ttnn.from_torch(
+                torch.zeros(shape, dtype=torch_dtype),
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=mem_config,
+            )
+            for _ in range(n_dummy)
+        ]
+        torch_tensor = torch.randn(shape, dtype=torch_dtype)
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=mem_config)
+        for d in dummies:
+            d.deallocate()
+
+        output = ttnn.move(tt_tensor, memory_config=mem_config)
+        got = output.cpu().to(layout).to_torch().to(torch_tensor.dtype)
+        assert torch.equal(got, torch_tensor), f"sharded move mismatch with {n_dummy} dummy shards"
+        output.deallocate()
+        tt_tensor.deallocate()
+
+    assert device.num_program_cache_entries() == 1
+
+
 def test_move_sharded_to_interleaved_rejected(device, expect_error):
     """Verify move rejects sharded-to-interleaved conversion (output must be sharded)."""
     torch.manual_seed(42)

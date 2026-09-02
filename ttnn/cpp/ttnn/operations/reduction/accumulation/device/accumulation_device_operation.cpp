@@ -89,7 +89,7 @@ AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::co
             : ((attributes.dtype == DataType::INVALID) ? tensor_args.input_tensor.dtype() : attributes.dtype);
 
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
-    return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
+    return tt::tt_metal::TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
 }
 
 AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::create_output_tensors(

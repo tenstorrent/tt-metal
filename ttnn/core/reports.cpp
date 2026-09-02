@@ -44,6 +44,11 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
     std::vector<BufferInfo> buffer_infos;
     for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        // Keep the geometric growth of the vector while making sure the buffers of this device fit.
+        const size_t required_size = buffer_infos.size() + allocated_buffers.size();
+        if (required_size > buffer_infos.capacity()) {
+            buffer_infos.reserve(std::max(required_size, buffer_infos.capacity() * 2));
+        }
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             auto device_id = device->id();
@@ -114,6 +119,12 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
             auto num_banks = device->allocator()->get_num_banks(buffer->buffer_type());
             auto buffer_type = buffer->buffer_type();
 
+            // Keep the geometric growth of the vector while making sure the pages of this buffer fit.
+            const size_t required_size = buffer_page_infos.size() + num_pages;
+            if (required_size > buffer_page_infos.capacity()) {
+                buffer_page_infos.reserve(std::max(required_size, buffer_page_infos.capacity() * 2));
+            }
+
             if (is_sharded(buffer->buffer_layout())) {
                 const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
                 for (auto mapped_page : buffer_page_mapping) {
@@ -136,7 +147,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                 uint32_t bank_id = 0;
                 for (uint32_t page_index = 0; page_index < num_pages; page_index++) {
                     auto page_address = buffer->page_address(bank_id, page_index);
-                    CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
+                    tt::tt_metal::CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
                     bank_id = (bank_id + 1) % num_banks;
 
                     buffer_page_infos.push_back(BufferPageInfo{

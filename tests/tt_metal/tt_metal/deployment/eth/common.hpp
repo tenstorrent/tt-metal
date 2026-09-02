@@ -8,6 +8,7 @@
 #include <chrono>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -286,7 +287,7 @@ static void wait_to_finish_eth_timeout_cores(
     }
 
     for (const auto& [dev, workload] : devices) {
-        detail::CompileProgram(dev->get_devices()[0], *programs[dev]);
+        programs[dev]->impl().compile(dev.get());
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 
@@ -863,6 +864,20 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
     }
 
     return "unknown";
+}
+
+// Returns true if the ethernet core connects to another chip within this cluster (i.e. it is safe to
+// call get_connected_ethernet_core on it). Cross-host cores (e.g. QSFP cables wired to another
+// Galaxy) show up as active/linked-up but live in the remote-device connection map, so calling
+// get_connected_ethernet_core on them fatals with "connects to a remote mmio device".
+[[maybe_unused]]
+static bool eth_core_connects_within_cluster(IDevice* device, const CoreCoord& logical_core) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(device->id());
+    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+    const auto& within_cluster = cluster.get_ethernet_connections();
+    auto it = within_cluster.find(device->id());
+    return it != within_cluster.end() && it->second.contains(eth_chan);
 }
 
 [[maybe_unused]]

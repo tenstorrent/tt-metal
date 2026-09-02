@@ -197,7 +197,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     }
 
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -712,6 +712,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     std::vector<CoreCoord> termination_master_virtual_cores;
     std::vector<uint32_t> termination_master_semaphore_ids;
     if (use_mux) {
+        termination_master_cores.reserve(num_links);
+        termination_master_virtual_cores.reserve(num_links);
+        termination_master_semaphore_ids.reserve(num_links);
         for (uint32_t link = 0; link < num_links; link++) {
             uint32_t master_worker_idx = link * workers_per_link;  // First worker on this link
             const auto& master_core = sender_cores[master_worker_idx];

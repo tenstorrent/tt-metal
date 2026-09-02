@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/experimental/quasar/move/move.hpp"  // quasar move (legacy ttnn::move uses the unported DataMovementKernel)
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
@@ -356,7 +357,9 @@ static std::vector<Tensor> pool2d_L1(
     }
 
     if (reallocate_halo_output) {
-        haloed_tensor = ttnn::move(haloed_tensor);
+        // Quasar move: the standard ttnn::move dispatches to MoveDeviceOperation, which builds a legacy
+        // DataMovementKernel (unsupported on Quasar). Mirrors the conv2d quasar-move call sites.
+        haloed_tensor = ttnn::operations::experimental::quasar::move(haloed_tensor);
     }
 
     // NOLINTBEGIN(bugprone-use-after-move)
@@ -912,8 +915,8 @@ static std::vector<Tensor> pool2d_DRAM(
     }
 
     // Create output tensors for DRAM slicing
-    Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
-        TensorSpec(
+    Tensor dram_output_tensor = ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, channels}),
             tt::tt_metal::TensorLayout(
                 dtype,

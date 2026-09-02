@@ -35,7 +35,6 @@ namespace tt::tt_metal {
 
 class IDevice;
 class DeviceManager;
-class DispatchMemMap;
 class dispatch_core_manager;
 enum DispatchWorkerType : uint32_t;
 
@@ -93,7 +92,6 @@ private:
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
     GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
-    std::unique_ptr<DispatchMemMap> dispatch_mem_map_[enchantum::to_underlying(CoreType::COUNT)];
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;

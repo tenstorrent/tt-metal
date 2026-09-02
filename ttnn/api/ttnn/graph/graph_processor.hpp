@@ -11,9 +11,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <any>
@@ -67,6 +70,19 @@ public:
         uint64_t addr,
         uint64_t size,
         bool is_globally_allocated,
+        const tt::tt_metal::IDevice* device) override;
+
+    void track_allocate_dataflow_buffer(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
+        bool borrows_memory,
+        const tt::tt_metal::IDevice* device) override;
+
+    void track_allocate_scratchpad(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
         const tt::tt_metal::IDevice* device) override;
 
     void track_deallocate_cb(const tt::tt_metal::IDevice* device) override;
@@ -160,12 +176,22 @@ public:
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
+    static bool has_active_instance();
+    static void set_pending_program_factory(std::string type, std::size_t index, bool cache_hit);
+
     // Detailed buffer tracing control
     static void enable_detailed_buffer_tracing();
     static void disable_detailed_buffer_tracing();
     static bool is_detailed_buffer_tracing_enabled();
 
 private:
+    struct PendingProgramFactory {
+        std::string type;
+        std::size_t index = 0;
+        bool cache_hit = false;
+    };
+    static thread_local std::optional<PendingProgramFactory> pending_program_factory_;
+
     static std::atomic<bool> capture_detailed_buffer_tracing_;
 };
 

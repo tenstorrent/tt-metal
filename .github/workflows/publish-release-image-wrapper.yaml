@@ -22,6 +22,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -33,7 +34,7 @@ jobs:
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false
   create-image-tag-name:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
     steps:
@@ -53,6 +54,7 @@ jobs:
       - check-harbor
       - build-artifact
       - create-image-tag-name
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.create-image-tag-name.result == 'success' }}
     secrets: inherit
     with:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}

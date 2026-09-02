@@ -9,10 +9,9 @@
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
@@ -91,61 +90,60 @@ void validate_rm_preconditions(
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
 }
 
-std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
-    // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8; the W path omits it, so the source TensorAccessor args follow at slot 8 (W)
-    // or slot 9 (H). The kernel is templated on REDUCE_DIM so the unused slot is genuinely dropped.
-    // Only supports ReduceOpDim::W or ReduceOpDim::H
-    std::vector<uint32_t> args = {
-        scaler_bits,
-        plan.W_logical,
-        plan.src_datum_size,
-        plan.padding_identity_bits,
-        plan.Wt,
-        plan.wt_tiles_per_chunk,
-        plan.rm_rows_per_tile,
-        plan.ht_tiles_per_chunk,
-    };
-    if (dim == tt::tt_metal::ReduceOpDim::H) {
-        args.push_back(plan.H_logical);
-    }
-    tt::tt_metal::TensorAccessorArgs(src).append_to(args);
-    return args;
-}
-
-std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
-    // Slot 0 (datum_bytes) is shared. The writer's REDUCE_COL (H) branch additionally consumes
-    // Wt, W_logical, and wt_tiles_per_chunk at slots 1-3; the W path omits them, so the dst
-    // TensorAccessor args follow at slot 1 (W) or slot 4 (H). The kernel is templated on REDUCE_DIM
-    // so the unused slots are genuinely dropped.
-    // Only supports ReduceOpDim::W or ReduceOpDim::H
-    std::vector<uint32_t> args = {
-        plan.dst_datum_size,
-    };
-    if (dim == tt::tt_metal::ReduceOpDim::H) {
-        args.push_back(plan.Wt);
-        args.push_back(plan.W_logical);
-        args.push_back(plan.wt_tiles_per_chunk);
-    }
-    tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
-    return args;
-}
-
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices, uint32_t slice_Ht) {
+    // Both reduce dims get the same set. Only the reader's REDUCE_COL (H) branch reads H_logical and
+    // the H-axis-split geometry (num_h_slices / slice_Ht), but a compile-time arg is free on the
+    // path that ignores it, and the name has to exist in every build of the source: name lookup in
+    // the discarded `if constexpr` branch happens regardless of the condition.
     return {
-        Ht_arg,
-        plan.Wt,
-        1u,  // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
-        post_mul_scaler_bits,
-        plan.wt_tiles_per_chunk,
-        plan.ht_tiles_per_chunk,
+        {"scaler_bits", scaler_bits},
+        {"W_logical", plan.W_logical},
+        {"elem_bytes", plan.src_datum_size},
+        {"padding_identity_bits", plan.padding_identity_bits},
+        {"Wt", plan.Wt},
+        {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
+        {"rm_rows_per_tile", plan.rm_rows_per_tile},
+        {"ht_tiles_per_chunk", plan.ht_tiles_per_chunk},
+        {"H_logical", plan.H_logical},
+        {"num_h_slices", num_h_slices},
+        {"slice_Ht", slice_Ht == 0 ? plan.Ht_rm : slice_Ht},
+    };
+}
+
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
+    const RmPlan& plan, bool tile_output, uint32_t num_h_slices) {
+    // As above: everything past datum_bytes is read only by the writer's REDUCE_COL (H) branch, but
+    // both dims declare the full set so the names resolve in either build. tile_output is mirrored
+    // by the REDUCE_RM_TILE_OUTPUT define, which is what the kernel actually branches on.
+    return {
+        {"datum_bytes", plan.dst_datum_size},
+        {"Wt", plan.Wt},
+        {"W_logical", plan.W_logical},
+        {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
+        {"tile_output", tile_output ? 1u : 0u},
+        {"num_h_slices", num_h_slices},
+        {"out_tile_rows", tt::div_up(num_h_slices, plan.rm_rows_per_tile)},
+    };
+}
+
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
+    return {
+        {"Ht", Ht_arg},
+        {"Wt", plan.Wt},
+        // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
+        {"NC", 1u},
+        {"post_mul_scaler_bits", post_mul_scaler_bits},
+        {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
+        {"ht_tiles_per_chunk", plan.ht_tiles_per_chunk},
+        // enable_fp32_sfpu: route Float32 through the SFPU (full fp32) instead of the FPU (tf32)
+        {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
     };
 }
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
+    const ttnn::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
@@ -171,7 +169,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::Layout output_layout) {
     using namespace tt::tt_metal;
 
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         output_shape,
         TensorLayout(output_dtype, PageConfig(output_layout), MemoryConfig(output_mem_config.buffer_type())));
 
@@ -208,7 +206,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
-        // appropriate TensorSpec builder.
+        // appropriate tt::tt_metal::TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return tensor_spec.width_sharded(grid, orientation);
         }
@@ -239,7 +237,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec_copy.shard_shape.rank() > 1) {
             nd_shard_spec_copy.shard_shape[-2] = 1;
         }
-        return tensor_spec.sharded(std::move(nd_shard_spec_copy), TensorSpec::ShardShapeAlignment::REQUIRED);
+        return tensor_spec.sharded(
+            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
     // Guard against unexpected new memory layouts.
@@ -267,7 +266,7 @@ void validate_reduce_sharded_buffer_types(
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
     const auto& shape = input_tensor.padded_shape();

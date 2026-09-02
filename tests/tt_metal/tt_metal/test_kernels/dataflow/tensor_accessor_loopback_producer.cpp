@@ -12,19 +12,22 @@
 //   arg 0: number of pages to transfer
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
 
+    Noc noc;
     TensorAccessor accessor(tensor::input_tensor);
     DataflowBuffer buf(dfb::input_dfb);
     uint32_t entry_size = buf.get_entry_size();
 
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {
         buf.reserve_back(1);
-        uint64_t src_noc_addr = accessor.get_noc_addr(page_id);
-        noc_async_read(src_noc_addr, buf.get_write_ptr(), entry_size);
-        noc_async_read_barrier();
+        noc.async_read(accessor, buf, entry_size, {.page_id = page_id}, {});
+        noc.async_read_barrier();
         buf.push_back(1);
     }
 }

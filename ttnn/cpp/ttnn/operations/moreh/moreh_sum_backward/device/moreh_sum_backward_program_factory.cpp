@@ -3,16 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <vector>
 
 #include "moreh_sum_backward_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
     const auto rank = padded_shape.rank();
@@ -56,14 +59,29 @@ std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
     return {logical_shape, padded_shape};
 }
 
-static constexpr const char* READER_KERNEL_PATH =
+namespace {
+
+// Resource names for the Metal 2.0 spec.
+const DFBSpecName C0_IN{"c0_in"};      // legacy c_0 (input)
+const DFBSpecName C1_ZERO{"c1_zero"};  // legacy c_1 (zero tile)
+const DFBSpecName C16_OUT{"c16_out"};  // legacy c_16 (output)
+const TensorParamName OUTPUT_GRAD{"output_grad"};
+const TensorParamName INPUT_GRAD{"input_grad"};
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE_1{"compute_group_1"};
+const KernelSpecName COMPUTE_2{"compute_group_2"};
+
+constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
-static constexpr const char* WRITER_KERNEL_PATH =
+constexpr const char* WRITER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/writer_moreh_sum_backward.cpp";
-static constexpr const char* COMPUTE_KERNEL_PATH =
+constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
 
-ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -135,104 +153,149 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             split_work_to_cores(grid, num_input_grad_tiles);
+    bool has_core_group_2 = !core_group_2.ranges().empty();
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         ProgramSpec
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor desc;
+    ProgramSpec spec;
+    spec.name = "moreh_sum_backward";
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_0,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = OUTPUT_GRAD, .spec = output_grad.tensor_spec()},
+        TensorParameter{.unique_id = INPUT_GRAD, .spec = input_grad.tensor_spec()},
+    };
+
+    // DataflowBuffers (formerly the c_0 / c_1 / c_16 buffers). All three are compute-bound, so each
+    // carries its data-format metadata. Sizes taken verbatim from the legacy buffer total sizes.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = C0_IN,
+        .entry_size = cb_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = cb_data_format,
     });  // input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_1,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = C1_ZERO,
+        .entry_size = cb_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = cb_data_format,
     });  // zero
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * cb_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_16,
-            .data_format = cb_data_format,
-            .page_size = cb_tile_size,
-        }}},
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = C16_OUT,
+        .entry_size = cb_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = cb_data_format,
     });  // output
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      DataMovementKernel SetUp
+    //                      Compute hardware config
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::CompileTimeArgs reader_ct_args = {input_grad_rank};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_ct_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = READER_KERNEL_PATH;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.reserve(num_cores);
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_ct_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.reserve(num_cores);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      ComputeKernel SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::Defines compute_defines;
-    if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+    // Style B: the legacy factory built a Metal ComputeConfigDescriptor directly from the
+    // resolved compute-kernel-config scalars. Reproduce those exact values on ComputeGen1Config,
+    // minding the two non-1:1 transforms (math_approx_mode bool->Precision; dst_full_sync_en
+    // inverted into double_buffer_dest).
+    ComputeGen1Config compute_cfg{
+        .fpu_math_fidelity = math_fidelity,
+        .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !dst_full_sync_en,
+    };
+    // Legacy set no unpack_to_dest_mode (all CBs defaulted to UnpackToSrc). The Metal 2.0 validator
+    // requires an explicit unpack_modes entry whenever a compute kernel consumes a Float32 DFB with
+    // enable_32_bit_dest = true. The compute kernel consumes c0_in and c1_zero; add explicit
+    // UnpackToSrc entries in that case, faithful to the legacy default.
+    if (cb_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+        compute_cfg.unpack_modes.emplace(C0_IN, UnpackMode::UnpackToSrc);
+        compute_cfg.unpack_modes.emplace(C1_ZERO, UnpackMode::UnpackToSrc);
     }
 
-    ComputeConfigDescriptor compute_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (fp32_dest_acc_en) {
+        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      KernelSpecs
+    ////////////////////////////////////////////////////////////////////////////
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = READER_KERNEL_PATH,
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = C0_IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = C1_ZERO, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD, .accessor_name = "output_grad"}},
+        .compile_time_args = {{"input_grad_rank", input_grad_rank}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_output_tiles", "start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    // The three variable-length per-dim RTA blocks (output_grad_dim, input_grad_dim, need_bcast_dim,
+    // each of length input_grad_rank) are passed as positional runtime varargs (read kernel-side via
+    // get_vararg). Count is fixed per program instantiation.
+    reader.advanced_options.num_runtime_varargs = 3 * input_grad_rank;
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = WRITER_KERNEL_PATH,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = C16_OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD, .accessor_name = "input_grad"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    // Compute kernel for core_group_1
-    KernelDescriptor compute_desc_1;
-    compute_desc_1.kernel_source = COMPUTE_KERNEL_PATH;
-    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = {num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    compute_desc_1.defines = compute_defines;
-    compute_desc_1.config = compute_config;
+    auto make_compute = [&](const KernelSpecName& id, uint32_t num_output_tiles) {
+        return KernelSpec{
+            .unique_id = id,
+            .source = COMPUTE_KERNEL_PATH,
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = C0_IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = C1_ZERO, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = C16_OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args =
+                {{"num_output_tiles", num_output_tiles},
+                 {"wt_need_bcast", need_bcast_dim[0]},
+                 {"ht_need_bcast", need_bcast_dim[1]}},
+            .hw_config = ComputeHardwareConfig{compute_cfg},
+        };
+    };
+    KernelSpec compute_1 = make_compute(COMPUTE_1, num_cols_per_core_group_1);
 
-    // Compute kernel for core_group_2 (may be empty)
-    KernelDescriptor compute_desc_2;
-    bool has_core_group_2 = !core_group_2.ranges().empty();
+    spec.kernels = {reader, writer, compute_1};
     if (has_core_group_2) {
-        compute_desc_2.kernel_source = COMPUTE_KERNEL_PATH;
-        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = {num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-        compute_desc_2.defines = compute_defines;
-        compute_desc_2.config = compute_config;
+        spec.kernels.push_back(make_compute(COMPUTE_2, num_cols_per_core_group_2));
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      RuntimeArgs SetUp
+    //                      WorkUnitSpecs
     ////////////////////////////////////////////////////////////////////////////
+    // Each work unit co-locates the reader, writer, and that group's compute kernel on its node set,
+    // so every DFB's producer and consumer land together per node (matches the proven moreh_group_norm
+    // layout). reader/writer are members of both work units; their effective placement is the union
+    // core_group_1 union core_group_2 == all_cores.
+    spec.work_units.push_back(
+        WorkUnitSpec{.name = "group1", .kernels = {READER, WRITER, COMPUTE_1}, .target_nodes = core_group_1});
+    if (has_core_group_2) {
+        spec.work_units.push_back(
+            WorkUnitSpec{.name = "group2", .kernels = {READER, WRITER, COMPUTE_2}, .target_nodes = core_group_2});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      ProgramRunArgs
+    ////////////////////////////////////////////////////////////////////////////
+    // The per-dim vararg block is identical across cores (does not depend on the core), built once.
+    std::vector<uint32_t> reader_varargs;
+    reader_varargs.reserve(3 * input_grad_rank);
+    reader_varargs.insert(reader_varargs.end(), output_grad_dim.begin(), output_grad_dim.end());
+    reader_varargs.insert(reader_varargs.end(), input_grad_dim.begin(), input_grad_dim.end());
+    reader_varargs.insert(reader_varargs.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -245,32 +308,24 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // Build reader runtime args: addr, num_tiles, offset, then dim vectors.
-        // Pass output_grad as Buffer* (not raw ->address()) so the program-cache fast hit path
-        // patches its address when the tensor is reallocated across calls.
-        KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(output_grad.buffer());
-        reader_rt_args.push_back(num_tiles_per_core);
-        reader_rt_args.push_back(tile_offset);
-        reader_rt_args.append(std::vector<uint32_t>(output_grad_dim.begin(), output_grad_dim.end()));
-        reader_rt_args.append(std::vector<uint32_t>(input_grad_dim.begin(), input_grad_dim.end()));
-        reader_rt_args.append(std::vector<uint32_t>(need_bcast_dim.begin(), need_bcast_dim.end()));
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values, core, {{"num_output_tiles", num_tiles_per_core}, {"start_id", tile_offset}});
+        reader_run.advanced_options.runtime_varargs.insert({core, reader_varargs});
 
-        reader_desc.emplace_runtime_args(core, reader_rt_args);
-
-        writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values, core, {{"num_tiles", num_tiles_per_core}, {"start_id", tile_offset}});
 
         tile_offset += num_tiles_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_1));
-    if (has_core_group_2) {
-        desc.kernels.push_back(std::move(compute_desc_2));
-    }
+    // The compute kernels take only compile-time args (no RTAs/CRTAs), so they get no KernelRunArgs
+    // entry — matching the proven moreh_group_norm factory, which likewise omits run-args for its
+    // arg-less compute kernels.
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args.emplace(OUTPUT_GRAD, TensorArgument{output_grad.mesh_tensor()});
+    run_args.tensor_args.emplace(INPUT_GRAD, TensorArgument{input_grad.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_sum_backward

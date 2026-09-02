@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "interleaved_to_sharded_partial_program_factory.hpp"
+#include "interleaved_to_sharded_partial_op.hpp"
 
 #include <cmath>
 
@@ -83,6 +84,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
+    bool is_quasar = (input.device()->arch() == tt::ARCH::QUASAR);
 
     if (input.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
@@ -167,7 +169,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
+    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned) {
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
         // This is done to mitigate the alignment issues.
         // See issue #34414.
@@ -352,13 +354,13 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
                 (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0)
                              : true);
             // for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole);
+            aligned = aligned and !(is_blackhole || is_quasar);
             uint32_t aligned_width_offset = 0;
             uint32_t aligned_shard_width = 0;
             uint32_t aligned_offset = 0;
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate
-                if (!is_blackhole) {
+                if (!(is_blackhole || is_quasar)) {
                     aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
                 } else {
                     if (src_is_dram) {
@@ -428,6 +430,62 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const InterleavedToShardedPartialParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Cache-hit fast path. Only TILE layout is supported (validate_on_program_cache_miss); the static
+    // work-split (shard extents, curr_idx, num_units) is pinned by the hashed shape/shard-spec. The only
+    // per-dispatch values are the source/output buffer addresses and the slice_index-dependent
+    // starting_idx_h. Patch just those slots in place instead of rebuilding the whole descriptor (O(1)
+    // per core rather than O(num_cores) descriptor work). Replaces get_dynamic_runtime_args.
+    const uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(
+        input_tensor, operation_attributes.num_slices, operation_attributes.slice_index);
+    const uint32_t src_addr = input_tensor.buffer()->address();
+    auto* dst_buffer = output.buffer();
+    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    const auto& shard_spec = operation_attributes.shard_spec;
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
+
+    // Kernel push order in create_descriptor: reader (0), writer (1)[, compute (2)].
+    // Reader TILE RT args: {src, shard_h, shard_w, padded_offset, num_units_offset, units_per_shard,
+    //   curr_idx_h+curr_idx_w, starting_idx_h}; the DRAM-output writer mirrors src->dst at 0 and
+    //   starting_idx_h at 7. The sharded-output writer carries neither (address rides on the output CB).
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kBufferAddrArgIdx = 0;
+    constexpr uint32_t kStartingIdxHArgIdx = 7;
+    for (const auto& core : cores) {
+        auto& reader_rt = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader_rt[kBufferAddrArgIdx] = src_addr;
+        reader_rt[kStartingIdxHArgIdx] = starting_idx_h;
+        if (dst_is_dram) {
+            auto& writer_rt = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+            writer_rt[kBufferAddrArgIdx] = dst_buffer->address();
+            writer_rt[kStartingIdxHArgIdx] = starting_idx_h;
+        }
+    }
+
+    // Sharded (non-DRAM) output binds its buffer to the output CB rather than a writer RT arg, so refresh
+    // that CB's base address in place. create_descriptor pushes the (unbound) input CB first only when
+    // converting data formats; mirror that ordering positionally -- apply_descriptor_runtime_args maps
+    // desc.cbs[i] to program CB i and updates only the entries that carry a buffer.
+    if (!dst_is_dram) {
+        const bool convert_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()) !=
+                                tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+        ProgramDescriptor cb_addr_only;
+        if (convert_df) {
+            cb_addr_only.cbs.emplace_back();  // input CB placeholder (unbound; address unchanged)
+        }
+        cb_addr_only.cbs.push_back(CBDescriptor{.buffer = dst_buffer});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+    }
 }
 
 }  // namespace ttnn::prim

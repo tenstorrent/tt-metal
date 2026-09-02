@@ -23,7 +23,7 @@ on:
         default: ""
         type: string
       tests-yaml-gist-url:
-        description: "URL to GitHub gist/raw containing release_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
+        description: "URL to GitHub gist/raw containing models_e2e_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
         required: false
         default: ""
         type: string
@@ -239,12 +239,18 @@ jobs:
       - name: Create changelog
         if: ${{ !inputs.dry-run }}
         id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
+        uses: mikepenz/release-changelog-builder-action@32e3c96f29a6532607f638797455e9e98cfc703d # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
+          # Resolve each commit in the range to its PR via the commits API instead
+          # of matching PR merge_commit_sha within a merge-date window. Our release
+          # branch re-creates commits (new SHAs) and lands PRs later than they
+          # merged to main, so the default matching only associated a handful of
+          # PRs (e.g. v0.74.0 listed 8 of ~600). One API call per commit.
+          fetchViaCommits: true
           failOnError: true
           outputFile: CHANGELOG.txt
       - name: Create empty changelog for dry run
@@ -283,7 +289,7 @@ jobs:
     if: ${{ !inputs.dry-run }}
     needs: create-changelog
     permissions: read-all
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -313,7 +319,7 @@ jobs:
 
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() }}
     concurrency: create_upload_draft_release
     outputs:
@@ -507,7 +513,7 @@ jobs:
   convert-draft-to-prerelease:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
     steps:
       - name: Checkout
@@ -657,7 +663,7 @@ jobs:
 
   trigger-prod-after-rc-success:
     needs: [build-test-publish, release-precheck, create-tag]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Only trigger if we are on an RC and the RC build-test-publish succeeded
     if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
     steps:

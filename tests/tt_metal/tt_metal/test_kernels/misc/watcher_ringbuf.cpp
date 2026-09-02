@@ -2,25 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Ethernet and DRAM cores only; TENSIX uses watcher_ringbuf_2_0.cpp.
+
 #include <cstdint>
 #include "api/debug/ring_buffer.h"
-
-/*
- * A test for the watcher waypointing feature.
-*/
-#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
-    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_DRISC)
-#include "api/compute/common.h"
+#include "api/compile_time_args.h"
+#if defined(DEBUG_RING_BUFFER_MPSC)
+// get_hw_thread_idx(), not get_my_thread_id(), must match ring_buffer.h's MPSC write_id encoding.
+#include "internal/hw_thread.h"
 #endif
 
 void kernel_main() {
-    // Conditionally enable using defines for each trisc
-#if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
-    (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
-    (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
-    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || \
-     defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC))
-    for (uint32_t idx = 0; idx < 40; idx++) {
+    constexpr uint32_t num_pushes = get_compile_time_arg_val(0);
+
+#if defined(DEBUG_RING_BUFFER_MPSC)
+    uint32_t thread_idx = internal_::get_hw_thread_idx();
+    for (uint32_t seq = 0; seq < num_pushes; seq++) {
+        WATCHER_RING_BUFFER_PUSH((thread_idx << 16) | seq);
+    }
+#else
+    for (uint32_t idx = 0; idx < num_pushes; idx++) {
         WATCHER_RING_BUFFER_PUSH((idx + 1) + (idx << 16));
     }
 #endif

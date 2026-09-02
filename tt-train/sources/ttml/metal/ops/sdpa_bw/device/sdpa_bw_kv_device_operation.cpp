@@ -47,10 +47,17 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         query_shape,
         key_shape);
 
-    // Validate data formats
+    // Validate data formats. The program factory sizes every input CB for BFLOAT16 tiles,
+    // so any other dtype would overrun CB pages and silently corrupt gradients.
     TT_FATAL(
-        grad_output.dtype() == query.dtype() && query.dtype() == key.dtype() && key.dtype() == value.dtype(),
-        "All input tensors must have the same data type");
+        grad_output.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+            query.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+            key.dtype() == tt::tt_metal::DataType::BFLOAT16 && value.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "All input tensors must be BFLOAT16. Got grad_output={}, query={}, key={}, value={}",
+        grad_output.dtype(),
+        query.dtype(),
+        key.dtype(),
+        value.dtype());
 
     // Validate device placement
     TT_FATAL(
@@ -81,6 +88,67 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     const auto [kB, kH, kS, kE] = key_shape.to_array_4D();
     const auto [vB, vH, vS, vE] = value_shape.to_array_4D();
 
+    // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
+    // iterate the padded sequence, so tile padding on S or head_dim would silently
+    // mis-scale attention instead of erroring out.
+    // V's head_dim never feeds the softmax scaler and non-tile-aligned vdim is a
+    // supported configuration (DiffVDim), so V is only checked on the sequence dim.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name, bool check_last_dim) {
+        const auto& logical = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
+        TT_FATAL(
+            (!check_last_dim || logical[-1] == padded[-1]) && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence{} (padded shape == logical shape). "
+            "Got logical={}, padded={}",
+            name,
+            check_last_dim ? " and head_dim" : "",
+            logical,
+            padded);
+    };
+    check_tile_aligned(query, "Query", /*check_last_dim=*/true);
+    check_tile_aligned(key, "Key", /*check_last_dim=*/true);
+    check_tile_aligned(value, "Value", /*check_last_dim=*/false);
+
+    // The reader streams `intermediates` (forward-pass logsumexp) as FP32 tiles via a
+    // TensorAccessor, which handles DRAM and L1 interleaved buffers alike; a wrong tensor
+    // here would produce garbage gradients with no error. sdpa_fw allocates it with query's
+    // memory config, so an L1-interleaved query legitimately yields L1-interleaved
+    // intermediates — only sharded layouts are unsupported.
+    const auto& intermediates = tensor_args.intermediates;
+    TT_FATAL(intermediates.device() == query.device(), "intermediates must be on the same device as query");
+    TT_FATAL(
+        intermediates.layout() == tt::tt_metal::Layout::TILE,
+        "intermediates must have TILE layout, got {}",
+        intermediates.layout());
+    TT_FATAL(
+        intermediates.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "intermediates must be FLOAT32, got {}",
+        intermediates.dtype());
+    TT_FATAL(
+        intermediates.buffer() != nullptr &&
+            intermediates.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "intermediates must be interleaved");
+    {
+        constexpr uint32_t kIntermediateWidth = 32U;  // one logsumexp tile per query row
+        const auto interm_shape = intermediates.logical_shape();
+        TT_FATAL(
+            interm_shape[0] == qB && interm_shape[1] == qH && interm_shape[2] == qS &&
+                interm_shape[3] == kIntermediateWidth,
+            "intermediates shape must be (B, q_heads, S, 32) = ({}, {}, {}, {}). Got {}",
+            qB,
+            qH,
+            qS,
+            kIntermediateWidth,
+            interm_shape);
+    }
+
+    // Dropout backward is not implemented; accepting a nonzero probability would silently
+    // return gradients of the dropout-free forward.
+    TT_FATAL(
+        operation_attributes.dropout_probability == 0.0F,
+        "Dropout is not supported in SDPA backward. Got dropout_probability={}, expected 0.0.",
+        operation_attributes.dropout_probability);
+
     TT_FATAL(
         qH > 0 && kH > 0 && vH > 0,
         "Number of heads must be greater than zero. Got q_heads={}, kv_heads={}, v_heads={}",
@@ -107,6 +175,15 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     // Validate mask shape if provided - must be (1, 1, S, S)
     if (tensor_args.attn_mask.has_value()) {
         const auto& mask = tensor_args.attn_mask.value();
+        TT_FATAL(
+            mask.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "Attention mask must be BFLOAT16 (mask CB pages are sized for BFLOAT16 tiles), got {}",
+            mask.dtype());
+        TT_FATAL(
+            mask.layout() == tt::tt_metal::Layout::TILE,
+            "Attention mask must have TILE layout, got {}",
+            mask.layout());
+        TT_FATAL(mask.device() == query.device(), "Attention mask must be on the same device as query");
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
 
@@ -147,19 +224,19 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
-    ttnn::TensorSpec grad_key_spec =
+    tt::tt_metal::TensorSpec grad_key_spec =
         tensor_args.preallocated_grad_key.has_value()
             ? tensor_args.preallocated_grad_key->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.key.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
 
     // Handle grad_value spec
-    ttnn::TensorSpec grad_value_spec =
+    tt::tt_metal::TensorSpec grad_value_spec =
         tensor_args.preallocated_grad_value.has_value()
             ? tensor_args.preallocated_grad_value->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.value.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.value.dtype(), tt::tt_metal::Layout::TILE, tensor_args.value.memory_config()));
@@ -174,12 +251,12 @@ SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperati
     // Handle grad_key
     ttnn::Tensor grad_key = tensor_args.preallocated_grad_key.has_value()
                                 ? tensor_args.preallocated_grad_key.value()
-                                : create_device_tensor(grad_key_spec, tensor_args.key.device());
+                                : ttnn::create_device_tensor(grad_key_spec, tensor_args.key.device());
 
     // Handle grad_value
     ttnn::Tensor grad_value = tensor_args.preallocated_grad_value.has_value()
                                   ? tensor_args.preallocated_grad_value.value()
-                                  : create_device_tensor(grad_value_spec, tensor_args.value.device());
+                                  : ttnn::create_device_tensor(grad_value_spec, tensor_args.value.device());
 
     return {grad_key, grad_value};
 }

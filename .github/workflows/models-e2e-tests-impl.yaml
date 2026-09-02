@@ -27,21 +27,49 @@ on:
       tier:
         required: true
         type: string
-        description: "Model tier to filter tests (1, 2, or 3)"
+        description: "Model tier to filter tests (1, 2, or 3). Ignored when `matrix` is provided."
+      matrix:
+        required: false
+        type: string
+        default: ""
+        description: "Optional pre-filtered JSON array of test legs. When set, skip YAML load/filters and only split into single-host vs multihost."
+      prefer-wheel-libs:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Forwarded to multihost setup. True to put manylinux wheel libs first on
+          LD_LIBRARY_PATH; false (T1 inplace) keeps the tarball build/lib.
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
     outputs:
       matrix:
-        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
+      matrix_multihost:
+        description: "Filtered matrix of exabox multihost legs that ran."
+        value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
+
+# Default to read-only. Only the multihost job needs id-token (multihost-ci runner chart), which it
+# grants on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix_multihost: ${{ steps.apply-filters.outputs.matrix_multihost }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
     steps:
       - name: Checkout the repository
+        if: ${{ inputs.matrix == '' }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
@@ -50,8 +78,10 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
       - name: Install dependencies
+        if: ${{ inputs.matrix == '' }}
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
+        if: ${{ inputs.matrix == '' }}
         run: |
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
@@ -61,30 +91,61 @@ jobs:
             "e2e" \
             "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
+        if: ${{ inputs.matrix == '' }}
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply tier and model filters
+      - name: Apply filters and split single-host vs multihost
         id: apply-filters
+        # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
+        # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
+        env:
+          PROVIDED_MATRIX: ${{ inputs.matrix }}
+          BUILT_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TIER: ${{ inputs.tier }}
+          MODEL: ${{ inputs.model }}
+          SKUS: ${{ inputs.enabled-skus }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
-          if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
-          fi
-          if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
-            echo "matrix=[]" >> $GITHUB_OUTPUT
+          if [ -n "$PROVIDED_MATRIX" ]; then
+            FILTERED="$PROVIDED_MATRIX"
           else
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            # Filter by tier
+            FILTERED=$(echo "$BUILT_MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+            # Filter by model (substring match, case-insensitive; comma-separated OR-list)
+            if [ "$MODEL" != "all" ]; then
+              FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
+                ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+                | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
+            fi
           fi
+          # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
+          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
+          SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
+          MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
+          emit() {  # $1 = output name, $2 = compact JSON array
+            if [ -z "$2" ] || [ "$2" = "[]" ]; then
+              echo "$1=[]" >> $GITHUB_OUTPUT
+            else
+              {
+                echo "$1<<EOF"
+                echo "$2"
+                echo "EOF"
+              } >> $GITHUB_OUTPUT
+            fi
+          }
+          if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
+            if [ -n "$PROVIDED_MATRIX" ]; then
+              echo "::warning::Caller-provided matrix is empty. Both single-host and multihost jobs will be skipped."
+            else
+              echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
+            fi
+          fi
+          emit matrix "$SINGLE"
+          emit matrix_multihost "$MULTI"
 
   models-e2e-tests:
     needs: load-test-matrix
@@ -99,6 +160,7 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online
@@ -128,7 +190,7 @@ jobs:
         # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
         # shared NFS honors mlperf-read-only.
         - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -153,7 +215,7 @@ jobs:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
             mkdir -p generated/test_reports
-            # Perf/accuracy are enforced by the "Validate perf and accuracy targets"
+            # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
@@ -178,7 +240,7 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      - name: Validate perf and accuracy targets
+      - name: Report and Validate Perf and Accuracy targets
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         shell: bash
         run: |
@@ -203,10 +265,34 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  # Multihost (exabox) e2e tests — lifecycle lives in models-e2e-tests-multihost-impl.yaml.
+  # Legs are routed here when prepare_test_matrix.py marks them "multihost": true
+  # (SKU runs_on contains an exabox-multihost* label) and load-test-matrix collects
+  # them into matrix_multihost.
+  models-e2e-tests-multihost:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate reads too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-multihost-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
+      summary-scope: ${{ inputs.summary-scope }}

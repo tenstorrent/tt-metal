@@ -22,9 +22,9 @@ namespace ttnn::operations::data_movement::indexed_fill {
 // `input_b` is allowed to be in DRAM or interleaved; it does not need to match the shard
 // geometry of input_a. Applies to both ROW_MAJOR and TILE layouts.
 bool is_native_indexed_fill_sharding(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
-    const TensorSpec& batch_id_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& batch_id_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // Worker-grid selection priority:
@@ -43,12 +43,12 @@ CoreRangeSet get_indexed_fill_worker_grid(
 //   * output  is the same sharding layout, L1, with the same shard grid and shard shape
 //   * input_b is either (a) the same sharding / grid / shape as input_a, or (b) INTERLEAVED
 bool is_shard_local_indexed_fill(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // True iff the tensor is sharded and the shard shape does not evenly divide the padded shape.
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
 // Scale the input shard spec from `from_shape` to `to_shape`.
 // `is_tile` controls the minimum shard dimension: TILE_{HEIGHT,WIDTH} for TILE layout, 1 for ROW_MAJOR.
@@ -58,18 +58,14 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     const ttnn::Shape& to_shape,
     bool is_tile);
 
-// Build a default shard spec for `padded_out_shape` over the device's full compute grid.
-// `is_tile` controls whether shard heights/widths are rounded to tile boundaries.
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
+// Synthesize a populated-shard output ShardSpec for specless sharded indexed_fill outputs.
+tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_tile = true);
 
-// Derive a shard_spec for a sharded output MemoryConfig that has none.
-// Uses adjust_to_shape() when input_tensor_a is sharded, otherwise generate_shard_spec_all_cores().
-// Returns the filled-in MemoryConfig (or the original unchanged if it is not sharded / already
-// has a shard_spec).
+// Fills a specless sharded output MemoryConfig via adjust_to_shape (sharded input) or generate_output_shard_spec.
 tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,

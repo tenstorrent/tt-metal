@@ -14,6 +14,8 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -42,8 +44,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     bool out_sharded = output.memory_config().is_sharded();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
-    // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    // and skip face1 and face3. Only writer_unary_unpad_width_16_sharded.cpp knows how to extract
+    // faces 0 and 2 from the tiled output emitted by eltwise_copy.cpp; that writer is only reached
+    // inside the `if (out_sharded)` branch. The interleaved-output writer
+    // (writer_unary_stick_layout_interleaved_blocks.cpp) expects the normal untilized row-major rows
+    // produced by untilize.cpp and cannot consume the tiled data, so the fast path must be gated on
+    // out_sharded.
+    bool unpad_tensor_w_16 =
+        out_sharded && output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -145,7 +153,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -156,7 +165,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (out_sharded) {
         // Both out-sharded writers consume OUT (untilized tiles) and produce the resident OUT_SHARDED
@@ -223,9 +233,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
 
     KernelSpec compute{
@@ -234,7 +247,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = compute_hw,
     };
     if (unpad_tensor_w_16) {
         compute.source = std::filesystem::path(
@@ -255,36 +268,37 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     const std::vector<CoreCoord> all_core_coords = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(all_core_coords.size());
-    writer_node_args.reserve(all_core_coords.size());
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : all_core_coords) {
         const NodeCoord node = core;
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"num_tiles_per_core", num_input_tiles}}});
+        reader_node_args["num_tiles_per_core"][node] = num_input_tiles;
     }
 
     if (out_sharded) {
         for (const auto& core : all_core_coords) {
             const NodeCoord node = core;
             if (unpad_tensor_w_16) {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_node_args,
+                    node,
+                    {
                         {"num_unpadded_output_rows", num_output_rows_unpadded},
-                        {"num_padded_tiles_per_core", num_input_tiles}}});
+                        {"num_padded_tiles_per_core", num_input_tiles},
+                    });
             } else {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_node_args,
+                    node,
+                    {
                         {"num_unpadded_output_rows", num_output_rows_unpadded},
                         {"num_padded_tiles_per_batch", ntiles_per_batch},
                         {"num_unpadded_rows_per_batch", out_shard_spec.shape[0] / batch},
                         {"padded_block_row_size_bytes", shard_spec.shape[1] * output.element_size()},
                         {"unpadded_block_row_size_bytes", block_row_size},
-                        {"batch", batch}}});
+                        {"batch", batch},
+                    });
             }
         }
     } else {
@@ -349,9 +363,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             // Legacy positional RTAs (dst_addr dropped -> carried by the OUTPUT TensorAccessor):
             //   {dst_addr, num_rows_block, block_row_size, 1, 1, 1, row_size_unpadded,
             //    num_rows_unpadded, block_start_row_id_offset, block_start_row_offset}
-            writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = node,
-                .args = {
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                node,
+                {
                     {"num_rows_block", num_rows_block},
                     {"block_row_size", block_row_size},
                     {"batch", 1u},
@@ -360,7 +375,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                     {"last_block_row_size_unpadded", row_size_unpadded},
                     {"num_output_rows_unpadded", num_rows_unpadded},
                     {"block_start_row_id", block_start_row_id_offset},
-                    {"block_start_row_offset", block_start_row_offset}}});
+                    {"block_start_row_offset", block_start_row_offset},
+                });
         }
     }
 

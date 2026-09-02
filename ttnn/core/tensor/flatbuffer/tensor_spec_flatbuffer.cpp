@@ -4,20 +4,25 @@
 
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/tensor_serialization_support.hpp>
+
 namespace ttnn {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
-            CoreCoord{range->start()->x(), range->start()->y()}, CoreCoord{range->end()->x(), range->end()->y()});
+            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
-    return CoreRangeSet{ranges};
+    return CoreRangeSet{std::move(ranges)};
 }
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    range_offsets.reserve(core_range_set.ranges().size());
     for (const auto& range : core_range_set.ranges()) {
         auto start = flatbuffer::CreateCoreCoord(builder, range.start_coord.x, range.start_coord.y);
         auto end = flatbuffer::CreateCoreCoord(builder, range.end_coord.x, range.end_coord.y);
@@ -37,6 +42,7 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt8: return tt::tt_metal::DataType::UINT8;
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
+        case flatbuffer::DataType::Int8: return tt::tt_metal::DataType::INT8;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
@@ -52,6 +58,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
+        case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
@@ -199,7 +206,7 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
         }
     }();
 
-    return tt::tt_metal::TensorLayout::restore_from_serialized(
+    return tt::tt_metal::restore_tensor_layout_from_serialized(
         from_flatbuffer(layout->data_type()),
         page_config,
         ttnn::from_flatbuffer(layout->memory_config()),
@@ -267,7 +274,7 @@ tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* confi
     if (config->nd_shard_spec()) {
         nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
     }
-    auto memory_config = tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
+    auto memory_config = tt::tt_metal::create_memory_config_with_prepopulated_shard_specs(
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
         shard_spec,

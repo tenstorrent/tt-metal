@@ -58,7 +58,7 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
 ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
-    return TensorSpec{
+    return tt::tt_metal::TensorSpec{
         tensor_args.input_tensor.logical_shape(),
         TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
 }

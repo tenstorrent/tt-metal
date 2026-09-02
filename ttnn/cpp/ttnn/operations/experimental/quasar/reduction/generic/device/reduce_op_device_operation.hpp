@@ -19,7 +19,7 @@ namespace ttnn::prim::qsr {
 struct ReduceDeviceOperation {
     using operation_attributes_t = ReduceParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct ReduceSingleCoreHwProgramFactory {

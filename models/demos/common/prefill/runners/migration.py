@@ -1,78 +1,56 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Model-agnostic KV-migration publish for the prefill runner.
 
-The runner owns the migration comms. The model-specific part — building the
-KV-chunk address table from the device cache layout — lives on the runtime
-(``runtime.build_kv_chunk_table(path)``); this module takes the already-serialized
-table and performs the generic handshake with a running migration_endpoint:
-
-    1. client.send_kv_chunk_table(table_path)   # SetTable on table_q
-    2. client.send_device_map(entries)          # AssignDevMap + N x DevMapEntry on table_q
-    3. client.wait_ready(timeout_ms)            # blocks on RespOpcode::WorkerReady
-
-Without step 2 the worker never opens UMD chips and never asserts WORKER_READY;
-without step 3 the runner enters its request loop before the scheduler can
-actually issue migrations. The device map is derived from the local mesh topology
-(generic). The ``_migration_client`` extension lives in tt-llm-engine and is
-imported LAZILY so the runner still works standalone when migration is opted out.
-"""
-
+import glob
 import os
+import socket
 import sys
+import time
+import zlib
+from ctypes import c_int32
+from typing import NamedTuple
 
 from loguru import logger
 
 import ttnn
 
-# Default shmem queue names. Overridable via PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE.
-_DEFAULT_CMD_QUEUE = "/prefill_mig_cmd_1"
-_DEFAULT_TABLE_QUEUE = "/prefill_mig_tbl_1"
-_DEFAULT_RESP_QUEUE = "/prefill_mig_rsp_1"
+_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
 
 
-def serialize_kv_chunk_table(
-    *,
-    table_builder,
-    num_layers: int,
-    max_seq_len: int,
-    num_users: int,
-    chunk_n_tokens: int,
-    chunk_size_bytes: int,
-    path: str,
-) -> str:
-    """Populate the generic KvChunkAddressTableConfig, invoke a model's `table_builder`, and serialize
-    the result to a protobuf file for the worker's SET_TABLE. Returns `path`.
+class KvCacheStage(NamedTuple):
+    base_addr: int
+    first_layer: int
+    count: int
 
-    The KV layout (how natural positions map to storage chips/offsets) is the one model-specific part:
-    the caller supplies `table_builder(config, chunk_size_bytes, num_users) -> KvChunkAddressTable`.
-    Everything here — config population, serialization, logging — is model-agnostic.
-    """
-    disagg = ttnn.experimental.disaggregation
-    cfg = disagg.KvChunkAddressTableConfig()
-    cfg.num_layers = num_layers
-    cfg.max_sequence_length = max_seq_len
-    cfg.num_slots = num_users
-    cfg.chunk_n_tokens = chunk_n_tokens
-    cfg.chunk_size_bytes = chunk_size_bytes
-    table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
-    disagg.export_to_protobuf_file(table, path)
-    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
-    return path
+
+def migration_file_export_enabled() -> bool:
+    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
+
+
+def migration_device_map_file_path() -> str:
+    return os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", _DEFAULT_DEVICE_MAP_FILE)
+
+
+def _disaggregation():
+    return ttnn.experimental.disaggregation
+
+
+def _serialize_table_to_path(table, path: str) -> None:
+    tmp = f"{path}.tmp"
+    _disaggregation().export_to_protobuf_file(table, tmp)
+    os.replace(tmp, path)
 
 
 def _resolve_queue_names() -> tuple[str, str, str]:
     return (
-        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", _DEFAULT_CMD_QUEUE),
-        os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", _DEFAULT_TABLE_QUEUE),
-        os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", _DEFAULT_RESP_QUEUE),
+        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mig_cmd_1"),
+        os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1"),
+        os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1"),
     )
 
 
 def _import_migration_client():
-    """Lazily import the tt-llm-engine ``_migration_client`` extension. Raises
-    ImportError if it is not importable."""
     client_dir = os.environ.get("PREFILL_MIGRATION_CLIENT_DIR")
     if client_dir and client_dir not in sys.path:
         sys.path.insert(0, client_dir)
@@ -89,9 +67,6 @@ def _import_migration_client():
 
 
 def _attach_migration_client():
-    """Resolve queue names, import ``_migration_client``, and attach. Returns
-    (client, cmd_q, table_q, resp_q); raises RuntimeError if the endpoint's shmem
-    queues are not reachable (the orchestrator must launch migration_endpoint first)."""
     cmd_q, table_q, resp_q = _resolve_queue_names()
     mod = _import_migration_client()
     try:
@@ -105,16 +80,66 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
-    """Row-major ``(umd_chip_id, fabric_mesh_id, fabric_chip_id)`` for this rank's local mesh.
+def _deliver_local_device_map(device_map, rank: int, timeout_s: float = 30.0) -> None:
+    mod = _import_migration_client()
 
-    ``umd_chip_id`` is the chip's HARDWARE-STABLE 64-bit ASIC unique id, resolved from the
-    FabricNodeId via ``ttnn.cluster.get_chip_unique_id_from_fabric_node_id`` — the SAME id the
-    migration worker keys ``dram_by_umd`` on (``UmdDevice::unique_id()`` from the cluster
-    descriptor). It is NOT the process-local logical id (``get_device_id``, 0..n-1) NOR the
-    physical UMD ChipId — those don't match the worker's unique-id-keyed device map, so a
-    physical-id device map reaches WORKER_READY but fails to resolve at migrate time.
-    """
+    def _discover():
+        trios = []
+        skipped = []
+        for side in ("a", "b"):
+            candidates = glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")
+            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for c in candidates:
+                name = "/" + os.path.basename(c)
+                if not os.access(c, os.R_OK | os.W_OK):
+                    st = os.stat(c)
+                    import pwd
+
+                    owner = pwd.getpwuid(st.st_uid).pw_name
+                    skipped.append(
+                        f"{name} (owner={owner}, mtime={time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))})"
+                    )
+                    continue
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
+                )
+        return trios, skipped
+
+    deadline = time.monotonic() + timeout_s
+    trios, skipped = _discover()
+    while not trios:
+        if time.monotonic() >= deadline:
+            if skipped:
+                details = "\n  ".join(skipped)
+                raise RuntimeError(
+                    f"[migration] local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) are present "
+                    f"but none are accessible by this user. Skipped {len(skipped)}:\n  {details}\n"
+                    f"This is usually caused by stale shm files from another user's previous run."
+                )
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        time.sleep(0.25)
+        trios, skipped = _discover()
+
+    for cmd, table, resp in trios:
+        try:
+            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
+        except RuntimeError as e:
+            if "Permission denied" in str(e):
+                logger.warning(f"[migration] skipping inaccessible worker queue {cmd}: {e}")
+                continue
+            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
+
+
+def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
     out: list[tuple[int, int, int]] = []
     for r in range(rows):
@@ -127,11 +152,6 @@ def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
 
 
 def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
-    """Single-rank device map for the migration endpoint, ordered per the
-    ``send_device_map`` binding: ``(fabric_node_mesh_id, fabric_node_chip_id,
-    umd_chip_id)``. Sanity-checks mesh size and fabric-node uniqueness so a
-    misconfigured PREFILL_SP/PREFILL_TP fails loud instead of producing a
-    half-filled device map."""
     raw = _enumerate_devices(mesh_device)
     expected = int(mesh_shape[0]) * int(mesh_shape[1])
     if len(raw) != expected:
@@ -149,11 +169,36 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
+def rank_scoped_device_map_path(path: str, rank: int, num_ranks: int) -> str:
+    if num_ranks <= 1:
+        return path
+    stem, ext = os.path.splitext(path)
+    return f"{stem}_r{rank}{ext}"
+
+
+def validate_stage_layout_contiguous(stage_layout) -> int:
+    expected = 0
+    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
+        if s["first_layer"] != expected:
+            raise RuntimeError(
+                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
+                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
+            )
+        expected += s["count"]
+    return expected
+
+
+def remove_stale_device_map_sidecars(path: str) -> None:
+    stem, ext = os.path.splitext(path)
+    for stale in [path, *glob.glob(f"{stem}_r*{ext}")]:
+        try:
+            os.remove(stale)
+            logger.warning(f"[migration] removed stale device map {stale} from a prior run")
+        except FileNotFoundError:
+            pass
+
+
 def serialize_device_map(mesh_device, path: str) -> str:
-    """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
-    (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that
-    read_dram_umd / the migration worker key device reads on. Reuses _enumerate_devices (which calls
-    ttnn.cluster.get_chip_unique_id_from_fabric_node_id). Pairs with the mock KV chunk table."""
     import json
     import os
 
@@ -164,7 +209,6 @@ def serialize_device_map(mesh_device, path: str) -> str:
             f"[migration] device-map fabric-node collision: {len(enumerated)} chips but only "
             f"{len(device_map)} unique (mesh_id, chip_id) keys"
         )
-    # Atomic publish: write a temp file then rename, so a concurrent reader never sees partial JSON.
     tmp = f"{path}.tmp"
     with open(tmp, "w") as mp:
         json.dump(device_map, mp)
@@ -173,31 +217,122 @@ def serialize_device_map(mesh_device, path: str) -> str:
     return path
 
 
-def publish_table_and_wait_ready(
-    *, mesh_device, mesh_shape, table_path: str, wait_ready_timeout_ms: int = 120_000
-) -> None:
-    """Publish an already-serialized KV-chunk table to the migration worker and block
-    on WORKER_READY (or raise on timeout).
+def serialize_kv_chunk_table(
+    *,
+    table_builder,
+    num_layers: int,
+    max_seq_len: int,
+    num_users: int,
+    chunk_n_tokens: int,
+    chunk_size_bytes: int,
+    path: str,
+) -> str:
+    cfg = _disaggregation().KvChunkAddressTableConfig()
+    cfg.num_layers = num_layers
+    cfg.max_sequence_length = max_seq_len
+    cfg.num_slots = num_users
+    cfg.chunk_n_tokens = chunk_n_tokens
+    cfg.chunk_size_bytes = chunk_size_bytes
+    table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
 
-    The runner calls this AFTER the runtime serialized the table
-    (``runtime.build_kv_chunk_table(path)``). Builds the device map from the local
-    mesh, attaches a ``MigrationLayerClient`` on the env-driven shmem queues, sends
-    SET_TABLE and AssignDevMap in the order the worker expects, then waits. The client
-    is scope-local to this call; runtime migrations are issued by the C++
-    PrefillScheduler over its own adapter.
 
-    Strict-by-default: any failure to import the extension, attach to the queues, or
-    reach WORKER_READY raises.
-    """
-    device_map = _build_device_map(mesh_device, mesh_shape)
-
-    client, cmd_q, table_q, resp_q = _attach_migration_client()
-
+def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
+    _serialize_table_to_path(table, path)
     logger.info(
-        f"[migration] publishing: table={table_path} devices={len(device_map)} "
-        f"queues=(cmd={cmd_q}, table={table_q}, resp={resp_q}) wait_ready_ms={wait_ready_timeout_ms}"
+        f"[migration] KV chunk address table serialized to {path} "
+        f"(configs={table.num_configs()}, entries={table.total_entries()})"
+    )
+    return path
+
+
+def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as map_file:
+        map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) exported to {path}")
+    return path
+
+
+def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_shape, device_map_path: str):
+    export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
+    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+
+
+def deliver_device_map_and_gather_stage_layouts(mesh_device, stages, mesh_shape, rank):
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    _deliver_local_device_map(device_map, rank)
+    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+
+
+def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
+    client, cmd_q, table_q, resp_q = _attach_migration_client()
+    logger.info(
+        f"[migration] publishing table={table_path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
+        f"wait_ready_ms={wait_ready_timeout_ms}"
     )
     client.send_kv_chunk_table(table_path)
-    client.send_device_map(device_map)
     client.wait_ready(wait_ready_timeout_ms)
-    logger.info(f"[migration] WORKER_READY: devices={len(device_map)} table={table_path}")
+    logger.info(f"[migration] WORKER_READY: table={table_path}")
+
+    return client
+
+
+def _host_tag_int():
+    return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
+
+
+def allgather_kv_stage_layouts(mesh_device, stages, mesh_shape):
+    return [
+        allgather_kv_stage_layout(mesh_device, stage.base_addr, mesh_shape, stage.first_layer, stage.count)
+        for stage in stages
+    ]
+
+
+def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):
+    rows = mesh_shape[0]
+    cols = mesh_shape[1]
+    base_addr = int(kv_base_addr)
+    num_banks = get_num_dram_banks(mesh_device)
+
+    all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))
+    all_count = ttnn.distributed_context_allgather_int(int(num_my_layers))
+    all_lo = ttnn.distributed_context_allgather_int(c_int32(base_addr).value)
+    all_hi = ttnn.distributed_context_allgather_int(c_int32(base_addr >> 32).value)
+    all_banks = ttnn.distributed_context_allgather_int(int(num_banks))
+    all_host = ttnn.distributed_context_allgather_int(_host_tag_int())
+
+    all_mesh = [[None] * cols for _ in range(rows)]
+    all_chip = [[None] * cols for _ in range(rows)]
+    for r in range(rows):
+        for c in range(cols):
+            fid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
+            all_mesh[r][c] = ttnn.distributed_context_allgather_int(int(fid.mesh_id))
+            all_chip[r][c] = ttnn.distributed_context_allgather_int(int(fid.chip_id))
+
+    size = len(all_lo)
+    stages = []
+    for rk in range(size):
+        base = ((all_hi[rk] & 0xFFFFFFFF) << 32) | (all_lo[rk] & 0xFFFFFFFF)
+        fnids = [
+            [ttnn.FabricNodeId(ttnn.MeshId(all_mesh[r][c][rk]), all_chip[r][c][rk]) for c in range(cols)]
+            for r in range(rows)
+        ]
+        stages.append(
+            {
+                "rank": rk,
+                "first_layer": all_first[rk],
+                "count": all_count[rk],
+                "base_addr": base,
+                "num_banks": all_banks[rk],
+                "host_tag": all_host[rk],
+                "fnids": fnids,
+            }
+        )
+    return stages
+
+
+def get_num_dram_banks(mesh_device):
+    return mesh_device.dram_grid_size().x

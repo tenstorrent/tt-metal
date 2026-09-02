@@ -1,0 +1,100 @@
+name: "Copilot Setup Steps"
+
+# Environment for the GitHub Copilot cloud agent, so it can make a change and
+# verify that it compiles. Authoring guidance lives in AGENTS.md, not here.
+#
+# Deliberately NO `container:`. The agent's runtime stages a git-proxy binary on
+# the host and then resolves it against the container-remapped RUNNER_TEMP
+# (/__w/_temp), so any job container kills the session before it starts:
+#   env: '/__w/_temp/git-proxy': No such file or directory
+#   git-proxy exited before listening on port 26831
+# Verified 2026-08-27 on a scratch repo. Related, still-open reports:
+#   https://github.com/orgs/community/discussions/170315
+#   https://github.com/orgs/community/discussions/184451
+#
+# So the agent stays on the host and builds via .github/scripts/copilot-build.sh,
+# which shells into the CI build image. The host runner is in the `docker` group.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/scripts/copilot-build.sh
+
+jobs:
+  # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
+  copilot-setup-steps:
+    runs-on: tt-ubuntu-2204-large-stable
+    # Copilot caps this at 59. Submodule checkout is the bulk of it.
+    timeout-minutes: 50
+
+    # Set minimal permissions for setup steps
+    # Copilot Agent receives its own token with appropriate permissions
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # build_metal.sh cannot configure without these.
+          submodules: recursive
+
+      - name: Verify build prerequisites
+        run: |
+          echo "::group::host"
+          echo "user   : $(whoami) ($(id -u):$(id -g))"
+          echo "groups : $(id -Gn)"
+          echo "docker : $(docker --version 2>/dev/null || echo ABSENT)"
+          echo "submodules: $(git submodule status --recursive | wc -l)"
+          echo "::endgroup::"
+          docker info >/dev/null 2>&1 || {
+            echo "::error::docker daemon unreachable - the agent cannot build without it"
+            exit 1
+          }
+          test -x .github/scripts/copilot-build.sh || {
+            echo "::error::.github/scripts/copilot-build.sh missing or not executable"
+            exit 1
+          }
+
+      - name: Pre-pull CI build image
+        # Pulled here so the agent does not spend session time on it. Normally a
+        # no-op on these runners, which build tt-metal continuously.
+        run: |
+          IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
+          START=$(date +%s)
+          docker pull -q "$IMG" >/dev/null && echo "pulled in $(( $(date +%s) - START ))s" \
+            || echo "::warning::could not pull $IMG - the agent will retry on first build"
+          docker image inspect "$IMG" --format 'image ready: {{.Id}} ({{.Created}})' 2>/dev/null || true
+
+      - name: Check ccache credentials
+        # A cold build will not finish inside a session, so surface this loudly.
+        # Referenced at step level: job-level env resolves empty for agent runs.
+        env:
+          ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+        run: |
+          # Both halves are required: copilot-build.sh enables the remote cache
+          # only when the pair is present, so reporting on one key alone would
+          # claim a warm cache while the build silently ran cold.
+          if [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] && [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
+            echo "Agents secrets present - remote ccache will be used (read-only)."
+          elif [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] || [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
+            echo "::error::Only one of GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY is set as an"
+            echo "::error::Agents secret. The remote cache needs both; the agent would build cold."
+            exit 1
+          elif [ -n "${ACTIONS_GARAGE_ACCESS_KEY:-}" ] && [ -n "${ACTIONS_GARAGE_SECRET_KEY:-}" ]; then
+            echo "::notice::Actions secrets found (this validation run), but Copilot cannot read them."
+            echo "::notice::Add GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY under Settings ->"
+            echo "::notice::Secrets and variables -> Agents for the agent to get a warm cache."
+          else
+            echo "::warning::No Garage credentials from either source. The agent would build COLD."
+          fi
+
+      - name: Install gh-aw extension
+        # Must match the gh-aw version the repo's .lock.yml files were compiled
+        # with (v0.86.2), or `gh aw compile` in an agent session rewrites every
+        # lock file to a different version's pins.
+        uses: github/gh-aw-actions/setup-cli@6aab9e5b5c91c615506061f09bedd81a23babe3c # v0.86.2
+        with:
+          version: v0.86.2

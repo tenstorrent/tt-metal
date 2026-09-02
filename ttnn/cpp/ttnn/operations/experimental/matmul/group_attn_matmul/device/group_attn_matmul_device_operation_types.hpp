@@ -13,7 +13,7 @@ struct GroupAttnMatmulParams {
     std::optional<const uint32_t> num_tokens;
     std::optional<const bool> transpose_hw;
     const uint32_t out_subblock_w;
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     const bool row_major;  // Specifies how work is distributed across cores

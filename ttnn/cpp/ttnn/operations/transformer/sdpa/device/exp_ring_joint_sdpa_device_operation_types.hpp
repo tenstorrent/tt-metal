@@ -120,6 +120,6 @@ constexpr size_t EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
 using ExpRingJointSDPAResult = Tensors;
 
 // ExpRingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
-using ExpRingJointSDPAResultSpec = std::vector<TensorSpec>;
+using ExpRingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

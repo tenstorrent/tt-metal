@@ -21,7 +21,7 @@ namespace ttnn::experimental::prim {
 struct MoEComputeDeviceOperation {
     using operation_attributes_t = MoEComputeParams;
     using tensor_args_t = MoEComputeInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory>;
 

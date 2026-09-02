@@ -14,9 +14,11 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 template <uint32_t t, typename AccessorType>
 void async_read_row_to_tile(
@@ -55,89 +57,70 @@ void async_read_row_to_tile(
 }
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
-    const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
-    const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
-    const uint32_t stats_tile_offset =
-        get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and
-                                   // E(x^2) in the left most columns per tile.
+    const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
+    const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
+    // Tile offset for stats input; the stats input is two tiles wide and contains E(x) and
+    // E(x^2) in the left most columns per tile.
+    const auto stats_tile_offset = get_arg(args::stats_tile_offset);
+    const auto y_offset = get_arg(args::y_offset);
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    const uint32_t stats_addr = get_arg_val<uint32_t>(8);
-    const uint32_t y_offset = get_arg_val<uint32_t>(9);
+    constexpr auto blk = get_arg(args::blk);
+    constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
+    constexpr auto gamma_is_row_major = get_arg(args::gamma_is_row_major);
+    constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
+    constexpr auto dfb_length = get_arg(args::dfb_length);
+    constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
+    constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
+    const auto src_a = TensorAccessor(tensor::src);
+    const auto src_stats = TensorAccessor(tensor::stats_src);
+
+    Noc noc;
+    // Input tiles and the per-device statistics, both consumed by the compute kernel.
+    DataflowBuffer dfb_inp_buf(dfb::inp);
+    DataflowBuffer dfb_stats_buf(dfb::stats);
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
-    const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
-    // datum size (bytes) of gamma/beta, derived from their tile size (TILE_HW = 32*32 = 1024 datums/tile).
-    // Used to scale the row/face byte offsets when packing a stick into tile layout (bf16=2B, fp32=4B).
-    const uint32_t gamma_datum_bytes = get_tile_size(cb_gamma) / tt::constants::TILE_HW;
-    const uint32_t beta_datum_bytes = get_tile_size(cb_beta) / tt::constants::TILE_HW;
-
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
-    constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
-    constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_length = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(8);
-    constexpr auto src_args = TensorAccessorArgs<9>();
-    constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-
-    const auto src_a = TensorAccessor(src_args, src_addr);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr);
+    const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
+    const uint32_t stats_tile_bytes = dfb_stats_buf.get_tile_size();
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
+    const auto addrg = TensorAccessor(tensor::gamma_src);
+    DataflowBuffer dfb_gamma_buf(dfb::gamma);
+    // datum size (bytes) of gamma, derived from its tile size (TILE_HW = 32*32 = 1024 datums/tile).
+    // Used to scale the row/face byte offsets when packing a stick into tile layout (bf16=2B, fp32=4B).
+    const uint32_t gamma_datum_bytes = dfb_gamma_buf.get_tile_size() / tt::constants::TILE_HW;
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
+    const auto addrb = TensorAccessor(tensor::beta_src);
+    DataflowBuffer dfb_beta_buf(dfb::beta);
+    const uint32_t beta_datum_bytes = dfb_beta_buf.get_tile_size() / tt::constants::TILE_HW;
 #endif
 
     // Generate constant tiles for layernorm compute
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_reduce,
+        dfb::reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
         reduce_factor>();
-    const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
-
-    Noc noc;
-    CircularBuffer cb_inp_buf(cb_inp);
-    CircularBuffer cb_stats_buf(cb_stats);
-#ifdef FUSE_GAMMA
-    CircularBuffer cb_gamma_buf(cb_gamma);
-#endif
-#ifdef FUSE_BETA
-    CircularBuffer cb_beta_buf(cb_beta);
-#endif
+    const auto eps = get_arg(args::eps);
+    // generate_bcast_col_scalar is a shared kernel-pool helper that still takes a CircularBuffer by
+    // value, so the handle is wrapped here at the call site rather than passed as a DataflowBuffer.
+    generate_bcast_col_scalar(CircularBuffer(dfb::eps), eps);
 
     uint32_t inp_tile_idx = tile_offset;
     uint32_t stats_tile_idx = stats_tile_offset;
 
-    constexpr uint32_t cb_iterations = Wt / cb_length;
-    constexpr uint32_t cb_leftovers = Wt % cb_length;
+    constexpr uint32_t dfb_iterations = Wt / dfb_length;
+    constexpr uint32_t dfb_leftovers = Wt % dfb_length;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Read stats tiles
-        cb_stats_buf.reserve_back(stats_tiles_cols);
+        dfb_stats_buf.reserve_back(stats_tiles_cols);
         uint32_t stats_write_offset = 0;
         for (uint32_t st = 0; st < stats_tiles_cols; ++st) {
             noc.async_read(
                 src_stats,
-                cb_stats_buf,
+                dfb_stats_buf,
                 stats_tile_bytes,
                 {.page_id = stats_tile_idx},
                 {.offset_bytes = stats_write_offset});
@@ -145,74 +128,74 @@ void kernel_main() {
             stats_tile_idx++;
         }
         noc.async_read_barrier();
-        cb_stats_buf.push_back(stats_tiles_cols);
+        dfb_stats_buf.push_back(stats_tiles_cols);
         // In the 2D-core-grid path each core handles only a horizontal slice [y_offset, y_offset + Wt)
         // of the gamma/beta tensors. The 1D path passes y_offset == 0 so this is a no-op there.
         uint32_t gamma_tile_count = y_offset;
         uint32_t beta_tile_count = y_offset;
-        for (uint32_t i = 0; i < cb_iterations; i++) {
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_inp_buf.reserve_back(1);
-                noc.async_read(src_a, cb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
+        for (uint32_t i = 0; i < dfb_iterations; i++) {
+            for (uint32_t j = 0; j < dfb_length; j++) {
+                dfb_inp_buf.reserve_back(1);
+                noc.async_read(src_a, dfb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
                 inp_tile_idx++;
                 noc.async_read_barrier();
-                cb_inp_buf.push_back(1);
+                dfb_inp_buf.push_back(1);
             }
-            if (ncht == 0 or cb_iterations != 1) {
+            if (ncht == 0 or dfb_iterations != 1) {
 #if defined FUSE_GAMMA || defined FUSE_BETA
 #ifdef FUSE_GAMMA
-                for (uint32_t j = 0; j < cb_length; j++) {
-                    cb_gamma_buf.reserve_back(1);
-                    uint32_t l1_write_addr = cb_gamma_buf.get_write_ptr();
+                for (uint32_t j = 0; j < dfb_length; j++) {
+                    dfb_gamma_buf.reserve_back(1);
+                    uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                     async_read_row_to_tile<gamma_is_row_major>(
                         noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                     gamma_tile_count++;
                     noc.async_read_barrier();
-                    cb_gamma_buf.push_back(1);
+                    dfb_gamma_buf.push_back(1);
                 }
 #endif
 #ifdef FUSE_BETA
-                for (uint32_t j = 0; j < cb_length; j++) {
-                    cb_beta_buf.reserve_back(1);
-                    uint32_t l1_write_addr = cb_beta_buf.get_write_ptr();
+                for (uint32_t j = 0; j < dfb_length; j++) {
+                    dfb_beta_buf.reserve_back(1);
+                    uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
                     async_read_row_to_tile<beta_is_row_major>(
                         noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
                     beta_tile_count++;
                     noc.async_read_barrier();
-                    cb_beta_buf.push_back(1);
+                    dfb_beta_buf.push_back(1);
                 }
 #endif
 #endif
             }
         }
-        for (uint32_t i = 0; i < cb_leftovers; i++) {
-            cb_inp_buf.reserve_back(1);
-            noc.async_read(src_a, cb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
+        for (uint32_t i = 0; i < dfb_leftovers; i++) {
+            dfb_inp_buf.reserve_back(1);
+            noc.async_read(src_a, dfb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
             inp_tile_idx++;
             noc.async_read_barrier();
-            cb_inp_buf.push_back(1);
+            dfb_inp_buf.push_back(1);
         }
-        if (ncht == 0 or cb_iterations != 1) {
+        if (ncht == 0 or dfb_iterations != 1) {
 #if defined FUSE_GAMMA || defined FUSE_BETA
 #ifdef FUSE_GAMMA
-            for (uint32_t i = 0; i < cb_leftovers; i++) {
-                cb_gamma_buf.reserve_back(1);
-                uint32_t l1_write_addr = cb_gamma_buf.get_write_ptr();
+            for (uint32_t i = 0; i < dfb_leftovers; i++) {
+                dfb_gamma_buf.reserve_back(1);
+                uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                 async_read_row_to_tile<gamma_is_row_major>(
                     noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                 gamma_tile_count++;
                 noc.async_read_barrier();
-                cb_gamma_buf.push_back(1);
+                dfb_gamma_buf.push_back(1);
             }
 #endif
 #ifdef FUSE_BETA
-            for (uint32_t i = 0; i < cb_leftovers; i++) {
-                cb_beta_buf.reserve_back(1);
-                uint32_t l1_write_addr = cb_beta_buf.get_write_ptr();
+            for (uint32_t i = 0; i < dfb_leftovers; i++) {
+                dfb_beta_buf.reserve_back(1);
+                uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
                 async_read_row_to_tile<beta_is_row_major>(noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
                 beta_tile_count++;
                 noc.async_read_barrier();
-                cb_beta_buf.push_back(1);
+                dfb_beta_buf.push_back(1);
             }
 #endif
 #endif

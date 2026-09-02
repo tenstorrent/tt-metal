@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t bias_cb_id = tt::CBIndex::c_3;
 
     // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
-    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // initialized by add_bcast_rows_init right before it in the loop, so the full init_bcast
     // here is redundant and was removed.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
@@ -59,7 +59,8 @@ void kernel_main() {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_init(mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(mm_partials_cb_id, i, i);
@@ -102,7 +103,7 @@ void kernel_main() {
                         // Redundant wait since we know data was just pushed
                         cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                         cb_wait_front(bias_cb_id, in1_per_core_w);
-                        add_bcast_rows_init_short(mm_bias_intermediate_cb_id, bias_cb_id);
+                        add_bcast_rows_init(mm_bias_intermediate_cb_id, bias_cb_id);
                         // reconfigure unpacker df for src B
                         reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                         // reconfigure packer df for out

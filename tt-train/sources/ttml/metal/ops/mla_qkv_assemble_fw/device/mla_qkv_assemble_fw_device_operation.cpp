@@ -17,7 +17,7 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
 
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "MLAQKVAssembleFw requires {} to be on device. Got storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -33,7 +33,7 @@ void MLAQKVAssembleFwDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "MLAQKVAssembleFw requires {} memory layout to be INTERLEAVED. Got: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -135,8 +135,9 @@ MLAQKVAssembleFwDeviceOperation::spec_return_value_t MLAQKVAssembleFwDeviceOpera
     const ttnn::Shape k_shape({B, args.n_heads, S, qk_head});
     const ttnn::Shape v_shape({B, args.n_heads, S, args.v_dim});
 
-    // Each output inherits from its primary input source. Validation requires all three
-    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    // q inherits q_pre's placement; k and v inherit kv_up's. Inputs may sit in
+    // different memory configs (only interleaved is required); the program hash
+    // keys each input's memory config independently.
     auto q_layout = tt::tt_metal::TensorLayout(q_pre.dtype(), tt::tt_metal::Layout::TILE, q_pre.memory_config());
     auto kv_layout = tt::tt_metal::TensorLayout(kv_up.dtype(), tt::tt_metal::Layout::TILE, kv_up.memory_config());
     output_specs.emplace_back(q_shape, q_layout);
@@ -151,19 +152,24 @@ MLAQKVAssembleFwDeviceOperation::tensor_return_value_t MLAQKVAssembleFwDeviceOpe
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.kv_up.device();
     return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+        ttnn::create_device_tensor(specs[0], device),
+        ttnn::create_device_tensor(specs[1], device),
+        ttnn::create_device_tensor(specs[2], device)};
 }
 
 ttsl::hash::hash_t MLAQKVAssembleFwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MLAQKVAssembleFwDeviceOperation>(
         args,
         tensor_args.kv_up.dtype(),
         tensor_args.q_pre.logical_shape(),
         tensor_args.kv_up.logical_shape(),
-        tensor_args.k_pe.logical_shape());
+        tensor_args.k_pe.logical_shape(),
+        tensor_args.q_pre.memory_config(),
+        tensor_args.kv_up.memory_config(),
+        tensor_args.k_pe.memory_config());
 }
 
 MLAQKVAssembleFwDeviceOperation::program_factory_t MLAQKVAssembleFwDeviceOperation::select_program_factory(

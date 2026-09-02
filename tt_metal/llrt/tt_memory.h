@@ -7,8 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 #include <vector>
+
+#include "tt_elffile.hpp"
 
 namespace ll_api {
 
@@ -29,13 +32,22 @@ private:
 
     std::vector<word_t> data_;
     std::vector<struct span> link_spans_;
-    uint32_t text_size_ = 0;
-    uint32_t text_addr_ = 0;
+    std::uint32_t text_size_ = 0;
+    std::uint32_t text_addr_ = 0;
     Loading loading_{Loading::DISCRETE};
+
+    // Populate link_spans_/data_/text_addr_/text_size_ from ELF segments, ordering by address for
+    // DISCRETE loads. Shared by the (path, loading) constructor and from_segments().
+    void pack_from_segments(const std::string& path, const std::vector<ElfFile::Segment>& segments);
 
 public:
     memory();
     memory(const std::string& path, Loading loading);
+
+    // Build a memory directly from in-memory ELF segments (no on-disk ELF), running the same
+    // address-ordering/packing logic as the (path, loading) constructor. Lets the segment-ordering
+    // behaviour be unit-tested with synthetic segments.
+    static memory from_segments(const std::vector<ElfFile::Segment>& segments, Loading loading);
 
     // These can be large objects, so ban copying ...
     memory(const memory&) = delete;
@@ -49,10 +61,10 @@ public:
     bool operator==(const memory& other) const;
     Loading get_loading() const { return loading_; }
 
-    uint32_t get_text_size() const { return this->text_size_; }
-    uint32_t get_packed_size() const { return data_.size() * sizeof(word_t); }
-    uint32_t get_text_addr() const { return this->text_addr_; }
-    void set_text_addr(const uint32_t& addr) { this->text_addr_ = addr; }
+    std::uint32_t get_text_size() const { return this->text_size_; }
+    std::uint32_t get_packed_size() const { return data_.size() * sizeof(word_t); }
+    std::uint32_t get_text_addr() const { return this->text_addr_; }
+    void set_text_addr(const std::uint32_t& addr) { this->text_addr_ = addr; }
 
     size_t size() const { return data_.size(); }
 
@@ -61,14 +73,17 @@ public:
     // Process spans in arg mem to fill data in *this (eg, from device)
     void fill_from_mem_template(
         const memory& mem_template,
-        const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+        const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>&
+            callback);
 
     // Iterate over spans_ to act on data_ (eg., to device)
     void process_spans(
-        const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
+        const std::function<void(std::vector<std::uint32_t>::const_iterator, std::uint64_t addr, std::uint32_t len)>&
+            callback) const;
     void process_spans(
-        const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
-    void update_spans(std::function<void(uint64_t& addr)>& callback);
+        const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>&
+            callback);
+    void update_spans(std::function<void(std::uint64_t& addr)>& callback);
 };
 
 }  // namespace ll_api

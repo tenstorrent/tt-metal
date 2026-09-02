@@ -29,11 +29,12 @@ def print_l1_small_buffers(device, name):
 
 def run_ccl_op(ccl_op, tensor_b, use_l1_small):
     if ccl_op == "all_gather":
+        # Production ttnn.all_gather auto-detects L1_SMALL from the device config;
+        # whether L1_SMALL is used for semaphores is controlled by how the
+        # mesh_device was opened (see the device_params parametrize), not an op arg.
         return ttnn.all_gather(
             tensor_b,
             dim=3,
-            topology=ttnn.Topology.Linear,
-            use_l1_small_for_semaphores=use_l1_small,
         )
     elif ccl_op == "reduce_scatter":
         return ttnn.reduce_scatter(
@@ -43,12 +44,11 @@ def run_ccl_op(ccl_op, tensor_b, use_l1_small):
             use_l1_small_for_semaphores=use_l1_small,
         )
     elif ccl_op == "composite_all_gather":
-        # ROW_MAJOR layout triggers the composite_all_gather path internally
+        # ROW_MAJOR layout triggers the composite_all_gather path internally.
+        # Production ttnn.all_gather auto-detects L1_SMALL from the device config.
         return ttnn.all_gather(
             tensor_b,
             dim=3,
-            topology=ttnn.Topology.Linear,
-            use_l1_small_for_semaphores=use_l1_small,
         )
     elif ccl_op == "composite_reduce_scatter":
         # ROW_MAJOR layout triggers the composite_reduce_scatter path internally
@@ -76,16 +76,24 @@ def deallocate_output(output):
         output.deallocate(True)
 
 
+# Couple the device config with use_l1_small: production ttnn.all_gather has no
+# use_l1_small_for_semaphores op arg anymore — it auto-detects L1_SMALL from the
+# device configuration. So use_l1_small=True must open the mesh_device WITH an
+# l1_small_size (exercising the auto-detect path), and use_l1_small=False without.
+# Parametrizing device_params and use_l1_small together (rather than independently)
+# keeps the device config and the expectation in lockstep.
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 512}],
-    indirect=True,
+    "device_params, use_l1_small",
+    [
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, False, id="l1_default"),
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 512}, True, id="l1_small"),
+    ],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize(
     "ccl_op", ["all_gather", "reduce_scatter", "composite_all_gather", "composite_reduce_scatter", "all_broadcast"]
 )
-@pytest.mark.parametrize("use_l1_small", [False, True], ids=["l1_default", "l1_small"])
-def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small):
+def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_small, expect_error):
     if mesh_device.get_num_devices() < 2:
         pytest.skip("Test requires at least 2 devices")
 
@@ -160,7 +168,7 @@ def test_ccl_l1_small_semaphores(mesh_device, device_params, ccl_op, use_l1_smal
     logger.info(f"Tensor C: shape [1, 1, 32, {tensor_c_cols}], {tensor_c_bytes} bytes total")
 
     if not use_l1_small:
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Out of Memory"):
             tensor_c = ttnn.from_torch(
                 torch.randn(1, 1, 32, tensor_c_cols),
                 dtype=ttnn.bfloat16,

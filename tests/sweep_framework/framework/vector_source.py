@@ -121,7 +121,19 @@ class VectorExportSource(VectorSource):
             if _env_dir:
                 self.export_dir = pathlib.Path(_env_dir)
                 if not self.export_dir.is_absolute():
-                    self.export_dir = pathlib.Path(__file__).parent.parent / self.export_dir.name
+                    # Resolve the path AS WRITTEN first. Collapsing straight to .name was
+                    # fine while the only values were flat siblings of vectors_export
+                    # (vectors_export_col/_row), but it silently rewrites a nested path like
+                    # vectors_export_by_device/mesh4x8_col_2d to sweep_framework/mesh4x8_col_2d,
+                    # which does not exist -- so a device-key batch dir would never be found.
+                    # The bare-name form is kept last so existing callers still work.
+                    _sweep_root = pathlib.Path(__file__).parent.parent
+                    _candidates = [
+                        pathlib.Path.cwd() / self.export_dir,
+                        _sweep_root / self.export_dir,
+                        _sweep_root / self.export_dir.name,
+                    ]
+                    self.export_dir = next((c for c in _candidates if c.is_dir()), _sweep_root / self.export_dir.name)
             else:
                 # Default to vectors_export directory relative to this file
                 self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"

@@ -14,7 +14,7 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 
-TEST(CleanupTest, Basic) {
+TEST(CleanupTest, CPU_Basic) {
     int counter = 0;
     {
         auto cleanup = make_cleanup([&counter]() { counter++; });
@@ -23,8 +23,9 @@ TEST(CleanupTest, Basic) {
     EXPECT_EQ(counter, 1);
 }
 
-TEST(CleanupTest, MultipleCleanupsInOrder) {
+TEST(CleanupTest, CPU_MultipleCleanupsInOrder) {
     std::vector<int> log;
+    log.reserve(3);
     {
         auto cleanup1 = make_cleanup([&log]() { log.push_back(1); });
         auto cleanup2 = make_cleanup([&log]() { log.push_back(2); });
@@ -33,7 +34,7 @@ TEST(CleanupTest, MultipleCleanupsInOrder) {
     EXPECT_THAT(log, ElementsAre(3, 2, 1));
 }
 
-TEST(CleanupTest, CancelCleanup) {
+TEST(CleanupTest, CPU_CancelCleanup) {
     int counter = 0;
     {
         auto cleanup = make_cleanup([&counter]() { counter++; });
@@ -43,7 +44,7 @@ TEST(CleanupTest, CancelCleanup) {
     EXPECT_EQ(counter, 0);
 }
 
-TEST(CleanupTest, MoveConstruction) {
+TEST(CleanupTest, CPU_MoveConstruction) {
     int counter = 0;
     {
         auto cleanup1 = make_cleanup([&counter]() { counter++; });
@@ -53,7 +54,7 @@ TEST(CleanupTest, MoveConstruction) {
     EXPECT_EQ(counter, 1);
 }
 
-TEST(CleanupTest, ExceptionSafety) {
+TEST(CleanupTest, CPU_ExceptionSafety) {
     bool cleanup_called = false;
     try {
         [[maybe_unused]] auto cleanup = make_cleanup([&cleanup_called]() { cleanup_called = true; });
@@ -65,7 +66,7 @@ TEST(CleanupTest, ExceptionSafety) {
     EXPECT_TRUE(cleanup_called);
 }
 
-TEST(CleanupTest, PerfectForwarding) {
+TEST(CleanupTest, CPU_PerfectForwarding) {
     std::vector<int> captured = {1, 2, 3};
     {
         auto cleanup = make_cleanup([captured = std::move(captured)]() {

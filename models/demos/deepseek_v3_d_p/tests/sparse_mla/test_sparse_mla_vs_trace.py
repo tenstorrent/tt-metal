@@ -2,22 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-DeepSeek V3.2 MLA/indexer/KV-cache vs the OFFICIAL reference values.
+MLA/indexer/KV-cache vs the OFFICIAL reference values.
 
 Unlike test_mla.py (whose truth is the in-repo MLACPU model), the truth here is
-the recorded output of the official DeepSeek-V3.2 CUDA stack, captured from a
-vLLM run (a single 5120-token prefill) and stored as safetensors streams.
-Reference layers available: 0, 30, 60.
+the recorded output of the official CUDA stack, captured from a vLLM run (a
+single 5120-token prefill) and stored as safetensors streams.
 
 Streams (per layer L), loaded by load_stream:
-  module_io/mla_input_layer_L     [5120, 7168] bf16   (== indexer_input)
-  module_io/mla_output_layer_L    [5120, 7168] bf16
+  module_io/mla_input_layer_L     [5120, 6144] bf16   (== indexer_input)
+  module_io/mla_output_layer_L    [5120, 6144] bf16
   dsa/indexer_logits_layer_L      [5120, 5120] fp32   (pre-causal-mask index_score)
   dsa/dsa_topk_indices_layer_L    [5120, 2048] int32  (-1 = unfilled / causal pad)
   kv_cache/layer_L                [5120, 576]  bf16   (latent kv 512 ++ k_pe 64)
 
 The reference dir defaults to the sibling bit_sculpt checkout; override with
-$DEEPSEEK_V32_REF_DIR. Pretrained layer weights are pulled from HF on demand
+$GLM51_REF_DIR. Pretrained layer weights are pulled from HF on demand
 (cached) by pretrained_mla_weights(layer=L) — multi-GB shards, downloaded once.
 
 FUNCTIONAL-PARITY caveat: the reference ran the real FP8 (ue8m0)
@@ -37,28 +36,20 @@ the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
 half-split layout (interleaved_to_halfsplit_perm in tt/mla/rope.py) and assert a hard
 element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
-Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
-  host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
-                                one 5120 forward; the 3 asserts are ~0 s each)
-  device indexer                ~45 s  (10 s mesh setup + 30 s device stems/score/topk)
-  device kv                     ~65 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-  device mla                    ~50 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-First run adds one-time JIT kernel compile (~1-2 min) and, if uncached, a multi-GB
-HF shard download. All are correctness gates → marked `gate`; @timeout(0).
+Device rows use only the supported Fabric2D 2x2, 2x4, 4x2, or 8x4 profiles. Runtime depends on
+mesh and cache warmth; first run adds one-time JIT compilation and, if uncached, a multi-GB HF
+shard download. All are correctness gates → marked `gate`; @timeout(0).
 
 ────────────────────────────────────────────────────────────────────────────────
-GLM-5.1 (model id `glm_5_1`) — same harness, different model
+GLM-5.1 (model id `glm_5_1`)
 ────────────────────────────────────────────────────────────────────────────────
-GLM-5.1 (`zai-org/GLM-5.1`, HF `glm_moe_dsa`) is a DeepSeek-V3.2-family model (MLA +
-DSA indexer + sparse attn); its vLLM trace mirrors the V3.2 layout, so every test
-body below is shared. The host/device tests are parametrized over `model` ∈
-{deepseek_v32, glm_5_1} (filter with `-k glm_5_1` / `-k deepseek_v32`). GLM differs
-only in: hidden 6144 (vs 7168); 64 q-heads (vs 128) → sparse_sdpa needs per-chip
-H = 64/tp ≥ 32, so **tp ≤ 2** (tp>2 meshes are skipped for GLM); indexer RoPE is
-INTERLEAVED (DS's is not); and NO YaRN (scale = qk_head_dim**-0.5). The config is
+GLM-5.1 (`zai-org/GLM-5.1`, HF `glm_moe_dsa`) is an MLA + DSA-indexer + sparse-attention
+model. Hidden 6144; 64 q-heads → sparse_sdpa needs per-chip
+H = 64/tp ≥ 32, so **tp ≤ 2** (tp>2 meshes are skipped); indexer RoPE is
+INTERLEAVED; NO YaRN (scale = qk_head_dim**-0.5). The config is
 hand-built (transformers can't load glm_moe_dsa) and weights load from
 zai-org/GLM-5.1 via the identical HF→MLACPU map. Trace dir: $GLM51_REF_DIR (default
-<repo>/bit_sculpt/results/glm-51); layers 0/30/60/77. The GLM-only CPU-only block at
+<repo>/bit_sculpt/results/glm-51); layers 0/30/60/77. The CPU-only block at
 the bottom validates the trace bundle (no weights/device).
 """
 
@@ -74,21 +65,20 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference, pretrained_mla_weights
-from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import DEFAULT_REPO
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config  # GLM dims + HF config
-from models.demos.deepseek_v3_d_p.tests.conftest import _resolve_config_only  # == the config_only fixture
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import (
-    parametrize_mesh_device,
+    detect_num_devices,
+    parametrize_mesh_and_device_params,
     skip_if_seq_too_small_for_sp,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 # Bespoke suite: validated against recorded vLLM trace bundles (indexer logits/topk, sparse output,
-# k_pe frame), so it stays here rather than on the v3.1 TestVariant infra. `trace` marks it as a
+# k_pe frame), so it stays here rather than on the dense-MLA TestVariant infra. `trace` marks it as a
 # trace-bundle parity test (run separately from the CI correctness matrix).
 pytestmark = pytest.mark.trace
 
@@ -100,7 +90,6 @@ def _require_trace_marker(request):
 
 
 SEQ_LEN = 5120  # the reference prefill length (fixed by the capture)
-REF_LAYERS = [0, 30, 60]
 
 # Thresholds — functional-parity (fp8 ref vs bf16 port). Observed layer 0:
 # logits 0.96, topk mean 0.985 (min row 0.91), latent 0.998, output 0.9998.
@@ -113,15 +102,9 @@ KV_PE_VLLM_PCC = 0.999  # element-wise, once our k_pe is reindexed to vLLM's hal
 OUTPUT_PCC = 0.98
 
 
-# ----------------------------------------------------------------------------
-# GLM-5.1 specifics. The DeepSeek-V3.2 code below is unchanged; GLM reuses every
-# test body and differs only here: its config/weights builders, its layer set, and
-# the tp ≤ 2 mesh cap. (model, layer) cases drive the shared host/device tests.
-# ----------------------------------------------------------------------------
 GLM_REF_LAYERS = [0, 30, 60, 77]  # indexer_logits captured for these (topk/kv exist for all 78)
 GLM_REPO = os.environ.get("GLM51_REPO", "zai-org/GLM-5.1")  # bf16 master; "-FP8" also works (loader dequants)
-# (model, layer) cases — DS and GLM share every host/device body.
-_CASES = [("deepseek_v32", l) for l in REF_LAYERS] + [("glm_5_1", l) for l in GLM_REF_LAYERS]
+_CASES = [("glm_5_1", l) for l in GLM_REF_LAYERS]
 _CASE_IDS = [f"{m}-L{l}" for m, l in _CASES]
 
 
@@ -131,20 +114,19 @@ _glm_hf_config = glm_hf_config
 
 def _weights_for(model: str, config, layer: int):
     """Pretrained canonical weights for (model, layer) — the one dict feeding both ttMLA and the CPU
-    reference (GLM has its own repo; DS uses the V3.2 repo). fp8 is dequantized on load."""
-    return pretrained_mla_weights(config, layer=layer, repo=GLM_REPO if model == "glm_5_1" else DEFAULT_REPO)
+    reference. fp8 is dequantized on load."""
+    return pretrained_mla_weights(config, layer=layer, repo=GLM_REPO)
 
 
 # ----------------------------------------------------------------------------
 # Reference loading
 # ----------------------------------------------------------------------------
 def _ref_dir(model: str) -> Path:
-    """Trace bundle dir for `model`: $GLM51_REF_DIR / $DEEPSEEK_V32_REF_DIR, else the in-tree
-    bit_sculpt checkout at the repo root. This file lives at tests/sparse_mla/, so the repo root
-    (<...>/tt-metal, which holds bit_sculpt/) is parents[5]."""
-    sub = "glm-51" if model == "glm_5_1" else "deepseek-v32"
-    env = os.environ.get("GLM51_REF_DIR" if model == "glm_5_1" else "DEEPSEEK_V32_REF_DIR")
-    return Path(env) if env else Path(__file__).resolve().parents[5] / "bit_sculpt" / "results" / sub
+    """Trace bundle dir for `model`: $GLM51_REF_DIR, else the in-tree bit_sculpt checkout at the
+    repo root. This file lives at tests/sparse_mla/, so the repo root (<...>/tt-metal, which holds
+    bit_sculpt/) is parents[5]."""
+    env = os.environ.get("GLM51_REF_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[5] / "bit_sculpt" / "results" / "glm-51"
 
 
 def load_stream(stream_dir: Path) -> torch.Tensor:
@@ -170,12 +152,10 @@ def load_reference(model: str, layer: int) -> dict:
         "topk": root / "dsa" / f"dsa_topk_indices_layer_{layer}",
         "kv": root / "kv_cache" / f"layer_{layer}",
     }
-    if model == "glm_5_1":
-        need["idx_in"] = root / "module_io" / f"indexer_input_layer_{layer}"  # for the trace-internal checks
+    need["idx_in"] = root / "module_io" / f"indexer_input_layer_{layer}"  # for the trace-internal checks
     missing = [str(p) for p in need.values() if not glob.glob(f"{p}/rows_*.safetensors")]
     if missing:
-        env = "GLM51_REF_DIR" if model == "glm_5_1" else "DEEPSEEK_V32_REF_DIR"
-        pytest.skip(f"{model} reference streams not found (set ${env}): missing {missing}")
+        pytest.skip(f"{model} reference streams not found (set $GLM51_REF_DIR): missing {missing}")
     return {k: load_stream(v) for k, v in need.items()}
 
 
@@ -273,21 +253,20 @@ def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str, kpe_layout: s
 
 
 # ----------------------------------------------------------------------------
-# Device: the TT implementation vs the official reference (Blackhole 1x4).
+# Device: the TT implementation vs the official reference on supported Fabric2D profiles.
 # ----------------------------------------------------------------------------
-_DEVICE_PARAMS = [
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    }
-]
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+_TORUS_XY_CERTIFIED = (
+    detect_num_devices() == 32
+    and os.environ.get("PREFILL_TORUS_XY_CERTIFIED") == "1"
+    and bool(os.environ.get("TT_MESH_GRAPH_DESC_PATH"))
+)
 
 
 def _config_for(model: str):
-    """ttMLA HF-style config (carries the DSA index_* fields). Both are hand-built — transformers can't
-    load glm_moe_dsa / deepseek_v32. DS uses the V3.2 config (NOT the dense R1 one): the indexer needs the
-    real index_* fields, not the getattr defaults the dense config would silently fall back to."""
-    return _glm_hf_config() if model == "glm_5_1" else _resolve_config_only("deepseek_v32")
+    """ttMLA HF-style config (carries the DSA index_* fields). Hand-built — transformers can't
+    load glm_moe_dsa."""
+    return _glm_hf_config()
 
 
 def _skip_unsupported(model: str, mesh_device) -> None:
@@ -307,7 +286,15 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
     config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
     return ttMLA(
-        config, weights, mesh_device, layer_idx=0, seq_len=SEQ_LEN, sp_axis=0, tp_axis=1, is_chunked=is_chunked
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=SEQ_LEN,
+        sp_axis=0,
+        tp_axis=1,
+        is_chunked=is_chunked,
+        layer_num=1,
     )
 
 
@@ -324,8 +311,7 @@ def _shard_idx_input(t, mesh_device):
     )
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, monkeypatch):
@@ -350,7 +336,23 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     xs = _shard_idx_input(x, mesh_device)
     sl = SEQ_LEN // mesh_device.shape[0]
     qr = mla._q_a_latent(xs, sl, mla._get_act_mem_config("q_b_proj", sl))
-    idx = mla._indexer.forward(xs, qr, sl)
+    # The indexer is always block-cyclic now (single-shot = one full-seq chunk at offset 0): feed it the
+    # indexed rope tables + a caller-owned index_kv_cache, matching the MLA forward path.
+    cfg = _config_for(model)
+    idx_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=cfg.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
+    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
+    idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
 
     # The indexer is now query-SP-sharded: top-k input is [1,1,S/sp,end_pos] (TP-replicated) and idx is
     # [1,1,S/sp,k]. Reassemble the full S by concatenating the SP shards (tp=0 column) along the query dim.
@@ -379,15 +381,30 @@ def _run_device_forward(model, config, layer, mesh_device):
     ref = load_reference(model, layer)
     mla = _make_mla(model, config, layer, mesh_device)
     sp_axis, tp_axis = 0, 1
-    kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    # Sparse: uncompressed bf16/ROW_MAJOR KVPE cache + indexed rope + a caller-owned indexer key cache.
+    # Single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0).
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_LEN,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
+    )
 
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
@@ -399,7 +416,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    out = mla.forward(tt_x, rope_tensors, kvpe_cache)
+    out = mla.forward(tt_x, rope_tensors, kvpe_cache, index_kv_cache=index_kv_cache)
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)[
@@ -407,15 +424,15 @@ def _run_device_forward(model, config, layer, mesh_device):
     ]  # [1, S, hidden]
     # KVPE: replicated across TP — concat TP replicas on the unused dim 1, keep first.
     kvpe_t = ttnn.to_torch(
-        kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        kvpe_cache.storage,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)[
         0, 0, :SEQ_LEN
     ]  # [S, 576]
     return ref, out_t, kvpe_t
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, ds_kpe_layout):
@@ -426,8 +443,7 @@ def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, 
     ttnn.synchronize_device(mesh_device)
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_mla_output_device_vs_reference(mesh_device, model, layer, device_params):

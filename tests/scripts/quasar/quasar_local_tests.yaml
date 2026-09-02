@@ -1,0 +1,332 @@
+# Quasar emulator regression tests
+#
+# Structure:
+#   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
+#                         relative to TT_METAL_HOME
+#     - filter: <pattern> (optional) gtest filter glob, or pytest node id after ::
+#                         Omit or use "" to run all tests in the gtest binary /
+#                         pytest file.
+#                         For pytest, the filter is appended verbatim as
+#                         "<file>::<filter>", so it must be the FULL node id after
+#                         "::" -- i.e. the test FUNCTION name, plus the bracketed
+#                         parametrization id when the test is parametrized:
+#                           pytest -vv path/to/test_foo.py::test_bar[param0-param1]
+#                                                            ^^^^^^^^^^^^^^^^^^^^^^ filter
+#                         A bare param id (e.g. "pretrained-device_params0") is NOT
+#                         a node id and collects 0 tests:
+#                           ERROR: not found: .../test_foo.py::pretrained-device_params0
+#                         Quote any filter containing [ ] { } , : # so YAML keeps it
+#                         as a plain string.
+#       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
+#       runner: <type>    (optional) gtest (default) or pytest
+#       env:              (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:     (optional, gtest only) --gtest_repeat=N
+#       back2back:        (optional, gtest only) When true, run this entry in the same
+#                         process as other consecutive back2back entries that share the
+#                         same group, config, env, and gtest_repeat. Used by
+#                         run_quasar_regression.sh. Defaults to false.
+#                         Illegal for runner: pytest.
+#                         Illegal to mix empty filter (run all) with named filters in
+#                         the same back2back batch.
+#
+# Example gtest entry
+#
+# unit_tests_legacy:
+#   - filter: "*SingleDmL1Write*"
+#     config: 1x3
+#     env:
+#       TT_METAL_SOMETHING: 1
+#
+# Example pytest entry (single test)
+#
+# tests/tt_metal/tools/profiler/test_device_profiler.py:
+#   - filter: test_custom_cycle_count
+#     runner: pytest
+#     config: 2x3_DISPATCH
+#     env:
+#       TT_METAL_DEVICE_PROFILER: 1
+#
+# Example pytest entry (single PARAMETRIZED test -- note the bracketed ids)
+#
+# models/demos/.../test_resnet50_e2e.py:
+#   - filter: "test_resnet50_e2e[pretrained-device_params0]"
+#     runner: pytest
+#     config: 2x3
+#
+# Example pytest entry (entire file)
+#
+# models/demos/.../test_add.py:
+#   - runner: pytest
+#     config: 2x3
+#     env:
+#       TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+
+
+# Profiler tests
+tests/tt_metal/tools/profiler/test_device_profiler.py:
+  - filter: test_custom_cycle_count_slow_dispatch
+    runner: pytest
+    config: 1x3
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: test_custom_cycle_count
+    runner: pytest
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+
+  - filter: test_full_buffer
+    runner: pytest
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_DEVICE_PROFILER: 1
+      ARCH_NAME: quasar
+
+# ResNet50 Quasar per-op tests (entire file)
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false, "enable_logging": true}'
+      TT_METAL_WATCHER_DUMP_ALL: 1
+      TT_METAL_WATCHER_NOINLINE: 1
+      TT_METAL_LLK_ASSERTS: 1
+      TT_METAL_ENV: dev
+      TT_METAL_WATCHER_DISABLE_RING_BUFFER: 1
+      TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: 1
+      TT_METAL_WATCHER_DISABLE_NOC_SANITIZE: 1
+      TT_METAL_WATCHER: 1
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER_DISABLE_PAUSE: 1
+      TT_METAL_WATCHER_TEST_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py:
+  - filter: "test_resnet50_e2e[pretrained-device_params0]"
+    runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      RESNET_PCC_LOG: 1

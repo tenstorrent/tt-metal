@@ -20,3 +20,9 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.fork == true }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
+    with:
+      build-inplace-wheel: true
+      run-wormhole: true
+      run-blackhole: false
+      run-sim: true
+      with-retries: ${{ inputs.with-retries || false }}

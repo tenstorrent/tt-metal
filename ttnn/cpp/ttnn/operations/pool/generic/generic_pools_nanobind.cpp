@@ -38,7 +38,7 @@ static std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> max_pool2d_nanobind
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<Op2DSliceConfig>& dram_slice_config,
-    const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+    const std::optional<const tt::tt_metal::TensorMemoryLayout> applied_shard_scheme,
     bool deallocate_input,
     bool reallocate_halo_output,
     bool return_indices,

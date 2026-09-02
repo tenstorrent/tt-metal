@@ -3,30 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 
-#include "../scatter_common.hpp"
+#include "../common.hpp"
 
 void kernel_main() {
     Noc noc;
-    constexpr auto ctas{get_ctas()};
 
-    const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
-    const uint32_t sticks_for_core = get_arg_val<uint32_t>(2);
+    constexpr auto output_stick_size_bytes = get_arg(args::output_stick_size_bytes);
 
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address);
+    const auto start_stick_id = get_arg(args::start_stick_id);
+    const auto sticks_for_core = get_arg(args::sticks_for_core);
 
-    using output_std_type = std_type_t<get_dataformat(ctas.output_cb)>;
+    const auto output_addr_gtor = TensorAccessor(tensor::output);
 
-    const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(3);
+    using output_std_type = std_type_t<get_dataformat(dfb::output)>;
+
+    const auto input_and_output_chunk_size = get_arg(args::input_and_output_chunk_size);
 
     // read sticks (or chunks of them) and write them to output
     for (uint32_t stick_id = start_stick_id; stick_id < start_stick_id + sticks_for_core; ++stick_id) {
-        for (uint32_t offset_bytes = 0; offset_bytes < ctas.output_stick_size_bytes;
+        for (uint32_t offset_bytes = 0; offset_bytes < output_stick_size_bytes;
              offset_bytes += input_and_output_chunk_size * sizeof(output_std_type)) {
-            const uint32_t chunk_write_bytes = std::min(
-                ctas.output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * sizeof(output_std_type));
-            write_to_output(noc, ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
+            const uint32_t chunk_write_bytes =
+                std::min(output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * sizeof(output_std_type));
+            write_to_output(noc, dfb::output, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
         }
     }
 }

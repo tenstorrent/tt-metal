@@ -77,7 +77,6 @@ class VaeDecoder:
         self.norm_num_blocks = norm_num_blocks
         self.norm_grid_core = ttnn.CoreGrid(y=4, x=8)
         (
-            self.norm_input_mask,
             self.norm_weights,
             self.norm_bias,
         ) = prepare_group_norm(
@@ -114,7 +113,6 @@ class VaeDecoder:
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=GROUPNORM_GROUPS,
-            input_mask=self.norm_input_mask,
             weight=self.norm_weights,
             bias=self.norm_bias,
             core_grid=self.norm_grid_core,

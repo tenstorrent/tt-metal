@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct IsInDeviceOperation {
     using operation_attributes_t = IsinParams;
     using tensor_args_t = IsinInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<IsInProgramFactory>;
 

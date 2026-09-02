@@ -40,6 +40,6 @@ using tensor_args_t = SubtractAtTargetInputs;
 //                       if c + device_first_v == target[n, s] && target[n, s] in [device_first_v, device_last_v)
 //                     = input[n, 0, s, c] otherwise
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::subtract_at_target::device

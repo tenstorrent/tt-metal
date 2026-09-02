@@ -1,0 +1,26 @@
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  chunks: "11"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: true
+
+migration:
+  issue: true
+  dest_endpoint_id: 1
+  dst_slot_offset: 2
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb

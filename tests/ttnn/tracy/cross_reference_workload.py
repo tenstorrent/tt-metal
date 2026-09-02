@@ -36,7 +36,6 @@ import ast
 import json
 import os
 import sys
-import threading
 
 import ttnn
 
@@ -75,7 +74,11 @@ def main():
     if os.environ.get("REQUIRE_GALAXY") == "1":
         try:
             cluster_type = ttnn.cluster.get_cluster_type()
-            is_galaxy = cluster_type in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG)
+            is_galaxy = cluster_type in (
+                ttnn.cluster.ClusterType.GALAXY,
+                ttnn.cluster.ClusterType.TG,
+                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+            )
         except Exception:
             is_galaxy = False
         if not is_galaxy:
@@ -107,10 +110,9 @@ def main():
         sys.exit(5)
 
     rt_records = []
-    lock = threading.Lock()
 
-    def collect(record):
-        with lock:
+    def collect_records(batch):
+        for record in batch.records:
             rt_records.append(
                 {
                     "runtime_id": record.runtime_id,
@@ -121,7 +123,7 @@ def main():
                 }
             )
 
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
 
     try:
         _run_resnet50(device)
@@ -158,8 +160,7 @@ def main():
 
         ttnn.close_mesh_device(device)
 
-        with lock:
-            rt_snapshot = list(rt_records)
+        rt_snapshot = list(rt_records)
 
         with open(rt_path, "w") as f:
             json.dump(rt_snapshot, f)

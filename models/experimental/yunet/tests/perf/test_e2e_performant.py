@@ -22,6 +22,7 @@ import ttnn
 from ttnn.device import Arch
 from models.experimental.yunet.runner.performant_runner import YunetPerformantRunner
 from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
+from models.demos.utils.common_demo_utils import report_vision_fps
 
 try:
     from tracy import signpost
@@ -39,7 +40,9 @@ EXPECTED_FPS_BLACKHOLE = {
 
 EXPECTED_FPS_WORMHOLE = {
     320: 150,
-    640: 35,
+    # 640: 10% below the first CI measurement of 76.0 fps on wh_n150 (run 32378297838).
+    # The previous 35 was an author-time value that CI never exercised.
+    640: 68.4,
 }
 
 
@@ -122,5 +125,7 @@ def test_yunet_e2e_performant(device, input_size):
         num_iterations=100,
         act_dtype=ttnn.bfloat16,
     )
+
+    report_vision_fps("yunet", fps, 1)
 
     assert fps > expected_fps, f"YUNet {input_height}x{input_width} FPS {fps:.1f} below expected {expected_fps}"

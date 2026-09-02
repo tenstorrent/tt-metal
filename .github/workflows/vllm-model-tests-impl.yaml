@@ -1,0 +1,751 @@
+name: "[internal] vLLM Model tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      vllm-source:
+        description: "Where the TT backend comes from: 'plugin' (upstream vLLM + standalone tenstorrent/vllm-tt-plugin) or 'fork' (tenstorrent/vllm)"
+        required: false
+        default: plugin
+        type: string
+      vllm-commit:
+        description: "tenstorrent/vllm branch or sha (vllm-source=fork only)"
+        required: false
+        default: dev
+        type: string
+      vllm-tt-plugin-ref:
+        description: "tenstorrent/vllm-tt-plugin branch or sha (vllm-source=plugin only)"
+        required: false
+        default: main
+        type: string
+      model:
+        description: "Model to test (or 'all' for all models)"
+        required: false
+        type: string
+        default: "all"
+      mlperf-read-only:
+        description: "Mount /mnt/MLPerf as read-only (set to false to allow tt_cache write-through during first-use)"
+        required: false
+        type: boolean
+        default: true
+      tier:
+        description: "Filter tests to this tier on manual runs ('all' = no filter; scheduled runs pass 'all'). The per-entry tier mirrors the model's e2e/unit tier."
+        required: false
+        type: string
+        default: "all"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/vllm_model_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          # No tier arg: vLLM Model Tests run every entry at one cadence, so the
+          # budget is summed across all SKU entries under the plain models.vllm key.
+          # (The per-entry `tier` field is classification metadata, not a filter.)
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "vllm"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          # vLLM entries have no `cmd` — the impl builds the command from structured
+          # fields — so opt into the allow-missing-cmd relaxation. Other pipelines keep
+          # the strict "every leg has a non-empty cmd" contract.
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --allow-missing-cmd
+      - name: Apply tier and model filters
+        id: apply-filters
+        run: |
+          FILTERED='${{ steps.build-matrix.outputs.matrix }}'
+          # Filter by tier (manual-run convenience; 'all' = no filter). Every entry
+          # runs at the same cadence, so scheduled runs pass tier=all.
+          if [ "${{ inputs.tier }}" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
+          fi
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list).
+          # A family-level dropdown entry like "google/gemma-4" picks up every
+          # google/gemma-4-*-it variant; explicit hub IDs match themselves.
+          if [ "${{ inputs.model }}" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
+          fi
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+          else
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+  vllm-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    # Whole-job guard (per-step timeouts still apply below). Sourced from the SKU's
+    # `timeout` in tests/pipeline_reorg/vllm_model_tests.yaml, budget-checked per tier.
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
+    # expression context (run-with-log log-file inputs) and the container step
+    # shells ($FILE_*). container.env is shell-only, not visible to expressions.
+    env:
+      FILE_SERVER_PID: "./server.pid"
+      FILE_INSTALL_LOG: "./output/vllm_install.log"
+      FILE_SERVER_LOG: "./output/vllm_server.log"
+      FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+      FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
+      FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+      FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        # Every source-layout difference between the two vllm-source modes is
+        # resolved here, so the test steps below stay mode-agnostic. PLUGIN_DIR
+        # holds examples/ and tests/tt; BENCH_SRC_DIR holds the upstream
+        # benchmarks/ tree, which the published vLLM wheel does not ship.
+        PLUGIN_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm/plugins/vllm-tt-plugin' || '/work/vllm-tt-plugin' }}
+        BENCH_SRC_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm' || '/work/vllm-source' }}
+        PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        HF_HUB_OFFLINE: 1
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+        FILE_SERVER_PID: "./server.pid"
+        FILE_INSTALL_LOG: "./output/vllm_install.log"
+        FILE_SERVER_LOG: "./output/vllm_server.log"
+        FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+        FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
+        FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+        FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+        FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
+        # uncheck the box at dispatch time when a model needs tt_cache first-use
+        # write-through. The yyz4-mnt-models cache mode (bh_quietbox_2) uses a
+        # different network mount (/mnt/models, not the shared /mnt/MLPerf); the
+        # weights-cache-mode field comes from .github/sku_config.yaml via
+        # prepare_test_matrix.py. The same ro/rw toggle applies to either source.
+        - ${{ (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️ Setup Metal
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Ensure BH Eth links online
+        if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
+
+      - name: 🔎 Validate vllm-source
+        run: |
+          case "${{ inputs.vllm-source }}" in
+            plugin|fork) echo "vllm-source=${{ inputs.vllm-source }}" ;;
+            *) echo "❌ vllm-source must be 'plugin' or 'fork', got '${{ inputs.vllm-source }}'"; exit 1 ;;
+          esac
+
+      - name: ⬇️ Checkout vLLM TT plugin
+        if: ${{ inputs.vllm-source != 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm-tt-plugin
+          path: docker-job/vllm-tt-plugin
+          ref: ${{ inputs.vllm-tt-plugin-ref }}
+          fetch-depth: 1
+
+      - name: ⬇️ Checkout vLLM fork
+        if: ${{ inputs.vllm-source == 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm
+          path: docker-job/vllm
+          ref: ${{ inputs.vllm-commit }}
+          fetch-depth: 0
+
+      - name: 📂 Create output directory
+        run: |
+          mkdir -p output
+
+      - name: 📀 Install vLLM
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_INSTALL_LOG }}
+          run: |
+            if [ "${{ inputs.vllm-source }}" = "fork" ]; then
+              VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+              if [ -d vllm/plugins/vllm-tt-plugin ]; then
+                uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+              fi
+            else
+              # The plugin owns the vLLM version pin and its dependency overrides,
+              # so the install procedure lives there and is sourced verbatim. It
+              # resolves paths relative to the plugin root.
+              pushd vllm-tt-plugin
+              source docs/install-vllm-tt.sh
+              popd
+            fi
+            # Per-model Python deps when the model directory pins versions that
+            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            case "${{ matrix.test-group.model }}" in
+              google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+            esac
+
+      - name: ⬇️ Checkout vLLM benchmark sources
+        # The structured-output benchmark is a script under benchmarks/, which the
+        # published vLLM distribution does not install. Fetch the tree at exactly
+        # the installed version; the fork already carries it in its own checkout.
+        if: ${{ inputs.vllm-source != 'fork' && matrix.test-group.structured-output }}
+        timeout-minutes: 10
+        run: |
+          VLLM_VERSION="$(python3 -c 'from importlib.metadata import version; print(version("vllm").split("+", 1)[0])')"
+          echo "Fetching vLLM benchmark sources for v${VLLM_VERSION}"
+          git init vllm-source
+          git -C vllm-source remote add origin https://github.com/vllm-project/vllm.git
+          git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
+          git -C vllm-source checkout --detach FETCH_HEAD
+
+      - name: 🚀 Run server
+        timeout-minutes: 1
+        run: |
+          TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
+          if [ -n "$TT_CONFIG_RAW" ]; then
+            ADDITIONAL_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
+            ADDITIONAL_CONFIG=(--additional-config "$ADDITIONAL_CONFIG_RAW")
+          else
+            ADDITIONAL_CONFIG=()
+          fi
+
+          if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
+            ADDITIONAL_SERVER_ARGS=(${{ matrix.test-group.additional-server-args }})
+          else
+            ADDITIONAL_SERVER_ARGS=()
+          fi
+
+          DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
+          if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
+            DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
+          else
+            DEFAULT_CHAT_TEMPLATE_KWARGS=()
+          fi
+
+          export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
+          if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
+            export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
+          fi
+          if [ -n "${{ matrix.test-group.tt-qwen3-text-ver }}" ]; then
+            export TT_QWEN3_TEXT_VER="${{ matrix.test-group.tt-qwen3-text-ver }}"
+          fi
+
+          # Keep TT cache separate from HF hub
+          export HF_MODEL="${{ matrix.test-group.model }}"
+          MODEL_NAME="${HF_MODEL/\//--}"
+          export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
+
+          # vLLM environment variables
+          export VLLM_RPC_TIMEOUT=300000
+
+          if [ -n "${{ matrix.test-group.tt_mm_throttle_perf }}" ]; then
+            export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
+          fi
+
+          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
+          # single-stream max_num_seqs=1):
+          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
+          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
+          #     100-token prompt only ever replays the 128 bucket. Limit it so the
+          #     trace region stays small and startup is fast.
+          #   * Decode warmup captures one resident trace per sampling-param
+          #     permutation; the full penalties×logprobs sweep is unused by the
+          #     default-sampling benchmark. Warm only plain/greedy/None.
+          # Both shrink the required trace_region_size (validated to fit <200 MB
+          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          case "$HF_MODEL" in
+            google/gemma-4-*)
+              export TT_LEAN_DECODE_WARMUP=1
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              # Wormhole: force the async-decode capability OFF.
+              #
+              # Dropping --async-scheduling from additional-server-args is NOT
+              # enough. Gemma4 advertises supports_async_decode from
+              # GEMMA4_SUPPORTS_ASYNC_DECODE, which defaults to "1", and the TT
+              # platform then turns async scheduling on by itself — run
+              # 32375657713 removed the flag and the server still logged
+              # "Asynchronous scheduling is enabled". Unlike the
+              # tt-inference-server model specs, this pipeline launches
+              # server_example_tt.py directly and never picks up the spec env,
+              # so the kill-switch has to be set here.
+              #
+              # Async decode is implicated in the WH-T3K-only decode hang
+              # (#49494) and measures no throughput benefit on WH at
+              # concurrency 32, so WH legs run without it. Blackhole legs keep
+              # async on and are unaffected by this branch.
+              if [ "${{ matrix.test-group.arch }}" = "arch-wormhole_b0" ]; then
+                export GEMMA4_SUPPORTS_ASYNC_DECODE=0
+                echo "Gemma4 WH: GEMMA4_SUPPORTS_ASYNC_DECODE=0 (async decode disabled on Wormhole)"
+              fi
+              # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
+              # the all-user pool must match the served max_model_len (BH 256k /
+              # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
+              # 30270375854). See tt-metal #49257 / #49083.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
+                MAX_MODEL_LEN=""
+                for ((i = 0; i < ${#ADDITIONAL_SERVER_ARGS[@]}; i++)); do
+                  if [ "${ADDITIONAL_SERVER_ARGS[$i]}" = "--max_model_len" ] && [ $((i + 1)) -lt ${#ADDITIONAL_SERVER_ARGS[@]} ]; then
+                    MAX_MODEL_LEN="${ADDITIONAL_SERVER_ARGS[$((i + 1))]}"
+                    break
+                  fi
+                done
+                export GEMMA4_MAX_TOKENS_ALL_USERS="${MAX_MODEL_LEN:-262144}"
+                export GEMMA4_VLLM_SINGLE_CHUNK=0
+                export GEMMA4_DEMO_SINGLE_CHUNK=0
+                export GEMMA4_CHUNKED_PREFILL_TRACE=1
+                # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                # Keep chunked-prefill *trace* on — sp0 capture hard-clears the
+                # sliding persistent ring so compile/capture match (see
+                # _release_sliding_prefill_tail(clear_persistent=True)).
+                if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
+                  export GEMMA4_GEN_PREFILL_CHUNK=2048
+                  echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
+                fi
+                echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
+              fi
+              ;;
+          esac
+
+          # Build the VLLM server arguments array
+          declare -a VLLM_SERVER_ARGS
+          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
+
+          echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
+
+          python3 "${PLUGIN_DIR}/examples/server_example_tt.py" "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
+
+          # Store server's pid for cleanup
+          echo $! > ${FILE_SERVER_PID}
+
+      - name: ⏰ Wait for server to be ready
+        run: |
+          echo "Waiting for server..."
+
+          timeout_seconds=$(( ${{ matrix.test-group.server-timeout }} * 60 ))
+          elapsed=0
+          interval=20
+
+          # Read the launcher PID once. ``read -r`` consumes only the
+          # first line, so a stray trailing line in the PID file can't
+          # turn ``$server_pid`` into a multi-token argument to
+          # ``kill -0``. A missing file or non-numeric content leaves
+          # ``$server_pid`` empty and the liveness check below silently
+          # skips rather than failing closed.
+          server_pid=""
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            read -r server_pid < "${FILE_SERVER_PID}" || server_pid=""
+          fi
+          if ! [[ "$server_pid" =~ ^[0-9]+$ ]]; then
+            server_pid=""
+          fi
+
+          # vLLM writes one of these to the server log within seconds of
+          # an engine-core crash. Polling /health for the full
+          # server-timeout after one has appeared just burns CI minutes —
+          # fail fast so the rest of the matrix can move on. Using a
+          # single ``grep -m1`` with multiple ``-e`` patterns gives one
+          # bounded-by-first-match file scan per poll cycle even as the
+          # log grows.
+          fatal_grep_args=(
+            -F -m1
+            -e "EngineCore failed to start"
+            -e "EngineCore encountered a fatal error"
+            -e "EngineDeadError"
+            -e "Engine core initialization failed"
+            -e "Failed core proc"
+          )
+
+          while [ $elapsed -lt $timeout_seconds ]; do
+            if curl -sf http://localhost:8000/health; then
+              echo "Server is up! 🚀 [$elapsed sec]"
+              exit 0
+            fi
+
+            # Fast-fail when the launcher process has already exited.
+            if [ -n "$server_pid" ] && ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "❌ Server launcher (pid=$server_pid) exited before becoming ready [$elapsed sec]."
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            # Fast-fail on a fatal marker in the server log. The launcher
+            # may stay alive after engine cores crash (e.g. multiprocess
+            # DP), so the log signal complements the liveness check.
+            if [ -f "${FILE_SERVER_LOG}" ]; then
+              fatal_match=$(grep "${fatal_grep_args[@]}" "${FILE_SERVER_LOG}" 2>/dev/null) || true
+              if [ -n "$fatal_match" ]; then
+                echo "❌ Fatal marker in server log [$elapsed sec]: $fatal_match"
+                echo "Check out the server log in a step below."
+                exit 1
+              fi
+            fi
+
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+
+          echo "❌ Server did not become ready in time (${timeout_seconds}s)."
+          echo "Check out the server log in a step below."
+          exit 1
+
+      - name: 📐 Run benchmark
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_BENCHMARK_LOG }}
+          run: |
+            if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+              ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+            else
+              ADDITIONAL_BENCHMARK_ARGS=()
+            fi
+
+            vllm bench serve \
+              --backend vllm \
+              --model ${{ matrix.test-group.model }} \
+              --dataset-name random \
+              --random-input-len 100 \
+              --random-output-len 100 \
+              --num-prompts 32 \
+              --ignore-eos \
+              --percentile-metrics ttft,tpot,itl,e2el \
+              --save-result \
+              --result-filename output/vllm_result.json \
+              "${ADDITIONAL_BENCHMARK_ARGS[@]}"
+      - name: Verify benchmark
+        run: |
+          # `vllm bench serve` exits 0 even when individual requests fail (a crashed
+          # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
+          # require EVERY request to complete successfully.
+          RESULT_JSON="output/vllm_result.json"
+          if [ ! -f "$RESULT_JSON" ]; then
+            echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
+          expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
+          if [ "$completed" != "$expected" ]; then
+            echo "❌ Only $completed/$expected requests completed successfully (require all)"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ All $expected requests completed successfully"
+
+      - name: 🧠 Run coherence guard (verbatim echo)
+        if: ${{ matrix.test-group.coherence-test }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        run: |
+          # Coherence guard: the other CI steps only check structural/throughput
+          # properties (request completion, structured-output schema). A backend
+          # regression that corrupts the forward pass (e.g. a broken on-device
+          # decode trace) still returns deterministic, well-formed-but-garbage
+          # tokens, so those checks pass while the model emits gibberish. Requiring
+          # a verbatim echo of a simple sentence catches that class of bug directly.
+          # Thinking off per-request and a budget that fits it anyway: a <think> preamble
+          # would eat the tokens and fail the grep for reasons unrelated to coherence.
+          SENTENCE="The quick brown fox jumps over the lazy dog."
+          curl http://localhost:8000/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "X-User-ID: vllm_test" \
+            -d "{
+              \"model\": \"${{ matrix.test-group.model }}\",
+              \"messages\": [
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
+                }
+              ],
+              \"chat_template_kwargs\": {\"enable_thinking\": false},
+              \"max_tokens\": 512,
+              \"temperature\": 0.0,
+              \"stream\": false,
+              \"ignore_eos\": false
+          }" \
+          2>&1 | tee ${FILE_COHERENCE_TEST_LOG}
+
+          # A model that cannot reproduce a simple sentence verbatim is not
+          # generating coherent text.
+          if ! grep -qF "$SENTENCE" "${FILE_COHERENCE_TEST_LOG}"; then
+            echo "❌ Coherence guard failed: model did not echo the sentence verbatim (likely gibberish from a corrupted forward pass)."
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ Coherence guard passed: verbatim echo found"
+
+      - name: 📐 Run structured output benchmark
+        if: ${{ matrix.test-group.structured-output }}
+        timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
+          run: |
+            if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+              ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+            else
+              ADDITIONAL_BENCHMARK_ARGS=()
+            fi
+
+            if [ -n "${{ matrix.test-group.additional-structured-output-args }}" ]; then
+              ADDITIONAL_STRUCTURED_OUTPUT_ARGS=(${{ matrix.test-group.additional-structured-output-args }})
+            else
+              ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
+            fi
+
+            python3 "${BENCH_SRC_DIR}/benchmarks/benchmark_serving_structured_output.py" \
+              --backend vllm \
+              --model ${{ matrix.test-group.model }} \
+              --num-prompts 32 \
+              --percentile-metrics ttft,tpot,itl,e2el \
+              --dataset json-unique \
+              --output-len 1024 \
+              --save-results \
+              --result-filename output/vllm_result_structured.json \
+              "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
+              "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}"
+
+            # The benchmark exits 0 even when responses are wrong; gate on the
+            # saved correct_rate(%), which must be a perfect 100.0. Reading the
+            # result file (not the log) keeps this race-free under the wrapper.
+            python3 -c "import json, sys; sys.exit(0 if float(json.load(open('output/vllm_result_structured.json'))['correct_rate(%)']) == 100.0 else 1)" \
+              || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
+            echo '✅ Structured output passed'
+
+      - name: 🖼️ Run multimodal test
+        if: ${{ matrix.test-group.multimodal }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
+          run: |
+            resp=$(curl -sS http://localhost:8000/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "X-User-ID: vllm_test" \
+              -d '{
+                "model": "${{ matrix.test-group.model }}",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Describe this image in 50 words."
+                      },
+                      {
+                        "type": "image_url",
+                        "image_url": {
+                          "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "max_tokens": 512,
+                "temperature": 0.0,
+                "top_p": 0.9,
+                "top_k": 10,
+                "repetition_penalty": 1.0,
+                "stream": false,
+                "ignore_eos": false
+            }')
+            echo "$resp"
+            # cats.jpeg: a correct description mentions a cat, so its absence
+            # means the model or image pipeline misbehaved. Grep the captured
+            # response (not the log) to stay race-free under the wrapper.
+            grep -qi cat <<<"$resp" || { echo '❌ keyword "cat" not found in multimodal response'; exit 1; }
+            echo '✅ Multimodal response describes a cat'
+      - name: 🧪 Run sampling tests
+        if: ${{ matrix.test-group.sampling-tests }}
+        timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_SAMPLING_TESTS_LOG }}
+          run: |
+            FILTER="${{ matrix.test-group.sampling-test-filter }}"
+            if [ -n "$FILTER" ]; then
+              pytest "${PLUGIN_DIR}/tests/tt" -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            else
+              pytest "${PLUGIN_DIR}/tests/tt" -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            fi
+
+      - name: 🧹 Cleanup server process
+        if: always()
+        run: |
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            pid=$(cat "${FILE_SERVER_PID}")
+            if kill -0 "$pid" 2>/dev/null; then
+              kill "$pid"
+              echo "✅ Server process with PID $pid terminated."
+              rm -f "${FILE_SERVER_PID}"
+            else
+              echo "❌ Server process already down!"
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+          else
+            echo "❌ PID file not found. Server may not have started correctly."
+            exit 1
+          fi
+
+      - name: Show server log
+        if: always()
+        continue-on-error: true
+        run: |
+          cat "${FILE_SERVER_LOG}"
+
+      - name: Show report
+        if: always()
+        continue-on-error: true
+        run: |
+          cat output/vllm_result.json
+
+      - name: Show structured output report
+        if: ${{ always() && matrix.test-group.structured-output }}
+        continue-on-error: true
+        run: |
+          cat output/vllm_result_structured.json
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["output"],
+              "output_dir": "ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+
+      - name: Set artifact prefix
+        if: ${{ !cancelled() }}
+        id: set-artifact-prefix
+        run: |
+          # Replace spaces with underscores
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
+          echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: docker-job/output/
+          prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, vllm-tests]
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.vllm-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

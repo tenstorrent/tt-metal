@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import pytest
 import torch
+
 import ttnn
-import math
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -171,6 +173,78 @@ def test_untilize_with_unpadding_height_sharded(
     assert_equal(result, torch_result)
 
 
+@pytest.mark.parametrize(
+    "hw, out_channels",
+    [
+        (2048, 2),  # 4 bytes, below 16-byte NOC alignment
+        (2048, 4),  # 8 bytes, below 16-byte NOC alignment
+        (2048, 8),  # 16 bytes, at alignment boundary
+        (2048, 16),  # W==16 fast path must not fire for interleaved output
+    ],
+)
+def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, hw, out_channels):
+    torch.manual_seed(0)
+    torch_input = torch.rand((hw, out_channels), dtype=torch.bfloat16)
+
+    num_cores = 64
+    shard_shape = [hw // num_cores, max(out_channels, 32)]  # pad width to TILE_WIDTH
+    core_range_set = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size())
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    output_tensor_end = [hw - 1, out_channels - 1]
+
+    tt_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    if out_channels == 16:
+        # Force an interleaved output so the W==16 fast path (sharded-only) must not fire.
+        tt_out = ttnn.untilize_with_unpadding(
+            tt_tensor, output_tensor_end=output_tensor_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    else:
+        tt_out = ttnn.untilize_with_unpadding(tt_tensor, output_tensor_end=output_tensor_end)
+    result = ttnn.to_torch(tt_out)
+
+    assert_equal(result, torch_input)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("output_width", [30, 31, 32])
+def test_untilize_with_unpadding_interleaved_to_height_sharded_unaligned_row(device, dtype, output_width):
+    """INTERLEAVED input -> HEIGHT_SHARDED output whose row size is not a multiple of the
+    buffer alignment (16 bytes in L1).
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 256, 64]
+    output_end = [0, 0, 255, output_width - 1]
+    torch_input = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+
+    # Shard width tracks the unpadded output width, so the output row size in bytes stays
+    # unaligned - padding the shard out to a tile width would hide the mis-striding.
+    num_cores = 4
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+    output_shard_spec = ttnn.ShardSpec(
+        shard_core_grid, (shape[2] // num_cores, output_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+
+    tile_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
+    result = ttnn.to_torch(untilized)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    assert_equal(result, torch_input[slices])
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shape, output_end, shard_shape, num_cores",
@@ -271,6 +345,28 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, output_end",
+    [
+        ([2, 3, 4, 64, 64], [0, 1, 2, 31, 31]),
+        ([2, 3, 4, 64, 64], [1, 2, 3, 63, 63]),
+    ],
+)
+def test_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end(device, dtype, tensor_shape, output_end):
+    torch.manual_seed(0)
+    torch_tensor = torch.arange(1, 1 + math.prod(tensor_shape), dtype=TTNN_TO_TORCH_DTYPE[dtype]).reshape(tensor_shape)
+
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    untilized = ttnn.untilize_with_unpadding(tile_tensor, output_tensor_end=output_end)
+    result = ttnn.to_torch(untilized)
+
+    expected_shape = [end + 1 for end in output_end]
+    assert list(untilized.shape) == expected_shape
+    slices = tuple(slice(0, end + 1) for end in output_end)
+    assert_equal(result, torch_tensor[slices])
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -664,7 +760,7 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         ttnn.Shape([3, 96, 96]),
     ],
 )
-@pytest.mark.parametrize("output_end", [(ttnn.Shape([3, 127, 127]))])
+@pytest.mark.parametrize("output_end", [ttnn.Shape([3, 127, 127])])
 @pytest.mark.parametrize(
     "output_memory_layout",
     [

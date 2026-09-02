@@ -4,9 +4,14 @@
 
 """Qwen3 backward pass comparison: HuggingFace (PyTorch) vs ttml.
 
-Compares per-parameter gradients between HuggingFace (CPU/bfloat16) and
-ttml (Tenstorrent device/bfloat16) after a single forward+backward pass
-with cross-entropy loss.
+Compares per-parameter gradients between HuggingFace (CPU) and ttml
+(Tenstorrent device/bfloat16) after a single forward+backward pass with
+cross-entropy loss.
+
+The HF side runs in bfloat16 by default, matching ttml — which means a
+disagreement cannot be attributed to either side. ``--hf_dtype float32`` makes
+HF a true reference (weights round-tripped through bf16 so both start from
+identical values), so the residual is attributable to ttml's bf16 accumulation.
 
 Usage:
     # Single device:
@@ -33,6 +38,7 @@ Usage:
 import argparse
 import math
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -46,6 +52,7 @@ from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
 )
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.models.qwen3.weights import (
     repermute_proj_rows,
@@ -58,7 +65,7 @@ from utils.param_utils import (
 )
 
 
-def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
+def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=1):
     """Compare per-parameter gradients between HF and TTML.
 
     Metrics (a = HF ground truth, b = TTML, eps = 1e-4):
@@ -93,6 +100,32 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
         ttml_grad_raw = ttml_grads[ttml_name].float()
         ttml_grad = ttml_grad_raw.squeeze()
 
+        # Fused KV: the ttml kv_proj grad packs K and V. Both the HF k_proj and
+        # v_proj entries map to this same ttml grad, so select the matching half
+        # BEFORE shape-matching/repermute. K then goes through repermute below; V
+        # is used as-is.
+        #   split_kv    (single-device/FSDP): layout is [all-K ; all-V], a plain
+        #               contiguous midpoint split.
+        #   split_kv_tp (ColumnParallel TP): layout is the per-shard interleave
+        #               [K_s0,V_s0,K_s1,V_s1,...], so de-interleave via a
+        #               [tp, 2, per, ...] reshape and take the K (0) or V (1) plane.
+        if hf_name in inv_transforms and inv_transforms[hf_name][0] == "split_kv":
+            _, which, kv_out, _num_kv_heads = inv_transforms[hf_name]
+            if ttml_grad.shape[0] >= 2 * kv_out:
+                ttml_grad = ttml_grad[:kv_out] if which == "k" else ttml_grad[kv_out : 2 * kv_out]
+        elif hf_name in inv_transforms and inv_transforms[hf_name][0] == "split_kv_tp":
+            _, which, num_kv_heads = inv_transforms[hf_name]
+            total = ttml_grad.shape[0]  # 2*kv_out (global, after concat_2 reassembly)
+            kv_out = total // 2
+            per = kv_out // tp_size
+            plane = 0 if which == "k" else 1
+            if ttml_grad.dim() == 2:
+                dei = ttml_grad.reshape(tp_size, 2, per, ttml_grad.shape[1])
+                ttml_grad = dei[:, plane].reshape(kv_out, ttml_grad.shape[1])
+            else:  # bias
+                dei = ttml_grad.reshape(tp_size, 2, per)
+                ttml_grad = dei[:, plane].reshape(kv_out)
+
         if hf_grad.shape != ttml_grad.shape:
             if hf_grad.dim() == 2 and ttml_grad.dim() == 2:
                 r = min(hf_grad.shape[0], ttml_grad.shape[0])
@@ -118,24 +151,42 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
                 ttml_grad = repermute_proj_rows(ttml_grad, num_heads=tr[1])
             elif tr[0] == "repermute_norm":
                 ttml_grad = repermute_norm_weights(ttml_grad)
+            elif tr[0] == "split_kv":
+                # The K half was carved out above; it still carries the RoPE
+                # row-permute (like q_proj/k_proj), so repermute it back to HF
+                # layout. The V half is used as-is (never permuted).
+                _, which, _kv_out, num_kv_heads = tr
+                if which == "k":
+                    ttml_grad = repermute_proj_rows(ttml_grad, num_heads=num_kv_heads)
+            elif tr[0] == "split_kv_tp":
+                # Same as split_kv: the de-interleaved K half still carries the
+                # RoPE row-permute and must be repermuted back to HF layout; V is
+                # used as-is.
+                _, which, num_kv_heads = tr
+                if which == "k":
+                    ttml_grad = repermute_proj_rows(ttml_grad, num_heads=num_kv_heads)
 
         hf_flat = hf_grad.flatten()
         ttml_flat = ttml_grad.flatten()
 
+        # Every reduction below accumulates in float64 while keeping float32
+        # temporaries. These tensors run to hundreds of millions of elements (the
+        # tied embed_tokens grad is vocab x hidden), and a float32 reduction over
+        # that many terms carries ~1e-3 relative error -- the same size as the
+        # bf16 differences being measured.
         abs_diff = (hf_flat - ttml_flat).abs()
-        ad_mean = abs_diff.mean().item()
+        ad_mean = abs_diff.mean(dtype=torch.float64).item()
         ad_max = abs_diff.max().item()
 
         rel_diff = abs_diff / (hf_flat.abs() + REL_EPS)
-        rd_mean = rel_diff.mean().item()
+        rd_mean = rel_diff.mean(dtype=torch.float64).item()
         rd_max = rel_diff.max().item()
 
-        hf_norm_t = hf_flat.norm()
-        ttml_norm_t = ttml_flat.norm()
-        cos_sim = (torch.dot(hf_flat, ttml_flat) / (hf_norm_t * ttml_norm_t + 1e-8)).item()
+        hf_norm_val = hf_flat.pow(2).sum(dtype=torch.float64).sqrt().item()
+        ttml_norm_val = ttml_flat.pow(2).sum(dtype=torch.float64).sqrt().item()
+        dot = (hf_flat * ttml_flat).sum(dtype=torch.float64).item()
+        cos_sim = dot / (hf_norm_val * ttml_norm_val + 1e-8)
         cos_dist = 1.0 - cos_sim
-        hf_norm_val = hf_norm_t.item()
-        ttml_norm_val = ttml_norm_t.item()
 
         abs_mean_sum += ad_mean
         abs_max_worst = max(abs_max_worst, ad_max)
@@ -310,7 +361,7 @@ def run_backward_comparison(
     assert max_seq_in_batch <= max_seq_len, f"Longest sequence ({max_seq_in_batch}) exceeds max_seq_len ({max_seq_len})"
 
     # ------------------------------------------------------------------
-    # 1. HuggingFace backward (CPU, float32)
+    # 1. HuggingFace backward (CPU, dtype per --hf_dtype)
     # ------------------------------------------------------------------
     print("\n[HF] Forward + backward ...")
     t0 = time.time()
@@ -362,13 +413,13 @@ def run_backward_comparison(
         for d in range(dp_size):
             padded_np[d, 0, 0, : seq_lens[d]] = np.array(sequences[d], dtype=np.int32)
         input_tensor = create_input_tensor_dp(padded_np, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_np)
+        logits = ttml_model(input_tensor, causal_mask)
     else:
         padded_input = torch.zeros(effective_batch, 1, 1, max_seq_len, dtype=torch.int32)
         for b in range(effective_batch):
             padded_input[b, 0, 0, : seq_lens[b]] = torch.tensor(sequences[b], dtype=torch.int32)
         input_tensor = create_input_tensor(padded_input, device)
-        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_input.numpy())
+        logits = ttml_model(input_tensor, causal_mask)
     if track_memory:
         MemoryUsageTracker.snapshot("FORWARD_PASS")
     print("  Forward pass complete.")
@@ -469,7 +520,7 @@ def run_backward_comparison(
     # 4. Compare per-parameter gradients
     # ------------------------------------------------------------------
     print("\nPer-parameter gradient diff (a=HF, b=TTML, eps=1e-4):")
-    _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms)
+    _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=tp_size)
 
     ctx.reset_graph()
 
@@ -483,6 +534,26 @@ def main():
     parser = argparse.ArgumentParser(description="Qwen3: backward gradient comparison (HF vs ttml)")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="Once upon a time")
+    parser.add_argument(
+        "--prompt_file",
+        type=str,
+        default=None,
+        help="Read the prompt from this file instead of --prompt. Use to fill a long "
+        "--max_seq_len with real text: with a short prompt almost every position is "
+        "padding (target id 0), and both sides average the loss over all of them, so "
+        "the comparison ends up dominated by padding rather than language modelling.",
+    )
+    parser.add_argument(
+        "--hf_dtype",
+        type=str,
+        default="bfloat16",
+        choices=["bfloat16", "float32"],
+        help="Precision of the HuggingFace reference. Default bfloat16 matches ttml, so "
+        "a disagreement cannot be attributed to either side. float32 makes HF a true "
+        "reference: the weights are still round-tripped through bfloat16 so both models "
+        "start from bit-identical values, and only the accumulation precision differs — "
+        "so the residual is attributable to ttml's bf16 compute.",
+    )
     parser.add_argument("--max_seq_len", type=int, default=128)
     parser.add_argument(
         "--mesh_shape",
@@ -525,9 +596,22 @@ def main():
     # ------------------------------------------------------------------
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    print(f"Loading HuggingFace model: {args.model_path}")
+    hf_dtype = torch.float32 if args.hf_dtype == "float32" else torch.bfloat16
+    print(f"Loading HuggingFace model: {args.model_path}  (reference dtype: {args.hf_dtype})")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=hf_dtype, trust_remote_code=True)
+
+    if hf_dtype == torch.float32:
+        # Round every weight through bfloat16 and back. The checkpoint is bf16 on disk,
+        # but loading it as float32 and *also* handing the float32 values to ttml would
+        # not match: ttml stores bf16, so ttml's weights would be the rounded ones while
+        # HF kept the unrounded. Round-tripping here makes both models start from
+        # bit-identical values, leaving accumulation precision as the only difference.
+        with torch.no_grad():
+            for p in hf_model.parameters():
+                p.copy_(p.bfloat16().float())
+        print("  Weights round-tripped through bfloat16 (identical starting values on both sides)")
+
     hf_model.eval()
     hf_config = hf_model.config
     hf_state_dict = hf_model.state_dict()
@@ -542,13 +626,29 @@ def main():
     else:
         count = 1
 
+    if args.prompt_file:
+        base_prompt = Path(args.prompt_file).read_text(errors="replace")
+        print(f"  Prompt from {args.prompt_file}: {len(base_prompt)} chars")
+    else:
+        base_prompt = args.prompt
+
     if count > 1:
         width = len(str(count))
-        prompts = [f"{str(i+1).zfill(width)}. {args.prompt}" for i in range(count)]
+        prompts = [f"{str(i+1).zfill(width)}. {base_prompt}" for i in range(count)]
     else:
-        prompts = [args.prompt]
+        prompts = [base_prompt]
 
-    all_prompt_tokens = [tokenizer.encode(p) for p in prompts]
+    # Trim to max_seq_len so a long prompt_file fills the window without overflowing it.
+    all_prompt_tokens = [tokenizer.encode(p)[: args.max_seq_len] for p in prompts]
+    fill = min(len(pt) for pt in all_prompt_tokens) / args.max_seq_len
+    if fill < 0.5:
+        print(
+            f"  NOTE: prompt fills only {fill:.1%} of max_seq_len={args.max_seq_len}. "
+            "The remaining positions are padding with target id 0, and both sides average "
+            "the loss over them, so most of the measured gradient is padding. Use "
+            "--prompt_file with enough text to fill the window for a language-modelling "
+            "comparison."
+        )
     token_lens = [len(pt) for pt in all_prompt_tokens]
     if len(set(token_lens)) > 1:
         print(f"  WARNING: prompt token lengths differ: {token_lens}")
@@ -558,7 +658,6 @@ def main():
     # ------------------------------------------------------------------
     # 3. Set up Tenstorrent device (single or mesh)
     # ------------------------------------------------------------------
-    from utils.device_setup import setup_device
     from utils.model_factory import create_ttml_model, load_hf_weights
 
     ctx, device = setup_device(dp_size, tp_size)
@@ -636,8 +735,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

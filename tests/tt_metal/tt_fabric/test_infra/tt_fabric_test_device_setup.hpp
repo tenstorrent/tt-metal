@@ -84,11 +84,11 @@ struct Connection {
     // of the eth chan (resolved via the control plane).
     FabricNodeId next_hop_dst{MeshId{0}, 0};
 
-    std::set<CoreCoord> sender_cores;           // Data senders (full-size channels)
-    std::set<CoreCoord> receiver_cores;         // Credit senders (header-only channels)
-    std::set<CoreCoord> sync_cores;             // Sync senders (header-only channels)
-    std::map<CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
-    std::map<CoreCoord, TestWorkerType> core_worker_types;  // Core -> worker type mapping
+    std::set<tt::tt_metal::CoreCoord> sender_cores;           // Data senders (full-size channels)
+    std::set<tt::tt_metal::CoreCoord> receiver_cores;         // Credit senders (header-only channels)
+    std::set<tt::tt_metal::CoreCoord> sync_cores;             // Sync senders (header-only channels)
+    std::map<tt::tt_metal::CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
+    std::map<tt::tt_metal::CoreCoord, TestWorkerType> core_worker_types;  // Core -> worker type mapping
     bool needs_mux = false;
 };
 
@@ -99,20 +99,20 @@ struct TestDevice;
 // Takes ownership of pristine cores and pops them on-demand
 class LocalDeviceCoreAllocator {
 public:
-    explicit LocalDeviceCoreAllocator(std::vector<CoreCoord>&& available_cores) :
+    explicit LocalDeviceCoreAllocator(std::vector<tt::tt_metal::CoreCoord>&& available_cores) :
         available_cores_(std::move(available_cores)) {}
 
-    std::optional<CoreCoord> allocate_core() {
+    std::optional<tt::tt_metal::CoreCoord> allocate_core() {
         if (available_cores_.empty()) {
             return std::nullopt;
         }
-        CoreCoord allocated = available_cores_.back();
+        tt::tt_metal::CoreCoord allocated = available_cores_.back();
         available_cores_.pop_back();
         return allocated;
     }
 
 private:
-    std::vector<CoreCoord> available_cores_;
+    std::vector<tt::tt_metal::CoreCoord> available_cores_;
 };
 
 // FabricConnectionManager: Centralized connection tracking and management
@@ -143,7 +143,7 @@ public:
     // and is recorded once on the Connection on first registration (it must be invariant
     // for a given key).
     void register_client(
-        const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst);
+        const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -158,17 +158,17 @@ public:
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_links() const;
 
     // Get all connection keys for a specific core (fast lookup via reverse map)
-    std::vector<ConnectionKey> get_connection_keys_for_core(const CoreCoord& core, TestWorkerType worker_type) const;
+    std::vector<ConnectionKey> get_connection_keys_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const;
 
     // Get number of fabric connections for a specific core
-    size_t get_connection_count_for_core(const CoreCoord& core, TestWorkerType worker_type) const;
+    size_t get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const;
 
     // Get the array index for a connection key in the core's connection list
     uint32_t get_connection_array_index_for_key(
-        const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const;
+        const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const;
 
     // Check if a core is a mux client
-    bool is_mux_client(const CoreCoord& core) const;
+    bool is_mux_client(const tt::tt_metal::CoreCoord& core) const;
 
     // Get the number of muxes to terminate (for compile-time arg)
     uint32_t get_num_muxes_to_terminate() const { return static_cast<uint32_t>(mux_configs_.size()); }
@@ -176,13 +176,13 @@ public:
     // Generate mux termination local args for a core
     // Returns empty vector if core is not a mux client
     std::vector<uint32_t> generate_mux_termination_local_args_for_core(
-        const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const;
+        const tt::tt_metal::CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const;
 
     // Generate all fabric connection args for a specific core
     // Returns rt_args to append (includes is_mux flag + connection args for each connection)
     // Parameters are passed in from TestDevice since it has all the context
     std::vector<uint32_t> generate_connection_args_for_core(
-        const CoreCoord& core,
+        const tt::tt_metal::CoreCoord& core,
         TestWorkerType worker_type,
         const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
         const FabricNodeId& fabric_node_id,
@@ -190,20 +190,20 @@ public:
 
 private:
     std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash> connections_;
-    std::unordered_map<CoreCoord, std::set<ConnectionKey>> sender_core_to_keys_;
-    std::unordered_map<CoreCoord, std::set<ConnectionKey>> receiver_core_to_keys_;
-    std::unordered_map<CoreCoord, std::set<ConnectionKey>> sync_core_to_keys_;
-    std::unordered_map<CoreCoord, ConnectionKey> mux_core_to_key_;
+    std::unordered_map<tt::tt_metal::CoreCoord, std::set<ConnectionKey>> sender_core_to_keys_;
+    std::unordered_map<tt::tt_metal::CoreCoord, std::set<ConnectionKey>> receiver_core_to_keys_;
+    std::unordered_map<tt::tt_metal::CoreCoord, std::set<ConnectionKey>> sync_core_to_keys_;
+    std::unordered_map<tt::tt_metal::CoreCoord, ConnectionKey> mux_core_to_key_;
 
     // Mux state (populated during process())
     // One mux per connection key (each fabric link has its own mux)
-    std::unordered_map<ConnectionKey, CoreCoord, ConnectionKeyHash> mux_cores_;  // connection key -> mux core location
-    std::unordered_map<CoreCoord, std::unique_ptr<FabricMuxConfig>>
+    std::unordered_map<ConnectionKey, tt::tt_metal::CoreCoord, ConnectionKeyHash> mux_cores_;  // connection key -> mux core location
+    std::unordered_map<tt::tt_metal::CoreCoord, std::unique_ptr<FabricMuxConfig>>
         mux_configs_;  // mux core -> mux config (1:1 with mux_cores_)
 
     // Mux termination state (populated during process())
-    std::set<CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
-    CoreCoord global_termination_master_;       // First mux client (in deterministic order)
+    std::set<tt::tt_metal::CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
+    tt::tt_metal::CoreCoord global_termination_master_;       // First mux client (in deterministic order)
 
     static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 8;
     static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 64;
@@ -216,7 +216,7 @@ private:
 struct TestWorker {
 public:
     virtual ~TestWorker() = default;
-    TestWorker(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestWorker(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
         const MeshCoordinate& device_coord,
@@ -231,7 +231,7 @@ public:
     void dump_results();
 
 protected:
-    CoreCoord logical_core_;
+    tt::tt_metal::CoreCoord logical_core_;
     uint32_t worker_id_{};
     std::string kernel_src_;
     TestDevice* test_device_ptr_;
@@ -240,14 +240,14 @@ protected:
 struct TestSender : TestWorker {
 public:
     ~TestSender() override = default;
-    TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestSender(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
     const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
 
     // Accessors for progress monitoring
-    CoreCoord get_core() const { return logical_core_; }
+    tt::tt_metal::CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
 
     // stores traffic config and the corresponding fabric connection key
@@ -257,7 +257,7 @@ public:
 
 struct TestReceiver : TestWorker {
 public:
-    TestReceiver(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestReceiver(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficReceiverConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
@@ -268,7 +268,7 @@ public:
 
 struct TestSync : TestWorker {
 public:
-    TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
@@ -279,7 +279,7 @@ public:
 
 struct TestMux : TestWorker {
 public:
-    TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_config(FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
@@ -306,41 +306,41 @@ public:
         const ReceiverMemoryMap* receiver_memory_map = nullptr);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id() const;
-    void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
-    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config);
-    void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
+    void add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSenderConfig config);
+    void add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config);
+    void add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(
-        CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
+        tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     void create_kernels();
 
     // Latency test kernel creation (called directly by TestContext)
     // Uses static memory map addresses for semaphores (same as bandwidth tests)
     void create_latency_sender_kernel(
-        CoreCoord core,
+        tt::tt_metal::CoreCoord core,
         FabricNodeId dest_node,
         uint32_t payload_size,
         uint32_t num_samples,
         NocSendType noc_send_type,
-        CoreCoord responder_virtual_core);
+        tt::tt_metal::CoreCoord responder_virtual_core);
 
     void create_latency_responder_kernel(
-        CoreCoord core,
+        tt::tt_metal::CoreCoord core,
         FabricNodeId sender_node,
         uint32_t payload_size,
         uint32_t num_samples,
         NocSendType noc_send_type,
         uint32_t sender_send_buffer_address,
         uint32_t sender_receive_buffer_address,
-        CoreCoord sender_virtual_core);
+        tt::tt_metal::CoreCoord sender_virtual_core);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
-    void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
+    void set_pristine_cores(std::vector<tt::tt_metal::CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
 
     // Set kernel source for specific workers (used by latency tests to override default kernels)
-    void set_sender_kernel_src(CoreCoord core, const std::string& kernel_src);
-    void set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src);
+    void set_sender_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src);
+    void set_receiver_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src);
 
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
@@ -361,10 +361,10 @@ public:
 
     // Original validation method for backward compatibility
     void validate_results() const;
-    void set_sync_core(CoreCoord coord) { sync_core_coord_ = coord; };
+    void set_sync_core(tt::tt_metal::CoreCoord coord) { sync_core_coord_ = coord; };
     void set_local_runtime_args_for_core(
         const MeshCoordinate& device_coord,
-        CoreCoord logical_core,
+        tt::tt_metal::CoreCoord logical_core,
         uint32_t local_args_address,
         const std::vector<uint32_t>& args) const;
 
@@ -373,8 +373,8 @@ public:
     }
 
     // Method to access sender and receiver configurations for traffic analysis
-    const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
-    const std::unordered_map<CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
+    const std::unordered_map<tt::tt_metal::CoreCoord, TestSender>& get_senders() const { return senders_; }
+    const std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
         return connection_manager_.get_used_fabric_links();
@@ -408,7 +408,7 @@ public:
     size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
 
 private:
-    void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
+    void add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core);
     void create_sender_kernels();
     void create_receiver_kernels();
     void validate_sender_results() const;
@@ -423,7 +423,7 @@ private:
     // part of the dedup key, so multiple traffic configs with different final dsts that
     // share the same physical link collapse to one ConnectionKey.
     ConnectionKey register_fabric_connection(
-        CoreCoord logical_core,
+        tt::tt_metal::CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
@@ -440,18 +440,18 @@ private:
 
     tt_metal::Program program_handle_;
 
-    std::unordered_map<CoreCoord, TestSender> senders_;
-    std::unordered_map<CoreCoord, TestReceiver> receivers_;
-    std::unordered_map<CoreCoord, TestSync> sync_workers_;  // Separate sync cores
-    std::unordered_map<CoreCoord, TestMux> muxes_;          // Mux workers
+    std::unordered_map<tt::tt_metal::CoreCoord, TestSender> senders_;
+    std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver> receivers_;
+    std::unordered_map<tt::tt_metal::CoreCoord, TestSync> sync_workers_;  // Separate sync cores
+    std::unordered_map<tt::tt_metal::CoreCoord, TestMux> muxes_;          // Mux workers
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;
-    CoreCoord sync_core_coord_;
+    tt::tt_metal::CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
     // Pristine cores for mux allocation (transferred from allocator)
-    std::vector<CoreCoord> pristine_cores_;
+    std::vector<tt::tt_metal::CoreCoord> pristine_cores_;
 
     bool use_unified_connection_manager_ = false;
 };

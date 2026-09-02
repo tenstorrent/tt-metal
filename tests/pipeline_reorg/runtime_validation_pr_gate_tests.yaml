@@ -3,10 +3,26 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (runtime -> pr_gate).
 
-- name: metalium validation smoke
-  cmd: /usr/bin/tt-metalium-validation-smoke
+- name: runtime validation smoke
+  # CPU_-prefixed test cases are host-only (no silicon); they run on the
+  # github_hosted_cpu entry below instead of burning device-runner time.
+  cmd: /usr/bin/tt-metalium-validation-smoke --gtest_filter='-*CPU_*'
   skus:
     wh_n150_civ2:
       timeout: 15
+  team: runtime
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+
+- name: runtime validation smoke cpu-only
+  # Host-only (no-silicon) subset of the smoke binary: test cases whose names carry
+  # the CPU_ prefix. Runs on a GitHub-hosted runner (github_hosted_cpu) so scarce
+  # device runners only execute tests that actually need hardware.
+  # TT_METAL_MOCK_CLUSTER_DESC_PATH keeps any implicit MetalContext creation on the
+  # device-less runner in mock mode instead of aborting on silicon discovery
+  # (tests that call configure_mock_mode() themselves still take precedence).
+  cmd: TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 10
   team: runtime
   owner_id: U099A7FMKL2 # Manish Sudumbrekar

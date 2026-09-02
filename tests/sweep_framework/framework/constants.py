@@ -16,6 +16,13 @@ from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+# Op-name tokens identifying a CCL / multi-device collective. Canonical list, shared by
+# sweeps_runner._is_multidevice_ccl_module (which decides whether the device profiler is safe
+# to enable) and split_vectors_by_device_key (which gives these modules their own batch). Kept
+# here rather than restated in each: the two must agree about what counts as CCL, and they are
+# in different import graphs.
+CCL_OP_TOKENS = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
+
 # Lead models are models that are prioritized for sweep testing.
 # These patterns are matched against the source path in traced operations
 # to identify which vectors belong to lead model workloads.

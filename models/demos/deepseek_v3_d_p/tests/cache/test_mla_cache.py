@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -10,10 +11,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_mla")
@@ -28,20 +30,46 @@ def cleanup_cache():
     report_and_clear()
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
+        ),
+        # Blackhole forms whole-box meshes only, so the 2x2 case above never runs on an 8-chip
+        # loudbox -- it is a 4-device QuietBox / Wormhole shape. 2x4 makes this test actually
+        # executable there, which is where the Kimi weight caches are exercised.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
-    """Test: weights → cold cache → warm cache produce identical outputs."""
+# "k3" (not "kimi_k3") because pytest -k is substring-based. deepseek_v3_d_p is the historical
+# default of the `variant` fixture, so keeping it first preserves this test's original coverage.
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k3"], indirect=True, ids=["dsv3", "k3"])
+def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only, variant):
+    """Test: weights → cold cache → warm cache produce identical outputs.
+
+    The kimi_k3 case additionally covers the ``g_proj`` output-gate weight: that it is written to and
+    read back from the cache, and that ``check_cache_complete``'s gate flag is not merely cosmetic
+    (a non-gated cache must fail the gated check, or a K3 layer could load a cache with no gate in
+    it and silently run ungated)."""
     config = config_only
     layer_idx = 0
     seq_len = 1024
@@ -90,6 +118,17 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
             * std
         ).to(torch.bfloat16),
     }
+    # Kimi-K3 output gate. Appended so the manual_seed(42) draw order above is unchanged for the
+    # non-gated variants.
+    has_output_gate = bool(getattr(config, "mla_use_output_gate", False))
+    if has_output_gate:
+        state_dict["g_proj.weight"] = (
+            torch.randn(
+                config.num_attention_heads * config.v_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16)
 
     # Create input (full tensor - mesh_mapper will shard automatically)
     # Following pattern from test_mla.py: create full tensor, let TTNN shard it
@@ -111,9 +150,9 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Initialize KVPE cache (required by MLA forward)
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -147,7 +186,9 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
 
     # === Path 2: Cold Cache ===
     init_checker(CACHE_DIR)
-    assert not ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be empty before build"
+    assert not ttMLA.check_cache_complete(
+        CACHE_DIR, f"layer_{layer_idx}.mla", has_output_gate=has_output_gate
+    ), "Cache should be empty before build"
 
     profiler.clear()
     profiler.start("build_cache")
@@ -164,7 +205,21 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     profiler.end("build_cache")
 
     init_checker(CACHE_DIR)
-    assert ttMLA.check_cache_complete(CACHE_DIR, f"layer_{layer_idx}.mla"), "Cache should be complete after build"
+    assert ttMLA.check_cache_complete(
+        CACHE_DIR, f"layer_{layer_idx}.mla", has_output_gate=has_output_gate
+    ), "Cache should be complete after build"
+    if has_output_gate:
+        # A gated cache must satisfy the non-gated check too (g_proj is additive, so the
+        # non-gated name set is a strict subset)...
+        assert ttMLA.check_cache_complete(
+            CACHE_DIR, f"layer_{layer_idx}.mla", has_output_gate=False
+        ), "gated cache should also satisfy the non-gated check"
+    else:
+        # ...and conversely a non-gated cache must NOT pass the gated check, or a K3 layer could
+        # silently load a cache with no g_proj in it.
+        assert not ttMLA.check_cache_complete(
+            CACHE_DIR, f"layer_{layer_idx}.mla", has_output_gate=True
+        ), "non-gated cache must not satisfy the gated check"
 
     profiler.start("cold_load")
     mla_cold = ttMLA(

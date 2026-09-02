@@ -112,7 +112,7 @@ MorehSoftmaxOperation::spec_return_value_t MorehSoftmaxOperation::compute_output
         return tensor_args.output->tensor_spec();
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

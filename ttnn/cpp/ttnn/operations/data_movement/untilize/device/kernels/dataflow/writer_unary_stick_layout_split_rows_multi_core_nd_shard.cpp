@@ -6,48 +6,43 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // run-time args
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src0_addr = get_arg_val<uint32_t>(1);
-    const uint32_t start_shard_id = get_arg_val<uint32_t>(2);
+    const auto start_shard_id = get_arg(args::start_shard_id);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
-    constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
-    constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
-    constexpr uint32_t num_shards = get_compile_time_arg_val(9);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
-    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(11);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(12);
-    constexpr uint32_t output_tensor_width = get_compile_time_arg_val(13);
-    constexpr uint32_t output_tensor_height = get_compile_time_arg_val(14);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto num_tiles_per_input_block = get_arg(args::num_tiles_per_input_block);
+    constexpr auto num_output_blocks_across_width = get_arg(args::num_output_blocks_across_width);
+    constexpr auto output_element_size = get_arg(args::output_element_size);
+    constexpr auto num_cols_per_input_block = get_arg(args::num_cols_per_input_block);
+    constexpr auto num_cols_per_output_block = get_arg(args::num_cols_per_output_block);
+    constexpr auto num_shards = get_arg(args::num_shards);
+    constexpr auto num_cores = get_arg(args::num_cores);
+    constexpr auto num_tiles_per_row = get_arg(args::num_tiles_per_row);
+    constexpr auto tile_width = get_arg(args::tile_width);
+    constexpr auto output_tensor_width = get_arg(args::output_tensor_width);
+    constexpr auto output_tensor_height = get_arg(args::output_tensor_height);
 
-    constexpr auto dst_args = TensorAccessorArgs<15>();
-    const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
-    constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-    const auto accessor_src = TensorAccessor(src0_args, src0_addr);
+    const auto accessor_dst = TensorAccessor(tensor::dst);
+    const auto accessor_src = TensorAccessor(tensor::src);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb::out);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
                                             uint32_t num_rows_to_write) {
-        cb_out.wait_front(num_tiles_per_input_block);
+        dfb_out.wait_front(num_tiles_per_input_block);
 
-        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
+        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
 
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
             uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
@@ -87,7 +82,7 @@ void kernel_main() {
         }
 
         noc.async_write_barrier();
-        cb_out.pop_front(num_tiles_per_input_block);
+        dfb_out.pop_front(num_tiles_per_input_block);
     };
 
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {

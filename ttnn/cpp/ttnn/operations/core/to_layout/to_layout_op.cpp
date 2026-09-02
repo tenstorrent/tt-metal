@@ -33,8 +33,8 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
         page_config = tt::tt_metal::PageConfig(layout, tensor.tensor_spec().tile());
     }
 
-    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
-    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
+    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
+    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
     const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config())
                                   .compute_padded_shape(tensor.padded_shape());
     return tensor.padded_shape() != padded_shape;
@@ -95,9 +95,9 @@ Tensor to_layout_impl(
     if (tensor_arg.layout() == Layout::TILE) {
         page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
     }
-    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
-    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype
-    // flows through `dtype` into tilize()/untilize() below.
+    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
+    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype flows
+    // through `dtype` into tilize()/untilize() below.
     auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config)
                                    .compute_padded_shape(tensor_arg.logical_shape());
     auto original_rank = tensor_arg.logical_shape().rank();
@@ -119,7 +119,7 @@ Tensor to_layout_impl(
         }
     }
 
-    if (tt::tt_metal::is_device_tensor(tensor_arg)) {
+    if (ttnn::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
 
@@ -128,9 +128,9 @@ Tensor to_layout_impl(
                 TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
+            tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
-                    tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
                     if (tensor.layout() == ttnn::TILE_LAYOUT) {
                         tensor_tile = tensor.tensor_spec().tile();
                     }
@@ -158,6 +158,7 @@ Tensor to_layout_impl(
                     dtype,
                     use_multicore_tilize,
                     false /* low perf mode */,
+                    tensor_tile,
                     sub_core_grids);
             }
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
@@ -181,14 +182,17 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
-                    {0, 0},
-                    {0, 0},
-                    {0, padded_output_shape[2] - output_shape[2]},
-                    {0, padded_output_shape[3] - output_shape[3]}};
+                // Pad only the last two dims (height/width), sized to the tensor's rank.
+                int padding_rank = padded_output_shape.rank();
+                ttsl::SmallVector<std::array<uint32_t, 2>> padding(padding_rank, {0, 0});
+                padding[padding_rank - 2] = {0, padded_output_shape[-2] - output_shape[-2]};
+                padding[padding_rank - 1] = {0, padded_output_shape[-1] - output_shape[-1]};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
                 tensor = ttnn::pad(tensor, padding, pad_value, true, std::nullopt);
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                tensor = ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                // ttnn::pad grows the logical shape to the padded height/width, so restore the tensor's
+                // logical shape to the true (unpadded) output shape while keeping the tile-aligned padded shape.
+                return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {

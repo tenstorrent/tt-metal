@@ -77,8 +77,18 @@ def run_op(
     tt_kv = to_dev(kv_host, device, kv_dtype)  # ttnn quantizes float -> fp8 when kv_dtype is fp8_e4m3
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     scale = q.shape[-1] ** -0.5  # 1/sqrt(k_dim), from the input width
+    kv_format = (
+        ttnn.transformer.SparseKVFormat.BF16 if kv_dtype == ttnn.bfloat16 else ttnn.transformer.SparseKVFormat.FP8_E4M3
+    )
     tt_out = ttnn.transformer.sparse_sdpa(
-        tt_q, tt_kv, tt_idx, v_dim, scale=scale, k_chunk_size=k_chunk_size, compute_kernel_config=compute_kernel_config
+        tt_q,
+        tt_kv,
+        tt_idx,
+        v_dim,
+        kv_format=kv_format,
+        scale=scale,
+        k_chunk_size=k_chunk_size,
+        compute_kernel_config=compute_kernel_config,
     )
     # Output dtype matches q. fp8 tensors can't be converted directly with to_torch, so typecast to bf16.
     if tt_out.dtype == ttnn.fp8_e4m3:

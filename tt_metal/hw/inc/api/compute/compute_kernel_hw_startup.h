@@ -5,35 +5,18 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #endif
 
-namespace ckernel {
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
 
-// clang-format off
-/**
- * Describes how the two input circular buffers map onto the source registers (SrcA/SrcB) of the
- * compute engine. This matters because compute_kernel_hw_startup() programs per-source-register
- * state (data formats, tile/face dimensions, tile sizes) and that state must match the operand
- * ordering of the operation that follows.
- *
- *  - SrcOrder::Regular : icb0 -> SrcA, icb1 -> SrcB. This is the natural ordering used by virtually
- *                        every operation (e.g. eltwise binary, where in0 -> SrcA and in1 -> SrcB).
- *  - SrcOrder::Reverse : icb0 -> SrcB, icb1 -> SrcA. The operands are mapped onto the source registers
- *                        in reverse. Matmul is the operation that needs this today: in0 (the "A" /
- *                        activations operand) is loaded into SrcB, while in1 (the "B" / weights operand)
- *                        is loaded into SrcA. Passing this tag lets the kernel keep calling startup with
- *                        the natural (in0, in1) argument order while startup programs the source
- *                        registers in the reversed order such an operation requires.
- */
-// clang-format on
-enum class SrcOrder : uint8_t {
-    Regular = 0,  // icb0 -> SrcA, icb1 -> SrcB
-    Reverse = 1,  // icb0 -> SrcB, icb1 -> SrcA
-};
+namespace ckernel {
 
 // clang-format off
 /**
@@ -94,7 +77,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 
-    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 #endif
@@ -159,6 +142,78 @@ ALWI void enable_fp32_dest_acc() {
 ALWI void disable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_set_fp32_dest_acc(false)));
+}
+#endif
+
+// clang-format off
+/**
+ * Sets FP32 destination accumulation to `enable` for a subsequent section
+ * of the kernel by calling enable_fp32_dest_acc() or disable_fp32_dest_acc().
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * This is a lightweight, standalone reconfiguration that is safe to call
+ * mid-kernel without re-running compute_kernel_hw_startup.
+ *
+ * No-op when `enable` already matches the kernel's DST_ACCUM_MODE
+ * (compute_kernel_hw_startup already programmed the requested mode).
+ * Must be paired with restore_fp32_dest_acc<enable>() using the same flag.
+ *
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
+ * |------------|--------|-----------------------------------------------------|------|-------------|----------|
+ * | Template   | enable | Dest-acc mode the enclosed section needs            | bool | true, false | True     |
+ */
+// clang-format on
+#ifndef ARCH_QUASAR
+template <bool enable>
+ALWI void set_fp32_dest_acc() {
+    if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
+        if constexpr (enable) {
+            enable_fp32_dest_acc();
+        } else {
+            disable_fp32_dest_acc();
+        }
+    }
+}
+#endif
+
+// clang-format off
+/**
+ * Restores destination accumulation to the kernel's DST_ACCUM_MODE after a
+ * matching set_fp32_dest_acc<enable>(), via enable_fp32_dest_acc() or
+ * disable_fp32_dest_acc().
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * This is a lightweight, standalone reconfiguration that is safe to call
+ * mid-kernel without re-running compute_kernel_hw_startup.
+ *
+ * No-op when `enable` already matches DST_ACCUM_MODE (the matching set
+ * was also a no-op). Pass the same `enable` used at the set.
+ *
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
+ * |------------|--------|-----------------------------------------------------|------|-------------|----------|
+ * | Template   | enable | Same flag passed to the matching set_fp32_dest_acc  | bool | true, false | True     |
+ */
+// clang-format on
+#ifndef ARCH_QUASAR
+template <bool enable>
+ALWI void restore_fp32_dest_acc() {
+    if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
+        if constexpr (DST_ACCUM_MODE) {
+            enable_fp32_dest_acc();
+        } else {
+            disable_fp32_dest_acc();
+        }
+    }
 }
 #endif
 

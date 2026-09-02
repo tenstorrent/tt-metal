@@ -8,6 +8,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_tanh.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -85,6 +86,7 @@ inline void calculate_tanhshrink() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
     if constexpr (is_fp32_dest_acc_en) {
         // The fp32 large-|x| path only needs the reciprocal Newton constants; the accurate

@@ -34,6 +34,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
     int32_t dim = -1;    // Dimension to split along (default -1)
 
+    // Per-chunk output widths along `dim`, in ELEMENTS
+    std::vector<uint32_t> chunk_sizes;
+
     // FSDP fusion: when set, the weight tensor is sharded along its K dim across
     // `fsdp_cluster_axis` with size `fsdp_ring_size`, and the op all-gathers it
     // into `persistent_weight_buffer` before/concurrently-with the matmul.
@@ -42,6 +45,11 @@ struct AllGatherMinimalMatmulAsyncParams {
     std::vector<GlobalSemaphore> fsdp_semaphore;  // ping-pong pair, same shape as `semaphore`
     bool using_persistent_weight_buffer = false;
     ttnn::ccl::Topology fsdp_topology;
+
+    // Fused SwiGLU: weight is a tile-pair-interleaved [gate|up] matrix of width 2N; the op
+    // emits silu(gate)*up of width N in a single matmul. Mutually exclusive with
+    // fused_activation / ternary.
+    bool fuse_swiglu = false;
 
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
@@ -66,7 +74,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         uint32_t fsdp_ring_size,
         std::vector<GlobalSemaphore> fsdp_semaphore,
         bool using_persistent_weight_buffer,
-        ttnn::ccl::Topology fsdp_topology) :
+        ttnn::ccl::Topology fsdp_topology,
+        bool fuse_swiglu = false,
+        std::vector<uint32_t> chunk_sizes = {}) :
         config(config),
         fused_activation(fused_activation),
         output_mem_config(output_mem_config),
@@ -85,11 +95,13 @@ struct AllGatherMinimalMatmulAsyncParams {
         fused_ternary_scalar(fused_ternary_scalar),
         chunks(chunks),
         dim(dim),
+        chunk_sizes(std::move(chunk_sizes)),
         fsdp_cluster_axis(fsdp_cluster_axis),
         fsdp_ring_size(fsdp_ring_size),
         fsdp_semaphore(std::move(fsdp_semaphore)),
         using_persistent_weight_buffer(using_persistent_weight_buffer),
-        fsdp_topology(fsdp_topology) {}
+        fsdp_topology(fsdp_topology),
+        fuse_swiglu(fuse_swiglu) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -102,9 +114,13 @@ struct AllGatherMinimalMatmulAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
+        "chunks",
+        "dim",
+        "chunk_sizes",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
-        "using_persistent_weight_buffer");
+        "using_persistent_weight_buffer",
+        "fuse_swiglu");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -117,11 +133,24 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
+            this->chunks,
+            this->dim,
+            this->chunk_sizes,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
-            this->using_persistent_weight_buffer);
+            this->using_persistent_weight_buffer,
+            this->fuse_swiglu);
     }
 };
+
+// Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
+inline std::vector<uint32_t> resolve_chunk_sizes(const AllGatherMinimalMatmulAsyncParams& params, uint32_t N) {
+    if (!params.chunk_sizes.empty()) {
+        return params.chunk_sizes;
+    }
+    const auto chunks = static_cast<uint32_t>(params.chunks);
+    return std::vector<uint32_t>(chunks, N / chunks);
+}
 
 struct AllGatherMinimalMatmulAsyncInputs {
     Tensor input_tensor;

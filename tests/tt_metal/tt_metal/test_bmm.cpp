@@ -12,13 +12,16 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -68,12 +71,9 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
     const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
     const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C), TensorTopology{}),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C)),
     };
 }
 
@@ -86,19 +86,20 @@ experimental::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::DataMovementHardwareConfig reader_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    experimental::DataMovementHardwareConfig writer_config{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
-    if (!use_implicit_sync) {
-        reader_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
-        writer_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
+    const bool is_quasar = tensors.src0.device().arch() == ARCH::QUASAR;
+    experimental::DataMovementHardwareConfig reader_config;
+    experimental::DataMovementHardwareConfig writer_config;
+    experimental::ComputeHardwareConfig compute_config;
+    if (is_quasar) {
+        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        compute_config = experimental::ComputeGen2Config{};
+    } else {
+        reader_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
+        writer_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        compute_config = experimental::ComputeGen1Config{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{
@@ -155,7 +156,7 @@ experimental::ProgramSpec build_bmm_program_spec(
              experimental::AllConsumerOf(SRC1_DFB, "src1"),
              experimental::ProducerOf(DST_DFB, "dst")},
         .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = compute_config,
     };
 
     return experimental::ProgramSpec{
@@ -200,12 +201,11 @@ bool validate_bmm_result(
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, Bmm) {
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
-    if (dev->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4; p.Kt = 2; p.Nt = 3;
         p.B_total = 2; p.B_per_core = 2;
         p.num_input_tiles = 2; p.num_output_tiles = 2;
@@ -221,16 +221,17 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
-    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
 
     constexpr uint32_t do_bcast = 0;
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -242,7 +243,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
@@ -254,17 +255,17 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     };
     experimental::SetProgramRunArgs(program, params);
 
+    auto& cq = mesh_device.mesh_command_queue();
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
-    // underlying reference buffer to populate / read back DRAM.
-    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
-    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
+    auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
+    auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
+    cq.enqueue_write_tensor(src0_host, tensors.src0);
+    cq.enqueue_write_tensor(src1_host, tensors.src1);
 
-    detail::LaunchProgram(dev, program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
+    auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<uint32_t>();
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
@@ -278,8 +279,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     if (mesh_device.compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
-
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;
@@ -305,7 +304,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -317,7 +316,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
@@ -331,15 +330,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
-    // underlying reference buffer to populate / read back DRAM.
-    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
-    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs; use unit-mesh MeshBuffer helpers.
+    slow_dispatch::WriteToBuffer(tensors.src0.mesh_buffer(), src0_vec);
+    slow_dispatch::WriteToBuffer(tensors.src1.mesh_buffer(), src1_vec);
 
-    detail::LaunchProgram(dev, program, true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
+    slow_dispatch::ReadFromBuffer(tensors.dst.mesh_buffer(), result_vec);
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);

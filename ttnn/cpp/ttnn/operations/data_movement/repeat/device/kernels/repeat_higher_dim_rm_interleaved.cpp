@@ -9,33 +9,26 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_addr = get_arg_val<uint32_t>(1);
     // Program factory controls the start and end of each of the 3 dims.
-    const uint32_t higher_dim_start = get_arg_val<uint32_t>(2);
-    const uint32_t higher_dim_end = get_arg_val<uint32_t>(3);
-    const uint32_t lower_dim_start = get_arg_val<uint32_t>(4);
-    const uint32_t lower_dim_end = get_arg_val<uint32_t>(5);
-    const uint32_t repetitions = get_arg_val<uint32_t>(6);
+    const auto higher_dim_start = get_arg(args::higher_dim_start);
+    const auto higher_dim_end = get_arg(args::higher_dim_end);
+    const auto lower_dim_start = get_arg(args::lower_dim_start);
+    const auto lower_dim_end = get_arg(args::lower_dim_end);
+    const auto repetitions = get_arg(args::repetitions);
     // nop lets you intentionally skip this core if dims don't divide evenly.
-    const uint32_t nop = get_arg_val<uint32_t>(7);
+    const auto nop = get_arg(args::nop);
 
-    constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(2);
-    // cb_id_in0 and cb_id_in1 are each 1 page of size: 128 + page_size_bytes.
-    constexpr uint32_t LOWER_DIMS = get_compile_time_arg_val(3);
-    constexpr uint32_t REP_DIM = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5, 0>();
-    constexpr auto dst_args =
-        TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.num_common_runtime_args()>();
+    constexpr auto original_page_size_bytes = get_arg(args::original_page_size_bytes);
+    constexpr auto LOWER_DIMS = get_arg(args::LOWER_DIMS);
+    constexpr auto REP_DIM = get_arg(args::REP_DIM);
 
     constexpr uint32_t LOWER_DIMS_TIMES_REP_DIM = LOWER_DIMS * REP_DIM;
 
@@ -45,27 +38,28 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr);
-    const auto d = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::src);
+    const auto d = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb0(cb_id_in0);
-    CircularBuffer cb1(cb_id_in1);
+    // dfb::in0 and dfb::in1 are each 1 page of size: 128 + page_size_bytes.
+    DataflowBuffer dfb0(dfb::in0);
+    DataflowBuffer dfb1(dfb::in1);
 
     // Alignment pre-calculations.
-    constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
-    constexpr uint64_t r_offset_to_use = src_args.is_dram ? OFFSET_64 : OFFSET_16;
-    constexpr uint32_t r_alignment_requirement = src_args.is_dram ? 64 : 16;
+    constexpr uint64_t r_mask_to_use = decltype(s)::is_dram ? MASK_64 : MASK_16;
+    constexpr uint64_t r_offset_to_use = decltype(s)::is_dram ? OFFSET_64 : OFFSET_16;
+    constexpr uint32_t r_alignment_requirement = decltype(s)::is_dram ? 64 : 16;
     constexpr uint32_t w_alignment_requirement = 16;
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 
-    cb0.reserve_back(1);
-    cb1.reserve_back(1);
-    uint32_t input_buffer = cb0.get_write_ptr();
-    uint32_t alignment_buffer = cb1.get_write_ptr();
-    cb1.push_back(1);
-    cb0.push_back(1);
+    dfb0.reserve_back(1);
+    dfb1.reserve_back(1);
+    uint32_t input_buffer = dfb0.get_write_ptr();
+    uint32_t alignment_buffer = dfb1.get_write_ptr();
+    dfb1.push_back(1);
+    dfb0.push_back(1);
 
     alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
     input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads

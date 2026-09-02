@@ -9,7 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -21,45 +22,48 @@ ALWI void REL() {
 }
 
 void kernel_main() {
-    uint32_t argrt = 0;
-    uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_end = get_arg_val<uint32_t>(argrt++);
+    auto batch_start = get_arg(args::batch_start);
+    auto batch_end = get_arg(args::batch_end);
+    auto seq_t_start = get_arg(args::seq_t_start);
+    auto seq_t_end = get_arg(args::seq_t_end);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    // Magic CB indices are gone: each buffer is a named DFB binding. The local
+    // aliases keep the LLK/FIFO call sites readable; each is the dfb:: handle,
+    // which converts implicitly to a CB id at the LLK call sites.
+    constexpr auto in_dfb = dfb::input;
+    constexpr auto cos_dfb = dfb::cos;
+    constexpr auto sin_dfb = dfb::sin;
+    constexpr auto trans_mat_dfb = dfb::trans_mat;
 
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t n_heads = get_compile_time_arg_val(9);
-    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
+    constexpr auto rotated_in_interm_dfb = dfb::rotated_interm;
+    constexpr auto cos_interm_dfb = dfb::cos_interm;
+    constexpr auto sin_interm_dfb = dfb::sin_interm;
+    constexpr auto out_dfb = dfb::out;
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto n_heads = get_arg(args::n_heads);
+    constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
 
-    CircularBuffer in_cb_obj(in_cb);
-    CircularBuffer cos_cb_obj(cos_cb);
-    CircularBuffer sin_cb_obj(sin_cb);
-    CircularBuffer trans_mat_cb_obj(trans_mat_cb);
-    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
-    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
-    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
-    CircularBuffer out_cb_obj(out_cb);
+    DataflowBuffer in_dfb_obj(in_dfb);
+    DataflowBuffer cos_dfb_obj(cos_dfb);
+    DataflowBuffer sin_dfb_obj(sin_dfb);
+    DataflowBuffer trans_mat_dfb_obj(trans_mat_dfb);
+    DataflowBuffer rotated_in_interm_dfb_obj(rotated_in_interm_dfb);
+    DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
+    DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);
+    DataflowBuffer out_dfb_obj(out_dfb);
 
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
     const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
-    matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
+    // Start from the state at the end of each iteration so same-format reconfigurations compile out.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cos_interm_dfb, sin_interm_dfb, out_dfb);
 
     // Get the trans_mat
-    trans_mat_cb_obj.wait_front(onetile);
+    trans_mat_dfb_obj.wait_front(onetile);
 
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
@@ -68,74 +72,83 @@ void kernel_main() {
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            sin_cb_obj.wait_front(my_cos_sin_tiles);
-            cos_cb_obj.wait_front(my_cos_sin_tiles);
+            sin_dfb_obj.wait_front(my_cos_sin_tiles);
+            cos_dfb_obj.wait_front(my_cos_sin_tiles);
         }
 #endif
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             uint32_t sin_cos_row_cnt = 0;
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
                 // input cb wait and reserve
-                in_cb_obj.wait_front(Wt);
+                in_dfb_obj.wait_front(Wt);
 #if RELOAD_IMPL == 1
-                sin_cb_obj.wait_front(Wt);
-                cos_cb_obj.wait_front(Wt);
+                sin_dfb_obj.wait_front(Wt);
+                cos_dfb_obj.wait_front(Wt);
 #endif
 
-                rotated_in_interm_cb_obj.reserve_back(Wt);
-                sin_interm_cb_obj.reserve_back(Wt);
-                cos_interm_cb_obj.reserve_back(Wt);
-                out_cb_obj.reserve_back(Wt);
+                rotated_in_interm_dfb_obj.reserve_back(Wt);
+                sin_interm_dfb_obj.reserve_back(Wt);
+                cos_interm_dfb_obj.reserve_back(Wt);
+                out_dfb_obj.reserve_back(Wt);
 
                 // // rotated = x @ trans_mat
-                matmul_init(in_cb, trans_mat_cb);
+                // Matmul uses SrcOrder::Reverse: trans_mat is SrcA and input is SrcB.
+                reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, in_dfb);
+                pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
+                matmul_init(in_dfb, trans_mat_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j);
-                    pack_tile(j, rotated_in_interm_cb, j);
+                    matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
+                    pack_tile(j, rotated_in_interm_dfb, j);
                 }
                 REL();
-                rotated_in_interm_cb_obj.push_back(Wt);
-                rotated_in_interm_cb_obj.wait_front(Wt);
+                rotated_in_interm_dfb_obj.push_back(Wt);
+                rotated_in_interm_dfb_obj.wait_front(Wt);
 
-                mul_tiles_init(rotated_in_interm_cb, sin_cb);
+                reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
+                pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
+                mul_init(rotated_in_interm_dfb, sin_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, sin_interm_cb, j);
+                    mul_tiles(rotated_in_interm_dfb, sin_dfb, j, j + (sin_cos_row_cnt * Wt), j);
+                    pack_tile(j, sin_interm_dfb, j);
                 }
                 REL();
-                sin_interm_cb_obj.push_back(Wt);
-                rotated_in_interm_cb_obj.pop_front(Wt);
+                sin_interm_dfb_obj.push_back(Wt);
+                rotated_in_interm_dfb_obj.pop_front(Wt);
 
+                reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
+                pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // cos_interim = x * cos
-                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_cb, j);
+                    mul_tiles(in_dfb, cos_dfb, j, j + (sin_cos_row_cnt * Wt), j);
+                    pack_tile(j, cos_interm_dfb, j);
                 }
                 REL();
-                cos_interm_cb_obj.push_back(Wt);
-                in_cb_obj.pop_front(Wt);  // Done with input
+                cos_interm_dfb_obj.push_back(Wt);
+                in_dfb_obj.pop_front(Wt);  // Done with input
 #if RELOAD_IMPL == 1
-                sin_cb_obj.pop_front(Wt);
-                cos_cb_obj.pop_front(Wt);
+                sin_dfb_obj.pop_front(Wt);
+                cos_dfb_obj.pop_front(Wt);
 #endif
 
-                sin_interm_cb_obj.wait_front(Wt);
-                cos_interm_cb_obj.wait_front(Wt);
-                add_tiles_init(cos_interm_cb, sin_interm_cb);
+                sin_interm_dfb_obj.wait_front(Wt);
+                cos_interm_dfb_obj.wait_front(Wt);
+                reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
+                pack_reconfig_data_format(cos_interm_dfb, out_dfb);
+                add_init(cos_interm_dfb, sin_interm_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-                    pack_tile(j, out_cb, j);
+                    add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
+                    pack_tile(j, out_dfb, j);
                 }
                 REL();
-                out_cb_obj.push_back(Wt);
-                sin_interm_cb_obj.pop_front(Wt);
-                cos_interm_cb_obj.pop_front(Wt);
+                out_dfb_obj.push_back(Wt);
+                sin_interm_dfb_obj.pop_front(Wt);
+                cos_interm_dfb_obj.pop_front(Wt);
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
@@ -147,12 +160,12 @@ void kernel_main() {
 
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            sin_cb_obj.pop_front(my_cos_sin_tiles);
-            cos_cb_obj.pop_front(my_cos_sin_tiles);
+            sin_dfb_obj.pop_front(my_cos_sin_tiles);
+            cos_dfb_obj.pop_front(my_cos_sin_tiles);
         }
 #endif
     }
 
     // Done with the transformation matrix, so remove from CB
-    trans_mat_cb_obj.pop_front(onetile);
+    trans_mat_dfb_obj.pop_front(onetile);
 }

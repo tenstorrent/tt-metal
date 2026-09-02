@@ -5,7 +5,10 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <optional>
+#include <tuple>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -30,6 +33,22 @@ struct ChunkingParams {
     uint32_t last_chunk_size;
 };
 
+// Aligned source base address the reader kernel reads from: the input buffer base advanced to the
+// nearest aligned address at/below the slice's byte offset (begins_bytes - misalignment). begins_bytes
+// and misalignment are hash-constant per cache entry (slice_start, dtype, input memory_config are all
+// folded into compute_program_hash), so only the buffer address changes between dispatches. A plain
+// Buffer* binding can only re-emit the bare base, not base+offset, so this value instead rides on
+// SliceDeviceOperation::get_dynamic_runtime_args (re-emitted on every cache hit). create_descriptor and
+// get_dynamic_runtime_args both call this helper so the emitted value can never drift.
+inline uint32_t slice_rm_reader_base_address(const Tensor& input, const ttnn::Shape& slice_start) {
+    const uint32_t begins_bytes = slice_start[-1] * input.element_size();
+    const auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                          ? ::hal::get_dram_alignment()
+                                          : ::hal::get_l1_alignment();
+    const uint32_t misalignment = begins_bytes % src_buffer_alignment;
+    return input.buffer()->address() + begins_bytes - misalignment;
+}
+
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -42,7 +61,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size,
     const ChunkingParams& chunking) {
-    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -80,23 +98,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
 
-    // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
-    // Fallback is padded for the reader tensor, unpadded for the writer tensor.
-    const auto per_shard_page_size_bytes = [&](const Tensor& t, uint32_t row_bytes) -> uint32_t {
-        const auto& mc = t.memory_config();
-        if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-            const auto& spec = mc.shard_spec().value();
-            return spec.shape[1] * t.element_size();
-        }
-        return row_bytes;
-    };
     const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
 
     std::vector<uint32_t> common_reader_kernel_args = {
-        start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
+        // Aligned source base; re-emitted on every cache hit by get_dynamic_runtime_args (base+offset
+        // cannot be a plain Buffer* binding). Same helper as get_dynamic_runtime_args so it can't drift.
+        slice_rm_reader_base_address(input_tensor, output_tensor_start),
         reader_page_size,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
@@ -133,7 +141,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         if (num_sticks_per_core != 0) {
             if (chunking.num_chunks_per_stick > 1) {
                 num_sticks_per_core_read = num_sticks_per_core;
-                num_read_per_barrier = 2;
+                // Match `compute_cb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
+                num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
                 auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
@@ -160,8 +169,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
         const uint32_t writer_page_size = per_shard_page_size_bytes(output_tensor, unpadded_row_size_bytes);
+        // Writer arg 0 is the plain output buffer base address; it is emitted as a Buffer* binding in
+        // create_descriptor (not here), so the args returned here start at arg 1.
         std::vector<uint32_t> writer_kernel_args = {
-            output_buffer->address(),
             unpadded_row_size_bytes,
             unpadded_row_size_bytes_offset,
             num_sticks_per_core,
@@ -239,7 +249,22 @@ SliceCbSizing compute_cb_size(
             l1_budget,
             alignment);
 
-        const uint32_t num_chunks = (unpadded_row_size_bytes + max_chunk - 1) / max_chunk;
+        uint32_t num_chunks = (unpadded_row_size_bytes + max_chunk - 1) / max_chunk;
+        // Odd num_chunks with nrpb=2 straddles the 4-page CB ring on the next stick — try an aligned
+        // shrink to reach even; commit only if it lands, else let the nrpb=1 fallback do the work.
+        constexpr uint32_t nrpb = 2;
+        if ((num_chunks % nrpb) != 0) {
+            const uint32_t target_n = num_chunks + (nrpb - (num_chunks % nrpb));
+            uint32_t new_max = unpadded_row_size_bytes / target_n;
+            new_max = (new_max / alignment) * alignment;
+            const uint32_t candidate_num_chunks =
+                (new_max >= alignment) ? (unpadded_row_size_bytes + new_max - 1) / new_max : 0;
+            if (new_max >= alignment && (candidate_num_chunks % nrpb) == 0) {
+                max_chunk = new_max;
+                num_chunks = candidate_num_chunks;
+            }
+        }
+
         const uint32_t remainder = unpadded_row_size_bytes % max_chunk;
         s.chunking = {
             .chunk_size = max_chunk,
@@ -264,7 +289,8 @@ SliceCbSizing compute_cb_size(
                                          : num_sticks_per_core_group_2;
     if (num_input_pages != 0) {
         if (needs_chunking) {
-            s.num_read_per_barrier = 2;
+            // Fallback when the shrink above couldn't reach an even num_chunks: nrpb=1 makes a straddle impossible.
+            s.num_read_per_barrier = (s.chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
         } else {
             auto num_sticks_per_core_pad32 = round_up_to_mul32(num_input_pages);
             uint32_t num_sticks_per_core_read =
@@ -361,13 +387,58 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     writer_desc.runtime_args.reserve(all_cores_vec.size());
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         reader_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].first));
-        writer_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].second));
+        // Writer arg 0 = output buffer base address, declared as a Buffer* binding so the framework
+        // patches it on cache hits instead of rebuilding the descriptor; args 1.. follow unchanged.
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.reserve(1 + all_runtime_args[i].second.size());
+        writer_args.push_back(dst_buffer);
+        writer_args.append(all_runtime_args[i].second);
+        writer_desc.emplace_runtime_args(all_cores_vec[i], writer_args);
     }
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> slice_rm_reader_dynamic_args(
+    const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output) {
+    // Reader arg 0 holds the aligned source base (input buffer address + a hash-constant byte offset).
+    // The offset is baked into the cached descriptor; only the buffer address changes per dispatch, so
+    // re-emit the full value on every cache hit. The work-split (and thus the active-core set) derives
+    // only from hashed shapes/grids, so it is identical on every hit — no freeze from a growing set.
+    const auto& input = tensor_args.input;
+    tt::tt_metal::IDevice* device = input.device();
+
+    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // Same work-split create_descriptor uses; only the core set (element 1) is needed here.
+    const auto work_split =
+        args.sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+    const CoreRangeSet& all_cores = std::get<1>(work_split);
+
+    const uint32_t reader_base = ttnn::operations::data_movement::slice_rm_reader_base_address(input, args.slice_start);
+    const auto cores = corerange_to_cores(all_cores);
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size());
+    for (const auto& core : cores) {
+        // kernel 0 (reader, pushed first in create_descriptor), arg 0.
+        dynamic_args.push_back(tt::tt_metal::DynamicRuntimeArg{0, core, 0, reader_base});
+    }
+    return dynamic_args;
+}
+
+void SliceRmProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceRmProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

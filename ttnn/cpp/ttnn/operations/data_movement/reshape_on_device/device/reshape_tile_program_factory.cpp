@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    tt::tt_metal::Tensor& output_tensor) {
+    ttnn::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};
@@ -32,9 +32,11 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
 
     Buffer* src0_buffer = input_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     auto output_shape = output_tensor.padded_shape();
+
+    // Tile count must come from the output tensor to match what the reader produces; deriving it
+    // from the input deadlocks when the input and output have different tile padding.
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
 
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

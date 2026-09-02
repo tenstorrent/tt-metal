@@ -159,9 +159,9 @@ JointSDPAResultSpec JointSDPADeviceOperation::compute_output_specs(
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
 }

@@ -13,7 +13,7 @@ Tensor layout contracts:
   - **Prefill** hidden states: ``[1, 1, S, dim]`` TILE, ``S % 128 == 0``.
   - **Decode** hidden states: ``[1, 1, B, dim]`` TILE (``B`` padded to tile in modules).
 
-Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded forwards,
+Executor contract: pre-embedded forwards,
 ``set_kv_cache``, ``rope_setup``, ``page_table`` through attention, ``model_args`` holds a
 :class:`Qwen25_72BExecutorRuntimeConfig` (not v1 ``ModelArgs``).
 """
@@ -21,13 +21,14 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List
 
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -72,7 +73,7 @@ class Qwen25_72BPagedAttentionConfig:
 
 @dataclass
 class Qwen25_72BExecutorRuntimeConfig:
-    """Engine-facing runtime knobs. Exposed as ``model.model_args`` for shared ``EagerLLMExecutor``."""
+    """Engine-facing runtime knobs. Exposed as ``model.model_args`` for the model-owned executor."""
 
     n_layers: int
     n_kv_heads: int
@@ -80,10 +81,31 @@ class Qwen25_72BExecutorRuntimeConfig:
     max_batch_size: int
     max_seq_len: int
     cluster_shape: list[int]
+    model_name: str = "Qwen2.5-72B-Instruct"
     max_prefill_chunk_size: int = 2048
+    max_context_len: int = 32768
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size`` — Qwen2.5-72B does, below).
+    # Qwen2.5-72B is a standard dense Qwen2.5 attention (NO QK-norm), so every prefill op is
+    # row-independent and the batched fold is bit-safe (same as the qwen25_7b / Coder-32B ports).
+    # ``max_prefill_batch_size`` is the largest supported padded wave; 32 folds batch-32 prefill in ONE
+    # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
+    # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
+    # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. ``disable_batched_prefill`` is the escape
+    # hatch back to the sequential loop; ``max_prefill_chunk_size`` (above) drives the #45234
+    # chunked-prompt decline.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -96,7 +118,9 @@ class Qwen25_72BExecutorRuntimeConfig:
         # superseded -- the 1B/3B ports proved that TT_FATAL no longer reproduces. Decode trace
         # remains enabled at the engine layer regardless.
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
+        allowed = self.trace_prefill_supported_seq_lens or {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(
+            num_devices, (128,)
+        )
         return (
             prefill_seq_len in allowed
             and prefill_seq_len <= self.max_prefill_chunk_size
@@ -121,6 +145,36 @@ class Qwen25_72BConfig:
     max_batch_size: int
     max_seq_len: int
     rope_table_len: int
+    num_devices: int = 8
+    mesh_device: ttnn.MeshDevice | None = None
+    n_layers: int | None = None
+    block_configs: list[Any] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.n_layers is None:
+            self.n_layers = self.num_hidden_layers
+
+
+@dataclass(frozen=True)
+class Qwen25_72BLayerWeights:
+    wqkv: torch.Tensor
+    wo: torch.Tensor
+    wqkv_bias: torch.Tensor
+    w1: torch.Tensor
+    w2: torch.Tensor
+    w3: torch.Tensor
+    attention_norm: torch.Tensor
+    ff_norm: torch.Tensor
+
+
+@dataclass(frozen=True)
+class Qwen25_72BWeights:
+    embedding: torch.Tensor
+    rope_cos: torch.Tensor
+    rope_sin: torch.Tensor
+    layers: tuple[Qwen25_72BLayerWeights, ...]
+    final_norm: torch.Tensor
+    lm_head: torch.Tensor
 
 
 _LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
@@ -211,7 +265,6 @@ def _slice_last_token_tile(x: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
 
 
 def _post_attn_norm_decode_configs(
-    mlp: MLP1D,
     *,
     dim: int,
     hidden_dim: int,
@@ -229,18 +282,54 @@ def _post_attn_norm_decode_configs(
     grid = _dram_shard_core_grid_k_n(dim, padded_hidden // num_devices)
     tile_padded_batch_rows = TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE)
     program_config = _create_sharded_norm_program_config(dim, grid, tile_padded_batch_rows, TILE_SIZE)
-    return program_config, mlp.config.decode_input_memcfg
+    memory_config = ttnn.create_sharded_memory_config(
+        (tile_padded_batch_rows, dim // grid.num_cores),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return program_config, memory_config
+
+
+# Cast the three per-layer prefill all-gathers (the two DistributedNorm activation reconstructions here
+# + the pre-WO gather via Attention1DConfig.prefill_ag_ccl_dtype) from bf16 to bfloat8_b. These are the
+# largest CCL cost in the batched b32-ci prefill and a bf16 all-gather moves 2× the bytes of a bf8_b one,
+# while every matmul they feed (QKV/WO bf8_b, W1/W3 bf4_b) quantizes the activation further regardless —
+# so the bf16 gather precision is largely wasted. PREFILL-ONLY: the decode call sites of
+# _all_gather_rmsnorm_tensor pass no dtype (byte-identical decode). None disables (byte-identical).
+# Qwen2.5-72B is precision-tolerant (the ">70B" recipe ships bf4 MLP + bf8 attention even in accuracy
+# mode); gated by token-accuracy + eval-32, not bit-exactness (see PLAN_03's prefill_reduce_ccl_dtype).
+_PREFILL_AG_CCL_DTYPE: ttnn.DataType | None = ttnn.bfloat8_b
 
 
 def _all_gather_rmsnorm_tensor(
-    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+    norm: RMSNorm1D,
+    x: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    dtype: ttnn.DataType | None = None,
 ) -> ttnn.Tensor:
     cfg = norm.config
-    if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
-        return x
-
+    requested_memory_config = memory_config
     if memory_config is None:
         memory_config = x.memory_config()
+
+    if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
+        if requested_memory_config is not None:
+            return ttnn.to_memory_config(x, memory_config)
+        if x.memory_config() != memory_config:
+            return ttnn.to_memory_config(x, memory_config)
+        return x
+
+    # Prefill-only opt-in (``dtype`` set only at the prefill call sites): cast the gather input (bf16) to
+    # a smaller CCL dtype (bfloat8_b) to halve this collective's cross-device payload. Decode call sites
+    # leave ``dtype=None`` → byte-identical. An explicit typecast is required (to_memory_config does not
+    # cast an already-DRAM tensor).
+    if dtype is not None and x.dtype != dtype:
+        x_cast = ttnn.typecast(x, dtype)
+        ttnn.deallocate(x)
+        x = x_cast
 
     tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
     return ttnn.experimental.all_gather_async(
@@ -269,24 +358,45 @@ class _Qwen25_72BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for the QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 72B the
+    # batch-32-ci prefill is matmul-compute-bound (~80% of FLOPs = the 3 MLP matmuls), so minimal_matmul
+    # is a real prefill-TTFT win — it narrows the batch-32-ci TTFT gap vs TTTv1 (which uses minimal_matmul
+    # for the same matmuls). The shared plumbing (attention_1d.use_minimal_qkv_matmul / mlp_1d
+    # use_minimal_w2_matmul, both gated seq_len>128) is already in the base; this flag just engages it.
+    # Qwen2.5-72B is a Qwen2.5 arch: the QKV bias is added AFTER the matmul, so it is unchanged by the
+    # minimal path (same as the mistral_7b / Coder-32B / deepseek Qwen2 ports). Independent of the
+    # FF-hidden DRAM-shard pad (a decode fix); minimal_matmul is prefill-only, so decode is unchanged.
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_qwen_72b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25_72BWHTuning:
     """Pick WH L1 tuning knobs for Qwen2.5-72B-Instruct on T3K.
 
-    Mirrors the empirical L1 cutoff used by the other large T3K ports (``mlp_prefill_len_cutoff=256``
-    for the wide FF matmul on Wormhole; Llama-3.3-70B shares the 80-layer / hidden-8192 topology).
-    ``mlp_decode_spill_w1_to_dram`` starts off; re-evaluate if decode batch-32 trips L1
-    circular-buffer validation (per-device FF shard is 8192×3696 in BFP4).
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci
+    FF prefill (``[1,1,B*S,dim]``, B*S=32*128=4096 at the natural 128 bucket) this tiles the wide FF
+    matmul as 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256 (``per_core_M=1``) — 4×
+    fewer / 4× larger sub-matmuls on the ~80%-FLOP FF block (better weight-mcast amortization, fewer
+    device inter-op boundaries), matching TTTv1's blocking. The earlier 256 was inherited-conservative
+    from the 7B-on-N300 port (per-device FF shard 9472 ≫ this model's T3K shard 3696), so its tighter-L1
+    motive does not apply here; 1024 fits — it is proven on the same-topology Llama-3.3-70B (shard 3584)
+    and the T3K 32B (3456) on this box, and TTTv1 runs 1024 for this exact model. Output is unchanged:
+    ``in0_block_w`` and the K-contraction order are independent of the M-tiling, so only ``per_core_M``
+    changes. ``mlp_decode_spill_w1_to_dram`` starts off; re-evaluate if decode batch-32 trips L1
+    circular-buffer validation (per-device FF shard is 8192×3696 in BFP4) — decode is unaffected by the
+    cutoff (it uses the separate DRAM-sharded prg configs, which never read ``prefill_len_cutoff``).
     """
     t = _Qwen25_72BWHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"L1 tuning for Qwen2.5-72B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
 
@@ -294,54 +404,32 @@ def _resolve_qwen_72b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25
 def _build_decoder_layer(
     *,
     idx: int,
-    hf_layer: Any,
+    weights: Qwen25_72BLayerWeights,
     qcfg: Qwen25_72BConfig,
     mesh_device: ttnn.MeshDevice,
     tt_ccl: Any,
     topology: Any,
     num_dev: int,
-    torch_dtype: torch.dtype,
     precision: Qwen25_72BPrecisionConfig,
     executor_mode: bool,
     paged_cfg: Qwen25_72BPagedAttentionConfig | None,
     cache_path: Path | None,
     wh: _Qwen25_72BWHTuning,
 ) -> Qwen25_72BDecoderLayer:
-    """Construct one decoder layer (attention + MLP + the two RMSNorms) from an HF layer."""
+    """Construct one decoder layer from provider-neutral tensors."""
     prefix = f"layer{idx}"
 
-    wqkv, wo, qn, kn, wqkv_b = weight_utils.attention_wqkv_wo_from_hf_layer(hf_layer.self_attn, num_dev)
     lazy_wqkv = _lazy(
-        wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
+        weights.wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
     )
-    lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
+    lazy_wo = _lazy(
+        weights.wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None
+    )
 
-    def _qk_norm_cfg(weight: torch.Tensor | None, name: str) -> RMSNorm1DConfig | None:
-        if weight is None:
-            return None
-        lw = _lazy(
-            weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch_dtype),
-            dtype=ttnn.bfloat16,
-            cache=(cache_path / "attn", f"{prefix}_{name}") if cache_path else None,
-        )
-        return RMSNorm1DConfig(
-            weight=lw,
-            mesh_device=mesh_device,
-            eps=qcfg.rms_norm_eps,
-            decode_in_sharded=False,
-            decode_out_sharded=False,
-            prefill_distributed=False,
-            tt_ccl=tt_ccl,
-        )
-
-    bias_lw = (
-        LazyWeight(
-            source=wqkv_b.to(torch_dtype),
-            dtype=ttnn.bfloat16,
-            cache_dir_weight_name=(cache_path / "attn", f"{prefix}_bias") if cache_path else None,
-        )
-        if wqkv_b is not None
-        else None
+    bias_lw = LazyWeight(
+        source=weights.wqkv_bias,
+        dtype=ttnn.bfloat16,
+        cache_dir_weight_name=(cache_path / "attn", f"{prefix}_bias") if cache_path else None,
     )
 
     attn = Attention1D.from_config(
@@ -356,8 +444,8 @@ def _build_decoder_layer(
             head_dim=qcfg.head_dim,
             max_batch_size=qcfg.max_batch_size,
             max_seq_len=qcfg.max_seq_len,
-            q_norm_config=_qk_norm_cfg(qn, "qn"),
-            k_norm_config=_qk_norm_cfg(kn, "kn"),
+            q_norm_config=None,
+            k_norm_config=None,
             wqkv_bias=bias_lw,
             use_vllm_paged_kv_cache=executor_mode,
             paged_attention_config=paged_cfg,
@@ -368,10 +456,25 @@ def _build_decoder_layer(
             sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+            # Route the folded-batch prefill WO projection through minimal_matmul (completes PLAN_01's
+            # QKV+FF2 minimal plumbing). WO is the least-efficient prefill matmul on ttnn.linear; the
+            # minimal op (already used for QKV above) recovers most of that gap and makes TTTv2 beat
+            # TTTv1's ttnn.linear WO. Gated by the same DISABLE_MINIMAL_MATMUL escape hatch.
+            prefill_wo_minimal_matmul=wh.prefill_minimal_matmul,
+            # WO-matmul prefill M-chunk cutoff: regroup the folded batch-32 prefill WO matmul into
+            # 2 chunks of 2048 (per_core_M=8) instead of 4 chunks of 1024, halving the WO weight
+            # re-stream passes on the folded prefill. Bit-identical M-reblocking (see field doc).
+            wo_prefill_len_cutoff=2048,
+            # Cast the pre-WO fused prefill all-gather from bf16 to bfloat8_b (halves this per-layer
+            # collective's cross-device payload). Paired with the two norm-reconstruction gathers cast
+            # via _PREFILL_AG_CCL_DTYPE in prefill_forward. Prefill-only (the fused gather is a
+            # prefill-path method); decode is unaffected. See _PREFILL_AG_CCL_DTYPE for rationale.
+            prefill_ag_ccl_dtype=_PREFILL_AG_CCL_DTYPE,
         )
     )
 
-    w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
+    w1, w2, w3 = weights.w1, weights.w2, weights.w3
     # Pad the FF hidden dim to a grid-friendly per-device size so the DRAM-sharded decode FF
     # matmuls (W1/W3/W2) use a full 64-core grid instead of 4. The decode grid must divide both
     # the K-tile and N-tile counts (in0 is K-width-sharded, weights are N-sharded); with the raw
@@ -405,11 +508,11 @@ def _build_decoder_layer(
             ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
-        mlp,
         dim=qcfg.dim,
         # Use the padded FF hidden so the post-attn RMSNorm decode output is width-sharded on the
         # SAME (64-core) grid as MLP1D's W1/W3 decode input; a mismatch silently corrupts decode.
@@ -418,9 +521,9 @@ def _build_decoder_layer(
         max_batch_size=qcfg.max_batch_size,
     )
 
-    def _build_norm(hf_norm: Any, name: str, **extra: Any) -> RMSNorm1D:
+    def _build_norm(weight: torch.Tensor, name: str, **extra: Any) -> RMSNorm1D:
         lw = _lazy(
-            weight_utils.rms_weight_torch(hf_norm).to(torch_dtype),
+            weight,
             dtype=ttnn.bfloat16,
             cache=(cache_path / "norm", f"{prefix}_{name}") if cache_path else None,
         )
@@ -436,10 +539,10 @@ def _build_decoder_layer(
         )
 
     return Qwen25_72BDecoderLayer(
-        input_layernorm=_build_norm(hf_layer.input_layernorm, "pre_attn"),
+        input_layernorm=_build_norm(weights.attention_norm, "pre_attn"),
         self_attn=attn,
         post_attention_layernorm=_build_norm(
-            hf_layer.post_attention_layernorm,
+            weights.ff_norm,
             "post_attn",
             decode_program_config=post_attn_decode_program_config,
             decode_memory_config=post_attn_decode_memory_config,
@@ -451,7 +554,7 @@ def _build_decoder_layer(
 def _build_lm_head(
     *,
     mesh_device: ttnn.MeshDevice,
-    hf_lm_head: torch.nn.Module,
+    lm_head_weight: torch.Tensor,
     qcfg: Qwen25_72BConfig,
     lm_head_dtype: ttnn.DataType,
     cache_path: Path | None,
@@ -461,10 +564,9 @@ def _build_lm_head(
     LM head DRAM matmul is sized for decode batch tiles (``max_batch_size``). Prefill logits
     use a single 32-row tile via ``post_process_prefill_output`` / :func:`_slice_last_token_tile`.
     """
-    lm_w = hf_lm_head.weight.detach().to(torch.bfloat16).clone()
     lm_splits, lm_split_sizes, lm_weights_memcfgs = weight_utils.build_lm_head_lazy_weights(
         mesh_device,
-        lm_w,
+        lm_head_weight,
         dim=qcfg.dim,
         vocab_size=qcfg.vocab_size,
         dtype=lm_head_dtype,
@@ -497,6 +599,98 @@ def _build_lm_head(
     )
 
 
+def build_qwen25_72b_model(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    config: Qwen25_72BConfig,
+    weights: Qwen25_72BWeights,
+    precision: Qwen25_72BPrecisionConfig,
+    cache_path: Path | None,
+    paged_attention_config: Qwen25_72BPagedAttentionConfig | None,
+) -> Qwen25_72B:
+    """Build the TT tensor graph from provider-neutral Qwen2.5-72B dimensions and tensors."""
+
+    ttnn.SetDefaultDevice(mesh_device)
+    num_devices = mesh_device.get_num_devices()
+    if num_devices != 8:
+        raise ValueError(
+            f"Qwen2.5-72B-Instruct port targets T3K (mesh (1, 8) = 8 devices) only. "
+            f"Got mesh_device with {num_devices} device(s). Open a T3K mesh with MESH_DEVICE=T3K."
+        )
+    if config.n_heads % num_devices != 0 or config.n_kv_heads % num_devices != 0:
+        raise ValueError(
+            f"Checkpoint heads ({config.n_heads}/{config.n_kv_heads}) must be divisible by "
+            f"device count ({num_devices})"
+        )
+    if len(weights.layers) != config.num_hidden_layers:
+        raise ValueError(f"Expected {config.num_hidden_layers} decoder layer weights, got {len(weights.layers)}")
+
+    tt_ccl = get_tt_ccl(mesh_device)
+    topology = default_topology(mesh_device)
+    emb = Embedding1D.from_config(
+        Embedding1DConfig(
+            weights=_lazy(
+                weights.embedding,
+                dtype=ttnn.bfloat16,
+                cache=(cache_path / "embedding", "tok_embeddings") if cache_path else None,
+            ),
+            mesh_device=mesh_device,
+            embed_scale=1.0,
+        )
+    )
+    rope_setup = RotarySetup1D.from_config(
+        Rope1DConfig(
+            cos_matrix=_lazy(
+                weights.rope_cos, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "cos") if cache_path else None
+            ),
+            sin_matrix=_lazy(
+                weights.rope_sin, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "sin") if cache_path else None
+            ),
+            max_batch_size=config.max_batch_size,
+            head_dim=config.head_dim,
+            device=mesh_device,
+            use_qk_fused=False,
+        )
+    )
+    wh = _resolve_qwen_72b_wh_tuning(num_dev=num_devices, max_batch_size=config.max_batch_size)
+    layers = [
+        _build_decoder_layer(
+            idx=idx,
+            weights=weights.layers[idx],
+            qcfg=config,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            topology=topology,
+            num_dev=num_devices,
+            precision=precision,
+            executor_mode=paged_attention_config is not None,
+            paged_cfg=paged_attention_config,
+            cache_path=cache_path,
+            wh=wh,
+        )
+        for idx in range(config.num_hidden_layers)
+    ]
+    final_norm = RMSNorm1D.from_config(
+        RMSNorm1DConfig(
+            weight=_lazy(
+                weights.final_norm, dtype=ttnn.bfloat16, cache=(cache_path / "norm", "final") if cache_path else None
+            ),
+            mesh_device=mesh_device,
+            eps=config.rms_norm_eps,
+            max_batch_size=config.max_batch_size,
+            tt_ccl=tt_ccl,
+        )
+    )
+    lm_head = _build_lm_head(
+        mesh_device=mesh_device,
+        lm_head_weight=weights.lm_head,
+        qcfg=config,
+        lm_head_dtype=precision.lm_head_dtype,
+        cache_path=cache_path,
+    )
+    return Qwen25_72B(config, emb, rope_setup, layers, final_norm, lm_head, mesh_device)
+
+
 class Qwen25_72BDecoderLayer(LightweightModule):
     def __init__(
         self,
@@ -511,6 +705,10 @@ class Qwen25_72BDecoderLayer(LightweightModule):
         self.self_attn = self_attn
         self.post_attention_layernorm = post_attention_layernorm
         self.mlp = mlp
+        self.attention_norm = input_layernorm
+        self.attention = self_attn
+        self.ff_norm = post_attention_layernorm
+        self.feed_forward = mlp
 
     def prefill_forward(
         self,
@@ -521,24 +719,29 @@ class Qwen25_72BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
-        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
-        r = self.self_attn.forward(
+        r = _all_gather_rmsnorm_tensor(self.input_layernorm, r, dtype=_PREFILL_AG_CCL_DTYPE)
+        r = self.self_attn.prefill_forward(
             r,
-            None,
             rot_mats,
-            mode="prefill",
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
-        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2)
+        r2 = _all_gather_rmsnorm_tensor(self.post_attention_layernorm, r2, dtype=_PREFILL_AG_CCL_DTYPE)
         r2 = self.mlp.prefill_forward(r2)
         return ttnn.add(h, r2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -567,7 +770,7 @@ class Qwen25_72B(LightweightModule):
     """
     Full decoder for Qwen2.5-72B-Instruct (TTTv2 modules only) on T3K.
 
-    Prefill/decode on **embedded** activations match ``EagerLLMExecutor``. Token embedding
+    Prefill/decode on **embedded** activations match the model-owned executor. Token embedding
     is ``embed_prefill`` / ``embed_decode``. Bind KV with ``set_kv_cache`` before first forward.
     """
 
@@ -585,7 +788,12 @@ class Qwen25_72B(LightweightModule):
     ):
         super().__init__()
         self.cfg = cfg
+        self.config = cfg
+        self.config.mesh_device = mesh_device
+        self.config.n_layers = cfg.num_hidden_layers
+        self.config.num_devices = mesh_device.get_num_devices()
         self.embed = embed
+        self.embedding = self.embed
         self.rope_setup = rope_setup
         self.layers = layers
         self.norm = norm
@@ -597,6 +805,8 @@ class Qwen25_72B(LightweightModule):
         self.n_layers = cfg.num_hidden_layers
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
+        self.config.num_devices = self.num_devices
+        self.config.block_configs = [SimpleNamespace(attention_config=layer.self_attn.config) for layer in self.layers]
 
         # The model owns its sampler; callers pick behavior per request via sampling_params.
         # Buffers are lazy (nothing materializes until the first on-device sampled decode), so
@@ -610,11 +820,9 @@ class Qwen25_72B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1's decision: default_sampling_force_argmax.allow_force_argmax=False
-                # for all non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The greedy
-                # recipe (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path,
-                # never the full-vocab force-argmax all-gather. See model_config.py:1007.
-                allow_force_argmax=False,
+                # Qwen72's LM head exposes 128 padded rows, beyond the top-k sampling
+                # kernel's 32-user limit. Route greedy requests through force-argmax.
+                allow_force_argmax=True,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling
@@ -625,192 +833,80 @@ class Qwen25_72B(LightweightModule):
     def n_kv_heads(self) -> int:
         return self.cfg.n_kv_heads
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        mesh_device: ttnn.MeshDevice,
-        hf_model_id: str = "Qwen/Qwen2.5-72B-Instruct",
-        *,
-        revision: str | None = DEFAULT_HF_REVISION,
-        max_batch_size: int = 32,
-        max_seq_len: int = 4096,
-        num_layers: int | None = None,
-        cache_dir: Path | str | None = None,
-        precision: Qwen25_72BPrecisionConfig = QWEN25_72B_ACCURACY,
-        block_size: int = 32,
-        executor_mode: bool = False,
-    ) -> Qwen25_72B:
-        """
-        Load HF weights on host and build TTNN modules (weights materialize on first forward).
+    def iter_executor_named_modules(self):
+        if not hasattr(self, "layers"):
+            return
+        for index, layer in enumerate(self.layers):
+            for suffix, submodule in (
+                ("attn_norm", getattr(layer, "attention_norm", None)),
+                ("attention", getattr(layer, "attention", None)),
+                ("ff_norm", getattr(layer, "ff_norm", None)),
+                ("mlp", getattr(layer, "feed_forward", None)),
+            ):
+                if submodule is not None:
+                    yield f"layer[{index}].{suffix}", submodule
+        if hasattr(self, "norm"):
+            yield "final_norm", self.norm
+        if hasattr(self, "lm_head"):
+            yield "lm_head", self.lm_head
 
-        Args:
-            mesh_device: Open mesh device — must be T3K ``(1, 8)``.
-            hf_model_id: Hugging Face hub id.
-            revision: HF revision SHA (default pins to ``DEFAULT_HF_REVISION``).
-            max_batch_size: Decode batch / KV allocation (tile-padded internally).
-            max_seq_len: KV cache sequence budget (per layer).
-            num_layers: If set, truncate stack for smoke tests.
-            cache_dir: Optional directory for ``LazyWeight`` tensor caches.
-            precision: Per-layer precision + math-fidelity recipe (see :class:`Qwen25_72BPrecisionConfig`).
-                Defaults to :data:`QWEN25_72B_ACCURACY`. For Qwen2.5-72B the accuracy and performance
-                recipes are identical (the ">70B" special case in ``model_config.py:119``); both ship
-                BFP4 FF1/FF3 + LOFI, BFP8 attention, BFP8 KV cache, BFP8 LM head.
-            block_size: Paged attention block size (tokens per block).
-            executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
-                If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
-        """
-        ttnn.SetDefaultDevice(mesh_device)
-        cache_path = Path(cache_dir) if cache_dir else None
-        num_dev = mesh_device.get_num_devices()
-        if num_dev != 8:
-            raise ValueError(
-                f"Qwen2.5-72B-Instruct port targets T3K (mesh (1, 8) = 8 devices) only. "
-                f"Got mesh_device with {num_dev} device(s). Open a T3K mesh with MESH_DEVICE=T3K."
+    def configure_paged_attention(self, *, block_size: int, max_num_blocks: int) -> None:
+        for name, value in (("block_size", block_size), ("max_num_blocks", max_num_blocks)):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        live_configs = tuple(layer.attention.config for layer in self.layers)
+        for layer_index, config in enumerate(live_configs):
+            if not config.use_vllm_paged_kv_cache or config.paged_attention_config is None:
+                raise RuntimeError(f"Model layer {layer_index} is not configured for externally managed paged KV cache")
+            if config.kv_cache is not None or getattr(self.layers[layer_index].attention, "kv_cache", None) is not None:
+                raise RuntimeError(f"Model layer {layer_index} already has a bound KV cache")
+        construction_configs = tuple(block.attention_config for block in getattr(self.config, "block_configs", ()))
+        for config in tuple({id(item): item for item in (*construction_configs, *live_configs)}.values()):
+            config.paged_attention_config = replace(
+                config.paged_attention_config,
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
             )
-        tt_ccl = get_tt_ccl(mesh_device)
-        topology = default_topology(mesh_device)
 
-        hf_cfg = AutoConfig.from_pretrained(hf_model_id, revision=revision)
-        n_heads_hf = hf_cfg.num_attention_heads
-        n_kv_hf = hf_cfg.num_key_value_heads
-        if n_heads_hf % num_dev != 0 or n_kv_hf % num_dev != 0:
-            raise ValueError(
-                f"This checkpoint requires num_attention_heads ({n_heads_hf}) and "
-                f"num_key_value_heads ({n_kv_hf}) to each be divisible by the mesh device "
-                f"count ({num_dev}) for Attention1D sharding."
-            )
-        torch_dtype = torch.bfloat16
-        logger.info(f"Loading HF weights: {hf_model_id} (revision={revision})")
-        hf = AutoModelForCausalLM.from_pretrained(hf_model_id, revision=revision, torch_dtype=torch_dtype)
-        hf.eval()
-        base = hf.model
-        n_layers = num_layers if num_layers is not None else hf_cfg.num_hidden_layers
-        dim = hf_cfg.hidden_size
-        n_heads = hf_cfg.num_attention_heads
-        n_kv = hf_cfg.num_key_value_heads
-        head_dim = dim // n_heads
-        inter = hf_cfg.intermediate_size
-        vocab = hf_cfg.vocab_size
-        rope_len = max(max_seq_len * 2, 8192)
-        rope_len = (rope_len + 127) // 128 * 128
+    def set_kv_cache(self, kv_cache: list | None) -> None:
+        if kv_cache is None:
+            for layer in self.layers:
+                layer.attention.config.kv_cache = None
+                if hasattr(layer.attention, "kv_cache"):
+                    layer.attention.kv_cache = None
+            return
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers")
+        cache_pairs = []
+        for index, value in enumerate(kv_cache):
+            try:
+                pair = tuple(value)
+            except TypeError as error:
+                raise TypeError(f"kv_cache layer {index} must provide an iterable K/V tensor pair") from error
+            if len(pair) != 2:
+                raise ValueError(f"kv_cache layer {index} must contain exactly two K/V tensors")
+            cache_pairs.append(pair)
+        for layer, pair in zip(self.layers, cache_pairs):
+            layer.attention.config.kv_cache = pair
+            if hasattr(layer.attention, "kv_cache"):
+                layer.attention.kv_cache = pair
 
-        blocks_per_user = (max_seq_len + block_size - 1) // block_size
-        max_num_blocks = blocks_per_user * max_batch_size
-        paged_cfg = (
-            Qwen25_72BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
-            if executor_mode
-            else None
-        )
-
-        qcfg = Qwen25_72BConfig(
-            hf_model_id=hf_model_id,
-            dim=dim,
-            n_heads=n_heads,
-            n_kv_heads=n_kv,
-            head_dim=head_dim,
-            hidden_dim=inter,
-            vocab_size=vocab,
-            rms_norm_eps=hf_cfg.rms_norm_eps,
-            rope_theta=getattr(hf_cfg, "rope_theta", 1_000_000.0),
-            num_hidden_layers=n_layers,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            rope_table_len=rope_len,
-        )
-
-        emb_src = weight_utils.embed_tokens_torch(base.embed_tokens)
-        emb = Embedding1D.from_config(
-            Embedding1DConfig(
-                weights=_lazy(
-                    emb_src,
-                    dtype=ttnn.bfloat16,
-                    cache=(cache_path / "embedding", "tok_embeddings") if cache_path else None,
-                ),
-                mesh_device=mesh_device,
-                embed_scale=1.0,
-            )
-        )
-
-        cos_t, sin_t = weight_utils.build_rope_cos_sin_torch(base.rotary_emb, rope_len, head_dim, torch_dtype)
-        cos_lw = _lazy(cos_t, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "cos") if cache_path else None)
-        sin_lw = _lazy(sin_t, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "sin") if cache_path else None)
-        rope_setup = RotarySetup1D.from_config(
-            Rope1DConfig(
-                cos_matrix=cos_lw,
-                sin_matrix=sin_lw,
-                max_batch_size=max_batch_size,
-                head_dim=head_dim,
-                device=mesh_device,
-                use_qk_fused=False,
-            )
-        )
-
-        wh = _resolve_qwen_72b_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size)
-
-        layers: list[Qwen25_72BDecoderLayer] = [
-            _build_decoder_layer(
-                idx=idx,
-                hf_layer=base.layers[idx],
-                qcfg=qcfg,
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl,
-                topology=topology,
-                num_dev=num_dev,
-                torch_dtype=torch_dtype,
-                precision=precision,
-                executor_mode=executor_mode,
-                paged_cfg=paged_cfg,
-                cache_path=cache_path,
-                wh=wh,
-            )
-            for idx in range(n_layers)
-        ]
-
-        norm_lw = _lazy(
-            weight_utils.rms_weight_torch(base.norm).to(torch_dtype),
-            dtype=ttnn.bfloat16,
-            cache=(cache_path / "norm", "final") if cache_path else None,
-        )
-        final_norm = RMSNorm1D.from_config(
-            RMSNorm1DConfig(
-                weight=norm_lw,
-                mesh_device=mesh_device,
-                eps=hf_cfg.rms_norm_eps,
-                max_batch_size=max_batch_size,
-                tt_ccl=tt_ccl,
-            )
-        )
-
-        lm = _build_lm_head(
-            mesh_device=mesh_device,
-            hf_lm_head=hf.lm_head,
-            qcfg=qcfg,
-            lm_head_dtype=precision.lm_head_dtype,
-            cache_path=cache_path,
-        )
-
-        del hf
-
-        model = cls(qcfg, emb, rope_setup, layers, final_norm, lm, mesh_device)
-        if executor_mode:
-            model.model_args = Qwen25_72BExecutorRuntimeConfig(
-                n_layers=n_layers,
-                n_kv_heads=n_kv,
-                head_dim=head_dim,
-                max_batch_size=max_batch_size,
-                max_seq_len=max_seq_len,
-                cluster_shape=list(mesh_device.shape),
-                model_cache_path=cache_path,
-                kv_cache_dtype=precision.kv_cache_dtype,
-            )
-        return model
-
-    def set_kv_cache(self, kv_cache: list) -> None:
-        assert len(kv_cache) == len(
-            self.layers
-        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
-        for i, layer in enumerate(self.layers):
-            layer.self_attn.config.kv_cache = tuple(kv_cache[i])
+    def prepare_prefill_rot_mats(self, position_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        self.rope_setup.load_device_weights()
+        cos = None
+        sin = None
+        try:
+            cos = ttnn.embedding(position_indices, self.rope_setup.cos_matrix, layout=ttnn.TILE_LAYOUT)
+            sin = ttnn.embedding(position_indices, self.rope_setup.sin_matrix, layout=ttnn.TILE_LAYOUT)
+            return ttnn.unsqueeze_to_4D(cos), ttnn.unsqueeze_to_4D(sin)
+        except BaseException:
+            for tensor in (sin, cos):
+                if tensor is not None:
+                    try:
+                        ttnn.deallocate(tensor)
+                    except BaseException:
+                        pass
+            raise
 
     def embed_decode(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         x = self.embed.forward(tokens)
@@ -825,13 +921,19 @@ class Qwen25_72B(LightweightModule):
         self,
         x_embed: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        *,
         user_id: int = 0,
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -841,6 +943,8 @@ class Qwen25_72B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
 
         if get_last_token == -1:
@@ -848,12 +952,55 @@ class Qwen25_72B(LightweightModule):
 
         # Slice + deallocate the full-sequence buffer before norm/LM head reduces peak L1.
         old = x
-        x_tile = _slice_last_token_tile(old, get_last_token)
+        if last_token_slice is None:
+            x_tile = _slice_last_token_tile(old, get_last_token)
+        else:
+            x_tile = ttnn.slice(
+                old,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(old.shape[2]) // 32,
+            )
         ttnn.deallocate(old)
+        if last_token_index is not None:
+            if x_tile.dtype != ttnn.bfloat16:
+                old_tile = x_tile
+                x_tile = ttnn.typecast(x_tile, ttnn.bfloat16)
+                ttnn.deallocate(old_tile)
+            old_tile = x_tile
+            x_tile = ttnn.embedding(last_token_index, x_tile, layout=ttnn.TILE_LAYOUT)
+            x_tile = ttnn.unsqueeze_to_4D(x_tile)
+            ttnn.deallocate(old_tile)
         return self._last_tile_logits(x_tile)
 
-    def post_process_prefill_output(self, hidden_states: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
-        return self._last_tile_logits(_slice_last_token_tile(hidden_states, last_token_idx))
+    def post_process_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        if last_token_slice is None:
+            x = _slice_last_token_tile(hidden_states, last_token_idx)
+        else:
+            x = ttnn.slice(
+                hidden_states,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(hidden_states.shape[2]) // 32,
+            )
+        if last_token_index is not None:
+            if x.dtype != ttnn.bfloat16:
+                old = x
+                x = ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x
+            x = ttnn.embedding(last_token_index, x, layout=ttnn.TILE_LAYOUT)
+            x = ttnn.unsqueeze_to_4D(x)
+            ttnn.deallocate(old)
+        return self._last_tile_logits(x)
 
     def _last_tile_logits(self, x_tile: ttnn.Tensor) -> ttnn.Tensor:
         """Final-norm + all-gather + LM-head on a 32-row tile. ``x_tile`` shape ``[1, 1, 32, dim]``."""
@@ -864,6 +1011,32 @@ class Qwen25_72B(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
         x = self.lm_head.forward(x)
         return ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+    def post_process_batched_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx_list: list[int],
+        padded_batch: int,
+        prefill_seq_len: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        del last_token_slice, last_token_index
+        fold_len = padded_batch * prefill_seq_len
+        selector = torch.zeros(1, 1, 32, fold_len, dtype=torch.bfloat16)
+        for local_row, last_token_idx in enumerate(last_token_idx_list):
+            selector[0, 0, local_row, local_row * prefill_seq_len + last_token_idx] = 1.0
+        selector = ttnn.from_torch(
+            selector,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+        )
+        x = ttnn.matmul(selector, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(selector)
+        return self._last_tile_logits(x)
 
     def decode_forward(
         self,

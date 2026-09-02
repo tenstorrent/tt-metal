@@ -80,7 +80,7 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
-    std::map<CoreType, std::vector<CoreCoord>> cores;
+    std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
@@ -119,6 +119,8 @@ struct InspectorSettings {
     bool serialize_on_dispatch_timeout = true;
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
+    bool log_mesh_buffers = false;
+    bool log_mesh_sockets = false;
 };
 
 template <typename T>
@@ -166,6 +168,10 @@ struct SanitizerSettings {
     std::optional<bool> internal = std::nullopt;
 };
 
+// Not a limit: the value TT_METAL_TDP_LIMIT_WATTS carries to ask for the board default back rather
+// than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
+inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -183,6 +189,17 @@ class RunTimeOptions {
 
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
+
+    // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
+    // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
+    // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
+    // plumbed to every rank as the TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the
+    // single source of truth for the path). It lets rank-binding generation map against the known-good
+    // factory topology instead of relying on live discovery, which is slow and can misbehave on
+    // partially reachable or degraded clusters. When provided, it also lets Fabric 2.0 statically
+    // reroute traffic around broken links.
+    // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+    std::string factory_system_descriptor_path;
 
     bool build_map_enabled = false;
 
@@ -223,6 +240,10 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
+    // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
+    std::chrono::milliseconds noc_debug_poll_interval{500};
+    std::chrono::milliseconds noc_debug_full_read_interval{4000};
+    std::chrono::milliseconds noc_debug_watermark_margin{3000};
 
     bool checkpoint_enabled = false;
 
@@ -231,10 +252,16 @@ class RunTimeOptions {
     // should remain the same size as normal, unlike with null_kernels.
     bool kernels_early_return = false;
 
+    // Temporary: rdcycle DFB init timing in device firmware. Deprecate once profiler covers this.
+    bool measure_dfb_init_time_enabled = false;
+
     bool clear_l1 = false;
     bool clear_dram = false;
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
+
+    // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
+    std::optional<uint32_t> tdp_limit_watts;
 
     bool skip_loading_fw = false;
 
@@ -254,6 +281,9 @@ class RunTimeOptions {
     bool enable_hw_cache_invalidation = false;
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+
+    // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
+    bool use_quasar_tensix_dispatch_cores = false;
 
     std::filesystem::path simulator_path = "";
 
@@ -292,6 +322,12 @@ class RunTimeOptions {
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
+
+    // Tri-state override for Blackhole DRAM programmable cores in the HAL:
+    //   nullopt = auto-detect (firmware + topology), the default
+    //   true    = force enable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1)
+    //   false   = force disable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0)
+    std::optional<bool> blackhole_dram_programmable_cores_override;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
@@ -347,6 +383,7 @@ class RunTimeOptions {
     bool force_jit_compile = false;
 
     // Store command queues in device DRAM
+    bool dram_backed_cq_env_var_set = false;
     bool dram_backed_cq = false;
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
@@ -384,6 +421,13 @@ class RunTimeOptions {
 
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
+
+    // Process-start trace allocation tracker settings. These are static because
+    // environment variables are process-wide and the hot-path accessors do not
+    // belong to a particular MetalContext.
+    inline static bool trace_allocation_tracking_enabled_ = false;
+    inline static bool trace_allocation_diagnostics_enabled_ = false;
+    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
 
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
@@ -466,10 +510,7 @@ public:
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
     bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
-    // TODO: Remove these Watcher NOC sanitize functions once NOC sanitization is supported on Quasar in fast dispatch
-    // (#45878)
     bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
-    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
     void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
     void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }
@@ -483,6 +524,12 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
+    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
+    static bool get_trace_allocation_skip_program_cache_enabled() {
+        return trace_allocation_skip_program_cache_enabled_;
+    }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -503,15 +550,19 @@ public:
     void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
     bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
+    bool get_inspector_log_mesh_buffers() const { return inspector_settings.log_mesh_buffers; }
+    void set_inspector_log_mesh_buffers(bool enabled) { inspector_settings.log_mesh_buffers = enabled; }
+    bool get_inspector_log_mesh_sockets() const { return inspector_settings.log_mesh_sockets; }
+    void set_inspector_log_mesh_sockets(bool enabled) { inspector_settings.log_mesh_sockets = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
+    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -522,8 +573,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
-        feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
+    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
                 feature_targets[feature].cores[core_type].push_back({x, y});
@@ -596,10 +647,11 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
+            get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode());
@@ -639,6 +691,21 @@ public:
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
+    // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
+    std::chrono::milliseconds get_noc_debug_poll_interval() const { return noc_debug_poll_interval; }
+    void set_noc_debug_poll_interval(std::chrono::milliseconds interval) { noc_debug_poll_interval = interval; }
+    // How often the thread self-triggers a full read + process + report + discharge. Rounded up to a whole number
+    // of poll intervals. Zero disables the self-triggered full read entirely (events are then only processed on a
+    // user read or at device close).
+    std::chrono::milliseconds get_noc_debug_full_read_interval() const { return noc_debug_full_read_interval; }
+    void set_noc_debug_full_read_interval(std::chrono::milliseconds interval) {
+        noc_debug_full_read_interval = interval;
+    }
+    // Bounded-lateness margin held back when processing events mid-run. MUST exceed the poll interval above, which
+    // is what bounds how long a stalled core can stay unrecorded; otherwise a cross-core violation can be judged
+    // before the peer core's earlier event has arrived. Validated in start_debug_dump_thread().
+    std::chrono::milliseconds get_noc_debug_watermark_margin() const { return noc_debug_watermark_margin; }
+    void set_noc_debug_watermark_margin(std::chrono::milliseconds margin) { noc_debug_watermark_margin = margin; }
 
     void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
     bool get_checkpoint_enabled() const { return checkpoint_enabled; }
@@ -649,6 +716,8 @@ public:
     void set_kernels_early_return(bool v) { kernels_early_return = v; }
     bool get_kernels_early_return() const { return kernels_early_return; }
 
+    bool get_measure_dfb_init_time_enabled() const { return measure_dfb_init_time_enabled; }
+
     bool get_clear_l1() const { return clear_l1; }
     void set_clear_l1(bool clear) { clear_l1 = clear; }
 
@@ -657,6 +726,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
+    void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
@@ -701,6 +773,9 @@ public:
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
 
+    // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
+    bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
+
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
@@ -719,8 +794,17 @@ public:
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
 
+    std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
+        return blackhole_dram_programmable_cores_override;
+    }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // Factory System Descriptor (FSD) path. Empty when unset.
+    bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
+    const std::string& get_factory_system_descriptor_path() const { return factory_system_descriptor_path; }
+    void set_factory_system_descriptor_path(const std::string& path) { factory_system_descriptor_path = path; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
@@ -844,6 +928,7 @@ public:
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
+    bool is_dram_backed_cq_specified() const { return dram_backed_cq_env_var_set; }
     bool get_dram_backed_cq() const { return dram_backed_cq; }
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 

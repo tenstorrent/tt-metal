@@ -16,7 +16,7 @@
 namespace ttnn {
 
 flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuffer(
-    const std::vector<tt::tt_metal::OverlappedTensorView>& views,
+    const std::vector<ttnn::OverlappedTensorView>& views,
     flatbuffers::FlatBufferBuilder& builder,
     std::vector<tt::tt_metal::HostBuffer>& buffers) {
     TT_FATAL(!views.empty(), "Need at least one OverlappedTensorView to serialize");
@@ -47,7 +47,7 @@ flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuf
     return flatbuffer::CreateOverlappedTensors(builder, fused_offset, views_vec);
 }
 
-std::vector<tt::tt_metal::OverlappedTensorView> overlapped_tensors_from_flatbuffer(
+std::vector<ttnn::OverlappedTensorView> overlapped_tensors_from_flatbuffer(
     const flatbuffer::OverlappedTensors* fb,
     ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
@@ -57,10 +57,10 @@ std::vector<tt::tt_metal::OverlappedTensorView> overlapped_tensors_from_flatbuff
 
     auto fused = ttnn::from_flatbuffer(fb->fused_tensor(), tensor_data, memory_pin);
 
-    std::vector<tt::tt_metal::OverlappedTensorView> result;
+    std::vector<ttnn::OverlappedTensorView> result;
     result.reserve(fb->views()->size());
     for (const auto* fb_view : *fb->views()) {
-        result.push_back(tt::tt_metal::OverlappedTensorView{
+        result.push_back(ttnn::OverlappedTensorView{
             .name = fb_view->name() ? fb_view->name()->str() : std::string{},
             .fused_tensor = fused,
             .tensor_shape = {fb_view->tensor_shape_h(), fb_view->tensor_shape_w()},

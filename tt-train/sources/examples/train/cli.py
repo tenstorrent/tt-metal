@@ -33,6 +33,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override sequence length (default: from config)",
     )
+    g.add_argument(
+        "--embedding-placement",
+        dest="embedding_placement",
+        type=str,
+        default=None,
+        metavar="MODE",
+        help="Override token-embedding TP placement (llama only): "
+        "replicated (default; sharding off) | vocab_parallel | feature_parallel",
+    )
 
     g = p.add_argument_group("Training overrides")
     g.add_argument("--batch-size", dest="batch_size", type=int, default=None, help="Override batch size")

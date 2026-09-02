@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -23,6 +24,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+
 namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
@@ -34,8 +38,8 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     auto all_cores = sender_cores.merge(receiver_cores);
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
-    auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -85,12 +89,14 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         auto sender_noc_coords = mesh_device->worker_core_from_logical_core(sender_core);
+        // Row-wise, to match how the GCB itself flattens each sender's receivers: a receiver's index
+        // in this vector is its credit slot, which orders the sender's NOC XY table.
+        const auto& receiver_cores_vec =
+            corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, /*row_wise=*/true);
         std::vector<CoreCoord> receiver_noc_coords;
-        for (const auto& receiver_core_range : receiver_cores.ranges()) {
-            const auto& receiver_cores_vec = corerange_to_cores(receiver_core_range);
-            for (const auto& receiver_core : receiver_cores_vec) {
-                receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
-            }
+        receiver_noc_coords.reserve(receiver_cores_vec.size());
+        for (const auto& receiver_core : receiver_cores_vec) {
+            receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
         }
         std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
@@ -134,6 +140,67 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
         tt::tt_metal::SetRuntimeArgs(program_, compute_receiver_kernel, receiver_cores, receiver_runtime_args);
     }
     this->RunProgram(mesh_device, workload);
+}
+
+TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(1, 0);
+    const CoreCoord idle_core(1, 1);
+    const CoreRangeSet receiver_cores{CoreRange(receiver_core)};
+    const CoreRangeSet all_cores(CoreRange({0, 0}, {1, 1}));
+    constexpr uint32_t cb_page_size = 32;
+    constexpr uint32_t remote_cb_index = 31;
+    constexpr uint32_t local_cb_index = 0;
+    constexpr tt::DataFormat tile_format = tt::DataFormat::Float16_b;
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    auto make_cb_config = [&]() {
+        CircularBufferConfig config(cb_page_size);
+        config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
+        config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
+        return config;
+    };
+    // Run a rectangular kernel grid with a remote CB on only one receiver. Dispatch must overwrite stale config on
+    // idle_core with the zero sentinel that setup_remote_cb_interfaces() skips.
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
+    auto sparse_global_cb = experimental::GlobalCircularBuffer(*mesh_device, sparse_mapping, 3200, BufferType::L1);
+    distributed::MeshWorkload sparse_workload;
+    Program sparse_program = CreateProgram();
+    experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);
+    CreateKernel(
+        sparse_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        all_cores,
+        ReaderDataMovementConfig{});
+    sparse_workload.add_program(device_range, std::move(sparse_program));
+    auto& sparse_program_in_workload = sparse_workload.get_programs().at(device_range);
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t poison_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const uint32_t poison_size = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1) - poison_base;
+    ASSERT_GT(poison_size, 0);
+    ASSERT_EQ(poison_size % sizeof(uint32_t), 0);
+    std::vector<uint32_t> poison(poison_size / sizeof(uint32_t), 0xffffffff);
+    detail::WriteToDeviceL1(device, idle_core, poison_base, poison);
+
+    this->RunProgram(mesh_device, sparse_workload);
+
+    const uint32_t remote_config_address =
+        sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
+        sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
+    std::vector<uint32_t> remote_config;
+    detail::ReadFromDeviceL1(
+        device,
+        idle_core,
+        remote_config_address,
+        UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
+        remote_config);
+    EXPECT_EQ(remote_config, std::vector<uint32_t>(UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG, 0));
 }
 
 }  // namespace tt::tt_metal

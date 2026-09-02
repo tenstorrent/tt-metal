@@ -85,6 +85,22 @@ bool can_use_sharded_optimized_factories(
     if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
         return false;  // ND_SHARDED output should take the default factory.
     }
+    // [#48552] TilizeMultiCoreShardedProgramFactory borrows a single-push DFB over the resident shard, and that
+    // borrowed-DFB read path delivers correct data for only the FIRST 64 tiles/shard, then repeats -- a fixed
+    // 64-entry limit in the borrowed-DFB credit/tile-counter path (isolated repro:
+    // test_tilize_width_quasar.py::test_quasar_tilize_sharded; PCC == 64/num_tiles_per_shard, exact). Route
+    // HEIGHT_SHARDED shards with > 64 tiles to the NON-borrowed TilizeMultiCoreDefaultProgramFactory (real
+    // per-block stick reader, per-block DFB -> no 64 cap), which tilizes correctly at any size. WIDTH_SHARDED
+    // uses a different factory and is left unchanged (untested against this bug). Remove once the DFB team
+    // widens the 64-entry field. tiles-per-shard is layout-independent: shard_h * shard_w / TILE_HW.
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& in_shard_shape = input_tensor.shard_spec().value().shape;
+        const uint32_t in_tiles_per_shard =
+            (in_shard_shape[0] * in_shard_shape[1]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        if (in_tiles_per_shard > 64) {
+            return false;
+        }
+    }
     return true;
 }
 }  // namespace
@@ -154,7 +170,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             operation_attributes.output_mem_config.buffer_type(),
             input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
                                                          // factory, the output has the same shard spec as the input.
-        return {TensorSpec(
+        return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
@@ -166,7 +182,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};

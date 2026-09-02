@@ -26,7 +26,7 @@ struct MoeUngroupTensorArgs {
     ttnn::Tensor grouped_scores;  // [1, 1, 1, T_cap]     ROW_MAJOR bf16
 };
 
-using MoeUngroupSpecReturn = ttnn::TensorSpec;
+using MoeUngroupSpecReturn = tt::tt_metal::TensorSpec;
 using MoeUngroupTensorReturn = ttnn::Tensor;
 
 using operation_attributes_t = MoeUngroupAttributes;

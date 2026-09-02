@@ -85,7 +85,7 @@ TEST_F(MatmulsTest, MatMulNoTranspose) {
     auto t_b = core::from_xtensor(b, &autograd::ctx().get_device());
 
     // Compute the result using the ttnn op.
-    auto t_y = matmul(t_a, t_b, false, false);
+    auto t_y = ttnn_fixed::matmul(t_a, t_b, false, false);
     xt::xarray<float> y = core::to_xtensor(t_y);
 
     // Compute the expected result using xtensor goldens.
@@ -101,7 +101,7 @@ TEST_F(MatmulsTest, MatMulTransposeA) {
     auto t_b = core::from_xtensor(b, &autograd::ctx().get_device());
 
     // Use transpose_a = true.
-    auto t_y = matmul(t_a, t_b, true, false);
+    auto t_y = ttnn_fixed::matmul(t_a, t_b, true, false);
     xt::xarray<float> y = core::to_xtensor(t_y);
 
     // Expected: (a^T) * b.
@@ -117,7 +117,7 @@ TEST_F(MatmulsTest, MatMulTransposeB) {
     auto t_b = core::from_xtensor(b, &autograd::ctx().get_device());
 
     // Use transpose_b = true.
-    auto t_y = matmul(t_a, t_b, false, true);
+    auto t_y = ttnn_fixed::matmul(t_a, t_b, false, true);
     xt::xarray<float> y = core::to_xtensor(t_y);
 
     // Expected: a * (b^T).
@@ -133,7 +133,7 @@ TEST_F(MatmulsTest, MatMulTransposeBoth) {
     auto t_b = core::from_xtensor(b, &autograd::ctx().get_device());
 
     // Use both transpositions.
-    auto t_y = matmul(t_a, t_b, true, true);
+    auto t_y = ttnn_fixed::matmul(t_a, t_b, true, true);
     xt::xarray<float> y = core::to_xtensor(t_y);
 
     // Expected: (a^T) * (b^T).

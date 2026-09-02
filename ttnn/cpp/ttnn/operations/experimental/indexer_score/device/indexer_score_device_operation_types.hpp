@@ -6,10 +6,16 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
+#include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
 
@@ -27,26 +33,50 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
     return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
 }
 
-// Block-cyclic (per-SP-shard) K cache layout. Chunked prefill stores each of `sp` SP shards' per-chunk slab
-// (chunk_local keys) back-to-back in its local cache, so after the SP all-gather the [B,1,T,D] k holds keys in
-// a PERMUTED physical order: physical row r holds the natural token at
-// P[r] = (lr/chunk_local)*chunk_global + c*chunk_local + (lr%chunk_local), where c = r/sll, lr = r%sll,
-// sll = T/sp, chunk_global = sp*chunk_local. The reader reads K back in LOGICAL token order (invP per tile),
-// so the causal mask and block-max-pool -- both keyed on the logical column -- stay byte-identical and the
-// score columns come out in natural token order. RESOLVED at the ttnn entry (interface + naming match
-// sparse_sdpa): the caller names the mesh axis the cache was striped over (block_cyclic_sp_axis) and passes
-// the per-shard chunk length (block_cyclic_chunk_local); sp = the mesh extent on that axis (DERIVED, not
-// free). Hashed (it shapes the reader binary). sp == 1 is the identity, represented as no block_cyclic at all.
-struct BlockCyclicLayout {
-    uint32_t sp;           // SP shard count the cache was gathered across (derived from the mesh sp axis)
-    uint32_t chunk_local;  // per-shard chunk length (elements); == chunk_size_global / sp == per-chip seq_len
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
+// indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
+using ttnn::prim::BlockCyclicLayout;
+
+// Ring-fused indexer: the op subsumes the SP all-gather. Instead of the caller pre-gathering K, it hands the
+// per-chip LOCAL K shard (tensor_args.k_local) as the all-gather INPUT and the full persistent buffer
+// (tensor_args.k) as the all-gather OUTPUT. In indexed mode k_local may be a multi-slot ND-sharded cache and k
+// is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
+// (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
+// semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
+// tensor_args). All fields and semaphore addresses are hashed because the descriptor embeds them in AG worker
+// allocation/routing/runtime arguments and the cache-hit override only rebuilds consumer kernels. ring_size /
+// ring_index are DERIVED from the mesh + coordinate (cluster_axis), not stored.
+struct FusedRingConfig {
+    uint32_t num_links{1};  // fabric links for the gather
+    ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
+    std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    bool full_mesh{false};
+    ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
+    uint32_t mesh_rows{0};
+    uint32_t mesh_cols{0};
+    std::optional<uint64_t> route_plan_hash;
+    // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
+    // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
+    // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.
 };
 
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
-    uint32_t chunk_start_idx{0};             // elements, tile-aligned
-    std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
+    uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
+    // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
+    // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
+    // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
+    // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
+    std::vector<uint32_t> seq_shard_axes{};
+    std::optional<uint32_t> sp_axis() const {
+        return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
+    }
+    std::optional<uint32_t> tp_axis() const {
+        return seq_shard_axes.size() >= 2 ? std::optional<uint32_t>(seq_shard_axes[1]) : std::nullopt;
+    }
     // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
     // Compile-time, so the true path is byte-identical to before.
     bool apply_relu{true};
@@ -79,20 +109,26 @@ struct operation_attributes_t {
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
     // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
-    // binary via compile-time defines, so the contiguous path stays byte-identical). nullopt == contiguous K
+    // binary via compile-time arguments). nullopt == contiguous K
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // Ring-fused all-gather config (see FusedRingConfig). nullopt = the classic unfused path (caller pre-gathers
+    // K), which selects the classic program factory and stays byte-identical.
+    std::optional<FusedRingConfig> fused_ring{std::nullopt};
+    bool has_fused_ring() const { return fused_ring.has_value(); }
 };
 
 struct tensor_args_t {
     const Tensor& q;
-    const Tensor& k;
+    const Tensor& k;  // fused: persistent all-gather OUTPUT; batch 1 in indexed mode
     const Tensor& weights;
+    // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
+    std::optional<Tensor> k_local{std::nullopt};
 };
 
 using tensor_return_value_t = Tensor;
 
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttnn::operations::experimental::indexer_score

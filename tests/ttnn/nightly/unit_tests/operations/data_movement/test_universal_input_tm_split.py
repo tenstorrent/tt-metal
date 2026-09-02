@@ -489,6 +489,26 @@ def test_interleaved_to_sharded_no_spec(device, memory_layout, shape, split_size
     _check(tt_out, ref)
 
 
+def test_specless_sharded_output_grid_shrinks_height(device):
+    """Split via generate_transpose_shard_spec: chunk (2*TILE, 2*TILE); ceil(64/32)=2 populated cores per chunk."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= 2:
+        pytest.skip("Device grid too small to observe shrink (need > 2 cores)")
+    shape = [2 * TILE, 4 * TILE]
+    torch.manual_seed(24)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, 2 * TILE, dim=-1)
+    tt_in = _from_torch(t, device, mc=L1)
+    out_no_spec = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    tt_out = ttnn.split(tt_in, 2 * TILE, dim=-1, memory_config=out_no_spec)
+    expected = ttnn.num_cores_to_corerangeset(2, compute_grid, True)
+    for tt_t in tt_out:
+        grid = tt_t.memory_config().shard_spec.grid
+        assert grid.num_cores() == 2, f"Expected 2 populated cores, got {grid.num_cores()}"
+        assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+    _check(tt_out, ref)
+
+
 # 9d. Sub-tile rescale → graceful DRAM downgrade (tile-alignment guard on rescaled shard_w=16 < TILE).
 
 
@@ -802,4 +822,110 @@ def test_native_single_core_sharded_input(device):
 
     tt_in = _from_torch(t, device, mc=in_cfg)
     tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    _check(tt_out, ref)
+
+
+# 20. Single-chunk parity — split_size >= dim size returns the whole tensor as one chunk; exercises num_splits=1 device path.
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("split_size", [64, 100])  # == dim size, and > dim size
+def test_split_single_chunk(device, layout, torch_dtype, ttnn_dtype, split_size):
+    """split_size >= dim size returns exactly one chunk equal to the input."""
+    torch.manual_seed(21)
+    t = torch.randn([64, 64]).to(torch_dtype)
+    ref = torch.split(t, split_size, dim=-1)
+    assert len(ref) == 1, f"Expected torch reference to produce 1 chunk, got {len(ref)} (split_size={split_size})"
+
+    tt_in = _from_torch(t, device, dtype=ttnn_dtype, layout=layout, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=L1)
+    assert len(tt_out) == 1, f"Expected a single chunk, got {len(tt_out)}"
+    _check(tt_out, ref)
+
+
+# 21. Strict list-size validation — under- and over-covering lists must raise; negative dims exercised.
+
+
+@pytest.mark.parametrize(
+    "shape, split_sizes, dim",
+    [
+        ([64, 64], [32], -1),  # under-covers: 32 < 64
+        ([64, 64], [32, 64], -1),  # over-covers: 32 + 64 > 64
+        ([64, 64], [16, 16], 0),  # under-covers on dim 0: 32 < 64
+        ([2, 64, 64], [32, 40], -2),  # over-covers via negative dim: 72 > 64
+    ],
+)
+def test_split_list_size_must_cover_dim(device, expect_error, shape, split_sizes, dim):
+    """A split_sizes list that does not sum exactly to the split dim must raise."""
+    torch.manual_seed(22)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = _from_torch(t, device, mc=L1)
+    with expect_error(RuntimeError, "split_sizes must sum exactly to the size of dimension"):
+        ttnn.split(tt_in, split_sizes, dim=dim, memory_config=L1)
+
+
+# 22. Integer-overload remainder path — non-divisible dim produces [split_size, remainder] chunks with correct shapes/values.
+
+
+@pytest.mark.parametrize(
+    "shape, split_size, dim",
+    [
+        ([2 * TILE, 3 * TILE // 2], TILE, -1),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+        ([3 * TILE // 2, 2 * TILE], TILE, 0),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+    ],
+)
+def test_split_int_remainder(device, shape, split_size, dim):
+    """Non-divisible dim size produces ceil(dim/split_size) chunks; last chunk is the remainder."""
+    torch.manual_seed(23)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=dim)
+    assert len(ref) == 2, f"Expected 2 reference chunks, got {len(ref)}"
+
+    tt_in = _from_torch(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=dim, memory_config=L1)
+    assert len(tt_out) == 2, f"Expected 2 output chunks, got {len(tt_out)}"
+    _check(tt_out, ref)
+
+
+# ---- Regression: logical-vs-padded shape in split output (#51214 items 6+7) ----
+
+
+@pytest.mark.parametrize(
+    "shape, split_size",
+    [
+        # Item 7: logical width not tile-aligned → must take slice fallback, not TILE kernel.
+        # Mid-tile slice bounds (50..100) are the first TILE coverage of that path in this file.
+        ([128, 100], 50),
+        # Item 6: padded height must not leak into chunk logical shape. N=2 → two-chunk helper.
+        ([100, 128], 64),
+        # Item 6 via N>2: routes through ttnn::prim::split directly (not the two-chunk helper).
+        ([100, 128], 32),
+        # Same padded/logical class on the batch>1 reshape path inside split_last_dim_two_chunks_tiled.
+        # On main this used padded Y=128 against logical height 100 and volume-mismatched.
+        ([2, 1, 100, 128], 64),
+    ],
+    ids=[
+        "item7_non_aligned_width_slice_fallback",
+        "item6_n2_padded_height",
+        "item6_n4_prim_split",
+        "item6_batch_gt1_reshape",
+    ],
+)
+def test_split_logical_vs_padded_shape(device, shape, split_size):
+    """#51214 items 6+7: chunk logical shapes and values must follow logical_shape, not padding."""
+    torch.manual_seed(42)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=-1)
+
+    tt_in = _from_torch(t, device, mc=DRAM)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=DRAM)
+    # _check asserts chunk count, per-chunk shape, and values. A padded_shape leak shows up as
+    # shape mismatch (e.g. [128,64] vs [100,64]); a wrong TILE-kernel split shows up as value mismatch.
     _check(tt_out, ref)

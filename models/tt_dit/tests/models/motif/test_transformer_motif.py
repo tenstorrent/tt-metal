@@ -21,6 +21,7 @@ from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -36,7 +37,7 @@ from ....utils.tensor import bf16_tensor
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("batch_size", [2])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_transformer_motif(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -165,6 +166,7 @@ def test_transformer_motif(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=submesh_device.shape,
+        mesh_device=submesh_device,
         get_torch_state_dict=get_state_dict,
     )
 

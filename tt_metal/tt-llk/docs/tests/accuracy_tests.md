@@ -14,12 +14,44 @@ These are ordinary pytest tests. Just set the device arch via `CHIP_ARCH`.
 The examples below use paths relative to `tests/python_tests/` and `CHIP_ARCH = wormhole`.
 
 ```bash
-# one op
-CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py -k Reciprocal -s
+# one op (--op selects by MathOperation name; repeatable for several)
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --op=Reciprocal -s
 
 # runs every op in the given test file
 CHIP_ARCH=wormhole pytest accuracy/test_examples_accuracy.py -s
 ```
+
+`--op` takes a `MathOperation` name (case-insensitive, exact), is repeatable
+(`--op=Exp --op=Log`), and composes with `-k`/`-m`.
+
+## Run modes
+
+The same op/format matrix can run in three modes, selected with `--mode`. All
+three run the one merged kernel (`sources/eltwise_unary_sfpu_perf.cpp`), but they
+differ in workload as well as in what they measure: `accuracy` sweeps 2048 points
+with a single loop, while `perf` and `both` use 8192 points and loop 16× for
+stable timings. So the numbers are not directly comparable across modes:
+
+- `accuracy` (default) — run on hardware and compare against the torch golden,
+  writing the per-op error files described below.
+- `perf` — profile every scenario for timings only (no golden compare, no file).
+- `both` — profile *and* write the accuracy files in one pass. Restricted to the
+  `L1_TO_L1` scenario (the only one whose L1 output can be read back and compared
+  to the golden), so its timings are narrower than `perf` mode's.
+
+```bash
+# accuracy only (default — --mode can be omitted)
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py
+
+# perf only
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --mode=perf
+
+# accuracy + perf in one run
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --mode=both
+```
+
+`--mode` keeps only the matching sweep and deselects the other two. It defaults
+to `accuracy`, and can be combined with `--op`.
 
 ## Output
 
@@ -36,7 +68,7 @@ source of truth. Parquet isn't human-readable, so there are two ways to get CSV:
 
 ```bash
 # 1. Write CSV directly instead of Parquet:
-CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py -k Reciprocal --csv
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --op=Reciprocal --csv
 
 # 2. Convert an existing Parquet file to CSV (no hardware run needed):
 python -m accuracy.to_csv accuracy/_csv_output/wh/exp.parquet   # one file

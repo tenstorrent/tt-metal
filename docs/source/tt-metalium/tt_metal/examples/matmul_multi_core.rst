@@ -258,7 +258,8 @@ The compute kernel does not handle IO directly and is not concerned with how wor
         constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
         constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
-        mm_init(cb_in0, cb_in1, cb_out);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+        matmul_init(cb_in0, cb_in1);
 
         // Instead of processing all tiles, we process only the assigned amount of tiles.
         for (uint32_t i = 0; i < num_output_tiles; ++i) {

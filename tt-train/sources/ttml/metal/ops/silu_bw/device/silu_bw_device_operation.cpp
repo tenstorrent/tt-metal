@@ -15,7 +15,7 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SiLUBackward operation requires {} to be on Device. Input storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -38,7 +38,7 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SiLUBackward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
@@ -80,7 +80,7 @@ tensor_return_value_t SiLUBackwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_da.has_value()) {
         return tensor_args.preallocated_da.value();
     } else {
-        return create_device_tensor(output_specs[0], tensor_args.input.device());
+        return ttnn::create_device_tensor(output_specs[0], tensor_args.input.device());
     }
 }
 

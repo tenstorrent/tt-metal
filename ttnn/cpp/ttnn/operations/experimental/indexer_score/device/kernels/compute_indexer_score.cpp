@@ -22,7 +22,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
-#include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
 
 // qk subblock height (head rows per DEST pass).
@@ -40,6 +40,8 @@ constexpr bool apply_relu = get_compile_time_arg_val(num_common_ct_args + 3) != 
 constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) != 0;
 // Fused + no mcast: stream k (waited incrementally in the matmul). Fused + mcast: k is one block, waited whole.
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
+// Fused ring visits bands in the arrival-order permutation supplied in runtime args.
+constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -59,7 +61,7 @@ inline void set_matmul_mode() {
     // guarded: no-op in bf16; only the fp32-dest fallback reconfigs.
     pack_reconfig_data_format(cb_out_strip, qk_cb);
     pack_reconfig_l1_acc(0);  // cb_qk packs overwrite
-    mm_block_init_short(
+    matmul_block_init(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     // relu(q.kT) in the packer when apply_relu; else linear, so the raw dot flows to the gate-mul.
     if constexpr (apply_relu) {
@@ -97,7 +99,7 @@ void matmul_relu_pass(uint32_t head_in_group, uint32_t q_row, uint32_t k_col) {
     emit_qk_matmul_block<q_cb, k_cb>(head_in_group, q_row, k_col);
     qk.reserve_back(heads_per_dest_pass);
     tile_regs_wait();
-    pack_tile_block(0, qk_cb, heads_per_dest_pass);
+    pack_block(0, qk_cb, heads_per_dest_pass);
     tile_regs_release();
     qk.push_back(heads_per_dest_pass);
 }
@@ -115,7 +117,7 @@ inline void set_mul_reconfig() {
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 inline void set_mul_mode() {
     set_mul_reconfig<qk_cb, w_cb, acc_cb>();
-    mul_bcast_cols_init_short(qk_cb, w_cb);
+    mul_bcast_cols_init(qk_cb, w_cb);
     // acc_to_dest=1: each mul MACs onto the same DEST tile (head 0 seeds the acquire-zeroed reg), so the
     // chunk's head reduction needs one pack, not a per-head packer-L1-acc RMW.
     MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, ckernel::BroadcastType::COL, MATH_FIDELITY>(
@@ -206,7 +208,7 @@ template <uint32_t acc_cb, uint32_t mask_cb>
 inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) {
     const bool is_diag = (k_tile == diag_tile);
     const uint32_t midx = is_diag ? 0u : 1u;  // 0 = diag strict-upper -inf, 1 = full -inf
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     pack_reconfig_l1_acc(is_diag ? 1 : 0);  // diag accumulates (keeps score); full -inf overwrites
     tile_regs_acquire();
     copy_tile(mask_cb, midx, 0);
@@ -306,7 +308,7 @@ inline void scale_q_by_w_inplace(uint32_t head_base) {
     pack_relu_config(ReluConfig::none());
     reconfig_data_format(cb_k, cb_q, cb_acc_strip, cb_w);  // srcA->q, srcB->w (guarded)
     pack_reconfig_data_format(cb_out_strip, cb_q);         // pack->cb_q (bf16, in place)
-    mul_bcast_cols_init_short(cb_q, cb_w);
+    mul_bcast_cols_init(cb_q, cb_w);
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
         const uint32_t w_idx = r * num_heads + head_base;
         for (uint32_t d = 0; d < head_dim_tiles; ++d) {
@@ -328,7 +330,7 @@ inline void set_matmul_to_acc_mode() {
     reconfig_data_format(cb_q, k_cb, cb_w, q_cb);  // srcA(q)->k, srcB(w)->q [guarded]
     pack_reconfig_data_format(cb_q, acc_cb);       // pack->acc
     pack_reconfig_l1_acc(0);
-    mm_block_init_short(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
+    matmul_block_init(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass, head_dim_tiles);
     pack_relu_config(ReluConfig::none());
 }
 
@@ -439,8 +441,9 @@ void kernel_main() {
         return;
     }
 
-    mm_block_init(
-        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
+    matmul_block_init(
+        cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped
     if constexpr (block_pool) {
         CircularBuffer(cb_scaler).wait_front(1);  // 1.0 reduce-MAX scaler, reused, never popped
@@ -463,7 +466,13 @@ void kernel_main() {
     const uint32_t band_iters = stream_heads ? max_bands : num_bands;
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band = 0; band < band_iters; ++band) {
+        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+            uint32_t band = band_i;
+            if constexpr (fused_ring_enabled) {
+                // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
+                // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
+                band = get_arg_val<uint32_t>(10 + band_i);
+            }
             if constexpr (stream_heads) {
                 if (band >= num_bands) {
                     drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
@@ -471,6 +480,15 @@ void kernel_main() {
                 }
             }
             span.set(group, band0 + band);
+            // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
+            // wholly past that prefix have no K/output work. Head streaming still receives one
+            // q-mcast block per band, so drain it to keep the row rendezvous in lockstep.
+            if (span.k_tiles() == 0) {
+                if constexpr (stream_heads) {
+                    drain_phantom_band_q();
+                }
+                continue;
+            }
             // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
             // paths wait the whole chunk here.
             if constexpr (!fuse_single || !fused_stream_k) {
@@ -511,7 +529,8 @@ void kernel_main() {
                                 k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
                             }
                             for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(head_base, r, c, n, r * k_tiles_per_unit + c);
+                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
+                                    head_base, r, c, n, r * k_tiles_per_unit + c);
                             }
                         }
                     }

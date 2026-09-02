@@ -23,12 +23,9 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -95,7 +92,6 @@ void create_and_read_max_num_semaphores(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -122,7 +118,7 @@ void create_and_read_max_num_semaphores(
                     workload.get_sem_base_addr(mesh_device, logical_core, CoreType::WORKER) +
                     (tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
-                tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
+                slow_dispatch::ReadFromL1(*mesh_device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
                 res.push_back(single_val.at(0));
             }
@@ -160,28 +156,27 @@ void try_creating_semaphores_out_of_bounds(
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), workload, core_range);
+        unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(device, workload, core_range);
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(devices_.at(id), workload);
-        unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
-            devices_.at(id), workload, core_range);
+        unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(device, workload);
+        unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(device, workload, core_range);
     }
 }
 

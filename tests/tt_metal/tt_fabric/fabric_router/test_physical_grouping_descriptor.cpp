@@ -9,7 +9,6 @@
 #include <string>
 #include <algorithm>
 #include <set>
-#include <iostream>
 #include <sstream>
 #include <cstdlib>
 
@@ -26,13 +25,22 @@ using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric::fabric_router_tests {
 
+class MockClusterPhysicalGroupingDescriptorTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+            GTEST_SKIP() << "PSD test requires TT_METAL_MOCK_CLUSTER_DESC_PATH; run it through the fabric "
+                            "CPU-only test runner's physical-grouping setup";
+        }
+    }
+};
+
+class PhysicalGroupingDescriptorSP4Tests : public MockClusterPhysicalGroupingDescriptorTest {};
+
+class PhysicalGroupingDescriptorDualT3kTests : public MockClusterPhysicalGroupingDescriptorTest {};
+
 // Helper function to create PSD from mock cluster
 static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
-    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
-    if (mock_desc == nullptr) {
-        throw std::runtime_error("TT_METAL_MOCK_CLUSTER_DESC_PATH must be set for PSD tests");
-    }
-
     // Create PSD from mock cluster (CPU-only test)
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
@@ -1564,7 +1572,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
 
 // SP4 GLX mock: each MPI rank builds a PSD from its rank-local cluster fragment (one BH Galaxy host, 32 ASICs).
 // 128-ASIC meshes (8x16_Mesh / 4x32_Mesh) are covered in ValidatePreformedGroups_Sp4BhGalaxyQuadHostMeshes.
-TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMeshGroupings_SingleHostScale) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMeshGroupings_SingleHostScale) {
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
 
@@ -1650,7 +1658,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMesh
     }
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuadHostMeshes) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuadHostMeshes) {
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
 
@@ -1687,9 +1695,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
         auto mesh_groupings = pgd.get_groupings_by_name("4x32_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         EXPECT_EQ(asic_ids.size(), 4u)
             << "Expected validation to pass: 4x32_Mesh (32x4) should map to mock cluster PSD (4 placements on SP4)";
@@ -1700,9 +1706,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
         auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
         ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         // SP4 GLX mock: 16 hosts × 32 ASICs = 512 ASICs; a 4x4_Mesh (16 ASICs) tiles disjointly → 32 placements.
         EXPECT_EQ(asic_ids.size(), 32u)
@@ -1710,7 +1714,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
     }
 }
 
-TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupings) {
+TEST_F(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupings) {
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/wh_t3k_physical_grouping_descriptor.textproto";
 
@@ -1723,16 +1727,15 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
         auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh_t3k");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh_t3k grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         // Should find 4 of them, each of them on a single host
         EXPECT_EQ(asic_ids.size(), 4u)
             << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
 
         // Each should have their own host name
-        for (const auto& asic_id_set : asic_ids) {
+        for (const auto& placement : asic_ids) {
+            const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x2_Mesh_t3k mapping should contain at least one ASIC";
             std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
             for (const auto& asic_id : asic_id_set) {
@@ -1746,15 +1749,14 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
         auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh_t3k");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh_t3k grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         ASSERT_EQ(asic_ids.size(), 2u)
             << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
 
         // Each should have their own host name
-        for (const auto& asic_id_set : asic_ids) {
+        for (const auto& placement : asic_ids) {
+            const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x4_Mesh_t3k mapping should contain at least one ASIC";
             std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
             for (const auto& asic_id : asic_id_set) {
@@ -1765,7 +1767,7 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
     }
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadUnknownGroupings) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadUnknownGroupings) {
     // FIXME: This test currently fails because placements for multiple groupings are currently not optimized yet, so we
     // need to skip it for now. This will be fixed in a future commit when needed for more placement optimizations.
     GTEST_SKIP();
@@ -1812,7 +1814,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWi
 }
 
 // Test POD and SUPERPOD level groupings - should fail (cannot be flattened as they're too high level)
-TEST(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -1849,7 +1851,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpodL
 // GET_VALID_GROUPINGS_FOR_MGD TESTS
 // ============================================================================
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
     // Test matching a 4x2 mesh MGD (8 ASICs) to the 4x2_Mesh grouping in bh_galaxy PGD
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
@@ -1863,16 +1865,6 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
 
     auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-
-    // Print valid groupings
-    for (const auto& [instance_type, instances] : valid_groupings) {
-        for (const auto& [instance_name, groupings] : instances) {
-            std::cout << "Instance type: " << instance_type << ", Instance name: " << instance_name << std::endl;
-            for (const auto& grouping : groupings) {
-                std::cout << "Grouping name: " << grouping.name << ", ASIC count: " << grouping.asic_count << std::endl;
-            }
-        }
-    }
 
     // Count total groupings across all instances
     size_t total_groupings = 0;
@@ -1917,7 +1909,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     ASSERT_GE(g0_groupings.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_4x4Mesh) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_4x4Mesh) {
     // Test matching a 4x4 mesh MGD (16 ASICs) to the 4x4_Mesh grouping
     // Using dual_4x4_mesh_graph_descriptor which has 4x4 meshes in a graph
     const std::string pgd_path =
@@ -1973,7 +1965,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_4x4Mesh) {
     ASSERT_GE(g0_groupings.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_2x8Mesh) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_2x8Mesh) {
     // Test matching a 2x8 mesh MGD (16 ASICs) to the 2x8_Mesh grouping
     // Using wh_galaxy_split_2x8_2x4_3_mesh which has a 2x8 mesh (MESH4)
     const std::string pgd_path =
@@ -2029,7 +2021,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_2x8Mesh) {
     ASSERT_GE(g0_groupings_2x8.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_8x16Mesh) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_8x16Mesh) {
     // Test matching an 8x16 mesh MGD (128 ASICs) to the 8x16_Mesh grouping
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
@@ -2074,7 +2066,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_8x16Mesh) {
     }
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
     // Test matching a single galaxy mesh MGD (32 ASICs) to the 4x8_Mesh grouping
     // Using single_bh_galaxy_mesh_graph_descriptor which has 8x4 (32 ASICs, same count but different topology)
     const std::string pgd_path =
@@ -2120,7 +2112,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4x8
     }
 }
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_DualGalaxy8x8) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_DualGalaxy8x8) {
     // Test matching a dual galaxy MGD with meshes
     // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
     // matching
@@ -2178,7 +2170,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_DualGalaxy8x8) 
 //      G2 (4 graphs: 2xG1+2xG0, ALL_TO_ALL)
 // ============================================================================
 
-TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_Phase3_HigherLayerGraphMatching) {
+TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_Phase3_HigherLayerGraphMatching) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
@@ -2574,10 +2566,143 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
     const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
-    for (const auto& asic_set : placements) {
-        EXPECT_EQ(asic_set.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
-        EXPECT_EQ(count_distinct_hosts_for_asics(psd, asic_set), 1u)
+
+    for (const auto& placement : placements) {
+        EXPECT_EQ(placement.asics.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
+        EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)
             << "Set-packing should prefer single-host placements when host_topology is [1,1]";
+
+        // find_all_in_psd copies the matched grouping's pinning onto the placement.
+        EXPECT_EQ(placement.mesh_node_to_asic_position.size(), 16u)
+            << "Composed pinning should cover all 16 logical chips";
+        std::set<tt::tt_metal::ASICPosition> composed_positions;
+        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+            composed_positions.insert(asic_position);
+        }
+        std::set<tt::tt_metal::ASICPosition> footprint_positions;
+        for (const auto& asic_id : placement.asics) {
+            footprint_positions.insert(
+                tt::tt_metal::ASICPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
+        }
+        EXPECT_EQ(composed_positions, footprint_positions)
+            << "Composed pinning should pin exactly the footprint ASIC positions";
+    }
+}
+
+// get_valid_groupings_for_mgd should persist logical chip_id -> ASIC position pinning on every committed MESH
+// grouping (mesh_node_to_asic_position), so the PGD pinning discovered during matching is available downstream.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMeshNodeToAsicPosition) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_pod_4x4_line_line_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_file_path)) << "PGD file not found: " << pgd_file_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_file_path)) << "MGD file not found: " << mgd_file_path;
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with bh_galaxy_xyz_cluster_desc.yaml";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    ASSERT_TRUE(valid_groupings.contains("MESH"));
+    ASSERT_TRUE(valid_groupings.at("MESH").contains("M0"));
+    const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    ASSERT_FALSE(committed_groupings.empty());
+
+    constexpr size_t kMgdNodeCount = 16;  // single_pod_4x4 is a 4x4 mesh => 16 logical chips (row-major 0..15)
+    size_t groupings_with_pinning = 0;
+    for (const auto& grouping : committed_groupings) {
+        ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
+            << "Committed PGD grouping '" << grouping.name << "' should carry logical chip_id -> ASIC position pinning";
+        const auto& pinning = grouping.mesh_node_to_asic_position;
+        ++groupings_with_pinning;
+
+        EXPECT_EQ(pinning.size(), kMgdNodeCount)
+            << "Pinning for '" << grouping.name << "' should cover every MGD mesh node";
+
+        std::set<LogicalChipId> seen_chip_ids;
+        std::set<tt::tt_metal::ASICPosition> seen_positions;
+        for (const auto& [chip_id, asic_position] : pinning) {
+            EXPECT_LT(chip_id, kMgdNodeCount) << "Logical chip id out of range for '" << grouping.name << "'";
+            EXPECT_GT(*asic_position.first, 0u) << "Tray id should be set for chip " << chip_id;
+            EXPECT_GT(*asic_position.second, 0u) << "ASIC location should be set for chip " << chip_id;
+            EXPECT_TRUE(seen_chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";
+            EXPECT_TRUE(seen_positions.insert(asic_position).second)
+                << "Pinning is not injective for '" << grouping.name << "'";
+        }
+    }
+    EXPECT_GT(groupings_with_pinning, 0u)
+        << "At least one committed grouping should carry logical chip_id -> ASIC position pinning";
+}
+
+// PGD<->MGD matching receives MGD pinnings as many-to-many groups (same shape as TopologyMapper /
+// TopologyMappingConfig). Verify explicit corner all-to-all pinnings still commit PGD layouts with
+// mesh_node_to_asic_position populated.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinnings_StillCommitsPgdLayout) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_file_path)) << "PGD file not found: " << pgd_file_path;
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology {
+            dims: [ 4, 4 ]
+            dim_types: [ LINE, LINE ]
+          }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        pinnings {
+          logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+          logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+          physical_asic_position { tray_id: 1 asic_location: 1 }
+          physical_asic_position { tray_id: 2 asic_location: 1 }
+          physical_asic_position { tray_id: 3 asic_location: 1 }
+          physical_asic_position { tray_id: 4 asic_location: 1 }
+          physical_asic_position { tray_id: 1 asic_location: 5 }
+        }
+    )proto";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with bh_galaxy_xyz_cluster_desc.yaml";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+    MeshGraphDescriptor mgd(mgd_text_proto);
+
+    const auto& pinning_groups = mgd.get_pinnings();
+    ASSERT_EQ(pinning_groups.size(), 1u);
+    ASSERT_EQ(pinning_groups.at(MeshId{0}).size(), 1u);
+    ASSERT_EQ(pinning_groups.at(MeshId{0})[0].fabric_nodes.size(), 4u);
+    ASSERT_GE(pinning_groups.at(MeshId{0})[0].asic_positions.size(), 4u);
+
+    auto without_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, mgd.get_pinnings());
+
+    ASSERT_TRUE(without_pinnings.contains("MESH"));
+    ASSERT_TRUE(with_pinnings.contains("MESH"));
+    ASSERT_TRUE(with_pinnings.at("MESH").contains("M0"));
+    ASSERT_FALSE(with_pinnings.at("MESH").at("M0").empty())
+        << "PGD matching should succeed with many-to-many MGD pinnings";
+
+    for (const auto& grouping : with_pinnings.at("MESH").at("M0")) {
+        ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
+            << "PGD-derived layout pinning must be populated for '" << grouping.name << "'";
+        EXPECT_EQ(grouping.mesh_node_to_asic_position.size(), 16u)
+            << "Committed PGD layout should cover all 16 logical chips";
     }
 }
 

@@ -27,15 +27,14 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& devices = fixture->get_devices();
@@ -49,13 +48,13 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto sender_device = devices[0];
     auto receiver_device = devices[1];
 
-    auto src_physical_device_id = sender_device->get_devices()[0]->id();
-    auto dst_physical_device_id = receiver_device->get_devices()[0]->id();
+    auto src_physical_device_id = sender_device->get_device_ids()[0];
+    auto dst_physical_device_id = receiver_device->get_device_ids()[0];
 
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // Get fabric context and topology
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -137,25 +136,24 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Run programs
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate results
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

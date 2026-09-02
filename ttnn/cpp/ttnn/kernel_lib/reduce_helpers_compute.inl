@@ -6,6 +6,7 @@
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -24,46 +25,90 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
-// SFPU MAX fold (also used by reduce_{h,w}_neg for -MAX(-x) MIN).
+// SFPU MAX fold
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile_init();
+    } else {
+        binary_max_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile(a, b, out);
+    } else {
+        binary_max_tile(a, b, out);
+    }
 }
 
-// SFPU SUM fold (Int32 cross-tile add). add_int_tile is exact 2's-complement and wraps on
-// overflow, matching torch's Int32 sum semantics.
+// SFPU MIN fold
+template <DataFormat format>
+ALWI void sfpu_reduce_min_fold_init() {
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile_init();
+    } else {
+        binary_min_tile_init();
+    }
+}
+
+template <DataFormat format>
+ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile(a, b, out);
+    } else {
+        binary_min_tile(a, b, out);
+    }
+}
+
+// SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
+// accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
+// it with ARCH_QUASAR to avoid template lookup failures.
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile_init();
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile_init();
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
+#endif
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile<format>(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile<format>(a, b, out);
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile(a, b, out);
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
+#endif
+    }
 }
 
-// Pool-type dispatched cross-tile fold init (MAX -> binary_max, SUM -> add_int).
-// Used only by compute_kernel_lib::reduce(); the _neg kernels call the MAX fold directly.
+// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
+// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 reduces.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
         sfpu_reduce_sum_fold_init<format>();
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
+    } else if constexpr (pool_type == PoolType::MIN) {
+        sfpu_reduce_min_fold_init<format>();
+#endif
     } else {
         sfpu_reduce_max_fold_init<format>();
     }
 }
 
 // Copy one input tile into DST and fold into the running accumulator (first tile seeds dst_idx
-// directly). Fold op is selected by pool_type: MAX -> running max, SUM -> running sum.
+// directly). Fold op is selected by pool_type: MAX -> running max, MIN -> running min, SUM -> running sum.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_copy_and_fold(
     uint32_t input_cb_id, uint32_t tile_idx, uint32_t dst_idx, uint32_t work_dst, bool is_first_tile) {
@@ -73,6 +118,10 @@ ALWI void sfpu_copy_and_fold(
         copy_tile(input_cb_id, tile_idx, work_dst);
         if constexpr (pool_type == PoolType::SUM) {
             sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
+        } else if constexpr (pool_type == PoolType::MIN) {
+            sfpu_reduce_min_fold_tile<format>(dst_idx, work_dst, dst_idx);
+#endif
         } else {
             sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
         }
@@ -166,12 +215,7 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    DataFormat reduce_format,
-    typename AccumulateT,
-    bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
@@ -188,12 +232,13 @@ ALWI void reload_accumulator_if_needed(
             // A vanilla copy_tile reload would leave the running max at col 0, but the
             // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
             // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
-            // of that face, restoring the exact layout GMPOOL expects.
+            // of that face, restoring the exact layout GMPOOL expects. The SFPU path never runs
+            // GMPOOL — its running max is a plain full-tile value — so it must not transpose.
             constexpr bool reload_within_face_transpose =
-                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
             reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
-            copy_tile_to_dst_init_short(
+            copy_init(
                 accumulate.config.cb_accumulator,
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
@@ -204,7 +249,9 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
-                detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                // Point SrcA back at the input for the next fold; the caller does the fold init.
+                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                copy_init(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -248,6 +295,7 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -255,7 +303,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
+    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
@@ -267,6 +315,11 @@ ALWI void reduce(
     static_assert(
         reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
         "Int32 AVG (mean) is not supported");
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
+    static_assert(
+        reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
+        "MIN is only valid on an SFPU path (Int32 or Accurate fp32); FPU MIN arrives as PoolType::MAX via -MAX(-x)");
+#endif
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
@@ -298,9 +351,12 @@ ALWI void reduce(
     ASSERT(input_dfb_id != output_dfb_id);
     ASSERT(input_dfb_id != scaler_dfb_id);
     ASSERT(output_dfb_id != scaler_dfb_id);
+#ifndef ARCH_QUASAR
+    // is_valid_dfb_tile_page_size() is a debug validator only defined on WH/BH
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
+#endif
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
@@ -315,7 +371,7 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
+    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -339,8 +395,10 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (is_sfpu) {
-        init_sfpu(input_dfb_id, output_dfb_id);
-        copy_tile_to_dst_init_short(input_dfb_id);
+        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
+        // reconfig above already established the HW config, so this only re-points the unpacker
+        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
+        copy_init(input_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
@@ -383,7 +441,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -469,10 +527,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Wt > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -511,8 +570,17 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+#else
+                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
+                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
+                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
+                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
+                    // rather than silently drop the finalize.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -590,10 +658,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Ht > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -641,12 +710,18 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
+#else
+                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
+                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk

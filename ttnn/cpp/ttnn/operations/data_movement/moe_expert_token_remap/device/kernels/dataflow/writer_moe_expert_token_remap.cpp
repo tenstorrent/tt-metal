@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint_pages.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -11,11 +11,11 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t data_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t output_mapping_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t output_reduced_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t local_experts_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t metadata_dfb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t data_dfb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t output_mapping_dfb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t output_reduced_dfb_id = get_compile_time_arg_val(4);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(5);
     constexpr uint32_t num_local_experts = get_compile_time_arg_val(6);
     constexpr uint32_t output_mapping_page_size_bytes = get_compile_time_arg_val(7);  // num_local_experts * datum size
@@ -39,31 +39,31 @@ void kernel_main() {
     const auto output_reduced_addrgen = TensorAccessor(output_reduced_args, output_reduced_base_addr);
 
     Noc noc;
-    CircularBuffer local_experts_cb(local_experts_cb_id);
-    CircularBuffer metadata_cb(metadata_cb_id);
-    CircularBuffer data_cb(data_cb_id);
-    CircularBuffer output_mapping_cb(output_mapping_cb_id);
-    CircularBuffer output_reduced_cb(output_reduced_cb_id);
+    DataflowBuffer local_experts_dfb(local_experts_dfb_id);
+    DataflowBuffer metadata_dfb(metadata_dfb_id);
+    DataflowBuffer data_dfb(data_dfb_id);
+    DataflowBuffer output_mapping_dfb(output_mapping_dfb_id);
+    DataflowBuffer output_reduced_dfb(output_reduced_dfb_id);
 
     // scratch space for mapping
-    output_mapping_cb.reserve_back(1);
-    const uint32_t output_l1_addr = output_mapping_cb.get_write_ptr();
-    output_mapping_cb.push_back(1);
+    output_mapping_dfb.reserve_back(1);
+    const uint32_t output_l1_addr = output_mapping_dfb.get_write_ptr();
+    output_mapping_dfb.push_back(1);
 
     // scratch space for reduction
-    output_reduced_cb.reserve_back(1);
-    const uint32_t reduced_l1_addr = output_reduced_cb.get_write_ptr();
-    output_reduced_cb.push_back(1);
+    output_reduced_dfb.reserve_back(1);
+    const uint32_t reduced_l1_addr = output_reduced_dfb.get_write_ptr();
+    output_reduced_dfb.push_back(1);
     tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);
     auto reduced_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reduced_l1_addr);
 
-    local_experts_cb.wait_front(1);
-    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_cb.get_read_ptr());
+    local_experts_dfb.wait_front(1);
+    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_dfb.get_read_ptr());
 
     for (uint32_t bs = start_idx, reduce_idx = reduce_start_idx, reduction_count = 0; bs < end_idx;
          ++bs, ++reduction_count) {
-        metadata_cb.wait_front(1);
-        const uint32_t metadata_l1_addr = metadata_cb.get_write_ptr();
+        metadata_dfb.wait_front(1);
+        const uint32_t metadata_l1_addr = metadata_dfb.get_write_ptr();
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
         tt::data_movement::common::fill_with_val<data_addr_t>(output_l1_addr, num_local_experts, 0);
@@ -73,12 +73,12 @@ void kernel_main() {
             const auto& expert_idx = local_experts_ptr[e];
             if (ttnn::operations::ccl::common::find_if<uint16_t, selected_experts_k, false>(metadata_ptr, expert_idx)) {
                 if (!found) {
-                    data_cb.wait_front(1);
-                    const uint32_t data_l1_addr = data_cb.get_read_ptr();
+                    data_dfb.wait_front(1);
+                    const uint32_t data_l1_addr = data_dfb.get_read_ptr();
                     found = true;
                 }
 
-                const uint32_t topk_l1_addr = data_cb.get_read_ptr() + expert_idx * datum_size_bytes;
+                const uint32_t topk_l1_addr = data_dfb.get_read_ptr() + expert_idx * datum_size_bytes;
                 const uint32_t output_l1_element_addr = output_l1_addr + e * datum_size_bytes;
                 tt::data_movement::common::tt_memmove<false, false, false, datum_size_bytes>(
                     noc, output_l1_element_addr, topk_l1_addr, datum_size_bytes);
@@ -93,9 +93,14 @@ void kernel_main() {
             output_mapping_page_size_bytes,
             {.offset_bytes = 0},
             {.page_id = bs, .offset_bytes = 0});
+        // WAR: the next iteration's fill_with_val overwrites output_l1_addr, so the mapping write
+        // must finish reading it as source first. A flush (departed) guarantees the source has been
+        // read into the NoC and preserves remote-completion overlap; landing is drained once after
+        // the loop. Mirrors the reduced-buffer path below.
+        noc.async_writes_flushed();
 
         if (found) {
-            data_cb.pop_front(1);
+            data_dfb.pop_front(1);
             found = false;
         }
 
@@ -107,12 +112,17 @@ void kernel_main() {
                 output_reduced_page_size_bytes,
                 {.offset_bytes = 0},
                 {.page_id = reduce_idx++, .offset_bytes = 0});
-            noc.async_write_barrier();
+            // WAR on reduced_l1_addr, same as the mapping path: flush (source read) is enough here,
+            // final landing is drained after the loop.
+            noc.async_writes_flushed();
             tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);
             reduction_count = 0;
         }
 
-        metadata_cb.pop_front(1);
+        metadata_dfb.pop_front(1);
     }
-    local_experts_cb.pop_front(1);
+    // Final drain: the per-iteration guards above only flush (depart); land all mapping/reduced
+    // writes before the kernel returns so the downstream op can't read not-yet-landed output.
+    noc.async_write_barrier();
+    local_experts_dfb.pop_front(1);
 }

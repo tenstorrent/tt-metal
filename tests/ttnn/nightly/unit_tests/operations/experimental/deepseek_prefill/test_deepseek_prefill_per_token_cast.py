@@ -16,7 +16,10 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 pytestmark = pytest.mark.use_module_device
 
@@ -27,9 +30,7 @@ E4M3_MAX = 448.0
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
     (30, 1152),  # partial tile-row + 9 scale blocks
-    (640, 7168),
-    (3200, 7168),
-    (6400, 7168),
+    (PREFILL_CHUNK_TOKENS_PER_CHIP, 7168),
     (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
 ]
 
@@ -77,6 +78,14 @@ def _ref_scale(x_fp32):
     return amax / E4M3_MAX
 
 
+def _ref_power_of_two_scale(x_fp32):
+    """Sparse MLA KV scale: 2^ceil(log2(clamp(amax, 1e-4) / E4M3_MAX))."""
+    *leading, H = x_fp32.shape
+    blocks = x_fp32.reshape(*leading, H // BLOCK_W, BLOCK_W)
+    amax = blocks.abs().amax(dim=-1).clamp(min=1e-4)
+    return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))
+
+
 # ---------------------------------------------------------------------------
 # Quality assertion helper.
 # ---------------------------------------------------------------------------
@@ -97,8 +106,10 @@ def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_cast_to_fp8_scale(device, dtype):
+def test_cast_to_fp8_scale(device, dtype, input_layout):
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 
@@ -111,7 +122,7 @@ def test_cast_to_fp8_scale(device, dtype):
     x_row = block_values.repeat_interleave(BLOCK_W)
     x = x_row.repeat([M, 1])
     x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
@@ -120,9 +131,11 @@ def test_cast_to_fp8_scale(device, dtype):
     assert_equal(scale, ref)
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_to_fp8_scale_values(device, dtype, shape):
+def test_cast_to_fp8_scale_values(device, dtype, shape, input_layout):
     torch.manual_seed(0)
 
     torch_dtype = getattr(torch, dtype)
@@ -130,7 +143,7 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
 
     x = (torch.randn(*shape) * 5.0).to(torch_dtype)
     x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
@@ -143,8 +156,8 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
     assert output_e4m3_tt.dtype == ttnn.fp8_e4m3
     assert x_tt.dtype == ttnn_dtype
     assert scale_tt.dtype == ttnn.float32
-    assert x_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert output_e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert x_tt.layout == input_layout
+    assert output_e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT  # outputs are always ROW_MAJOR
     assert scale_tt.layout == ttnn.ROW_MAJOR_LAYOUT
 
     max_rel = ((scale - ref).abs() / ref.abs().clamp_min(1e-9)).max().item()
@@ -152,14 +165,91 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} shape={shape}")
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("shape", [(1, 512), (30, 512), (2, 3, 32, 512)])
+def test_cast_to_fp8_power_of_two_scale_for_sparse_kv(device, dtype, shape, input_layout):
+    """Opt-in sparse-KV mode keeps the existing op contract but emits TT-safe UE8M0-style scales."""
+    torch.manual_seed(23)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    x = (torch.randn(*shape) * 0.01).to(torch_dtype)
+    # Give the four 128-wide blocks distinct dynamic ranges.
+    x = x * torch.tensor([1.0, 8.0, 64.0, 512.0], dtype=torch_dtype).repeat_interleave(BLOCK_W)
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt, round_scale_to_power_of_two=True)
+    scale = ttnn.to_torch(scale_tt).float()
+    ref_scale = _ref_power_of_two_scale(x.float())
+
+    assert tuple(e4m3_tt.shape) == shape
+    assert tuple(scale_tt.shape) == _scale_shape(shape)
+    # The device row-max reduction can quantize an FP32 amax at a power-of-two
+    # boundary. Its rounded scale must remain the same or an adjacent power.
+    scale_ratio = scale / ref_scale
+    assert torch.all((scale_ratio == 0.5) | (scale_ratio == 1.0) | (scale_ratio == 2.0)), (
+        f"Expected scale ratio to be 0.5, 1.0, or 2.0; got ratios={scale_ratio.tolist()}, "
+        f"scales={scale.tolist()}, reference_scales={ref_scale.tolist()}"
+    )
+    assert torch.all(
+        torch.log2(scale) == torch.round(torch.log2(scale))
+    ), f"Expected power-of-two scales; got scales={scale.tolist()}"
+
+    # Blackhole's truncating packer reserves normalized magnitudes >= 480 for
+    # 0x7F. Check the safety property against the unquantized host amax.
+    blocks = x.float().reshape(*x.shape[:-1], x.shape[-1] // BLOCK_W, BLOCK_W)
+    normalized_amax = blocks.abs().amax(dim=-1) / scale
+    assert torch.all(normalized_amax < 480.0), (
+        f"Normalized amax must be below 480; got max={normalized_amax.max().item()}, "
+        f"values={normalized_amax.tolist()}"
+    )
+
+    y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
+    y = ttnn.to_torch(y_tt).float()
+    assert_quality(y, x.float(), pcc_threshold=0.999, rtol=0.15, atol=1e-3, label=f"sparse KV {dtype} {shape}")
+
+
+def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
+    """Exponent-15 E4M3FN values through 448 are finite and must not increase the scale."""
+    block_maxima = torch.tensor([240.0, 256.0, 448.0, 449.0], dtype=torch.float32)
+    x = torch.zeros(1, 4 * BLOCK_W, dtype=torch.float32)
+    x[0, ::BLOCK_W] = block_maxima
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt, round_scale_to_power_of_two=True)
+
+    scale = ttnn.to_torch(scale_tt).float().reshape(-1)
+    expected_scale = torch.tensor([1.0, 1.0, 1.0, 2.0])
+    assert torch.equal(
+        scale, expected_scale
+    ), f"Unexpected boundary scales: got {scale.tolist()}, expected {expected_scale.tolist()}"
+
+    y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
+    y = ttnn.to_torch(y_tt).float()
+    # The hardware packer truncates instead of rounding to nearest. Values can
+    # therefore land one E4M3FN ULP below the mathematical result.
+    expected_output = torch.tensor([224.0, 240.0, 416.0, 448.0])
+    actual_output = y[0, ::BLOCK_W]
+    assert torch.equal(
+        actual_output, expected_output
+    ), f"Unexpected E4M3FN boundary outputs: got {actual_output.tolist()}, expected {expected_output.tolist()}"
+
+
 # ---------------------------------------------------------------------------
 # per_token_cast_back: dequantization value tests.
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_narrow_scales_to_bf16)
+@pytest.mark.parametrize("narrow_scales_to_bf16", [False, True], ids=["scales_kept_at_fp32", "scales_narrow_to_bf16"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_back_dequant(device, out_dtype, shape):
+def test_cast_back_dequant(device, out_dtype, shape, narrow_scales_to_bf16):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, out_dtype)
     ttnn_dtype = getattr(ttnn, out_dtype)
@@ -175,10 +265,15 @@ def test_cast_back_dequant(device, out_dtype, shape):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        e4m3_tt, scale_tt, output_dtype=ttnn_dtype, narrow_scales_to_bf16=narrow_scales_to_bf16
+    )
     out = ttnn.to_torch(out_tt).float()
 
-    golden = input_e4m3.float() * input_scale.repeat_interleave(BLOCK_W, dim=-1)
+    # apples-to-apples: on the bf16 path the device narrows the scale to bf16 before the multiply,
+    # so the golden narrows it too
+    golden_scale = input_scale.to(torch.bfloat16).float() if narrow_scales_to_bf16 else input_scale
+    golden = input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)
     if out_dtype == "bfloat16":
         golden = golden.to(torch_dtype).float()
 
@@ -188,13 +283,16 @@ def test_cast_back_dequant(device, out_dtype, shape):
 
     # Restrict to normal e4m3 values where relative tolerance is meaningful.
     normal = input_e4m3.float().abs() > 2.0**-6
+    # narrow_scales_to_bf16 runs the multiply in bf16/HiFi2 (vs fp32/HiFi4)
+    # which has a real precision cost, not a golden mismatch, so allow a slightly looser rtol.
+    rtol = 1.5e-2 if narrow_scales_to_bf16 else 1e-2
     assert_quality(
         out[normal],
         golden[normal],
         pcc_threshold=0.999,
-        rtol=1e-2,
+        rtol=rtol,
         atol=1e-3,
-        label=f"dequant {out_dtype} shape={shape}",
+        label=f"dequant {out_dtype} narrow_scales_to_bf16={narrow_scales_to_bf16} shape={shape}",
     )
 
 
@@ -203,9 +301,12 @@ def test_cast_back_dequant(device, out_dtype, shape):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
+# Output layout is always ROW_MAJOR.
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", ROUNDTRIP_SHAPES)
-def test_round_trip_random(device, dtype, shape):
+def test_round_trip_random(device, dtype, shape, input_layout):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
@@ -213,7 +314,7 @@ def test_round_trip_random(device, dtype, shape):
     x = (torch.randn(*shape) * 5.0).to(torch_dtype)
     x_in = x.float()
     x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
@@ -221,3 +322,141 @@ def test_round_trip_random(device, dtype, shape):
 
     # fp8 quantization (~12% worst-case relative error) bounds the reconstruction.
     assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")
+
+
+# Each number inside the list is how much tokens does each expert on a single chip have
+# The length of the list is num_experts_per_chip
+# Example: [130, 74, 200, 96, 41] means that we have 5 experts per chip, where the first expert has 130 tokens, etc...
+TOKEN_COUNT_AWARE_CASES = [
+    # dense - each expert has tokens
+    ("dense", [130, 74, 200, 96, 41]),
+    # zeros_middle, zeros_leading, zeros_trailing - some expert have no tokens
+    # we test if those tokens are skipped correctly and if the operator
+    # correctly handles the case where some experts have no tokens
+    ("zeros_middle", [130, 0, 0, 74, 200]),
+    ("zeros_leading", [0, 0, 130, 74, 200]),
+    ("zeros_trailing", [130, 74, 200, 0, 0]),
+    # overflow - the packed regions run past the flat buffer; the op must clamp to capacity, drop the
+    # out-of-bounds tokens, and never hang.
+    ("overflow", [9000, 9000, 9000, 9000, 9000]),
+]
+
+
+def _ceil_tile(n):
+    return ((n + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def create_u32_tensor(device, values):
+    return ttnn.from_torch(
+        torch.tensor(values, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+MAX_DISPATCH_BUFFER_TOKENS = 5 * 1024 * 8
+
+# Metadata scale path: the dispatch metadata row is [METADATA_HEADER routing ints][H/128 fp32-bit scales].
+METADATA_HEADER = 3  # This may change in the future, but the actual number is not important for the test
+# The number is just used to set the starting offset when reading the scales from the metadata row
+
+
+def _pack_scale_metadata(input_scale):
+    """Bit-store fp32 per-token scales in the tail of an int32 dispatch-metadata row (the metadata scale
+    path). Leading header columns are filled with a sentinel the kernel must ignore."""
+    M, blocks = input_scale.shape
+    meta = torch.full((M, METADATA_HEADER + blocks), 0x0BADF00D, dtype=torch.int32)
+    meta[:, METADATA_HEADER:] = input_scale.contiguous().view(torch.int32)
+    return meta
+
+
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_scales_not_from_metadata)
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("scales_from_metadata", [False, True])
+@pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
+def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata, output_dtype):
+    torch.manual_seed(0)
+    H = KimiK26Config.EMB_SIZE
+
+    experts_per_chip = len(counts)
+    # This chip owns non-contiguous global ids (odd slots) out of a wider routed-expert space.
+    num_routed_experts = 2 * experts_per_chip
+    global_expert_idx_table = [2 * s + 1 for s in range(experts_per_chip)]
+
+    # Packed region layout for this chip's experts; other global ids stay zero (never read).
+    expert_region_offsets = [0] * num_routed_experts
+    expert_token_counts = [0] * num_routed_experts
+    running_offset = 0
+    for local_slot, token_count in enumerate(counts):
+        global_id = global_expert_idx_table[local_slot]
+        expert_region_offsets[global_id] = running_offset
+        expert_token_counts[global_id] = token_count
+        running_offset += _ceil_tile(token_count)
+    capacity = MAX_DISPATCH_BUFFER_TOKENS  # fixed flat buffer; [total_valid_rows, capacity) is untouched tail
+    # The op clamps its swept region to the buffer capacity, so rows past it are dropped (overflow case).
+    total_valid_rows = min(running_offset, capacity)
+
+    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0
+
+    e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
+    # Feed the scales either as a plain (M, H/128) fp32 tensor or packed into the int32 metadata tail;
+    # both drive the same math, so the golden is identical.
+    if scales_from_metadata:
+        scale_tt = None
+        metadata_tt = ttnn.from_torch(
+            _pack_scale_metadata(input_scale),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        metadata_tt = None
+        scale_tt = ttnn.from_torch(
+            input_scale,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    expert_region_offsets_tt = create_u32_tensor(device, expert_region_offsets)
+    expert_token_counts_tt = create_u32_tensor(device, expert_token_counts)
+    global_expert_idx_table_tt = create_u32_tensor(device, global_expert_idx_table)
+
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        e4m3_tt,
+        scale_tt,
+        token_count_aware=True,
+        expert_region_offsets=expert_region_offsets_tt,
+        expert_token_counts=expert_token_counts_tt,
+        global_expert_idx_table=global_expert_idx_table_tt,
+        experts_per_chip=experts_per_chip,
+        output_dtype=output_dtype,
+        metadata=metadata_tt,
+    )
+    out = ttnn.to_torch(out_tt).float()
+
+    assert tuple(out_tt.shape) == (capacity, H)
+    assert out_tt.dtype == output_dtype
+
+    golden = input_e4m3.float() * input_scale.repeat_interleave(BLOCK_W, dim=-1)
+    # A bf16 output rounds the result at the packer; fp32 output stays full fp32.
+    if output_dtype == ttnn.bfloat16:
+        golden = golden.to(torch.bfloat16).float()
+
+    # The op sweeps [0, total_valid_rows) contiguously (valid tokens + end-of-region tile padding), so
+    # every written row must equal e4m3 * scale; the tail beyond total_valid_rows is left untouched.
+    prefix_out = out[:total_valid_rows]
+    prefix_golden = golden[:total_valid_rows]
+    normal = input_e4m3.float()[:total_valid_rows].abs() > 2.0**-6
+    assert_quality(
+        prefix_out[normal],
+        prefix_golden[normal],
+        pcc_threshold=0.999,
+        rtol=1e-2,
+        atol=1e-3,
+        label=f"token-count-aware cast back {label} metadata={scales_from_metadata} out={output_dtype}",
+    )

@@ -43,8 +43,6 @@ BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
 
 @dataclass
 class DumpWaitGlobalsData:
-    location: OnChipCoordinate = triage_field("Loc")
-    risc_name: str = triage_field("Proc")
     kernel_name: str = triage_field("Kernel Name")
     worker_type: str | None = triage_field("worker_type")
     cq_id: int | None = triage_field("cq_id")
@@ -248,13 +246,13 @@ def read_wait_globals(
     try:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
             my_dispatch_cb_sem_id_const = kernel_elf.get_constant("my_dispatch_cb_sem_id")
-            fd_core_type_idx_const = kernel_elf.get_constant("fd_core_type_idx")
-            assert my_dispatch_cb_sem_id_const is not None and fd_core_type_idx_const is not None
+            programmable_core_type_idx_const = kernel_elf.get_constant("programmable_core_type_idx")
+            assert my_dispatch_cb_sem_id_const is not None and programmable_core_type_idx_const is not None
             my_dispatch_cb_sem_id = int(my_dispatch_cb_sem_id_const)
-            fd_core_type_idx = int(fd_core_type_idx_const)
+            programmable_core_type_idx = int(programmable_core_type_idx_const)
 
             # sem_l1_base is a firmware global array of L1 pointers; index by core type
-            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[programmable_core_type_idx]
             sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
             local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
 
@@ -274,7 +272,7 @@ def read_wait_globals(
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
-    chip_id = location._device.unique_id
+    chip_id = location.device.unique_id
     x, y = virtual_coord
 
     # Lookup core info for the given kernel name based on virtual coordinates
@@ -285,8 +283,6 @@ def read_wait_globals(
     core_info = multi_info.get_info_for_kernel(dispatcher_core_data.kernel_name) if multi_info else None
 
     return DumpWaitGlobalsData(
-        location=location,
-        risc_name=risc_name,
         kernel_name=dispatcher_core_data.kernel_name,
         last_wait_count=last_wait_count,
         last_wait_stream=last_wait_stream,
@@ -344,7 +340,7 @@ def run(args, context: Context):
         # Check RISC core with risc_name at this location for dispatcher kernels
         if location not in locations_to_check:
             return None
-        noc_block = location._device.get_block(location)
+        noc_block = location.device.get_block(location)
         dispatch_core_pairs = []
         for risc_name in noc_block.risc_names:
             dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)

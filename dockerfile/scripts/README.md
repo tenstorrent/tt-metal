@@ -14,7 +14,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 ### Layer Types
 
-1. **Pre-built Tool Images** (10 tools)
+1. **Pre-built Tool Images** (11 tools)
    - Built by `Dockerfile.tools` and pushed to GHCR
    - Injected into downstream Dockerfiles via Bake `contexts` (overriding `FROM scratch AS <tool>-layer` stubs)
    - Tagged as `ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>`
@@ -30,6 +30,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
    | cmake | Build system generator |
    | yq | YAML processor |
    | zstd | Zstandard compression CLI and libzstd |
+   | curl | HTTPS client; needed at >=8.x for Garage/S3 SigV4 uploads (MINFRA-1374) |
    | sfpi | SFPI compiler tools |
    | openmpi | MPI implementation for distributed computing |
 
@@ -74,6 +75,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 | `install-ccache.sh` | Install ccache binary release |
 | `install-cmake.sh` | Install CMake binary release |
 | `install-clangbuildanalyzer.sh` | Build and install ClangBuildAnalyzer |
+| `install-curl.sh` | Build and install curl from source |
 | `install-doxygen.sh` | Build and install doxygen from source |
 | `install-gdb.sh` | Build and install GDB from source |
 | `install-iwyu.sh` | Build and install Include What You Use (not currently in Docker image) |
@@ -127,6 +129,7 @@ CCACHE_VERSION=4.11.0 ./dockerfile/scripts/compute-hashes.sh
 | mold | GitHub release page |
 | doxygen | SourceForge release page |
 | clangbuildanalyzer | GitHub release (compute from download) |
+| curl | Official curl.se release archive + PGP signature; hash computed from a verified download |
 | gdb | GNU announcement mailing list or FTP .sig files |
 | iwyu | GitHub release (compute from download) |
 | yq | GitHub release checksums file |

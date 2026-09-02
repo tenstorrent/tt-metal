@@ -11,8 +11,8 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
-from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -367,7 +367,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     "device_params",
     [
         {
-            "trace_region_size": 1671168,
+            "trace_region_size": 8 * 1024 * 1024,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -403,6 +403,11 @@ def test_deepseek_v3_mla_tilize_trace_mode(
       - INTERLEAVED: no sharding
       - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
+    # Both variants are failing in CI:
+    #   interleaved  — TT_FATAL: trace buffers (4112384B) exceed trace_region_size (1671168B)
+    #   width_sharded — TT_FATAL: not on_dispatch_core (program.cpp:146)
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50679
+    pytest.skip(f"Skipping {memory_config_type} variant: known CI failure — #50679")
     torch.manual_seed(2003)
 
     # Create random tensor for input
@@ -549,6 +554,10 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
 
 
 def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
+    # RuntimeError: No core coordinate found at location: (8, 0, TENSIX, LOGICAL)
+    # DRAM grid x-size (9 on BH) exceeds the valid Tensix logical core range on this board.
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50689
+    pytest.skip("Skipping: DRAM grid x-size maps outside valid Tensix logical cores — #50689")
     torch.manual_seed(0)
     num_cores = device.dram_grid_size().x
     shard_shape = (32, 64)
@@ -556,10 +565,12 @@ def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
 
     torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    output_shard_grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), True)
+    input_shard_spec = ttnn.ShardSpec(input_shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, input_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     tt_input = ttnn.from_torch(
         torch_tensor,
@@ -811,22 +822,28 @@ def test_tilize_col_major_orientation(device, memory_layout, tensor_shape, shard
 
 
 @pytest.mark.parametrize(
-    "tensor_shape, num_cores",
+    "tensor_shape, num_cores, shard_h",
     [
-        ([1, 1, 32, 64], 1),
-        ([1, 1, 64, 64], 2),
-        ([1, 1, 128, 64], 4),
-        ([1, 1, 256, 128], 8),
-        ([1, 1, 512, 64], 8),
-        ([1, 1, 96, 128], 3),
-        ([1, 1, 192, 256], 6),
+        ([1, 1, 32, 64], 1, None),
+        ([1, 1, 64, 64], 2, None),
+        ([1, 1, 128, 64], 4, None),
+        ([1, 1, 256, 128], 8, None),
+        ([1, 1, 512, 64], 8, None),
+        ([1, 1, 96, 128], 3, None),
+        ([1, 1, 192, 256], 6, None),
+        # Uneven shard (last core does not have a full shard, i.e. total height is less
+        # than shard_h * num_cores) across ranks 2/3/4, via ttnn.to_layout's height-sharded
+        ([63, 32], 2, 32),
+        ([1, 63, 32], 2, 32),
+        ([1, 1, 63, 32], 2, 32),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
+def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, shard_h, dtype):
     torch.manual_seed(42)
     H, W = tensor_shape[-2], tensor_shape[-1]
-    shard_h = H // num_cores
+    if shard_h is None:
+        shard_h = H // num_cores
     if shard_h == 0 or shard_h % 32 != 0:
         pytest.skip(f"shard_height={shard_h} not tile-aligned")
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
@@ -837,9 +854,10 @@ def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
-    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(tt_output.shape) == tensor_shape
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
@@ -884,6 +902,55 @@ def test_tilize_width_sharded_shapes(device, tensor_shape, num_cores, dtype):
 
 
 @pytest.mark.parametrize(
+    "config",
+    ["sharded_width_l1", "interleaved_dram_multicore", "single_core"],
+)
+def test_tilize_program_cache_addr_change(device, config):
+    """Program-cache hit path (override_runtime_arguments)"""
+    torch.manual_seed(0)
+
+    if config == "sharded_width_l1":
+        tensor_shape = (32, 256)
+        num_cores = 4
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+            [32, tensor_shape[1] // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        use_multicore = True
+    elif config == "interleaved_dram_multicore":
+        tensor_shape = (1, 1, 128, 128)
+        mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        use_multicore = True
+    else:  # single_core
+        tensor_shape = (1, 1, 32, 64)
+        mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        use_multicore = False
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg, use_multicore=use_multicore)
+        keep_alive += [tt_input, tt_output]
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "tilize must reuse the cached program on a hit"
+
+    assert entries == 1, "tilize should build exactly one program for a fixed config"
+    device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
     "tensor_shape, grid_shape",
     [
         # Square grids
@@ -902,7 +969,7 @@ def test_tilize_width_sharded_shapes(device, tensor_shape, num_cores, dtype):
         ([1, 1, 256, 512], (4, 4)),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint8])
 def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     torch.manual_seed(42)
     n_y, n_x = grid_shape
@@ -913,8 +980,12 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
     shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
-    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+    if dtype == ttnn.uint8:
+        torch_input = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    elif dtype == ttnn.float32:
+        torch_input = torch.rand(tensor_shape, dtype=torch.float32)
+    else:
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
@@ -922,3 +993,267 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_layout",
+    [
+        ([1, 1, 128, 256], None),  # Interleaved input/output.
+        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "tile_shape",
+    [(16, 32), (8, 32), (4, 32), (2, 32), (1, 32)],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_shape, dtype):
+    """Tilize a ROW_MAJOR input (interleaved or sharded) directly into a tiny (non-32x32) tile shape."""
+    torch.manual_seed(42)
+    tile_h, tile_w = tile_shape
+    H, W = tensor_shape[-2], tensor_shape[-1]
+    shard_h, shard_w = 32, 32
+    assert H % tile_h == 0 and W % tile_w == 0, "tensor dims must be divisible by tile dims"
+
+    if shard_layout is None:
+        mem_cfg = None
+    elif shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        assert W == shard_w, "height-sharded shard width must match tensor width"
+        assert H % shard_h == 0, "tensor height must be divisible by shard height"
+        num_cores = H // shard_h
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        assert H == shard_h, "width-sharded shard height must match tensor height"
+        assert W % shard_w == 0, "tensor width must be divisible by shard width"
+        num_cores = W // shard_w
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    else:
+        assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert H % shard_h == 0 and W % shard_w == 0, "tensor dims must be divisible by shard dims"
+        n_y = H // shard_h
+        n_x = W // shard_w
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+        shard_shape = [shard_h, shard_w]
+
+    if shard_layout is not None:
+        shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(tile_shape)), memory_config=mem_cfg)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    if shard_layout is not None:
+        assert tt_output.memory_config().memory_layout == shard_layout
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+@pytest.mark.parametrize(
+    "tensor_shape, shard_layout",
+    [
+        # Interleaved input/output.
+        ([1, 1, 128, 256], None),
+        ([1, 1, 64, 256], None),
+        ([1, 1, 64, 128], None),
+        ([1, 1, 16, 128], None),
+        # Sharded input/output (invokes the sharded retile factory).
+        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
+@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
+    """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
+    torch.manual_seed(42)
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    if input_tile_shape[0] == output_tile_shape[0]:
+        pytest.skip("Input and output tile shapes are the same")
+
+    # Build a (possibly sharded) already-tiled input using the source tile shape.
+    mem_cfg = None
+    if shard_layout is not None:
+        # Use a 32x32 shard so the shard height is divisible by every tile height under test,
+        # keeping both the input and output tilings tile-aligned within each shard.
+        H, W = tensor_shape[-2], tensor_shape[-1]
+        shard_h, shard_w = 32, 32
+        if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            num_cores = H // shard_h
+            grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            num_cores = W // shard_w
+            grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        else:
+            assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            n_y, n_x = H // shard_h, W // shard_w
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+        shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+        memory_config=mem_cfg,
+    )
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+
+    # Re-tilize into a different tile shape; input and output tile shapes differ.
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), memory_config=mem_cfg)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    if shard_layout is not None:
+        assert tt_output.memory_config().memory_layout == shard_layout
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+# Tilize with simultaneous tile-shape and dtype change (the retile path).
+# The packer destination format must be reconfigured to match the output CB before
+# the tilize phase; without it the dtype conversion is silently skipped and the
+# output tensor carries data in the wrong format.
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype, min_pcc",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b, 0.999),
+        (ttnn.float32, ttnn.bfloat16, 0.9999),
+    ],
+    ids=["bf16_to_bfp8", "fp32_to_bf16"],
+)
+@pytest.mark.parametrize(
+    "input_tile_shape, output_tile_shape",
+    [
+        ((32, 32), (16, 32)),
+        ((16, 32), (32, 32)),
+    ],
+    ids=["32x32_to_16x32", "16x32_to_32x32"],
+)
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 128], [1, 1, 128, 256]])
+def test_tilize_retile_dtype_conversion(
+    device, tensor_shape, input_tile_shape, output_tile_shape, in_dtype, out_dtype, min_pcc
+):
+    """Tilize with simultaneous tile-shape and dtype change: verifies that the output
+    tensor carries the requested dtype and numerically correct data."""
+    # Blocked (exponent-shared) formats pack a full 32-row tile, so the device rejects
+    # tiny (<32-row) output tile heights for them (see tilize_device_operation.cpp).
+    if output_tile_shape[0] < 32 and out_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        pytest.skip("Tiny tile heights are not supported for blocked output dtypes (BFLOAT8_B/BFLOAT4_B)")
+
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), dtype=out_dtype)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {tt_output.layout}"
+    assert tt_output.dtype == out_dtype, f"Expected dtype {out_dtype}, got {tt_output.dtype}"
+
+    torch_output = ttnn.to_torch(tt_output)
+    if out_dtype == ttnn.bfloat16:
+        # fp32 → bfloat16 rounds on the packer. A near-bit-exact ULP comparison catches any
+        # dest-format misconfiguration that PCC 0.9999 could silently absorb. Allow 1 ULP
+        # because the packer breaks exact-half ties by rounding away from zero, whereas
+        # torch's .to(bfloat16) uses round-half-to-even, so tie values may differ by 1 ULP.
+        assert_with_ulp(torch_input.to(torch.bfloat16), torch_output, ulp_threshold=1)
+    else:
+        assert_with_pcc(torch_input.to(torch.float32), torch_output.to(torch.float32), min_pcc)
+
+
+#   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
+#   strided (every-other-row zero) pattern because the BH-specific
+#   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full
+#   tile) is incompatible with 8-bit data; the fix skips the BH workaround
+#   for IS_8BIT_FORMAT and uses FACE_DIM_1x16 (standard per-face dim).
+#   On Blackhole, non-sharded uint8 is always routed to TilizeMultiCoreBlockProgramFactory
+#   which uses an alignment-aware reader to handle narrow (<64 B) sticks.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 32],
+        [1, 1, 128, 32],
+        [1, 1, 32, 1056],
+        [1, 1, 2048, 32],
+        [1, 1, 128, 1056],
+    ],
+)
+def test_tilize_uint8(device, shape):
+    torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.tilize(tt_input)
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("tensor_shape", [(1, 1, 32, 7328)])
+def test_tilize_block_two_pair_program_cache_addr_change(device, tensor_shape):
+    torch.manual_seed(0)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg, use_multicore=True)
+        keep_alive += [tt_input, tt_output]
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "tilize must reuse the cached program on a hit"
+
+    assert entries == 1, "tilize should build exactly one program for a fixed config"
+    device.disable_and_clear_program_cache()
+
+
+# Blackhole sends non-sharded uint8 tilize to the block factory, the only way a 1-tile-wide tensor
+# reaches it. These get a single reader/writer pair: 2048/4096 rows build only full_set, 5120 rows
+# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit.
+@run_for_blackhole()
+@pytest.mark.parametrize("shape", [(1, 1, 2048, 32), (1, 1, 4096, 32), (1, 1, 5120, 32)])
+def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
+    torch.manual_seed(0)
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+        tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_output = ttnn.tilize(tt_input)
+        keep_alive += [tt_input, tt_output]
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "tilize must reuse the cached program on a hit"
+
+    assert entries == 1, "tilize should build exactly one program for a fixed config"
+    device.disable_and_clear_program_cache()

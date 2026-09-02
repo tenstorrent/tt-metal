@@ -4,12 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
+#include <tuple>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -27,7 +32,7 @@ enum class SubtileBroadcastType {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
 struct BinaryNgDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
@@ -53,15 +58,76 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
+        std::optional<std::uint32_t> a_shard_volume;
+        std::optional<std::uint32_t> b_shard_volume;
+        std::optional<std::uint32_t> c_shard_volume;
+        // Sharded output's shape in pages on the accessor path. The inputs' equivalent rides in
+        // tensor_args_t::to_hash(); the output has no Tensor at hash time, so it is carried here.
+        std::optional<tt::tt_metal::Shape> c_tensor_shape_in_pages;
 
-        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
+
+        // Program-cache attributes. Runtime scalar/tolerance values are excluded; they are patched as runtime args.
+        static constexpr auto attribute_names = std::make_tuple(
+            "binary_op_type",
+            "lhs_activations",
+            "rhs_activations",
+            "post_activations",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            // core_ranges of every CB and kernel. Depends on the device's sub-device layout, which
+            // nothing else here carries and which does not clear the cache when swapped. Same set on a
+            // single sub-device, so no extra entries there.
+            "worker_grid",
+            "subtile_broadcast_type",
+            "is_sfpu",
+            "is_quant_op",
+            "is_where_op",
+            "input_layout_a",
+            "input_layout_b",
+            "output_layout",
+            "equal_nan",
+            "a_shard_volume",
+            "b_shard_volume",
+            "c_shard_volume",
+            "c_tensor_shape_in_pages");
+
+        auto attribute_values() const {
+            return std::make_tuple(
+                binary_op_type,
+                lhs_activations,
+                rhs_activations,
+                (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                worker_grid,
+                subtile_broadcast_type,
+                is_sfpu,
+                is_quant_op,
+                is_where_op,
+                input_layout_a,
+                input_layout_b,
+                output_layout,
+                binary_op_type == BinaryOpType::ISCLOSE ? equal_nan : false,
+                a_shard_volume,
+                b_shard_volume,
+                c_shard_volume,
+                c_tensor_shape_in_pages);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
+
+        // Operand dtypes and memory configs, plus each sharded operand's shape in pages. Omits logical
+        // shape by design, so differently-shaped interleaved calls share one cache entry.
+        ttsl::hash::hash_t to_hash() const;
     };
 
     struct ProgramFactory {
@@ -69,6 +135,16 @@ struct BinaryNgDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& c);
+
+        // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
+        // addresses), since compute_program_hash excludes the tensor volume. Correct by construction —
+        // re-derives from the same shared builder create_descriptor() uses, no address inference. See the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -76,7 +152,6 @@ struct BinaryNgDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

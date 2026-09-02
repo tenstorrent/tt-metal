@@ -1,0 +1,532 @@
+# This file defines the test matrix for the vLLM Model Tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   model: HF hub id of the model to serve (also used for workflow_dispatch model filtering).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes (whole-job guard; also summed for budget checks).
+#     tier: Model tier (1, 2, or 3). Classification only — every entry runs at the
+#           same cadence in this single pipeline. The value mirrors the tier of the
+#           equivalent model in the e2e/unit pipelines (models_e2e_tests.yaml /
+#           models_unit_tests.yaml) for the matching SKU, for reporting/parity.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# vLLM-specific per-entry keys (consumed by vllm-model-tests-impl.yaml):
+#   server-timeout / benchmark-timeout / sampling-test-timeout: per-step timeouts (minutes).
+#   structured-output-timeout: per-step timeout for the structured output benchmark
+#     (minutes). Defaults to benchmark-timeout; set it when that run is the long pole.
+#   mesh-device, arch, tt-config, additional-server-args, additional-benchmark-args,
+#   additional-structured-output-args, default-chat-template-kwargs, tt-llama-text-ver,
+#   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
+#   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
+#   sampling-test-filter: -k filter for the sampling test step.
+#
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# ── Gemma 3 ────────────────────────────────────────────────────────
+
+- name: "Gemma3-27B"
+  model: google/gemma-3-27b-it
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
+  additional-server-args: "--async-scheduling"
+  tt-llama-text-ver: tt_transformers
+  multimodal: true
+  skus:
+    wh_llmbox:
+      timeout: 65
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: "Gemma3-27B DP=4"
+  model: google/gemma-3-27b-it
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D_RING", "l1_small_size": 4096}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
+  tt_mm_throttle_perf: 5
+  tt-llama-text-ver: tt_transformers
+  multimodal: true
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+# ── Gemma 4 ────────────────────────────────────────────────────────
+
+- name: "Gemma4-E2B"
+  model: google/gemma-4-E2B-it
+  server-timeout: 30
+  benchmark-timeout: 12
+  coherence-test: true
+  mesh-device: N150
+  arch: arch-wormhole_b0
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    wh_n150:
+      timeout: 65
+      tier: 3
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+# Product path on QB2: 256k + chunked prefill + B=32. LoudBox legs are omitted
+# — models.vllm bh_loudbox budget (75) is fully consumed by Llama-3.1-8B.
+# SKU timeouts kept at main's allocation so verify_time_budget stays green
+# without touching .github/time_budget.yaml.
+- name: "Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-26B-A4B"
+  model: google/gemma-4-26B-A4B-it
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 300000000}'
+  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 60
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+# Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
+#
+# KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
+# decode on WH-T3K only; the same serving config passes on BH. Kept enabled to
+# track. https://github.com/tenstorrent/tt-metal/issues/49494
+# Still reproducing as of run 32375657713: EngineCore died with
+# "TIMEOUT: device timeout, potential hang detected, the device is unrecoverable"
+# (system_memory_manager.cpp:779) after 6/16 requests, with decode already
+# degraded to ~412 ms/token against ~112 ms locally. Removing --async-scheduling
+# alone did NOT fix it — that run still logged "Asynchronous scheduling is
+# enabled" because the capability defaults on; the kill-switch now lives in
+# vllm-model-tests-impl.yaml. Whether that closes #49494 is unproven.
+#
+# --async-scheduling was REMOVED here (it is still set on the Blackhole legs
+# below). Async decode is measurably broken on Wormhole: on T3K 12B at
+# max_num_seqs 32, async ON returns 32/32 correct on only 4 of 6 repeats
+# (30/32 on the other two, degenerate repetition) while async OFF gives 32/32
+# on four consecutive repeats at the same throughput (363-383 vs 377-389 tok/s
+# aggregate) — no throughput upside, strictly worse correctness. This is also
+# the most likely driver of the WH-T3K-only decode hang tracked in
+# https://github.com/tenstorrent/tt-metal/issues/49494, which never reproduced
+# on BH with the same serving config. Restore it with the tt-inference-server
+# WH specs once the async path is fixed on Wormhole.
+#
+# Benchmark scope reduced to 16 prompts (the shared default is 32) instead of
+# raising any timeout. 31B/T3K sustains ~8.9 tok/s and the benchmark is
+# serialized at max_num_seqs 1, so 32 x 100 output tokens needs ~360 s and was
+# overrunning the 5 min benchmark budget (measured 359.9 s). 16 prompts is
+# ~180 s, comfortably inside it. additional-benchmark-args is appended after the
+# shared args so --num-prompts wins, and the "all requests completed" gate reads
+# num_prompts back out of the result JSON, so it stays consistent at 16.
+#
+# coherence-test added: this was the only gemma4 leg without it, and the
+# benchmark gate gates on request *completion* only — the WH corruption class
+# returns well-formed garbage with completed == num_prompts and sails straight
+# through. Verified passing on T3K.
+- name: "Gemma4-31B"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
+  additional-benchmark-args: "--num-prompts 16"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-31B"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 35
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+# ── Qwen 3.6 ───────────────────────────────────────────────────────
+
+- name: "Qwen3.6-27B (multimodal B=1)"
+  model: Qwen/Qwen3.6-27B
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 268435456, "l1_small_size": 24576}'
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  multimodal: true
+  skus:
+    bh_quietbox_2:
+      timeout: 70
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+- name: "Qwen3.6-27B (batch=8)"
+  model: Qwen/Qwen3.6-27B
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 1073741824, "l1_small_size": 24576}'
+  additional-server-args: "--max_num_seqs 8 --max_model_len 65536 --async-scheduling"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 65
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# ── GPT-OSS ────────────────────────────────────────────────────────
+
+- name: "GPT-OSS-120B (low-latency)"
+  model: openai/gpt-oss-120b
+  server-timeout: 35
+  benchmark-timeout: 15
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  multimodal: false
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"sample_on_device_mode": "all"}'
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  structured-output: true
+  # The structured output run issues 32 x 1024-token requests against a server
+  # pinned to --max_num_seqs 1, so they are served strictly one at a time and the
+  # run takes far longer than the plain benchmark that shares benchmark-timeout.
+  structured-output-timeout: 30
+  additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
+  skus:
+    wh_galaxy_perf:
+      timeout: 75
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  co-owner-2-id: U06F3ER8X9A # Stuti Raizada
+  team: models
+
+- name: "GPT-OSS-120B (high-throughput)"
+  model: openai/gpt-oss-120b
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  multimodal: false
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 100000000}'
+  tt_mm_throttle_perf: 2
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  sampling-test-timeout: 40
+  additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
+  skus:
+    wh_galaxy_perf:
+      timeout: 105
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  co-owner-2-id: U06F3ER8X9A # Stuti Raizada
+  team: models
+
+# ── Llama ──────────────────────────────────────────────────────────
+
+- name: "Llama-3.1-8B-Instruct with sampling-tests"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 15
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  additional-server-args: "--async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  sampling-test-filter: "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 45
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: "Llama-3.1-8B-Instruct (prefix caching)"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 10
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  # Prefix-caching models reserve a traced resumed prefill per traced sequence
+  # length at warmup, which the 50 MB default does not cover: 53248000B measured
+  # on this SKU. 85 MB matches the T3K sampling-tests leg above rather than
+  # tracking the measurement, so the headroom absorbs a bucket set growing.
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 85000000}'
+  multimodal: false
+  additional-benchmark-args: "--random-prefix-len 128"
+  additional-server-args: "--async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: "Llama-3.1-8B-Instruct"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"trace_region_size": 76000000}'
+  tt-llama-text-ver: tt_transformers
+  additional-server-args: "--async-scheduling"
+  structured-output: true
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: "Llama-3.1-8B-Instruct with sampling-tests"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-llama-text-ver: tt_transformers
+  # See the prefix-caching leg: warmup reserves a traced resumed prefill per
+  # traced sequence length, above the 50 MB default. Carried over from the T3K
+  # measurement, not measured on Blackhole. Reserving at warmup means a value
+  # that is too small fails at server startup rather than mid-run, so this is
+  # loud if it is wrong.
+  tt-config: '{"trace_region_size": 85000000}'
+  additional-server-args: "--data_parallel_size 8 --async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 75
+      tier: 2
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: "Llama-3.1-8B-Instruct DP=4"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  # See the prefix-caching leg: warmup reserves a traced resumed prefill per
+  # traced sequence length, above the 50 MB default. Carried over from the T3K
+  # measurement, not measured on Galaxy. Reserving at warmup means a value that
+  # is too small fails at server startup rather than mid-run, so this is loud if
+  # it is wrong.
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  tt-llama-text-ver: tt_transformers
+  additional-server-args: "--data_parallel_size 4 --async-scheduling"
+  structured-output: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 40
+      tier: 1
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: "Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
+  model: meta-llama/Llama-3.3-70B-Instruct
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: llama3_70b_galaxy
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  additional-benchmark-args: "--random-prefix-len 256"
+  sampling-tests: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 1
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# ── Qwen 3 ─────────────────────────────────────────────────────────
+
+- name: "Qwen3-32B device with sampling-tests"
+  model: Qwen/Qwen3-32B
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  tt-qwen3-text-ver: qwen3_32b_galaxy
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  sampling-tests: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+# ── Qwen VL ────────────────────────────────────────────────────────
+
+- name: "Qwen2.5-VL-72B-Instruct"
+  model: Qwen/Qwen2.5-VL-72B-Instruct
+  server-timeout: 12
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 2048 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 52
+      tier: 2
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: "Qwen3-VL-32B-Instruct"
+  model: Qwen/Qwen3-VL-32B-Instruct
+  coherence-test: false
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 131072 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 50
+      tier: 2
+  owner_id: U08H31YMN4Q # Sarva Sanjay
+  team: models
+
+# ── Infra / overhead ───────────────────────────────────────────────
+
+- name: "NoOp test model (vLLM overhead)"
+  model: models/vllm_test_utils/no_op_test
+  server-timeout: 2
+  benchmark-timeout: 2
+  mesh-device: "(1, 1)"
+  arch: arch-wormhole_b0
+  tt-config: '{"register_test_models": true, "input_queue_batching_delay": 0}'
+  additional-server-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+  additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0"
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# ── Disabled entries (preserved for re-enable) ─────────────────────
+#
+# [WH-T3K] Gemma4-26B-A4B — DRAM OOM during KV cache allocation (layer 25/30)
+# causes EngineCore init failure on WH-T3K. Re-enable once hybrid KV cache is
+# enabled. https://github.com/tenstorrent/tt-metal/issues/49257
+#
+# - name: "Gemma4-26B-A4B"
+#   model: google/gemma-4-26B-A4B-it
+#   coherence-test: true
+#   server-timeout: 30
+#   benchmark-timeout: 10
+#   mesh-device: T3K
+#   arch: arch-wormhole_b0
+#   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 200000000}'
+#   additional-server-args: "--max_num_seqs 1 --async-scheduling"
+#   multimodal: false
+#   skus:
+#     wh_llmbox:
+#       timeout: 45
+#       tier: 2
+#   owner_id: U08TJ70UFRT # Harry Andrews
+#   team: models
+#
+# [WH-T3K] Multi-process reduce scatter test model — Metal timeout in
+# reduce-scatter async tests. https://github.com/tenstorrent/vllm/issues/416
+# Originally disabled in https://github.com/tenstorrent/tt-metal/pull/39088
+#
+# - name: "Multi-process reduce scatter test model"
+#   model: models/vllm_test_utils/t3000_multiproc_test
+#   server-timeout: 4
+#   benchmark-timeout: 4
+#   mesh-device: "(2, 4)"
+#   arch: arch-wormhole_b0
+#   tt-config: '{"rank_binding": "tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml", "mpi_args": "--allow-run-as-root --tag-output", "config_pkl_dir": "vllm", "register_test_models": true}'
+#   additional-server-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+#   additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct"
+#   multimodal: false
+#   skus:
+#     wh_llmbox:
+#       timeout: 15
+#       tier: 2
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models

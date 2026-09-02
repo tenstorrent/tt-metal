@@ -19,6 +19,8 @@
 
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -34,6 +36,8 @@
 
 - name: ttnn nightly matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 50
@@ -64,6 +68,8 @@
 
 - name: ttnn nightly reduction tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 45
@@ -79,29 +85,52 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk and not test_h2d_socket_sync" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
     wh_n300_civ2:
       timeout: 65
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
+  # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 60
     bh_p150b_civ2:
-      timeout: 35
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+      timeout: 40
+  owner_id: U080FKG7KEU # Utku Aydonat
+  team: ttnn
+  category: experimental
+
+- name: ttnn attn_res_weighted_reduce_nc unit tests
+  # The test file sits in a directory no group suite globs, so this row is the only thing
+  # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
+  # alone, and every group suite that would otherwise collect it runs -x on SKUs it has
+  # never executed on, where a failure would abort tests belonging to someone else.
+  # The per-test timeout sits below the step timeout so a hang is reported as a
+  # pytest stack dump rather than an opaque step kill, with room left over for the
+  # report to be written.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py -xv --timeout=60'
+  skus:
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole - viommu)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py -xv --timeout=600'
+  # Tests opt in with @pytest.mark.requires_host_iommu, allowing operation developers to add IOMMU coverage
+  # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
+  cmd: |
+    pytest \
+      tests/ttnn/nightly/unit_tests/operations/experimental \
+      tests/ttnn/nightly/unit_tests/operations/sdpa \
+      -m requires_host_iommu -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
       timeout: 5
@@ -116,7 +145,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U0A2EGX0Z29 # Ronnie Li
+  owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
   category: experimental
 
@@ -213,7 +242,7 @@
       timeout: 45
     bh_p150b_civ2:
       timeout: 45
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: moreh
 
@@ -228,18 +257,18 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: misc
 
 - name: ttnn nightly sdpa tests
-  # MLA decode / prefill stress are split out into the sdpa stress entry below;
-  # this entry runs the rest of the sdpa nightly suite.
+  # MLA decode / prefill stress are split out into the sdpa stress entry below; this entry runs the rest of the
+  # sdpa nightly suite. Host-IOMMU tests are selected by marker in the viommu job above.
   cmd: |
     pytest tests/ttnn/nightly/unit_tests/operations/sdpa \
       --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
       --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
-      -xv --timeout=600
+      -m "not requires_host_iommu" -xv --timeout=600
   skus:
     wh_n150_civ2:
       timeout: 90
@@ -269,9 +298,11 @@
 
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
-      timeout: 40
+      timeout: 50
     wh_n300_civ2:
       timeout: 40
     bh_p100:
@@ -282,52 +313,114 @@
   team: ttnn
   category: data_movement
 
-- name: ttnn nightly data_movement ccl tests group 1
-  # The post-commit data_movement / ccl / point_to_point suites are re-run
-  # nightly in 3 split groups to cover the long tail that the PR gate skips.
-  cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=300'
+# The post-commit data_movement / ccl / point_to_point suites are re-run nightly
+# to cover the long tail that the PR gate skips. One bucket per suite (these
+# replaced a single 3-way `pytest-split` job): the split was by test count, not
+# duration, so the groups were badly unbalanced and a group's contents shifted
+# whenever tests were added anywhere in the three roots.
+#
+# Timeouts below are derived from measured per-directory runtimes in run
+# 31037640586 (2026-08-05). data_movement is ~89% of the collected tests and
+# essentially all of the runtime; ccl is ~11% of collection but ~96% of it skips
+# on these single-/dual-chip SKUs (the real coverage needs galaxy/box topologies),
+# and point_to_point is 12 tests.
+- name: ttnn nightly data_movement tests (post-commit suite)
+  # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
-      timeout: 35
+      timeout: 120
     wh_n300_civ2:
-      timeout: 35
+      timeout: 95
     bh_p100:
-      timeout: 35
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 80
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
 
-- name: ttnn nightly data_movement ccl tests group 2
-  cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=300'
+- name: ttnn n300 ccl tests
+  cmd: |
+    pytest \
+      tests/ttnn/unit_tests/operations/ccl/test_ccl_l1_small_semaphores.py \
+      tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300 \
+      -xv -m "not disable_fast_runtime_mode" --timeout=300
   skus:
-    wh_n150_civ2:
-      timeout: 35
     wh_n300_civ2:
-      timeout: 35
-    bh_p100:
-      timeout: 35
-    bh_p150b_civ2:
-      timeout: 35
+      timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
 
-- name: ttnn nightly data_movement ccl tests group 3
-  cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=300'
+- name: blackhole host to device smoke tests
+  cmd: 'pytest tests/ttnn/unit_tests/operations/ccl/test_send_recv_async_hd.py -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
-    wh_n150_civ2:
-      timeout: 35
-    wh_n300_civ2:
-      timeout: 35
     bh_p100:
-      timeout: 35
+      timeout: 10
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
+
+- name: ttnn nightly point_to_point tests (post-commit suite)
+  # 12 tests (4 skipped), measured in single-digit seconds on every SKU.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/point_to_point -xv -m "not disable_fast_runtime_mode" --timeout=300'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: data_movement
+
+- name: ccl nightly tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  skus:
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  owner_id: U07M7QZ0BQA # Camilo Vega
+  team: ttnn
+  category: ccl
+
+- name: Galaxy CCL tests
+  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: ccl
+
+- name: Galaxy MoE tests
+  cmd: |
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe &&
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: ccl
+
+- name: BH Galaxy CCL tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
+  skus:
+    bh_galaxy:
+      timeout: 40
+  owner_id: U07M7QZ0BQA # Camilo Vega
+  team: ttnn
+  category: ccl
 
 - name: ttnn nightly docs examples tests
   # docs_examples runs on viommu-stable SKUs.
@@ -358,7 +451,7 @@
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
   category: cpp_accessor
 

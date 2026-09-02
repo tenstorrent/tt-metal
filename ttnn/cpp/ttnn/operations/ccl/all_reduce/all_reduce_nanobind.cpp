@@ -35,19 +35,21 @@ void bind_all_reduce(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.
 
-        Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> output = ttnn.all_reduce(ttnn_tensor)
-            >>> print(output.shape)
-            [1, 1, 32, 256]
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            The reduction is performed in BFLOAT16; BFLOAT8_B inputs are up-cast to BFLOAT16 for the reduction and cast back, and FLOAT32 takes a dedicated reduction path. Input must be rank 2 or greater. The output preserves the input dtype and shape.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: supported in DRAM or L1. A sharded input is converted to interleaved internally (its buffer type is preserved), and the result is written back according to the requested output ``memory_config``.
         )doc";
 
     ttnn::bind_function<"all_reduce">(

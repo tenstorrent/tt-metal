@@ -8,14 +8,12 @@ import importlib
 import os
 import pathlib
 import pkgutil
-import re
 import sys
 from types import ModuleType
 
 from loguru import logger
 
 import ttnn._ttnn
-
 
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
@@ -26,56 +24,24 @@ if "TTNN_CONFIG_PATH" in os.environ:
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
-def load_config_from_dictionary(config, from_file=False):
-    global CONFIG
-    for key, value in config.items():
-        if hasattr(CONFIG, key):
-            if getattr(CONFIG, key) is not None:
-                value = type(getattr(CONFIG, key))(value)
-            setattr(CONFIG, key, value)
-        elif from_file:
-            logger.warning(
-                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
-            )
-        else:
-            raise ValueError(f"Unknown configuration key: {key}")
+def load_config_from_dictionary(config, from_file=False, source=None):
+    try:
+        CONFIG.apply_json_overrides(json.dumps(config, default=str), strict=not from_file, source=str(source or ""))
+    except RuntimeError as e:
+        # Keep raising ValueError as this function always has; TT_THROW surfaces as RuntimeError.
+        raise ValueError(str(e)) from e
 
 
 def load_config_from_json_file(json_path):
-    global CONFIG
-    try:
-        with open(json_path, "r") as f:
-            config = json.load(f)
-        load_config_from_dictionary(config, from_file=True)
-    except Exception as e:
-        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
+    CONFIG.load_from_file(pathlib.Path(json_path))
 
 
 def save_config_to_json_file(json_path):
-    with open(json_path, "w") as f:
-        normalized_config = {}
-        for key in dir(CONFIG):
-            if re.match("^_.+_$", key):
-                continue
-            value = getattr(CONFIG, key)
-            if isinstance(value, pathlib.Path):
-                value = str(value)
-            normalized_config[key] = value
-        json.dump(normalized_config, f, indent=4)
+    CONFIG.save_to_file(pathlib.Path(json_path))
 
 
-if CONFIG_PATH is not None:
-    if CONFIG_PATH.exists():
-        logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
-        load_config_from_json_file(CONFIG_PATH)
-    else:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        save_config_to_json_file(CONFIG_PATH)
-
-if CONFIG_OVERRIDES is not None:
-    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
-    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
-
+# TTNN_CONFIG_PATH and TTNN_CONFIG_OVERRIDES are applied in C++ at _ttnn load, so that pure C++
+# consumers get the same configuration as Python; see ttnn/core/config.cpp.
 logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
@@ -131,6 +97,8 @@ from ttnn._ttnn.multi_device import (
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
     allgather_int as distributed_context_allgather_int,
+    send_bytes as distributed_context_send_bytes,
+    recv_bytes as distributed_context_recv_bytes,
     subcontext_id as distributed_context_subcontext_id,
     subcontext_count as distributed_context_subcontext_count,
     subcontext_sizes as distributed_context_subcontext_sizes,
@@ -151,7 +119,7 @@ from ttnn._ttnn.operations.trace import (
     MeshTraceId,
     begin_trace_capture,
     end_trace_capture,
-    execute_trace,
+    execute_trace as _ttnn_execute_trace,
     release_trace,
 )
 
@@ -159,12 +127,62 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
+from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_corruptible_allocation_scope(mesh_device)
+        try:
+            yield
+        finally:
+            _pop_corruptible_allocation_scope(mesh_device)
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
+        yield
+
+
+if TRACE_ALLOC_TRACKING:
+
+    def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+        """Execute a captured trace, with automatic allocation-safety verification."""
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+        UnsafeAllocationTracker(device).verify_before_replay(trace_id)
+        return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+
+else:
+    # Preserve the original nanobind fast path when tracking is disabled.
+    execute_trace = _ttnn_execute_trace
+
+
+def mark_corruptible(tensor):
+    """
+    Mark a specific tensor buffer as intentionally corruptible for trace
+    allocation safety checks.
+    """
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+    return UnsafeAllocationTracker.mark_corruptible(tensor)
+
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
 from ttnn._ttnn.fabric import (
     FabricConfig,
+    FabricType,
     FabricReliabilityMode,
     FabricTensixConfig,
     FabricUDMMode,
@@ -175,10 +193,17 @@ from ttnn._ttnn.fabric import (
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
     get_physical_mesh_shapes,
+    get_eth_forwarding_direction,
+    get_forwarding_link_indices,
+    get_all_fabric_mesh_ids,
+    get_all_mgd_fabric_types,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
     setup_routing_plane_connection,
+    get_fabric_kernel_defines,
+    fabric_connection_rt_args,
+    compute_fabric_connection_rt_args,
 )
 
 # Import cluster functions and types
@@ -224,11 +249,16 @@ from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
 
+from ttnn._ttnn.layer_ack_service import (
+    LayerAckService,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
     DumpTensorMode,
     uint8,
+    int8,
     uint16,
     int32,
     uint32,
@@ -374,6 +404,7 @@ from ttnn.core import (
     split_work_to_cores,
     grid_to_cores,
     get_current_command_queue_id_for_thread,
+    ttnn_dtype_to_torch_dtype,
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
@@ -518,7 +549,13 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
+from ttnn.operations.ccl import (
+    Topology,
+    get_usable_topology,
+    DispatchAlgorithm,
+    WorkerMode,
+    MMSignalAggregatorMode,
+)
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -553,9 +590,32 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
+# RGB -> YUV conversion op
+from ttnn._ttnn.operations.experimental import YUVCoefficients
+from ttnn._ttnn.operations.experimental import YUVColorSpace
+from ttnn._ttnn.operations.experimental import RGBRange
+from ttnn._ttnn.operations.experimental import YUVRange
+from ttnn._ttnn.operations.experimental import YUVFormat
+from ttnn._ttnn.operations.experimental import rgb_to_yuv
+from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
+from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
+
+experimental.YUVCoefficients = YUVCoefficients
+experimental.YUVColorSpace = YUVColorSpace
+experimental.RGBRange = RGBRange
+experimental.YUVRange = YUVRange
+experimental.YUVFormat = YUVFormat
+experimental.rgb_to_yuv = rgb_to_yuv
+experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
+experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+
+transformer.SparseKVFormat = SparseKVFormat
+
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

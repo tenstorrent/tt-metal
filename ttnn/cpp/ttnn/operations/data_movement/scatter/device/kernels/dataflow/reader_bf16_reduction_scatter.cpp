@@ -4,9 +4,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/numeric/bfloat16.h"
-#include "../scatter_bf16_reduction_common.hpp"
+#include "experimental/kernel_args.h"
+#include "../common.hpp"
 
 #include <array>
 
@@ -36,24 +37,24 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
     }
 }
 
-// performs scatter on data loaded to cb with load_to_cb
+// performs scatter on data loaded to dfb with load_to_dfb
 template <typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const CircularBuffer& input_cb,
-    const CircularBuffer& index_cb,
-    const CircularBuffer& source_cb,
-    const CircularBuffer& output_cb,
-    const CircularBuffer& fp32_temp_cb,
+    const DataflowBuffer& input_dfb,
+    const DataflowBuffer& index_dfb,
+    const DataflowBuffer& source_dfb,
+    const DataflowBuffer& output_dfb,
+    const DataflowBuffer& fp32_temp_dfb,
     const uint32_t& input_stick_size,
     const index_type& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
-    const uint32_t index_l1_read_addr = index_cb.get_read_ptr();
-    const uint32_t source_l1_read_addr = source_cb.get_read_ptr();
-    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
-    const uint32_t fp32_temp_l1_write_addr = fp32_temp_cb.get_write_ptr();
+    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
+    const uint32_t index_l1_read_addr = index_dfb.get_read_ptr();
+    const uint32_t source_l1_read_addr = source_dfb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
@@ -84,9 +85,9 @@ FORCE_INLINE void scatter_along_chunk(
 
 // copies source stick to destination stick (first phase of scatter)
 FORCE_INLINE void copy_input_to_fp32_temp(
-    const CircularBuffer& input_cb, const CircularBuffer& fp32_temp_cb, uint32_t input_chunk_size) {
-    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
-    const uint32_t fp32_temp_l1_write_addr = fp32_temp_cb.get_write_ptr();
+    const DataflowBuffer& input_dfb, const DataflowBuffer& fp32_temp_dfb, uint32_t input_chunk_size) {
+    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
@@ -96,9 +97,9 @@ FORCE_INLINE void copy_input_to_fp32_temp(
 }
 
 FORCE_INLINE void copy_fp32_temp_to_output(
-    const CircularBuffer& fp32_temp_cb, const CircularBuffer& output_cb, uint32_t chunk_size) {
-    const uint32_t fp32_temp_l1_read_addr = fp32_temp_cb.get_read_ptr();
-    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
+    const DataflowBuffer& fp32_temp_dfb, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
+    const uint32_t fp32_temp_l1_read_addr = fp32_temp_dfb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr float* fp32_temp_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
@@ -113,118 +114,115 @@ FORCE_INLINE void copy_fp32_temp_to_output(
 
 void kernel_main() {
     Noc noc;
-    constexpr auto ctas{get_ctas()};
 
-    const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
-    const uint32_t index_buffer_address = get_arg_val<uint32_t>(1);
-    const uint32_t source_buffer_address = get_arg_val<uint32_t>(2);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
-    const uint32_t sticks_for_core = get_arg_val<uint32_t>(4);
+    constexpr auto input_stick_size = get_arg(args::input_stick_size);
+    constexpr auto index_stick_size = get_arg(args::index_stick_size);
+    constexpr auto source_stick_size = get_arg(args::source_stick_size);
+    constexpr auto input_rank = get_arg(args::input_rank);
+
+    const auto start_stick_id = get_arg(args::start_stick_id);
+    const auto sticks_for_core = get_arg(args::sticks_for_core);
     // for the outer input/output loop (DRAM accesses per stick: input_row_elem_num / 76800)
-    const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(5);
+    const auto input_and_output_chunk_size = get_arg(args::input_and_output_chunk_size);
     // for the inner index/source loop (DRAM accesses per stick per single input/output loop: index_row_elem_num /
     // 76800)
-    const uint32_t index_chunk_size = get_arg_val<uint32_t>(6);
-    const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
-    const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
+    const auto index_chunk_size = get_arg(args::index_chunk_size);
+    const auto source_chunk_size = get_arg(args::source_chunk_size);
+    const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg(args::scatter_reduction_type));
 
-    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address);
-    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address);
-    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address);
+    const auto input_addr_gtor = TensorAccessor(tensor::input);
+    const auto index_addr_gtor = TensorAccessor(tensor::index);
+    const auto source_addr_gtor = TensorAccessor(tensor::source);
 
-    using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
-    using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;
+    using input_std_type = std_type_t<get_dataformat(dfb::input)>;
+    using index_std_type = std_type_t<get_dataformat(dfb::index)>;
 
-    constexpr uint32_t N = ctas.input_rank - 1;
+    constexpr uint32_t N = input_rank - 1;
     // generate 2 stick shape counters
-    const auto input_dims{make_shape_array_from_runtime_args<N>(9)};
-    const auto index_dims{make_shape_array_from_runtime_args<N>(9 + N)};
+    const auto input_dims{make_shape_array_from_runtime_args<N>(0)};
+    const auto index_dims{make_shape_array_from_runtime_args<N>(N)};
 
     const auto index_strides = make_strides<N>(index_dims);
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
-    CircularBuffer input_cb(ctas.input_cb);
-    CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
-    CircularBuffer output_cb(ctas.output_cb);
-    CircularBuffer index_cb(ctas.index_cb);
-    CircularBuffer source_cb(ctas.source_cb);
+    DataflowBuffer input_dfb(dfb::input);
+    DataflowBuffer fp32_temp_dfb(dfb::fp32_temp);
+    DataflowBuffer output_dfb(dfb::output);
+    DataflowBuffer index_dfb(dfb::index);
+    DataflowBuffer source_dfb(dfb::source);
 
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
         // process input/output chunks sequentially
-        for (uint32_t input_offset = 0; input_offset < ctas.input_stick_size;
-             input_offset += input_and_output_chunk_size) {
-            const uint32_t input_chunk_length =
-                std::min(ctas.input_stick_size - input_offset, input_and_output_chunk_size);
+        for (uint32_t input_offset = 0; input_offset < input_stick_size; input_offset += input_and_output_chunk_size) {
+            const uint32_t input_chunk_length = std::min(input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
-            load_to_cb(
+            load_to_dfb(
                 noc,
-                ctas.input_cb,
+                dfb::input,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            input_cb.wait_front(ONE_PAGE);
-            fp32_temp_cb.reserve_back(ONE_PAGE);
+            input_dfb.wait_front(ONE_PAGE);
+            fp32_temp_dfb.reserve_back(ONE_PAGE);
 
-            copy_input_to_fp32_temp(input_cb, fp32_temp_cb, input_chunk_length);
+            copy_input_to_fp32_temp(input_dfb, fp32_temp_dfb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
                 // second phase: load index and source data chunk-by-chunk and scatter
-                for (uint32_t index_offset = 0, source_offset = 0; index_offset < ctas.index_stick_size;
+                for (uint32_t index_offset = 0, source_offset = 0; index_offset < index_stick_size;
                      index_offset += index_chunk_size, source_offset += source_chunk_size) {
                     // if stick is chunked, the last chunk is usually smaller
-                    const uint32_t index_chunk_length =
-                        std::min(ctas.index_stick_size - index_offset, index_chunk_size);
-                    const uint32_t source_chunk_length =
-                        std::min(ctas.source_stick_size - source_offset, source_chunk_size);
+                    const uint32_t index_chunk_length = std::min(index_stick_size - index_offset, index_chunk_size);
+                    const uint32_t source_chunk_length = std::min(source_stick_size - source_offset, source_chunk_size);
 
-                    load_to_cb(
+                    load_to_dfb(
                         noc,
-                        ctas.index_cb,
+                        dfb::index,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
                         index_chunk_length * sizeof(index_std_type),
                         index_stick_id);
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
-                    load_to_cb(
+                    load_to_dfb(
                         noc,
-                        ctas.source_cb,
+                        dfb::source,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    index_cb.wait_front(ONE_PAGE);
-                    source_cb.wait_front(ONE_PAGE);
+                    index_dfb.wait_front(ONE_PAGE);
+                    source_dfb.wait_front(ONE_PAGE);
                     scatter_along_chunk<index_std_type>(
-                        input_cb,
-                        index_cb,
-                        source_cb,
-                        output_cb,
-                        fp32_temp_cb,
-                        ctas.input_stick_size,
+                        input_dfb,
+                        index_dfb,
+                        source_dfb,
+                        output_dfb,
+                        fp32_temp_dfb,
+                        input_stick_size,
                         input_offset,
                         input_chunk_length,
                         index_chunk_length,
                         scatter_reduction_type);
-                    source_cb.pop_front(ONE_PAGE);
-                    index_cb.pop_front(ONE_PAGE);
+                    source_dfb.pop_front(ONE_PAGE);
+                    index_dfb.pop_front(ONE_PAGE);
                 }
             }
 
-            input_cb.pop_front(ONE_PAGE);
-            fp32_temp_cb.push_back(ONE_PAGE);
-            fp32_temp_cb.wait_front(ONE_PAGE);
-            output_cb.reserve_back(ONE_PAGE);
+            input_dfb.pop_front(ONE_PAGE);
+            fp32_temp_dfb.push_back(ONE_PAGE);
+            fp32_temp_dfb.wait_front(ONE_PAGE);
+            output_dfb.reserve_back(ONE_PAGE);
 
-            // third phase: push to the output cb with fp32->bf16 conversion
-            copy_fp32_temp_to_output(fp32_temp_cb, output_cb, input_chunk_length);
-            fp32_temp_cb.pop_front(ONE_PAGE);
-            output_cb.push_back(ONE_PAGE);
+            // third phase: push to the output dfb with fp32->bf16 conversion
+            copy_fp32_temp_to_output(fp32_temp_dfb, output_dfb, input_chunk_length);
+            fp32_temp_dfb.pop_front(ONE_PAGE);
+            output_dfb.push_back(ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);
     }

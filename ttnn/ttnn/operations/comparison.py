@@ -33,10 +33,11 @@ def pearson_correlation_coefficient(expected, actual):
         logger.error("One tensor is all nan, the other is not.")
         return 0.0
 
-    # Test if either is completely zero
+    # Test if either is completely zero — also a constant (zero-variance) case.
+    # Fall back to allclose so that zero-vs-small-constant within tolerance passes.
     if torch.any(expected.bool()) != torch.any(actual.bool()):
-        logger.error("One tensor is all zero")
-        return 0.0
+        logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+        return float(torch.allclose(expected, actual, rtol=1e-05, atol=1e-04))
 
     # For now, mask all infs and nans so that we check the rest... TODO
     expected = expected.clone()
@@ -60,17 +61,23 @@ def pearson_correlation_coefficient(expected, actual):
     if expected.dtype == torch.bfloat16:
         expected = expected.type(torch.float32)
         actual = actual.type(torch.float32)
-    output = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(expected).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(actual).detach().numpy()).flatten(),
-        )
-    )
 
-    if isinstance(output, np.ma.core.MaskedConstant):
-        return 1.0
+    # If either tensor is constant (zero std dev), PCC is undefined. Fall back to allclose
+    # rather than returning a misleading 1.0 from the corrcoef diagonal.
+    if torch.max(expected) == torch.min(expected) or torch.max(actual) == torch.min(actual):
+        logger.warning("One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose.")
+        return float(torch.allclose(expected, actual, rtol=1e-05, atol=1e-04))
 
-    return output
+    output = np.ma.corrcoef(
+        np.ma.masked_invalid(torch.squeeze(expected).detach().numpy()).flatten(),
+        np.ma.masked_invalid(torch.squeeze(actual).detach().numpy()).flatten(),
+    )[0, 1]
+
+    if isinstance(output, np.ma.core.MaskedConstant) or np.isnan(float(output)):
+        logger.warning("PCC returned NaN/masked. Falling back to allclose.")
+        return float(torch.allclose(expected, actual, rtol=1e-05, atol=1e-04))
+
+    return float(output)
 
 
 __all__ = []

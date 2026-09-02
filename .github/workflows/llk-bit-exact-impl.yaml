@@ -1,0 +1,156 @@
+name: "LLK bit-exact impl"
+# Entry points: workflow_call only. Schedule / workflow_dispatch live in llk-bit-exact.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        description: "Architecture to run: all, wormhole, or blackhole"
+        required: false
+        default: all
+        type: string
+      bit-exact-runs:
+        description: "Times each variant is executed on device and compared"
+        required: false
+        default: "100"
+        type: string
+      pytest-markers:
+        description: "Pytest mark expression for LLK python_tests"
+        required: false
+        type: string
+        default: "not perf and not nightly and not accuracy and not quasar"
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: [build-images]
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_bit_exact_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "bit_exact"
+      - name: Build test matrix
+        id: build-matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+        run: |
+          case "$ARCHITECTURE" in
+            all)
+              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+              ;;
+            wormhole)
+              ENABLED_SKUS="wh_n150_civ2"
+              ;;
+            blackhole)
+              ENABLED_SKUS="bh_p150b_civ2"
+              ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "$ENABLED_SKUS" \
+            ./.github/sku_config.yaml
+
+  llk-bit-exact-exec:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH for logs and artifacts
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          PYTEST_MARKERS: ${{ inputs.pytest-markers }}
+          BIT_EXACT_RUNS: ${{ inputs.bit-exact-runs }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: bit-exact-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          include_passed: true
+          annotate_only: true

@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/lock.h"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 namespace experimental {
@@ -416,6 +417,14 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
     // We assert that the offset of sender and receiver common attributes are the same
     // so we can use either interface here
     const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index);
+    // The align define is emitted per-kernel, so a kernel spanning a core range where only some cores
+    // own this remote CB also runs here on cores that don't. setup_remote_cb_interfaces zeroes
+    // fifo_start_addr on those cores, so fifo_start_addr == 0 means "remote CB not present here" (a real
+    // start is an L1 buffer address, never 0): nothing to align, and the interface may hold stale state
+    // from a prior program, so skip.
+    if (remote_cb.fifo_start_addr == 0) {
+        return;
+    }
     uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> cb_addr_shift;
     uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> cb_addr_shift);
     uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> cb_addr_shift;
@@ -612,14 +621,21 @@ public:
      * @return A scoped lock on the RemoteCircularBuffer
      */
     [[nodiscard]] auto scoped_lock() {
-        return Lock([this]() { release_scoped_lock(); });
+#if defined(DEVICE_DEBUG_DUMP) && defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+        const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index_);
+        uint32_t addr = remote_cb.fifo_start_addr;
+        ASSERT(addr != 0);
+        uint32_t num_bytes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
+        return Lock([addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
+        });
+#else
+        return Lock([]() {});
+#endif
     }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
-
     uint32_t remote_cb_index_;
 };
 

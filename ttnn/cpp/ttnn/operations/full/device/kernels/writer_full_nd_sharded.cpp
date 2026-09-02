@@ -4,29 +4,35 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "full_kernel_common.hpp"
 
 void kernel_main() {
-    uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t fill_value = get_arg_val<uint32_t>(1);
-    uint32_t start_shard_id = get_arg_val<uint32_t>(2);
+    uint32_t fill_value = get_arg(args::fill_value);
+    uint32_t start_shard_id = get_arg(args::start_shard_id);
 
-    constexpr uint32_t cb_value = get_compile_time_arg_val(0);
-    constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_shards = get_compile_time_arg_val(4);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr uint32_t elems_per_page = get_arg(args::elems_per_page);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t num_shards = get_arg(args::num_shards);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
 
     value val;
     val.u = fill_value;
 
-    cb_reserve_back(cb_value, onepage);
+    Noc noc;
+    // Holds the single fill-value page this instance builds and then writes to every page of every
+    // shard it owns. This instance is the buffer's only toucher: it fills the page and drains it itself.
+    DataflowBuffer dfb(dfb::value);
 
-    uint32_t write_addr = get_write_ptr(cb_value);
+    dfb.reserve_back(onepage);
+
+    uint32_t write_addr = dfb.get_write_ptr();
 
     if (val.u == 0) {
-        zero_buffer(cb_value, page_size);
+        zero_buffer(dfb, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -48,22 +54,21 @@ void kernel_main() {
 #endif
     }
 
-    cb_push_back(cb_value, 1);
+    dfb.push_back(1);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_addr);
+    const auto dst_accessor = TensorAccessor(tensor::output);
 
-    cb_wait_front(cb_value, 1);
+    dfb.wait_front(1);
 
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = dst_accessor.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); ++page_iter) {
             uint32_t page_id = page_iter->page_id();
-            const auto cb_value_addr = get_read_ptr(cb_value);
-            noc_async_write_page(page_id, dst_accessor, cb_value_addr);
+            noc.async_write(dfb, dst_accessor, dst_accessor.get_aligned_page_size(), {}, {.page_id = page_id});
         }
     }
 
-    noc_async_writes_flushed();
-    cb_pop_front(cb_value, 1);
-    noc_async_write_barrier();
+    noc.async_writes_flushed();
+    dfb.pop_front(1);
+    noc.async_write_barrier();
 }

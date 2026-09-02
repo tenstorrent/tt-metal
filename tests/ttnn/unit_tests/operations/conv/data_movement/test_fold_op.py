@@ -82,7 +82,7 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("padding", [(0, 0), (8, 8), (20, 12, 15, 17)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout, input_dtype):
     batch_size, height, width = nhw
     stride_h, stride_w = stride
@@ -111,7 +111,15 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
             f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
         )
 
-    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    # FP32 has twice the per-stick byte footprint of bfloat16, so the largest configuration
+    # (channels=320 with a 32x32 stride) makes the fold dataflow buffers grow to ~2.7 MB, past the
+    # ~1.5 MB per-core L1. This is a pre-existing device capacity limit — the DFB/CB sizing is
+    # dtype-driven and identical on main — not a fold correctness issue, so skip it.
+    if input_dtype == ttnn.float32 and channels == 320 and stride == (32, 32):
+        pytest.skip("FP32 fold DFBs exceed per-core L1 for channels=320 with 32x32 stride (capacity limit)")
+
+    torch_input_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch_input_dtype)
     torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
 
     torch_output_tensor = fold_torch(torch_input_tensor_nhwc, stride_h, stride_w, padding=padding)
@@ -131,6 +139,8 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         diff = torch.abs(torch_output_tensor - tt_output_tensor) / torch_output_tensor.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
+        # bfloat16 and float32 are both bit-exact for this copy-only op (the reference and the
+        # device output share the input dtype), so assert exact equality.
         assert torch.equal(
             torch_output_tensor, tt_output_tensor
         ), f"Expected: {torch_output_tensor}, Actual: {tt_output_tensor}"
@@ -390,7 +400,6 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch_input = torch.randn(act_shape, dtype=torch.bfloat16)
 
     expected = fold_torch(torch_input, stride_h, stride_w)
-    expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
     tt_input = torch2tt_tensor(
         torch_input,
@@ -414,7 +423,6 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
         expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
-        expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
         if core_grid is None:
             # Fit to max cores that divides total elements without padding. In case of padding cases,

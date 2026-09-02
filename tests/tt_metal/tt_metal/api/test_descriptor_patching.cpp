@@ -31,11 +31,11 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "multi_device_fixture.hpp"
@@ -72,14 +72,14 @@ MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDev
     auto tensor_layout = TensorLayout(
         DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
     auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-    return MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+    return MeshTensor::allocate_on_device(*mesh_device, spec);
 }
 
 // ============================================================================
 // SECTION 1: Pure unit tests — no device required
 // ============================================================================
 
-TEST(DescriptorPatching, EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
     KernelDescriptor kd;
     kd.emplace_runtime_args({0, 0}, {10u, 20u, 30u});
 
@@ -89,7 +89,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceRuntimeArgs_MultipleCores_AllUint32) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_MultipleCores_AllUint32) {
     KernelDescriptor kd;
     kd.emplace_runtime_args({0, 0}, {1u, 2u});
     kd.emplace_runtime_args({1, 0}, {3u, 4u});
@@ -100,7 +100,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_MultipleCores_AllUint32) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
+TEST(DescriptorPatching, CPU_EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
     KernelDescriptor kd;
     kd.emplace_common_runtime_args({100u, 200u, 300u});
 
@@ -111,7 +111,7 @@ TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
 // Regression: emplace_runtime_args must accept nullptr Buffer* as a placeholder for
 // an absent optional tensor.  It emits 0u into the runtime arg slot and registers no
 // binding, so the cache-hit fast path stays valid for ops with optional inputs.
-TEST(DescriptorPatching, EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     KernelDescriptor kd;
     Buffer* null_buf = nullptr;
     kd.emplace_runtime_args({0, 0}, {1u, null_buf, 3u});
@@ -121,7 +121,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+TEST(DescriptorPatching, CPU_EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     KernelDescriptor kd;
     Buffer* null_buf = nullptr;
     kd.emplace_common_runtime_args({7u, null_buf, 9u});
@@ -130,7 +130,7 @@ TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding
     EXPECT_TRUE(kd.common_buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, RTArgList_Uint32Only_NoBufferBindings) {
+TEST(DescriptorPatching, CPU_RTArgList_Uint32Only_NoBufferBindings) {
     KernelDescriptor kd;
     KernelDescriptor::RTArgList args;
     args.push_back(7u);
@@ -143,7 +143,7 @@ TEST(DescriptorPatching, RTArgList_Uint32Only_NoBufferBindings) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, RTArgList_Append_ConcatenatesUint32s) {
+TEST(DescriptorPatching, CPU_RTArgList_Append_ConcatenatesUint32s) {
     KernelDescriptor kd;
     KernelDescriptor::RTArgList args;
     args.push_back(1u);
@@ -153,18 +153,18 @@ TEST(DescriptorPatching, RTArgList_Append_ConcatenatesUint32s) {
     EXPECT_EQ(kd.runtime_args[0].second, (std::vector<uint32_t>{1u, 2u, 3u, 4u}));
 }
 
-TEST(DescriptorPatching, ResolvedBindings_DefaultIsEmpty) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_DefaultIsEmpty) {
     ResolvedBindings b;
     EXPECT_TRUE(b.empty());
 }
 
-TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingRtArg_IsFalse) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingRtArg_IsFalse) {
     ResolvedBindings b;
     b.rt_args.push_back({});
     EXPECT_FALSE(b.empty());
 }
 
-TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
     ResolvedBindings b;
     b.cbs.push_back({});
     EXPECT_FALSE(b.empty());
@@ -609,6 +609,116 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
     EXPECT_TRUE(resolved.empty());
     EXPECT_TRUE(resolved.rt_args.empty());
     EXPECT_TRUE(resolved.cbs.empty());
+}
+
+// #48928: an OUTPUT buffer that aliases an INPUT (in-place op writing back into its input) is a
+// same-buffer-by-construction alias, not the ambiguous matmul(X, X) case.  With num_input_buffers
+// marking the input/output boundary, resolve_bindings must KEEP the fast path (non-empty bindings).
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasesInput_KeepsFastPath) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // [input=buf_a, output=buf_a]; first entry is the input, the second is the in-place output.
+    ResolvedBindings resolved =
+        resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()}, /*num_input_buffers=*/1);
+
+    EXPECT_FALSE(resolved.empty());
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].tensor_buffer_idx, 0u);
+}
+
+// #48928: a duplicate purely WITHIN the input region (two distinct input operands that coincide,
+// matmul(X, X)) must still bail even when num_input_buffers is given.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InputRegionDuplicate_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // Both entries are inputs (no output region); the repeat is ambiguous → bail.
+    ResolvedBindings resolved =
+        resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()}, /*num_input_buffers=*/2);
+
+    EXPECT_TRUE(resolved.empty());
+}
+
+// #48928: op(X, X, out=X) — X at two genuine input positions plus the in-place output_tensor slot.
+// Even with the in-place opt-in ON, the output-alias skip is granted ONCE; the extra input
+// occurrence still bails, so a later same-shape op(X, Y, out=X) cache hit can't patch input-b to X.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedInInputs_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // [input_a=X, input_b=X, output_tensor=X | return=X]; num_input_buffers=3 (tensor_args), 1 output.
+    ResolvedBindings resolved = resolve_bindings(
+        program,
+        desc,
+        std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get(), buf_a.get()},
+        /*num_input_buffers=*/3,
+        /*allow_inplace_output_tensor_alias=*/true);
+
+    EXPECT_TRUE(resolved.empty());
+}
+
+// #48928/#49573: an in-place op's output_tensor carried INSIDE tensor_args (input region) aliasing
+// an input — [input=X, output_tensor=X | return=X].  This is the SDXL-silu / MorehAdamW shape.
+//   - Default (opt-out): treated as an ambiguous input-region duplicate → BAIL to slow-path rebuild.
+//     This is the safe behavior for ops whose get_dynamic_runtime_args is incomplete.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_Default_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // num_input_buffers=2 (input + output_tensor), 1 output (return). Default opt-in (false) → bail.
+    ResolvedBindings resolved = resolve_bindings(
+        program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get()}, /*num_input_buffers=*/2);
+
+    EXPECT_TRUE(resolved.empty());
+}
+
+//   - Opt-in (allow_inplace_output_tensor_alias=true): the op re-applies every cache-hit-varying arg
+//     itself (binary_ng), so the output_tensor is a safe in-place alias → KEEP the fast path.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_OptIn_KeepsFastPath) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(
+        program,
+        desc,
+        std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get()},
+        /*num_input_buffers=*/2,
+        /*allow_inplace_output_tensor_alias=*/true);
+
+    EXPECT_FALSE(resolved.empty());
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].tensor_buffer_idx, 0u);
 }
 
 // resolve_bindings fires TT_FATAL when a runtime-arg binding buffer is not in

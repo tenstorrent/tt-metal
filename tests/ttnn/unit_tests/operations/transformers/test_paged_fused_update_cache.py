@@ -178,7 +178,7 @@ def run_test_paged_fused_update_cache_decode(
 
     # Perform fused update cache operation. use_attr_idxs drives the NON-index-tensor path
     # (update_idxs list -> operation_attributes.update_idxs), where cache_start_id / tile_update_offset_B
-    # are baked into runtime args and must be re-patched on cache hits via get_dynamic_runtime_args.
+    # are baked into runtime args and re-derived on cache hits by override_runtime_arguments.
     if use_attr_idxs:
         cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
             cachett1, xt1, cachett2, xt2, update_idxs=cache_idxs, page_table=page_table_tt
@@ -367,17 +367,17 @@ def test_paged_fused_update_cache_decode_program_caching(
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8])
-@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("pcc", [0.9995])
 def test_paged_fused_update_cache_decode_attr_idxs_program_caching(
     paged_update, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device, pcc
 ):
-    """Regression for the DynamicRuntimeArg fix on the NON-index-tensor (update_idxs list) path. The two
+    """Regression for override_runtime_arguments on the NON-index-tensor (update_idxs list) path. The two
     cached calls below differ only in their positions, which are excluded from the program hash — so they
     must share ONE cache entry, and the second call must write at its OWN positions (cache_start_id /
-    tile_update_offset_B re-patched on the cache hit, not frozen at the first call's values)."""
+    tile_update_offset_B re-derived on the cache hit, not frozen at the first call's values)."""
     # Cache miss, then a HIT at different positions, same shapes.
     run_test_paged_fused_update_cache_decode(
         paged_update,

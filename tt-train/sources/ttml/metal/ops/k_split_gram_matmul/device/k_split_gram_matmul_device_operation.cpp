@@ -15,13 +15,13 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     TT_FATAL(input.device()->arch() == tt::ARCH::BLACKHOLE, "KSplitGramMatmul is only supported on Blackhole.");
-    TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated on device");
     TT_FATAL(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Input tensor must be in DRAM");
     TT_FATAL(input.layout() == tt::tt_metal::Layout::TILE, "Input tensor must have TILE layout");
     TT_FATAL(input.dtype() == ttnn::DataType::BFLOAT16, "Input tensor must be BFLOAT16");
     TT_FATAL(
-        input.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "Input tensor must use INTERLEAVED memory layout");
     const auto rank = input.logical_shape().rank();
     TT_FATAL(rank == 2 || rank == 4, "Input tensor must be 2D [M, K] or 4D [1, 1, M, K]");
@@ -33,7 +33,16 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
             input.logical_shape()[1]);
     }
     const uint32_t tile_width = input.tensor_spec().tile().get_width();
-    const uint32_t K_tiles = input.logical_shape()[-1] / tile_width;
+    // The kernels reduce every tile in the padded K range and make no assumption about the
+    // contents of tile-padding columns (upstream ops may leave garbage there), so logical K
+    // must be tile-aligned.
+    TT_FATAL(
+        input.logical_shape()[-1] % tile_width == 0,
+        "K dimension ({}) must be a multiple of the tile width ({})",
+        input.logical_shape()[-1],
+        tile_width);
+    // Padded K_tiles is what the K-split actually partitions (matches the program factory).
+    const uint32_t K_tiles = input.padded_shape()[-1] / tile_width;
     TT_FATAL(K_tiles % 2 == 0, "K dimension ({} tiles) must be even for K-split", K_tiles);
     const auto device_grid = input.device()->compute_with_storage_grid_size();
     const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
@@ -42,14 +51,14 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output = tensor_args.preallocated_output.value();
         const uint32_t M = input.logical_shape()[-2];
-        TT_FATAL(output.storage_type() == tt::tt_metal::StorageType::DEVICE, "Preallocated output must be on device");
+        TT_FATAL(output.storage_type() == ttnn::StorageType::DEVICE, "Preallocated output must be on device");
         TT_FATAL(output.buffer() != nullptr, "Preallocated output must be allocated on device");
         TT_FATAL(
             output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Preallocated output must be in DRAM");
         TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must have TILE layout");
         TT_FATAL(output.dtype() == ttnn::DataType::BFLOAT16, "Preallocated output must be BFLOAT16");
         TT_FATAL(
-            output.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Preallocated output must use INTERLEAVED memory layout");
         TT_FATAL(
             output.logical_shape()[-2] == M && output.logical_shape()[-1] == M,
@@ -68,7 +77,7 @@ KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOpera
     }
     const uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
     auto shape = ttnn::Shape({1, 1, M, M});
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
 }
@@ -78,7 +87,7 @@ KSplitGramMatmulDeviceOperation::tensor_return_value_t KSplitGramMatmulDeviceOpe
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(
+    return ttnn::create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 

@@ -199,6 +199,21 @@ def import_device_profile_log(logPath):
     return devicesData
 
 
+# (risc, zone_name) pairs whose ZONE_START/ZONE_END bracket a per-op firmware window on a worker core's
+# master processor (or the trace-replay aggregate). Op boundaries in get_ops are detected off these
+# master-FW markers.
+MASTER_FW_MARKERS = {
+    ("BRISC", "BRISC-FW"),
+    ("ERISC", "ERISC-FW"),
+    ("TENSIX_RISC_AGG", "TRACE-FW"),
+    ("QUASAR_DM0", "DM0-FW"),
+}
+
+
+def is_master_fw_boundary(risc, timerID, phase):
+    return timerID["type"] == phase and (risc, timerID["zone_name"]) in MASTER_FW_MARKERS
+
+
 def get_ops(timeseries):
     opsDict = {}
     for ts in timeseries:
@@ -237,15 +252,7 @@ def get_ops(timeseries):
             if len(ts) == 5:
                 timerID, tsValue, attachedData, risc, core = ts
                 if opCores[core]:
-                    if (
-                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
-                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
-                        or (
-                            risc == "TENSIX_RISC_AGG"
-                            and timerID["zone_name"] == "TRACE-FW"
-                            and timerID["type"] == "ZONE_START"
-                        )
-                    ):
+                    if is_master_fw_boundary(risc, timerID, "ZONE_START"):
                         if len(opCores[core]) == 2:
                             corruption = False
                             for core, coreOp in opCores.items():
@@ -262,15 +269,7 @@ def get_ops(timeseries):
                             False
                         ), f"Unexpected FW start, core {core}, risc {risc} is reporting a second start of FW for op {opID}. {assertMsg}"
 
-                    elif (
-                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
-                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                        or (
-                            risc == "TENSIX_RISC_AGG"
-                            and timerID["zone_name"] == "TRACE-FW"
-                            and timerID["type"] == "ZONE_END"
-                        )
-                    ):
+                    elif is_master_fw_boundary(risc, timerID, "ZONE_END"):
                         assert (
                             len(opCores[core]) == 1
                         ), "Unexpected FW end, core {core}, risc {risc} is reporting a second end of FW for op {opID}"
@@ -281,27 +280,11 @@ def get_ops(timeseries):
                                 opIsDone = False
                                 break
                 else:
-                    if (
-                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
-                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
-                        or (
-                            risc == "TENSIX_RISC_AGG"
-                            and timerID["zone_name"] == "TRACE-FW"
-                            and timerID["type"] == "ZONE_START"
-                        )
-                    ):
+                    if is_master_fw_boundary(risc, timerID, "ZONE_START"):
                         opCores[core] = (timerID,)
             if len(ts) == 4:
                 timerID, tsValue, attachedData, risc = ts
-                if (
-                    (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
-                    or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                    or (
-                        risc == "TENSIX_RISC_AGG"
-                        and timerID["zone_name"] == "TRACE-FW"
-                        and timerID["type"] == "ZONE_END"
-                    )
-                ):
+                if is_master_fw_boundary(risc, timerID, "ZONE_END"):
                     opIsDone = True
             ops[-1]["timeseries"].append(ts)
             if opIsDone:
@@ -595,7 +578,8 @@ def get_duration(riscData, analysis):
 
 def is_timer_id_iteration_start(timerID):
     ret = False
-    if timerID["type"] == "ZONE_START" and timerID["zone_name"] == "BRISC-FW":
+    # Master worker-FW zone: BRISC-FW on WH/BH, DM0-FW on Quasar.
+    if timerID["type"] == "ZONE_START" and timerID["zone_name"] in ("BRISC-FW", "DM0-FW"):
         ret = True
     return ret
 

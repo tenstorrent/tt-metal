@@ -23,7 +23,7 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -31,30 +31,39 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_ref
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
     PROMPT_5K_PATH,
-    PROMPT_25K_PATH,
     create_hf_model,
+    decoder_layer_kwargs,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    mla_kvpe_width,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
-_PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
+_PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
@@ -111,13 +120,6 @@ def run_model(
     # coverage; the real device gate already covers the 256-expert meshes that run in CI.
     if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
         pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
-
-    # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
-    # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
-    # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
-    # growing the down-matmul output circular buffer to ~2.9 MB — beyond the 1.5 MB L1 (OOM).
-    if isl_total == 25 * 1024 and tuple(mesh_device.shape) != (8, 4):
-        pytest.skip("25k ISL only fits L1 on the full 8x4 mesh; skipping on smaller meshes")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -218,6 +220,21 @@ def run_model(
         torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
         ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
+        # A cache written before the KVPE fix holds the reference's EXPANDED per-head keys, not the
+        # compressed latent the device stores. Existence alone would reuse it and keep reporting the
+        # -1.0 rows this change removes, so check the stored width and recompute if it is stale --
+        # otherwise the fix is silently bypassed on every cache a developer already has.
+        if ref_cache_loadable and pcc_validation:
+            expected_kvpe_width = mla_kvpe_width(config)
+            if expected_kvpe_width is not None:
+                probe = torch.load(torch_ref_cache, weights_only=True).get("ref_kvpe")
+                if probe is not None and probe.shape[-1] != expected_kvpe_width:
+                    logger.warning(
+                        f"Cached reference at {torch_ref_cache} stores KVPE of width "
+                        f"{probe.shape[-1]}, expected {expected_kvpe_width} (pre-fix expanded keys); "
+                        f"recomputing the reference instead of reusing it."
+                    )
+                    ref_cache_loadable = False
         need_hf_model = not ttnn_cache_complete or (
             (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
         )
@@ -278,18 +295,18 @@ def run_model(
             position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
             attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
             ref_cache = DynamicCache()
+            # Bound to the layer's own signature, and reused below for the KVPE line.
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
             with torch.no_grad():
-                layer_out = hf_model.layers[layer_idx](
-                    torch_input,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                torch_output = layer_out[0]
+                layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
-                ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
+                ref_kvpe = reference_kvpe_for_layer(
+                    hf_model.layers[layer_idx], layer_idx, torch_input, layer_kwargs, ref_cache, config
+                )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
             profiler.end("torch_reference")
 
@@ -364,9 +381,9 @@ def run_model(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,
@@ -488,132 +505,72 @@ def run_model(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+    if not is_balanced:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("prompt_25k", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
+        # pcc-prompt_5k runs ~3x longer than perf-prompt_5k (122s vs 41s warm on 8x4) because the CPU
+        # reference dominates, not the device. Rebalancing CI around that split is a separate PR.
+        ("prompt_5k", False, PREFILL_CHUNK_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
+    ids=["perf-prompt_5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
-    # `-k "... and moe and ..."` (EXPECT_NUM_TESTS=1), so a host id carrying `moe` would be collected too
+    # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
     ids=["dense", "moe-gate_device", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
-            # into a ring → Ring for SP-axis MoE dispatch/combine; the 4-wide TP axis stays a line
-            # → Linear for TP-axis collectives (RMS-norm, MLA, shared-expert, gate). A scalar Ring
-            # here deadlocks the TP-axis all-gathers on a non-existent column wrap link.
-            (ttnn.Topology.Ring, ttnn.Topology.Linear),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            # Id omits the `fabric2d-`/`mesh-` tokens on purpose: CI runs the fabric2d-mesh siblings
-            # via count-guarded `-k "8x4 and fabric2d"` (EXPECT_NUM_TESTS=1) selectors, so a torus id
-            # carrying `fabric2d` would be collected too and break the count. Select it with `-k torus-y`.
-            id="torus-y-8x4",
+            id="torus-xy-8x4",
         ),
         pytest.param(
             (4, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
-            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_y4...
-            (ttnn.Topology.Ring, ttnn.Topology.Linear),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-y-4x4",
         ),
         pytest.param(
             (4, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_x_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
-            # a physical wrap, so TP-axis collectives (RMS-norm, MLA, shared-expert) can ring too.
-            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
-            (ttnn.Topology.Ring, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-xy-4x4",
         ),
@@ -623,7 +580,7 @@ def run_model(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(750)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_ds_prefill_block(
     variant,
@@ -636,7 +593,6 @@ def test_ds_prefill_block(
     layer_type,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     input_source,
     tokenizer,
@@ -647,6 +603,7 @@ def test_ds_prefill_block(
     use_pretrained,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
     # xfail this exact combo (keeping the real threshold for every other config) until it is fixed;
     # strict=True turns an XPASS into a failure so the marker is removed once the fix lands.
@@ -691,14 +648,10 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("random", False, 5 * 1024, 8),
-        ("random", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-        ("prompt_5k", True, 5 * 1024, 8),
-        ("prompt_25k", True, 25 * 1024, 8),
+        ("random", False, PREFILL_CHUNK_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-prompt_5k", "pcc-prompt_25k"],
+    ids=["perf-random-5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -707,23 +660,19 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
@@ -740,7 +689,6 @@ def test_kimi_prefill_block(
     layer_type,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     input_source,
     tokenizer,
@@ -751,6 +699,7 @@ def test_kimi_prefill_block(
     use_pretrained,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_model(
         variant,
         config_only,
@@ -797,6 +746,17 @@ def test_kimi_prefill_block(
 # complete (device) + matching host weights from the checkpoint (reference); else RANDOM for both. Never
 # (re)builds the cache (slow: 256-expert conversion / FP8 dequant — a separate staging step).
 GLM_BLOCK_OUTPUT_PCC = 0.98
+
+
+def _first_full_moe_layer(config):
+    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.2 "shared" indexer
+    # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
+    # layer computes its own. glm_5_1 has no indexer_types -> every layer is full -> returns
+    # first_k_dense_replace (3). glm_5_2 layers 3-5 are shared -> returns 6.
+    idx = config.first_k_dense_replace
+    while indexer_layer_is_reused(config, idx):
+        idx += 1
+    return idx
 
 
 def _glm_norm_weight(hidden, seed):
@@ -874,26 +834,23 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-            },
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
-@pytest.mark.parametrize(
-    "layer_type, layer_idx", [("dense", 0), ("moe", GLM51Config.NUM_DENSE_LAYERS)], ids=["dense", "moe"]
-)
+@pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -903,24 +860,20 @@ def test_glm_prefill_block(
     mesh_device,
     device_params,
     num_links,
-    topology,
     seq_len,
     layer_type,
-    layer_idx,
     model_path,
     weight_cache_path,
 ):
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
+    topology = per_axis_topology(device_params["fabric_config"])
     is_moe = layer_type == "moe"
     config = config_only
     config.max_seq_len = seq_len
-    # GLM-5.2 MoE single-block: skipped. The block feeds a RANDOM input, which drives GLM's
-    # near-degenerate top-8 MoE gate to select different experts on device vs the CPU reference at an
-    # isolated layer (block PCC collapses to ~0.1 though the same layer scores ~0.995 in-context in
-    # test_glm_prefill_transformer). Not an op/weight bug — a random-input artifact of the degenerate
-    # gate. GLM-5.2 MoE is covered by test_glm_prefill_transformer; the device gate by test_ttnn_moe.
-    if is_moe and getattr(config, "indexer_types", None) is not None:
-        pytest.skip("GLM-5.2 single-block MoE unreliable under degenerate gate on random input (see comment)")
+    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.2 "shared"
+    # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
+    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_2 -> 6 (3-5 shared).
+    layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
@@ -931,11 +884,20 @@ def test_glm_prefill_block(
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
     experts_per_chip = GLM51Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
     effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
+    # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
+    # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
+    # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995
+    # in-context in test_glm_prefill_transformer — a real-weight-gate x random-input artifact, not an
+    # op/weight bug. On random weights the gate is non-degenerate and the block matches (~0.99). Forcing
+    # random here keeps the MoE path exercised regardless of what the cache holds; real-weight MoE-gate
+    # coverage lives in test_glm_prefill_transformer and test_ttnn_moe. The dense case still loads real
+    # weights when the cache is complete.
     use_pretrained = False
     if effective_cache is not None:
         effective_cache.mkdir(parents=True, exist_ok=True)
         init_checker(effective_cache)  # required before check_cache_complete / pattern_exists
-        use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, not is_moe, experts_per_chip)
+        if not is_moe:
+            use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, True, experts_per_chip)
     logger.info(f"[glm block {layer_type}] use_pretrained={use_pretrained} (ttnn cache={effective_cache})")
 
     if use_pretrained:
@@ -993,17 +955,33 @@ def test_glm_prefill_block(
         # num_layers=layer_num) gets a valid count, not the None default.
         layer_num=1,
     )
-    kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(seq_len)
+    # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
+    # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
+    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=seq_len
+    )
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # --- input (full, host) + sharded device copy ---
     torch.manual_seed(7)
@@ -1021,7 +999,9 @@ def test_glm_prefill_block(
     )
 
     logger.info(f"[glm block {layer_type}] running device block")
-    out = block.forward(tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len)
+    out = block.forward(
+        tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+    )
     if isinstance(out, tuple):
         out = out[0]
     tt_out = ttnn.to_torch(

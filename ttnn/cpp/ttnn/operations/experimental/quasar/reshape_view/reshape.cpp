@@ -95,7 +95,7 @@ static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
 // derivation from the input tensor's spec (layout should match the input).
 MemoryConfig recompute_shard_spec_for_output(
     const MemoryConfig& memory_config,
-    const TensorSpec& output_shape,
+    const tt::tt_metal::TensorSpec& output_shape,
     bool explicit_memory_config = false,
     const std::optional<tt::tt_metal::ShardSpec>& input_shard_spec = std::nullopt) {
     // Auto-derive: caller asked for a sharded output but didn't pin a shard_spec. Seed
@@ -450,11 +450,12 @@ ttnn::Tensor reshape_tiled(
         }
 
         // Direct sharded path: TILED factories use TensorAccessorArgs for transparent sharded I/O.
-        // Temporary interleaved TensorSpec provides physical dims and alignment to recompute_shard_spec_for_output.
+        // Temporary interleaved tt::tt_metal::TensorSpec provides physical dims and alignment to
+        // recompute_shard_spec_for_output.
         MemoryConfig target_output_mem_config = memory_config;
         if (memory_config.is_sharded()) {
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-            auto interleaved_output_spec = TensorSpec(
+            auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
                 tt::tt_metal::TensorLayout::fromPaddedShape(
                     tensor3d.dtype(),
@@ -517,7 +518,7 @@ ttnn::Tensor reshape_tiled(
     // If block/height-sharded output, compute the correct shard spec
     if (updated_mem_config.is_sharded()) {
         // Synthesize TensorLayout from the requested padded shape, but with an interleaved
-        // MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the TensorSpec
+        // MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the tt::tt_metal::TensorSpec
         // constructor below skip its shape-fits-shard-grid validation, which would otherwise
         // apply the *input* shard_spec to the *output* shape and fatal. The padded shape
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
@@ -530,7 +531,7 @@ ttnn::Tensor reshape_tiled(
             requested_shape_3d,
             requested_padded_shape_3d);
 
-        // Construct synthetic TensorSpec
+        // Construct synthetic tt::tt_metal::TensorSpec
         tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
 
         // Recompute the shard spec for the output tensor shape

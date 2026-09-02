@@ -7,6 +7,9 @@
 #include <api/dataflow/dataflow_api.h>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+// Pulled in for UnicastEndpoint (used by rm_fill_page_with_clear_template below) and, at the
+// includers, experimental::local_addr.
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))
@@ -67,7 +70,7 @@ RM_DF_ALWI void rm_fill_buffer_with_identity_pattern(
 //
 // Reader helpers for dense RM reduce (W and H paths).
 //
-// CB layout staged into cb_rm: one page per logical RM row (chunk-wide).
+// Buffer layout staged into dfb::rm: one entry per logical RM row (chunk-wide).
 //   page_bytes = wt_in_chunk × TILE_WIDTH × elem_bytes  ( == chunk_row_bytes )
 // The reader pushes rm_rows_per_tile (= TILE_HEIGHT) pages per h-tile slab — real rows overlaid
 // on the identity-pad template, padded rows beyond a partial last h-tile carry pure identity.
@@ -97,7 +100,7 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
     return {chunk_bytes, chunk_start_bytes, valid_bytes};
 }
 
-// Fill a freshly reserved cb_rm region with the padding-identity template (0 / -inf / +inf as
+// Fill a freshly reserved dfb::rm region with the padding-identity template (0 / -inf / +inf as
 // appropriate). `region_bytes` is the total byte span to fill, which the caller sets to
 // rm_rows_per_tile * page_bytes when reserving a full slab worth of row pages at once. The helper
 // loops because the clear template is one tile worth and may be smaller than the region.
@@ -107,7 +110,7 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
 template <typename ClearTemplateSrc>
 RM_DF_ALWI void rm_fill_page_with_clear_template(
     Noc& noc,
-    experimental::CB& cb_rm,
+    DataflowBuffer& dfb_rm,
     uint32_t region_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {
@@ -116,7 +119,7 @@ RM_DF_ALWI void rm_fill_page_with_clear_template(
     while (pad_offset < region_bytes) {
         const uint32_t copy_bytes =
             (region_bytes - pad_offset) < clear_template_bytes ? (region_bytes - pad_offset) : clear_template_bytes;
-        noc.async_read(self_ep, cb_rm, copy_bytes, clear_template_src, {.offset_bytes = pad_offset});
+        noc.async_read(self_ep, dfb_rm, copy_bytes, clear_template_src, {.offset_bytes = pad_offset});
         pad_offset += copy_bytes;
     }
 }

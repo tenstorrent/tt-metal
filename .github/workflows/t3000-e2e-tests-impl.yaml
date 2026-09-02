@@ -15,16 +15,12 @@ on:
       enabled-skus:
         required: true
         type: string
-      model:
-        required: false
-        type: string
-        default: "all"
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_e2e_tests.yaml
     steps:
@@ -53,16 +49,6 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Filter test matrix by model
-        id: filter-matrix
-        if: inputs.model != 'all'
-        env:
-          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-        run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]')
-          echo "matrix<<EOF" >> $GITHUB_OUTPUT
-          echo "$filtered" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
   t3000-e2e-tests:
     needs: load-test-matrix
@@ -137,7 +123,10 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, t3000-e2e-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

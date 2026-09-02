@@ -40,7 +40,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     // Synchronize all devices before dispatching neighbor_pad programs.
     // This ensures all previous fabric-initiated writes (from prior ops) have completed.
     auto* mesh_device = tensor_args.input_tensor.device();
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -177,6 +177,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     for (size_t d = 0; d < operation_attributes.dim; d++) {
         outer_dim_size *= input_tensor_shape[d];
     }
+
+    const bool use_barrier_sem = !operation_attributes.using_persistent_buffers;
 
     bool is_first_device = true;
     bool is_last_device = true;
@@ -378,6 +380,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             is_last_w_device);
 
         // W fabric core coordinates (placed after H fabric cores in first row)
+        w_fabric_logical_cores.reserve(num_w_fabric_cores);
+        w_fabric_virtual_cores.reserve(num_w_fabric_cores);
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
             CoreCoord wc = {num_h_fabric_cores + i, 0};
             w_fabric_logical_cores.push_back(wc);
@@ -522,7 +526,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 h_writer_num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
                 virtual_core.x,                    // neighbor_sem_noc0_x
                 virtual_core.y,                    // neighbor_sem_noc0_y
-                true,                              // use_barrier_semaphore
+                use_barrier_sem,                   // use_barrier_semaphore
                 virtual_opposite_core.x,           // barrier_sem_noc0_x
                 virtual_opposite_core.y};          // barrier_sem_noc0_y
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
@@ -660,23 +664,28 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             uint32_t a_offset = 0;
 
             uint32_t unit_offset = 0;
+            local_copy_core_coords.reserve(num_local_cores);
             for (uint32_t i = 0; i < num_local_cores; ++i) {
                 const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
                 const uint32_t a_count = a_base + (i < a_rem ? 1u : 0u);
-                if (units_for_core == 0 && a_count == 0) {
-                    continue;
-                }
 
                 const CoreCoord& logical_core = local_cores[i];
-                local_copy_core_coords.push_back(logical_core);
 
-                // Per-core unique args: work distribution for Phase B (copy) and Phase A (zero-fill)
+                // Per-core unique args: work distribution for Phase B (copy) and Phase A (zero-fill).
+                // These MUST be set for every core the kernels are placed on -- including cores with no
+                // work -- otherwise a no-work core reuses stale runtime args from a prior program and
+                // reads/writes garbage. Set args first, then skip bookkeeping for no-work cores.
                 SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, {unit_offset, units_for_core});
                 SetRuntimeArgs(
                     program,
                     local_writer_kernel_id,
                     {logical_core},
                     {unit_offset, units_for_core, a_offset, a_count});
+
+                if (units_for_core == 0 && a_count == 0) {
+                    continue;
+                }
+                local_copy_core_coords.push_back(logical_core);
 
                 unit_offset += units_for_core;
                 a_offset += a_count;
@@ -831,7 +840,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     1,                               // num_sticks_per_halo_dim
                     w_virtual_core.x,                // neighbor_sem_noc0_x
                     w_virtual_core.y,                // neighbor_sem_noc0_y
-                    true,                            // use_barrier_semaphore (W-axis startup barrier)
+                    use_barrier_sem,                 // use_barrier_semaphore (W-axis startup barrier)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y
                 // No Phase 2 signal targets (W writers don't signal further)

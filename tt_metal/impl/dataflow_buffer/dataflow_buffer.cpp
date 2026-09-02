@@ -7,9 +7,11 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <limits>
-#include <tuple>
-#include <utility>
+#include <string>
+#include <type_traits>
 
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -17,6 +19,794 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+
+namespace tt::tt_metal::experimental::dfb::detail {
+
+namespace {
+
+// Narrow a host-side value into an on-disk init-blob field width. Rejects silent truncation so the
+// blob always matches what HW / device unpack expect.
+template <typename NarrowT, typename WideT>
+NarrowT dfb_narrow_field(WideT value, uint32_t dfb_id, const char* field_name) {
+    static_assert(std::numeric_limits<NarrowT>::is_integer, "dfb_narrow_field requires an integer destination");
+    constexpr auto max_v = static_cast<WideT>(std::numeric_limits<NarrowT>::max());
+    TT_FATAL(
+        value <= max_v,
+        "DFB {}: {} ({}) exceeds on-disk field width max {} ({} bits)",
+        dfb_id,
+        field_name,
+        value,
+        max_v,
+        std::numeric_limits<NarrowT>::digits);
+    return static_cast<NarrowT>(value);
+}
+
+uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) {
+    if (payload_bytes == 0) {
+        return 0;
+    }
+    // RTL sim and DMA paths move L1 in uint32_t chunks; also honor HAL L1 alignment for the region.
+    const uint32_t min_align = hal.has_tile_counter_registers() ? static_cast<uint32_t>(sizeof(uint32_t)) : 1u;
+    const uint32_t align_bytes = std::max(min_align, hal.get_alignment(HalMemType::L1));
+    return static_cast<uint32_t>(tt::align(payload_bytes, align_bytes));
+}
+
+dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
+    uint8_t num_tcs,
+    const std::vector<::dfb::PackedTileCounter>& tcs,
+    uint8_t tiles_to_post_or_ack) {
+    dfb_dm0_txn_descriptor_image_t img = {};
+    img.num_counters = num_tcs;
+    for (uint8_t j = 0; j < num_tcs && j < ::dfb::MAX_TCS_PER_TXN; ++j) {
+        img.tile_counters[j] = tcs[j];
+    }
+    img.tiles_to_post_or_ack = tiles_to_post_or_ack;
+    return img;
+}
+
+uint32_t compute_dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+}
+
+uint32_t compute_dm0_isr_txn_hw_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+}
+
+std::vector<uint8_t> serialize_dm0_isr_txn_hw_pool_for_core(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    uint32_t producer_txn_id_mask,
+    uint32_t consumer_txn_id_mask) {
+    const uint32_t hw_bytes = compute_dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+    if (hw_bytes == 0) {
+        return {};
+    }
+
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+    std::vector<uint8_t> pool(hw_bytes, 0);
+    auto write_threshold = [&](uint8_t txn_id, uint8_t threshold) {
+        dfb_dm0_isr_txn_threshold_t entry = {};
+        entry.threshold = threshold;
+        std::memcpy(
+            pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_isr_txn_threshold_t),
+            &entry,
+            sizeof(entry));
+    };
+    for (const auto& dfb : dfbs_on_core) {
+        for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
+            write_threshold(
+                dfb->producer_txn_descriptor.txn_ids[i],
+                dfb->producer_txn_descriptor.num_entries_to_process_threshold);
+        }
+        for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; i++) {
+            write_threshold(
+                dfb->consumer_txn_descriptor.txn_ids[i],
+                dfb->consumer_txn_descriptor.num_entries_to_process_threshold);
+        }
+    }
+    return pool;
+}
+
+std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    uint32_t producer_txn_id_mask,
+    uint32_t consumer_txn_id_mask) {
+    const uint32_t pool_bytes = compute_dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+    if (pool_bytes == 0) {
+        return {};
+    }
+
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+    std::vector<uint8_t> pool(pool_bytes, 0);
+    for (const auto& dfb : dfbs_on_core) {
+        auto it = dfb->core_lookup_.find(core);
+        if (it == dfb->core_lookup_.end()) {
+            continue;
+        }
+        const auto& [group_idx, alloc_addr] = it->second;
+        (void)alloc_addr;
+        const auto& hw_risc_configs = dfb->groups[group_idx].hw_risc_configs;
+
+        std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
+        std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+        for (int bit = 0; bit < 16; bit++) {
+            if (!(dfb->risc_mask & (1 << bit))) {
+                continue;
+            }
+            const DFBRiscConfig* rc = nullptr;
+            for (const auto& c : hw_risc_configs) {
+                if (c.risc_id == static_cast<uint8_t>(bit)) {
+                    rc = &c;
+                    break;
+                }
+            }
+            if (rc == nullptr) {
+                continue;
+            }
+            for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
+                if (rc->is_producer) {
+                    blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                } else {
+                    blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                }
+            }
+        }
+
+        const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
+        const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
+        const auto prod_desc = build_dm0_txn_descriptor_image(
+            num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        const auto cons_desc = build_dm0_txn_descriptor_image(
+            num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+
+        for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
+            const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
+            std::memcpy(
+                pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_txn_descriptor_image_t),
+                &prod_desc,
+                sizeof(prod_desc));
+        }
+        for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; i++) {
+            const uint8_t txn_id = dfb->consumer_txn_descriptor.txn_ids[i];
+            std::memcpy(
+                pool.data() + dm0_isr_txn_slot_index(all_mask, txn_id) * sizeof(dfb_dm0_txn_descriptor_image_t),
+                &cons_desc,
+                sizeof(cons_desc));
+        }
+    }
+    return pool;
+}
+
+}  // namespace
+
+std::pair<uint32_t, uint32_t> compute_dm0_isr_blob_core_masks(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    uint32_t producer_mask = 0;
+    uint32_t consumer_mask = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; ++i) {
+            producer_mask |= 1u << dfb->producer_txn_descriptor.txn_ids[i];
+        }
+        for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; ++i) {
+            consumer_mask |= 1u << dfb->consumer_txn_descriptor.txn_ids[i];
+        }
+    }
+    return {producer_mask, consumer_mask};
+}
+
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+    if ((producer_mask | consumer_mask) == 0) {
+        return 0;
+    }
+    const uint32_t txn_hw_bytes = compute_dm0_isr_txn_hw_pool_byte_size(producer_mask, consumer_mask);
+    const uint32_t pool_bytes = compute_dm0_isr_txn_desc_pool_byte_size(producer_mask, consumer_mask);
+    return static_cast<uint32_t>(sizeof(dfb_dm0_isr_blob_core_header_t)) + txn_hw_bytes + pool_bytes;
+}
+
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    // Callers (compute_dfb_config_serialized_size / serialize_dfb_config_for_core) guarantee non-empty.
+    TT_ASSERT(!dfbs_on_core.empty());
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    if (!MetalContext::instance(context_id).hal().has_tile_counter_registers()) {
+        return 0;
+    }
+    uint32_t num_slots = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        num_slots += dfb->dm1_remapper_slot_count();
+    }
+    return static_cast<uint32_t>(sizeof(dfb_dm1_remapper_core_header_t)) +
+           num_slots * static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t));
+}
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    // Callers (serialize_dfb_config_for_core) guarantee non-empty.
+    TT_ASSERT(!dfbs_on_core.empty());
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    if (!MetalContext::instance(context_id).hal().has_tile_counter_registers()) {
+        return {};
+    }
+
+    uint16_t num_slots = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        const uint32_t slot_count = dfb->dm1_remapper_slot_count();
+        TT_FATAL(
+            num_slots + slot_count <= UINT16_MAX,
+            "DM1 remapper slot count overflow on core ({},{})",
+            core.x,
+            core.y);
+        num_slots = static_cast<uint16_t>(num_slots + slot_count);
+    }
+
+    std::vector<uint8_t> data;
+    data.reserve(dm1_remapper_blob_core_size(dfbs_on_core));
+
+    dfb_dm1_remapper_core_header_t hdr = {};
+    hdr.num_slots = num_slots;
+    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
+    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
+
+    for (const auto& dfb : dfbs_on_core) {
+        dfb->append_dm1_remapper_slots_for_core(core, data);
+    }
+    return data;
+}
+
+// Returns the serialized byte size of one hart's init blob (init entries only, no wait entries).
+// Accounts for per-entry variable TC arrays and 4B end-padding.
+static uint32_t hart_blob_byte_size(
+    uint8_t hartid, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    uint32_t sz = 0u;
+    uint8_t n = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        if (!(dfb->risc_mask & (1u << hartid))) { continue; }
+        n++;
+        // Find num_tcs for this hart in this DFB (use first group; all groups share same hw_risc_configs shape).
+        uint8_t num_tcs = 1;
+        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+            if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
+        }
+        sz += dfb_hart_init_entry_byte_size(num_tcs);
+    }
+    if (n == 0) {
+        sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
+    }
+    return (sz + 3u) & ~3u;  // 4B-aligned
+}
+
+uint32_t compute_dfb_config_serialized_size(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    if (dfbs_on_core.empty()) { return 0; }
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
+    TT_FATAL(hal.has_tile_counter_registers(), "compute_dfb_config_serialized_size requires Quasar");
+
+    uint32_t payload = dfb_config_header_size();
+    payload += dm1_remapper_blob_core_size(dfbs_on_core);
+    payload += dm0_isr_blob_region_size(dfbs_on_core);
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        payload += hart_blob_byte_size(h, dfbs_on_core);
+    }
+    // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
+    payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
+               static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(sizeof(uint32_t));
+    return align_dfb_config_transfer_size(hal, payload);
+}
+
+void populate_dfb_global_header_participation(
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    std::fill(std::begin(ghdr.participation_mask), std::end(ghdr.participation_mask), 0u);
+    ghdr.num_dfbs = static_cast<uint8_t>(dfbs_on_core.size());
+    TT_FATAL(
+        dfbs_on_core.size() <= ::dfb::NUM_DFBS,
+        "DFB count {} exceeds maximum {}",
+        dfbs_on_core.size(),
+        ::dfb::NUM_DFBS);
+    uint32_t id_mask = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        TT_FATAL(
+            dfb->device_slot < ghdr.num_dfbs,
+            "DFB {} device slot {} out of range (num_dfbs {})",
+            dfb->id,
+            dfb->device_slot,
+            ghdr.num_dfbs);
+        id_mask |= (1u << dfb->device_slot);
+        for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+            if (dfb->risc_mask & (1u << hartid)) {
+                ghdr.participation_mask[hartid] |= (1u << dfb->device_slot);
+            }
+        }
+    }
+    const uint32_t expected_id_mask =
+        ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
+    TT_FATAL(
+        id_mask == expected_id_mask,
+        "DFB device slots must be contiguous 0..{}-1 (id_mask=0x{:x})",
+        ghdr.num_dfbs,
+        id_mask);
+}
+
+void verify_dfb_hart_blobs(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    (void)dfbs_on_core;
+    TT_FATAL(config_bytes.size() >= sizeof(dfb_global_header_t), "DFB config too small for hart blob verify");
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
+
+    for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+        const uint32_t blob_off = ghdr->hart_blob_offset[hartid];
+        const uint8_t num_entries = dfb_hart_participation_count(ghdr->participation_mask[hartid]);
+        TT_FATAL(
+            blob_off <= config_bytes.size(),
+            "hart_blob_offset[{}]={} out of range (config size {})",
+            hartid, blob_off, config_bytes.size());
+        const uint32_t blob_end = (hartid + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS) ? ghdr->hart_blob_offset[hartid + 1u]
+                                                                                   : ghdr->dfb_signal_region_off;
+        TT_FATAL(
+            blob_off <= blob_end && blob_end <= config_bytes.size(),
+            "hart {} blob [{}, {}) is not an ascending in-range extent (config size {}); DM init derives "
+            "its invalidate range from consecutive hart_blob_offset entries",
+            hartid,
+            blob_off,
+            blob_end,
+            config_bytes.size());
+
+        if (num_entries == 0) {
+            TT_FATAL(
+                blob_off + 4u <= config_bytes.size(),
+                "hart {} minimal blob overflows config",
+                hartid);
+            continue;
+        }
+
+        TT_FATAL(
+            blob_off % 4u == 0u,
+            "hart {} blob offset {} is not 4B-aligned",
+            hartid,
+            blob_off);
+
+        const uint8_t* blob = config_bytes.data() + blob_off;
+
+        // Walk init entries and verify they are self-consistent with DFB data.
+        uint32_t cursor = 0u;
+        for (uint8_t e = 0; e < num_entries; e++) {
+            TT_FATAL(
+                blob_off + cursor + sizeof(dfb_hart_init_entry_t) <= config_bytes.size(),
+                "hart {} init entry {} header overflows config", hartid, e);
+            const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(blob + cursor);
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(entry->num_tcs);
+            TT_FATAL(
+                blob_off + cursor + entry_sz <= config_bytes.size(),
+                "hart {} init entry {} (num_tcs={}) TC arrays overflow config", hartid, e, entry->num_tcs);
+            TT_FATAL(
+                entry->logical_dfb_id < ghdr->num_dfbs,
+                "hart {} init entry {} logical_dfb_id={} >= num_dfbs={}",
+                hartid, e, entry->logical_dfb_id, ghdr->num_dfbs);
+            TT_FATAL(
+                (ghdr->participation_mask[hartid] & (1u << entry->logical_dfb_id)) != 0,
+                "hart {} init entry {} logical_dfb_id={} not in participation_mask=0x{:x}",
+                hartid, e, entry->logical_dfb_id, ghdr->participation_mask[hartid]);
+            cursor += entry_sz;
+        }
+        TT_FATAL(
+            blob_off + cursor <= blob_end,
+            "hart {} entries span {} bytes but its blob extent is [{}, {}); DM init would invalidate less "
+            "than it walks",
+            hartid,
+            cursor,
+            blob_off,
+            blob_end);
+    }
+}
+
+void verify_dfb_global_header_participation(
+    const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    const uint32_t valid_dfb_mask =
+        ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
+    for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+        uint32_t expected = 0;
+        for (const auto& dfb : dfbs_on_core) {
+            if (dfb->risc_mask & (1u << hartid)) {
+                expected |= (1u << dfb->device_slot);
+            }
+        }
+        TT_FATAL(
+            ghdr.participation_mask[hartid] == expected,
+            "participation_mask[{}]=0x{:x} != expected 0x{:x} from risc_mask",
+            hartid,
+            ghdr.participation_mask[hartid],
+            expected);
+        TT_FATAL(
+            (ghdr.participation_mask[hartid] & ~valid_dfb_mask) == 0,
+            "participation_mask[{}]=0x{:x} has bits >= num_dfbs {}",
+            hartid,
+            ghdr.participation_mask[hartid],
+            ghdr.num_dfbs);
+    }
+}
+
+size_t serialize_dfb_config_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    std::span<uint8_t> out) {
+    if (dfbs_on_core.empty()) { return 0; }
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
+    if (!hal.has_tile_counter_registers()) {
+        constexpr size_t config_bytes_per_slot = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+        size_t bytes_written = 0;
+        for (const auto& dfb : dfbs_on_core) {
+            TT_FATAL(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
+            auto it = dfb->core_lookup_.find(core);
+            TT_FATAL(it != dfb->core_lookup_.end(), "DFB {} has no config for core ({}, {})", dfb->id, core.x, core.y);
+            const uint32_t alloc_addr = it->second.second;
+            TT_FATAL(
+                !dfb->borrows_memory() || alloc_addr != 0,
+                "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+                dfb->id);
+
+            const size_t byte_offset = static_cast<size_t>(dfb->device_slot) * config_bytes_per_slot;
+            TT_FATAL(
+                byte_offset + config_bytes_per_slot <= out.size(),
+                "DFB {} (device slot {}) config at byte offset {} does not fit in the {}-byte config payload "
+                "sized by finalize_dfbs",
+                dfb->id,
+                dfb->device_slot,
+                byte_offset,
+                out.size());
+            bytes_written = std::max(bytes_written, byte_offset + config_bytes_per_slot);
+        }
+
+        // A core can have gaps in its device slots. Keep those entries zero while placing each
+        // config at the slot firmware and kernel accessors use.
+        std::fill(out.begin(), out.begin() + bytes_written, uint8_t{0});
+        for (const auto& dfb : dfbs_on_core) {
+            const size_t byte_offset = static_cast<size_t>(dfb->device_slot) * config_bytes_per_slot;
+            const uint32_t alloc_addr = dfb->core_lookup_.at(core).second;
+            const uint32_t words[UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG] = {
+                alloc_addr,
+                dfb->config.entry_size * dfb->config.num_entries,
+                dfb->config.num_entries,
+                dfb->config.entry_size,
+            };
+            std::memcpy(out.data() + byte_offset, words, sizeof(words));
+        }
+        return bytes_written;
+    }
+
+    // ---------------------------------------------------------------------------
+    // 1. Collect per-core risc configs for every DFB (base/limit resolved per core).
+    //    Assign producer_signal_bit: per-producer bit position in dfb_signal[logical_dfb_id].
+    // ---------------------------------------------------------------------------
+    // per_core_configs[dfb_idx] = per-risc configs with base_addr/limit resolved.
+    std::vector<std::vector<DFBRiscConfig>> per_core_configs;
+    per_core_configs.reserve(dfbs_on_core.size());
+    for (const auto& dfb : dfbs_on_core) {
+        per_core_configs.push_back(dfb->compute_per_core_risc_configs(core));
+    }
+
+    // producer_signal_bit[dfb_idx][hart] = bit position (0-based) in dfb_signal[logical_dfb_id]; 0xFF if consumer.
+    // dfb_expected_signal_vals[logical_dfb_id] = OR of all producer bits for that DFB.
+    // Every producer gets a unique bit; consumers wait for the full bitmask.
+    std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_signal_bit(dfbs_on_core.size());
+    for (auto& arr : producer_signal_bit) { arr.fill(0xFFu); }
+    std::array<uint32_t, ::dfb::NUM_DFBS> dfb_expected_signal_vals{};
+    dfb_expected_signal_vals.fill(0u);
+    std::array<uint8_t, ::dfb::NUM_DFBS> next_producer_bit{};
+    next_producer_bit.fill(0u);
+    for (size_t di = 0; di < dfbs_on_core.size(); di++) {
+        const auto& dfb = dfbs_on_core[di];
+        const uint8_t logical_dfb_id = static_cast<uint8_t>(dfb->device_slot);
+        for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+            if (!(dfb->risc_mask & (1u << h))) { continue; }
+            const auto& rcs = per_core_configs[di];
+            for (const auto& rc : rcs) {
+                if (rc.risc_id == h && rc.is_producer) {
+                    const uint8_t bit = next_producer_bit[logical_dfb_id]++;
+                    TT_FATAL(
+                        bit < ::dfb::MAX_PRODUCERS_PER_DFB,
+                        "DFB {}: producer signal bit {} exceeds MAX_PRODUCERS_PER_DFB {} "
+                        "(signal region stride; DM0/DM1 reserved)",
+                        dfb->id,
+                        bit,
+                        ::dfb::MAX_PRODUCERS_PER_DFB);
+                    producer_signal_bit[di][h] = bit;
+                    dfb_expected_signal_vals[logical_dfb_id] |= (1u << bit);
+                    break;
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 2. Build the header (all offsets computed after blob sizes are known).
+    // ---------------------------------------------------------------------------
+    dfb_global_header_t ghdr = {};
+    populate_dfb_global_header_participation(ghdr, dfbs_on_core);
+    verify_dfb_global_header_participation(ghdr, dfbs_on_core);
+
+    // has_dm0_isr: any DFB with implicit-sync txns?
+    ghdr.has_dm0_isr = (dm0_isr_blob_region_size(dfbs_on_core) > 0) ? 1u : 0u;
+    ghdr.dm0_isr_ready = 0;
+
+    const uint32_t header_size = dfb_config_header_size();  // 96B
+    const uint32_t total_dm1_blob_size = dm1_remapper_blob_core_size(dfbs_on_core);
+    const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
+
+    ghdr.dm1_remapper_blob_offset = header_size;
+    ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
+    const uint32_t hart_blobs_base = ghdr.dm0_isr_blob_offset + total_dm0_isr_blob_size;
+
+    // Pre-compute per-hart blob sizes to fill hart_blob_offset[].
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_blob_sizes{};
+    uint32_t running = hart_blobs_base;
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        uint32_t sz = hart_blob_byte_size(h, dfbs_on_core);
+        ghdr.hart_blob_offset[h] = static_cast<uint16_t>(running);
+        hart_blob_sizes[h] = sz;
+        running += sz;
+    }
+    ghdr.dfb_signal_region_off = running;
+
+    // ---------------------------------------------------------------------------
+    // 3. Emit header.
+    // ---------------------------------------------------------------------------
+    uint32_t offset = 0;
+    TT_FATAL(out.size() >= header_size, "DFB config buffer too small for header");
+    std::memcpy(out.data(), &ghdr, sizeof(ghdr));
+    offset = header_size;
+
+    // ---------------------------------------------------------------------------
+    // 4. Emit DM1 remapper blob (core-wide flat layout).
+    // ---------------------------------------------------------------------------
+    {
+        auto blob = serialize_dm1_remapper_core_blob(core, dfbs_on_core);
+        TT_FATAL(offset + blob.size() <= out.size(), "DFB config overflow (DM1 blob)");
+        std::memcpy(out.data() + offset, blob.data(), blob.size());
+        offset += static_cast<uint32_t>(blob.size());
+    }
+
+    // ---------------------------------------------------------------------------
+    // 5. Emit DM0 ISR blob (unchanged).
+    // ---------------------------------------------------------------------------
+    if (total_dm0_isr_blob_size > 0) {
+        const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+        dfb_dm0_isr_blob_core_header_t core_hdr = {
+            .producer_txn_id_mask = producer_mask,
+            .consumer_txn_id_mask = consumer_mask,
+        };
+        TT_FATAL(offset + sizeof(core_hdr) <= out.size(), "DFB config overflow (DM0 ISR core hdr)");
+        std::memcpy(out.data() + offset, &core_hdr, sizeof(core_hdr));
+        offset += sizeof(core_hdr);
+
+        auto txn_hw_pool = serialize_dm0_isr_txn_hw_pool_for_core(dfbs_on_core, producer_mask, consumer_mask);
+        if (!txn_hw_pool.empty()) {
+            TT_FATAL(offset + txn_hw_pool.size() <= out.size(), "DFB config overflow (DM0 txn hw pool)");
+            std::memcpy(out.data() + offset, txn_hw_pool.data(), txn_hw_pool.size());
+            offset += static_cast<uint32_t>(txn_hw_pool.size());
+        }
+
+        auto desc_pool = serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, producer_mask, consumer_mask);
+        if (!desc_pool.empty()) {
+            TT_FATAL(offset + desc_pool.size() <= out.size(), "DFB config overflow (DM0 txn desc pool)");
+            std::memcpy(out.data() + offset, desc_pool.data(), desc_pool.size());
+            offset += static_cast<uint32_t>(desc_pool.size());
+        }
+    }
+    TT_FATAL(
+        offset == hart_blobs_base,
+        "DFB config: offset {} != hart_blobs_base {} after DM0/DM1 blobs", offset, hart_blobs_base);
+
+    // ---------------------------------------------------------------------------
+    // 6. Emit per-hart sequential init blobs (init entries only; no wait entries).
+    //    Layout of each blob:
+    //      [dfb_hart_init_entry_t × num_entries] (variable, 4B-aligned each)
+    //      (4B-padded end)
+    //    num_entries = popcount(participation_mask[h]); not stored in the blob.
+    // ---------------------------------------------------------------------------
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        const uint32_t blob_start = offset;
+        TT_FATAL(
+            static_cast<uint16_t>(blob_start) == ghdr.hart_blob_offset[h],
+            "hart {} blob offset mismatch: offset {} vs header {}", h, blob_start, ghdr.hart_blob_offset[h]);
+
+        // Count participating DFBs for this hart.
+        uint8_t num_entries = 0;
+        for (const auto& dfb : dfbs_on_core) {
+            if (dfb->risc_mask & (1u << h)) {
+                num_entries++;
+            }
+        }
+
+        if (num_entries == 0) {
+            // Minimal 4-byte blob: {0, 0, 0, 0}
+            TT_FATAL(offset + 4u <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
+            std::memset(out.data() + offset, 0, 4u);
+            offset += 4u;
+            continue;
+        }
+
+        TT_FATAL(
+            blob_start % 4u == 0u,
+            "hart {} blob offset {} is not 4B-aligned",
+            h,
+            blob_start);
+
+        // Init entries: one per participating DFB, variable size.
+        for (size_t di = 0; di < dfbs_on_core.size(); di++) {
+            const auto& dfb = dfbs_on_core[di];
+            if (!(dfb->risc_mask & (1u << h))) {
+                continue;
+            }
+            const auto& rcs = per_core_configs[di];
+            const DFBRiscConfig* rc_ptr = nullptr;
+            for (const auto& rc : rcs) {
+                if (rc.risc_id == h) { rc_ptr = &rc; break; }
+            }
+            TT_FATAL(rc_ptr != nullptr,
+                "DFB {}: no risc_config for hart {} on core ({},{})", dfb->id, h, core.x, core.y);
+            const DFBRiscConfig& rc = *rc_ptr;
+            const uint8_t num_tcs = rc.config.num_tcs_to_rr;
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            TT_FATAL(offset + entry_sz <= out.size(),
+                "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
+
+            // Header (28B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
+            dfb_hart_init_entry_t entry = {};
+            entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
+            entry.num_tcs        = num_tcs;
+            entry._reserved0 = 0;
+            entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
+                                            : static_cast<uint16_t>(0);
+            entry.entry_size = dfb->config.entry_size;
+            entry.num_entries = dfb_narrow_field<uint16_t>(dfb->config.num_entries, dfb->id, "num_entries");
+            // Precompute hart-type-specific stride_size so device can copy it directly:
+            //   DM harts   (h < TENSIX_RISC_OFFSET): stride_size = entry_size_raw * stride_in_entries
+            //   TRISC harts (h >= TENSIX_RISC_OFFSET): stride_size = (entry_size_raw >> 4) * stride_in_entries
+            // kTRISCCbAddrShift == 4 matches the cb_addr_shift constant in dataflow_buffer_init.h.
+            constexpr uint32_t kTRISCCbAddrShift = 4u;
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                entry.stride_size_precomp = dfb->config.entry_size * dfb->stride_in_entries;
+            } else {
+                entry.stride_size_precomp = (dfb->config.entry_size >> kTRISCCbAddrShift) * dfb->stride_in_entries;
+            }
+            entry.stride_size_tiles = dfb_narrow_field<uint8_t>(dfb->stride_in_entries, dfb->id, "stride_size_tiles");
+
+            uint8_t flags = 0;
+            // Every producer initializes its own TCs and publishes a readiness signal bit.
+            if (rc.is_producer) {
+                flags |= DFB_HART_FLAG_IS_PRODUCER;
+            }
+            // Exactly one of these can be set: either DM1 programs this producer's pair and the
+            // producer waits on it, or the producer programs the pair itself (intra-tensix dfb case).
+            if (dfb->use_remapper) {
+                flags |= (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER)
+                             ? DFB_HART_FLAG_REMAPPER_SELF_PROG
+                             : DFB_HART_FLAG_REMAPPER_WAIT_DM1;
+            }
+            if (rc.config.broadcast_tc) {
+                flags |= DFB_HART_FLAG_BROADCAST_TC;
+            }
+            flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
+            entry.flags = flags;
+
+            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero).
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                const dfb_txn_id_descriptor_t& txn =
+                    rc.is_producer ? dfb->producer_txn_descriptor : dfb->consumer_txn_descriptor;
+                entry.num_txn_ids               = txn.num_txn_ids;
+                entry.threshold                 = txn.num_entries_to_process_threshold;
+                entry.num_entries_per_txn_id    = txn.num_entries_per_txn_id;
+                entry.num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
+                for (uint8_t t = 0; t < txn.num_txn_ids && t < ::dfb::NUM_TXN_IDS; t++) {
+                    entry.txn_ids[t] = txn.txn_ids[t];
+                }
+            }
+            entry.producer_signal_bit = producer_signal_bit[di][h];
+            entry.remapper_pair_index = (dfb->use_remapper && rc.is_producer)
+                ? rc.config.remapper_pair_index
+                : 0xFFu;
+            // Only meaningful for self-programming (intra-tensix) producers; DM harts reclaim this byte.
+            entry.intra_shadow_tc_id = (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER && rc.is_producer)
+                                           ? rc.config.intra_shadow_tc_id
+                                           : 0xFFu;
+
+            // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
+            std::memset(out.data() + offset, 0, entry_sz);
+
+            // Write fixed header.
+            std::memcpy(out.data() + offset, &entry, sizeof(entry));
+
+            // DM harts: mirror bytes [12,24) in LocalDFBInterface DTCM order so
+            // dfb_unpack_entry_header_dm stays consistent with on-disk layout.
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                dfb_write_dm_scalar_pack_to_blob(
+                    out.data() + offset,
+                    num_tcs,
+                    producer_signal_bit[di][h],
+                    entry.txn_ids,
+                    entry.threshold,
+                    entry.num_entries_per_txn_id,
+                    entry.num_entries_per_txn_id_per_tc,
+                    entry.num_txn_ids,
+                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
+                    entry.remapper_pair_index);
+            }
+
+            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header,
+            // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
+            // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
+            // Total TC section = (num_tcs*9 + 3) & ~3 — identical to original SoA byte count.
+            // Device reads: running pair pointer (8B stride, base+limit adjacent per slot) +
+            // two preloaded ptc words covering all TCs before the loop (zero in-loop memory traffic).
+            uint32_t tc_pairs_off = offset + static_cast<uint32_t>(sizeof(entry));
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                dfb_blob_tc_pair_t pair = {};
+                if (h >= ::dfb::TENSIX_RISC_OFFSET) {
+                    pair.base_addr = rc.config.base_addr[t] >> kTRISCCbAddrShift;
+                    pair.limit     = rc.config.limit[t] >> kTRISCCbAddrShift;
+                } else {
+                    pair.base_addr = rc.config.base_addr[t];
+                    pair.limit     = rc.config.limit[t];
+                }
+                std::memcpy(out.data() + tc_pairs_off, &pair, sizeof(pair));
+                tc_pairs_off += static_cast<uint32_t>(sizeof(pair));
+            }
+            // ptc bytes follow all pairs (region already zero-initialised by memset above).
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                out[tc_pairs_off + t] = rc.config.packed_tile_counter[t];
+            }
+
+            offset += entry_sz;
+        }
+
+        // Pad blob to 4B boundary.
+        const uint32_t blob_end_padded = (offset + 3u) & ~3u;
+        if (blob_end_padded > offset) {
+            std::memset(out.data() + offset, 0, blob_end_padded - offset);
+            offset = blob_end_padded;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 7. Emit signal region:
+    //    [dfb_signal[NUM_DFBS * MAX_PRODUCERS_PER_DFB]] (byte slots, zeroed)
+    //    [dfb_expected_signal[NUM_DFBS]] (uint32_t bitmasks, host-computed)
+    //
+    //    Producer i of DFB d writes byte 1 to slot [d * MAX_PRODUCERS_PER_DFB + i] at runtime.
+    //    Consumer polls each set bit in dfb_expected_signal[d].
+    // ---------------------------------------------------------------------------
+    TT_FATAL(
+        offset == ghdr.dfb_signal_region_off,
+        "DFB config: offset {} != dfb_signal_region_off {}", offset, ghdr.dfb_signal_region_off);
+    {
+        constexpr uint32_t kMaxProd = static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB);
+        constexpr uint32_t kSlotBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * kMaxProd;
+        constexpr uint32_t kExpectedBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * sizeof(uint32_t);
+        TT_FATAL(offset + kSlotBytes + kExpectedBytes <= out.size(), "DFB config overflow (signal region)");
+        // Per-producer byte slots — zeroed; each producer writes 1 via uncached alias at runtime.
+        std::memset(out.data() + offset, 0, kSlotBytes);
+        offset += kSlotBytes;
+        // dfb_expected_signal[NUM_DFBS] — host-computed bitmask of active producer bits per DFB.
+        for (uint32_t i = 0; i < static_cast<uint32_t>(::dfb::NUM_DFBS); i++) {
+            std::memcpy(out.data() + offset, &dfb_expected_signal_vals[i], sizeof(uint32_t));
+            offset += sizeof(uint32_t);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 8. Verify and pad to transfer alignment.
+    // ---------------------------------------------------------------------------
+    verify_dfb_hart_blobs(std::span<const uint8_t>(out.data(), offset), dfbs_on_core);
+
+    const uint32_t aligned_size = align_dfb_config_transfer_size(hal, offset);
+    TT_FATAL(out.size() >= aligned_size, "DFB config buffer too small for aligned payload");
+    if (aligned_size > offset) { std::memset(out.data() + offset, 0, aligned_size - offset); }
+    return aligned_size;
+}
+
+}  // namespace tt::tt_metal::experimental::dfb::detail
 
 namespace tt::tt_metal::experimental::dfb {
 
@@ -57,8 +847,9 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
         TT_FATAL(
-            dfb->config.num_producers >= 1 && dfb->config.num_producers <= 8,
-            "DM producer count must be between 1 and 8, got {}",
+            dfb->config.num_producers >= 1 && dfb->config.num_producers <= ::dfb::MAX_PRODUCERS_PER_DFB,
+            "DM producer count must be between 1 and {} (DM0/DM1 reserved; signal region stride), got {}",
+            ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_producers);
         const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
         for (DataMovementProcessor dm : producer_dm_riscvs) {
@@ -85,8 +876,9 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
         TT_FATAL(
-            dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 8,
-            "DM consumer count must be between 1 and 8, got {}",
+            dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= ::dfb::MAX_PRODUCERS_PER_DFB,
+            "DM consumer count must be between 1 and {} (DM0/DM1 reserved), got {}",
+            ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_consumers);
         const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
@@ -129,29 +921,113 @@ namespace detail {
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
 }
 
-uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
-    uint8_t idx = next_index_[core_coord]++;
+std::pair<::dfb::PackedTileCounter, ::dfb::PackedTileCounter> TileCounterAllocator::allocate_intra_tensix_pair(
+    const CoreCoord& core, uint8_t tensix_id) {
+    // ClientL + sacrificial ClientR shadow. Remapper can map any two Tensix-only TCs; adjacency is
+    // not required — these just happen to come out consecutive because the Tensix-only pool is
+    // allocated monotonically.
+    auto client_l = allocate(core, tensix_id, /*use_t6_only=*/true);
+    auto shadow = allocate(core, tensix_id, /*use_t6_only=*/true);
+    return {client_l, shadow};
+}
+
+void RemapperIndexAllocator::reserve_packer_ranges(
+    const CoreCoord& core_coord, const std::array<uint8_t, ::dfb::NUM_TENSIX>& counts) {
+    auto& pools = next_index_[core_coord];
+    uint8_t packer_floor = ::dfb::NUM_REMAPPER_PAIRINGS;
+    for (uint8_t neo = 0; neo < ::dfb::NUM_TENSIX; neo++) {
+        pools.packer_base[neo] = 0xFFu;
+        pools.packer_count[neo] = 0;
+        pools.packer_next[neo] = 0;
+        if (counts[neo] == 0) {
+            continue;
+        }
+        TT_FATAL(
+            counts[neo] * ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB <= ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS,
+            "Neo {} on core ({}, {}) needs {} packer remapper pairs, which would need {} of the {} Tensix-only tile "
+            "counters ({} per intra-tensix DFB: ClientL + shadow)",
+            neo,
+            core_coord.x,
+            core_coord.y,
+            counts[neo],
+            counts[neo] * ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB,
+            ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS,
+            ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB);
+        TT_FATAL(
+            packer_floor >= ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START + counts[neo],
+            "Out of 1-to-1 remapper pairs on core ({}, {}) while reserving {} packer pairs for Neo {}",
+            core_coord.x,
+            core_coord.y,
+            counts[neo],
+            neo);
+        packer_floor = static_cast<uint8_t>(packer_floor - counts[neo]);
+        pools.packer_base[neo] = packer_floor;
+        pools.packer_count[neo] = counts[neo];
+    }
+    pools.packer_floor = packer_floor;
+}
+
+uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord, bool one_to_many) {
+    auto& pools = next_index_[core_coord];
+    if (one_to_many) {
+        TT_FATAL(
+            pools.next_one_to_many < ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS,
+            "Out of 1-to-many remapper pairs for core ({}, {}): only {} of the {} pairs support fan-out",
+            core_coord.x,
+            core_coord.y,
+            ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS,
+            ::dfb::NUM_REMAPPER_PAIRINGS);
+        return pools.next_one_to_many++;
+    }
+    const uint8_t pair_index = static_cast<uint8_t>(::dfb::REMAPPER_ONE_TO_ONE_PAIR_START + pools.next_one_to_one);
     TT_FATAL(
-        idx < ::dfb::NUM_REMAPPER_PAIRINGS,
-        "Out of remapper pairs for core ({}, {})",
+        pair_index < pools.packer_floor,
+        "Out of DM1 1-to-1 remapper pairs for core ({}, {}): bottom-up allocation reached "
+        "packer-owned range [{}, {})",
+        core_coord.x,
+        core_coord.y,
+        pools.packer_floor,
+        ::dfb::NUM_REMAPPER_PAIRINGS);
+    pools.next_one_to_one++;
+    return pair_index;
+}
+
+uint8_t RemapperIndexAllocator::allocate_for_packer(const CoreCoord& core_coord, uint8_t tensix_id) {
+    TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
+    auto& pools = next_index_[core_coord];
+    TT_FATAL(
+        pools.packer_base[tensix_id] != 0xFFu && pools.packer_next[tensix_id] < pools.packer_count[tensix_id],
+        "No reserved packer remapper pair left for Neo {} on core ({}, {}): call reserve_packer_ranges first",
+        tensix_id,
         core_coord.x,
         core_coord.y);
-    return idx;
+    return static_cast<uint8_t>(pools.packer_base[tensix_id] + pools.packer_next[tensix_id]++);
 }
 
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
+    // DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down so user
+    // kernels can keep constexpr trids in [0, USER_TXN_ID_MAX].
+    const uint8_t remaining =
+        (next_id_ >= DFB_TXN_ID_BASE) ? static_cast<uint8_t>(next_id_ - DFB_TXN_ID_BASE + 1) : static_cast<uint8_t>(0);
     TT_FATAL(
-        next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only 32 are available",
+        count <= remaining,
+        "TxnIdAllocator exhausted: requested {} IDs but only {} remain in DFB pool [{}, {}] "
+        "(user kernels own [0, {}]; id 0 is NOC_V2_TRID_STATIC)",
         count,
-        next_id_);
+        remaining,
+        DFB_TXN_ID_BASE,
+        HW_TXN_ID_MAX,
+        USER_TXN_ID_MAX);
+    // Hand out a contiguous ascending block from the top of the remaining pool.
+    const uint8_t first = static_cast<uint8_t>(next_id_ - count + 1);
     std::vector<uint8_t> ids;
     ids.reserve(count);
     for (uint8_t i = 0; i < count; i++) {
-        ids.push_back(next_id_++);
+        ids.push_back(static_cast<uint8_t>(first + i));
     }
+    next_id_ = static_cast<uint8_t>(first - 1);
     return ids;
 }
 
@@ -273,6 +1149,139 @@ bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
 
 bool has_tensix_risc(uint16_t risc_mask) { return (risc_mask & 0x0F00) != 0; }
 
+static std::pair<uint8_t, uint8_t> get_tc_counts(const DfbGroup& group) {
+    uint8_t num_producer_tcs = 0;
+    uint8_t num_consumer_tcs = 0;
+    for (const auto& rc : group.hw_risc_configs) {
+        if (rc.is_producer) {
+            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
+        } else {
+            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
+        }
+    }
+    return {num_producer_tcs, num_consumer_tcs};
+}
+
+// Recompute {capacity, stride_in_entries} from the DFB's num_entries / access pattern. Re-validates the
+// producer/consumer divisibility constraints.
+static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowBufferImpl& dfb) {
+    const DataflowBufferConfig& config = dfb.config;
+    uint32_t capacity = 0;
+    uint32_t stride_in_entries = 0;
+    switch (config.cap) {
+        case ::dfb::AccessPattern::STRIDED:
+            TT_FATAL(
+                config.num_entries % std::max(config.num_producers, config.num_consumers) == 0,
+                "DFB {}: num_entries ({}) must be divisible by max(num_producers, num_consumers) = {}",
+                dfb.id,
+                config.num_entries,
+                std::max(config.num_producers, config.num_consumers));
+            capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
+            stride_in_entries = std::max(config.num_producers, config.num_consumers);
+            break;
+        case ::dfb::AccessPattern::ALL:
+            TT_FATAL(
+                config.num_entries % config.num_producers == 0,
+                "DFB {}: num_entries ({}) must be divisible by num_producers = {}",
+                dfb.id,
+                config.num_entries,
+                config.num_producers);
+            capacity = config.num_entries / config.num_producers;
+            stride_in_entries = 1;
+            break;
+        default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
+    }
+
+    constexpr uint32_t max_capacity = std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max();
+    TT_FATAL(
+        capacity <= max_capacity,
+        "DFB {}: capacity {} exceeds the maximum {} (HW BUFFER_CAPACITY is 16 bits); reduce num_entries.",
+        dfb.id,
+        capacity,
+        max_capacity);
+    log_debug(tt::LogMetal, "DFB {} capacity={} stride_in_entries={}", dfb.id, capacity, stride_in_entries);
+    return {static_cast<uint16_t>(capacity), stride_in_entries};
+}
+
+static void validate_ring_extent(const DataflowBufferImpl& dfb) {
+    const DataflowBufferConfig& config = dfb.config;
+    const uint16_t capacity = dfb.capacity;
+    const uint32_t stride_in_entries = dfb.stride_in_entries;
+    const uint32_t id = dfb.id;
+    if (!MetalContext::instance(dfb.get_context_id()).hal().has_tile_counter_registers()) {
+        return;
+    }
+    const bool tensix_on_dfb = has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask);
+    if (!tensix_on_dfb || capacity == 0) {
+        return;
+    }
+    const uint64_t ring_bytes = static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
+    const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
+    const uint32_t unreserved_l1_size =
+        hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    TT_FATAL(
+        ring_bytes % l1_align == 0,
+        "DFB {}: ring size in bytes ({}) must be a multiple of L1 alignment ({})",
+        id,
+        ring_bytes,
+        l1_align);
+    const uint64_t entry_size_trisc_units = static_cast<uint64_t>(config.entry_size) / l1_align;
+    TT_FATAL(
+        entry_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC entry_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size",
+        id,
+        entry_size_trisc_units,
+        l1_align);
+    const uint64_t stride_size_trisc_units = entry_size_trisc_units * stride_in_entries;
+    TT_FATAL(
+        stride_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC stride_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size or stride",
+        id,
+        stride_size_trisc_units,
+        l1_align);
+    TT_FATAL(
+        stride_in_entries <= std::numeric_limits<uint8_t>::max(),
+        "DFB {}: stride_in_entries ({}) exceeds uint8_t (TRISC stride_size_tiles); reduce producers/consumers",
+        id,
+        stride_in_entries);
+
+    const uint64_t ring_trisc_units = ring_bytes / l1_align;
+    TT_FATAL(
+        ring_trisc_units > 0U,
+        "DFB {}: TRISC ring extent is zero L1 units (ring_bytes={}, align={})",
+        id,
+        ring_bytes,
+        l1_align);
+    TT_FATAL(
+        ring_trisc_units <= std::numeric_limits<uint32_t>::max(),
+        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint32_t; reduce capacity, stride, or "
+        "entry_size",
+        id,
+        ring_trisc_units,
+        l1_align);
+    TT_FATAL(
+        ring_bytes <= unreserved_l1_size,
+        "DFB {}: ring size ({} bytes) exceeds Tensix unreserved L1 size ({} bytes); reduce capacity, stride, or "
+        "entry_size",
+        id,
+        ring_bytes,
+        unreserved_l1_size);
+}
+
+static dfb_txn_id_descriptor_t make_txn_descriptor(
+    const DataflowBufferImpl& dfb, bool is_producer, const std::vector<uint8_t>& txn_ids, uint8_t num_tcs) {
+    const DataflowBufferConfig& config = dfb.config;
+    return compute_txn_descriptor(
+        config.num_entries,
+        config.num_producers,
+        config.num_consumers,
+        is_producer,
+        txn_ids,
+        num_tcs,
+        is_producer ? config.pap : config.cap);
+}
+
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::dfb::AccessPattern::ALL) {
         bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
@@ -317,19 +1326,6 @@ uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_
     return 1;
 }
 
-// Extract tensix IDs from risc_mask (bits 8-11)
-// Returns vector of tensix_ids (0-3) that are being used
-std::vector<uint8_t> extract_tensix_ids(uint16_t risc_mask) {
-    std::vector<uint8_t> tensix_ids;
-    uint16_t tensix_mask = (risc_mask >> 8) & 0x0F;  // bits 8-11
-    for (uint8_t i = 0; i < ::dfb::NUM_TENSIX; i++) {
-        if (tensix_mask & (1 << i)) {
-            tensix_ids.push_back(i);
-        }
-    }
-    return tensix_ids;
-}
-
 // Get tensix_id for allocation when only DM RISCs are used
 // Round-robins through 0-3 based on pair index
 uint8_t get_dm_tensix_id_for_pair(uint8_t pair_index) { return pair_index % 4; }
@@ -340,327 +1336,93 @@ struct TileCounterGroup {
     std::vector<::dfb::PackedTileCounter> consumer_tcs;
 };
 
-uint32_t DataflowBufferImpl::serialized_size() const {
-    // On WH/BH: one 4-word CB-format config entry per DFB (identical to a circular buffer config)
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return 4 * sizeof(uint32_t);
+// WH/BH: one 4-word CB-format config per DFB.  Quasar: per-DFB layout folded into per-hart blobs.
+static uint32_t dfb_wh_bh_serialized_size() { return 4u * sizeof(uint32_t); }
+
+uint16_t DataflowBufferImpl::dm1_remapper_slot_count() const {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
+        return 0;
     }
-    // On Quasar: one dfb_initializer_t + one dfb_initializer_per_risc_t per risc.
-    // All groups have the same number of RISC configs
-    TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
-    return sizeof(dfb_initializer_t) +
-           (groups[0].hw_risc_configs.size() * sizeof(dfb_initializer_per_risc_t));
+    // Intra-tensix pairs are programmed by each Neo's packer, so they contribute no DM1 slots.
+    return remapper_programmer == RemapperProgrammer::DM1 ? static_cast<uint16_t>(config.num_producers) : 0;
 }
 
-static std::pair<uint8_t, uint8_t> get_tc_counts(const DfbGroup& group) {
-    uint8_t num_producer_tcs = 0;
-    uint8_t num_consumer_tcs = 0;
-    for (const auto& rc : group.hw_risc_configs) {
-        if (rc.is_producer) {
-            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
-        } else {
-            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
-        }
-    }
-    return {num_producer_tcs, num_consumer_tcs};
-}
-
-std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
+void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
+        return;
+    }
 
-    // On WH/BH: emit the same 4-word format used for circular buffers so the existing
-    // setup_local_cb_read_write_interfaces firmware path can initialise the DFB slot.
-    // Layout: [base_addr, total_size_bytes, num_pages, page_size_bytes]
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        auto it = this->core_lookup_.find(core);
-        TT_FATAL(
-            it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-        const uint32_t alloc_addr = it->second.second;
-        TT_FATAL(
-            !this->borrows_memory() || alloc_addr != 0,
-            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-            this->id);
-
-        std::vector<uint8_t> data;
-        data.reserve(4 * sizeof(uint32_t));
-        const uint32_t words[4] = {
-            alloc_addr,                                     // fifo_addr (base)
-            this->config.entry_size * this->config.num_entries,  // fifo_size
-            this->config.num_entries,                       // fifo_num_pages
-            this->config.entry_size,                        // fifo_page_size
-        };
-        const auto* bytes = reinterpret_cast<const uint8_t*>(words);
-        data.insert(data.end(), bytes, bytes + sizeof(words));
-        return data;
+    const uint16_t num_rmp = dm1_remapper_slot_count();
+    if (num_rmp == 0) {
+        return;
     }
 
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-    const auto& [group_idx, alloc_addr] = it->second;
-    TT_FATAL(
-        !this->borrows_memory() || alloc_addr != 0,
-        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-        this->id);
-    const DfbGroup* core_group = &this->groups[group_idx];
+    const auto& [group_idx, _] = it->second;
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
 
-    const auto& hw_risc_configs = core_group->hw_risc_configs;
-
-    std::vector<uint8_t> data;
-    data.reserve(serialized_size());
-
-    dfb_initializer_t init = {};
-    init.logical_id = this->id;
-    init.entry_size = this->config.entry_size;
-    init.stride_in_entries = this->stride_in_entries;
-    init.capacity = this->capacity;
-    init.risc_mask_bits.dm_mask = this->risc_mask & 0xFF;
-    init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
-    init.risc_mask_bits.tensix_trisc_mask = this->tensix_trisc_mask & 0x0F;
-    init.num_producers = this->config.num_producers;
-    init.producer_txn_descriptor = this->producer_txn_descriptor;
-    init.consumer_txn_descriptor = this->consumer_txn_descriptor;
-    init.implicit_sync_configured = 0;
-    TT_FATAL(
-        this->config.num_entries <= std::numeric_limits<uint16_t>::max(),
-        "DFB {}: num_entries ({}) exceeds the maximum {} representable on device",
-        this->id,
-        this->config.num_entries,
-        std::numeric_limits<uint16_t>::max());
-    init.num_entries = static_cast<uint16_t>(this->config.num_entries);
-
-    log_debug(
-        tt::LogMetal,
-        "Serializing DFB {} for core ({},{}) with {} producers and {} consumers. risc_mask: 0x{:x} use_remapper: {}",
-        this->id,
-        core.x,
-        core.y,
-        this->config.num_producers,
-        this->config.num_consumers,
-        this->risc_mask,
-        this->use_remapper);
-
-    log_debug(tt::LogMetal, "Entry size: {}", this->config.entry_size);
-    log_debug(tt::LogMetal, "Stride in entries: {}", this->stride_in_entries);
-    log_debug(tt::LogMetal, "Capacity: {}", this->capacity);
-    log_debug(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_debug(tt::LogMetal, "Producer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
-        this->producer_txn_descriptor.num_txn_ids,
-        this->producer_txn_descriptor.num_entries_to_process_threshold,
-        this->producer_txn_descriptor.num_entries_per_txn_id,
-        this->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
-    log_debug(tt::LogMetal, "Consumer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
-        this->consumer_txn_descriptor.num_txn_ids,
-        this->consumer_txn_descriptor.num_entries_to_process_threshold,
-        this->consumer_txn_descriptor.num_entries_per_txn_id,
-        this->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
-
-    const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
-    data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
-
-    const uint32_t entry_size = this->config.entry_size;
-    // const uint32_t max_prod_cons = std::max(this->config.num_producers, this->config.num_consumers);
-
-    // num_producer_tcs / num_consumer_tcs derived from this core's finalized HW config.
-    const auto [num_producer_tcs, num_consumer_tcs] = get_tc_counts(*core_group);
-
-    // Address arithmetic for L1 base/limit/step:
-    //   - STRIDED (stride_in_entries = max_prod_cons): interleaved layout.
-    //     Each producer occupies 1 slot per round → base step = entry_size.
-    //   - ALL (stride_in_entries = 1): contiguous block per producer/TC.
-    //     Each producer occupies `capacity` consecutive slots → base step = capacity * entry_size.
-    //     This applies to both DM-DM ALL (broadcast_tc) and Tensix-involved ALL (remapper).
-    //     The hardware derives the per-pop stride from (limit - base - entry_size) / (capacity - 1),
-    //     which equals entry_size for ALL and max_prod_cons * entry_size for STRIDED.
-    const uint32_t effective_stride = this->stride_in_entries;
-    const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
-
-    std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
-    uint32_t base = alloc_addr;
-    for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
-        for (auto& rc : per_core_rc) {
-            if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
-                rc.config.base_addr[tc] = base;
-                rc.config.limit[tc] =
-                    rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-                // Always advance base so each producer/TC gets its own L1 slot range.
-                // broadcast_tc only governs device-side credit posting, not L1 addressing.
-                base += base_step;
-            }
-        }
-    }
-    base = alloc_addr;
-    for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
-        for (auto& rc : per_core_rc) {
-            if (rc.is_producer) {
-                continue;
-            }
-            rc.config.base_addr[tc] = base;
-            rc.config.limit[tc] =
-                rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-            // In strided case each consumer maps to a different producer region, so advance base per consumer.
-            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
-                base += base_step;
-            }
-        }
-        // In ALL case all consumers share the producer address regions as they see every producer's data.
-        if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
-            tc < num_consumer_tcs) {
-            base += base_step;
-        }
-    }
-
-    // Write one dfb_initializer_per_risc_t per risc, in risc_mask order
+    // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
     for (int bit = 0; bit < 16; bit++) {
         if (!(this->risc_mask & (1 << bit))) {
             continue;
         }
         const DFBRiscConfig* rc = nullptr;
-        for (const auto& c : per_core_rc) {
-            if (c.risc_id == static_cast<uint8_t>(bit)) {
-                rc = &c;
-                break;
-            }
+        for (const auto& c : hw_risc_configs) {
+            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
         }
-        TT_FATAL(rc != nullptr, "DFB {}: no risc_config for risc_id {} on core ({},{})", this->id, bit, core.x, core.y);
-
-        log_debug(tt::LogMetal, "New risc config (risc_id={}, is_producer={})", rc->risc_id, rc->is_producer);
-        dfb_initializer_per_risc_t per_risc = {};
-
-        per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
-        per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
-        per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
-        log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
-        // Copy per-risc arrays
-        for (int i = 0; i < rc->config.num_tcs_to_rr; i++) {
-            per_risc.base_addr[i] = rc->config.base_addr[i];
-            per_risc.limit[i] = rc->config.limit[i];
-            per_risc.packed_tile_counter[i] = rc->config.packed_tile_counter[i];
-            log_trace(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.base_addr[i]));
-            log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.limit[i]));
-            log_trace(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
-        }
-        per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc->config.remapper_pair_index) & 0x3F;
-        per_risc.flags.remapper_en = this->use_remapper;
-        per_risc.flags.is_producer = rc->is_producer;
-        per_risc.consumer_tcs = rc->config.consumer_tcs;
-        // Per-producer remapper fields
-        per_risc.remapper_consumer_ids_mask = rc->config.remapper_consumer_ids_mask;
-        per_risc.producer_client_type = rc->config.producer_client_type;
-        log_debug(tt::LogMetal, "Is producer: {}", rc->is_producer);
-        log_debug(tt::LogMetal, "Remapper en: {}", this->use_remapper);
-        if (this->use_remapper && rc->is_producer) {
-            log_debug(
-                tt::LogMetal,
-                "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
-                rc->config.remapper_pair_index,
-                rc->config.producer_client_type,
-                rc->config.remapper_consumer_ids_mask);
+        if (!rc->is_producer) {
+            continue;
         }
 
-        const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
-        data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
+        uint8_t num_clientRs =
+            static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
+        uint8_t producer_client_type = rc->config.producer_client_type;
+        uint8_t tc_id = ::dfb::get_counter_id(rc->config.packed_tile_counter[0]);
+        uint8_t valid_mask = static_cast<uint8_t>((1u << num_clientRs) - 1);
+
+        uint32_t clientR_val = 0;
+        uint8_t mask_remaining = rc->config.remapper_consumer_ids_mask;
+        for (uint8_t r = 0; r < num_clientRs && r < ::dfb::MAX_CLIENT_RS; r++) {
+            uint8_t id_R = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
+            mask_remaining &= mask_remaining - 1;
+            uint8_t tc_R = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
+            clientR_val |= (static_cast<uint32_t>(id_R & 0x7u) << (r * 8)) |
+                           (static_cast<uint32_t>(tc_R & 0x1Fu) << (r * 8 + 3));
+        }
+        uint32_t clientL_val =
+            (static_cast<uint32_t>(producer_client_type & 0x7u)) |
+            (static_cast<uint32_t>(tc_id    & 0x1Fu) << 3) |
+            (static_cast<uint32_t>(valid_mask & 0xFu) << 8) |
+            (1u << 12) |  // clientl_is_producer = 1
+            (1u << 13);   // clientr_group = 1, distribute = 0
+
+        dfb_dm1_remapper_slot_t slot = {};
+        slot.pair_index  = rc->config.remapper_pair_index;
+        slot.clientR_val = clientR_val;
+        slot.clientL_val = clientL_val;
+        const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
+        data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
     }
-
-    log_debug(tt::LogMetal, "Serialized DFB {} for core ({},{}) size: {}", this->id, core.x, core.y, data.size());
-
-    return data;
 }
 
-// Recompute {capacity, stride_in_entries} from the DFB's num_entries / access pattern. Re-validates the
-// producer/consumer divisibility constraints.
-static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowBufferImpl& dfb) {
-    const DataflowBufferConfig& config = dfb.config;
-    uint32_t capacity = 0;
-    uint32_t stride_in_entries = 0;
-    switch (config.cap) {
-        case ::dfb::AccessPattern::STRIDED:
-            TT_FATAL(
-                config.num_entries % std::max(config.num_producers, config.num_consumers) == 0,
-                "DFB {}: num_entries ({}) must be divisible by max(num_producers, num_consumers) = {}",
-                dfb.id,
-                config.num_entries,
-                std::max(config.num_producers, config.num_consumers));
-            capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
-            stride_in_entries = std::max(config.num_producers, config.num_consumers);
-            break;
-        case ::dfb::AccessPattern::ALL:
-            TT_FATAL(
-                config.num_entries % config.num_producers == 0,
-                "DFB {}: num_entries ({}) must be divisible by num_producers = {}",
-                dfb.id,
-                config.num_entries,
-                config.num_producers);
-            capacity = config.num_entries / config.num_producers;
-            stride_in_entries = 1;
-            break;
-        default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
+uint32_t DataflowBufferImpl::serialized_size() const {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
+        return dfb_wh_bh_serialized_size();
     }
-
-    constexpr uint32_t max_capacity = std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max();
-    TT_FATAL(
-        capacity <= max_capacity,
-        "DFB {}: capacity {} exceeds the maximum {}, reduce num_entries.",
-        dfb.id,
-        capacity,
-        max_capacity);
-    log_debug(tt::LogMetal, "DFB {} capacity={} stride_in_entries={}", dfb.id, capacity, stride_in_entries);
-    return {static_cast<uint16_t>(capacity), stride_in_entries};
-}
-
-static void validate_ring_extent(const DataflowBufferImpl& dfb) {
-    const DataflowBufferConfig& config = dfb.config;
-    const uint16_t capacity = dfb.capacity;
-    const uint32_t stride_in_entries = dfb.stride_in_entries;
-    const uint32_t id = dfb.id;
-    // TRISC pack/unpack store the ring extent in uint16_t L1-aligned units; only Quasar (tile-counter
-    // hardware) has this constraint, and only when a Tensix RISC participates in the DFB.
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return;
+    // Quasar: per-hart init entry sizes are fixed for a finalized TC assignment.
+    TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
+    uint32_t sz = 0;
+    for (const auto& rc : groups[0].hw_risc_configs) {
+        sz += dfb_hart_init_entry_byte_size(rc.config.num_tcs_to_rr);
     }
-    const bool tensix_on_dfb = has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask);
-    if (!tensix_on_dfb || capacity == 0) {
-        return;
-    }
-    const uint64_t ring_bytes = static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
-    const uint32_t l1_align = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    TT_FATAL(
-        ring_bytes % l1_align == 0,
-        "DFB {}: ring size in bytes ({}) must be a multiple of L1 alignment ({})",
-        id,
-        ring_bytes,
-        l1_align);
-    const uint64_t ring_trisc_units = ring_bytes / l1_align;
-    TT_FATAL(
-        ring_trisc_units > 0U,
-        "DFB {}: TRISC ring extent is zero L1 units (ring_bytes={}, align={})",
-        id,
-        ring_bytes,
-        l1_align);
-    TT_FATAL(
-        ring_trisc_units < 65536U,
-        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint16_t; reduce capacity, stride, or "
-        "entry_size",
-        id,
-        ring_trisc_units,
-        l1_align);
-}
-
-static dfb_txn_id_descriptor_t make_txn_descriptor(
-    const DataflowBufferImpl& dfb, bool is_producer, const std::vector<uint8_t>& txn_ids, uint8_t num_tcs) {
-    const DataflowBufferConfig& config = dfb.config;
-    return compute_txn_descriptor(
-        config.num_entries,
-        config.num_producers,
-        config.num_consumers,
-        is_producer,
-        txn_ids,
-        num_tcs,
-        is_producer ? config.pap : config.cap);
+    return sz;
 }
 
 void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries) {
     if (!new_entry_size.has_value() && !new_num_entries.has_value()) {
-        return;  // no-op: nothing to override
+        return;
     }
 
     const uint32_t es = new_entry_size.value_or(config.entry_size);
@@ -668,40 +1430,23 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     TT_FATAL(es > 0, "DFB {}: entry_size override must be > 0", id);
     TT_FATAL(ne > 0, "DFB {}: num_entries override must be > 0", id);
 
-    // The kernel-config dfb_size region is frozen after the first launch (finalize_offsets runs once).
-    // A size override must never change the serialized size.
     const std::optional<uint32_t> serialized_size_before =
         configs_finalized ? std::optional<uint32_t>(serialized_size()) : std::nullopt;
 
     config.entry_size = es;
     config.num_entries = ne;
 
-    // Recompute capacity + stride (re-validates divisibility vs producers/consumers).
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
-
-    // Re-run the TRISC ring-extent uint16 validation (only done inside finalize otherwise).
     validate_ring_extent(*this);
 
-    // Re-entry only: finalize_dataflow_buffer_configs() skips already-finalized DFBs, so the
-    // size-derived txn descriptors must be recomputed in place. Preserve the already-allocated
-    // transaction IDs (reuse the stored txn_ids array) and TC assignment (do not touch groups,
-    // configs_finalized, or the allocators). On first launch (!configs_finalized) finalize computes
-    // these fresh from the updated config, so nothing is needed here.
-    if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         const bool producer_is_tensix_only =
             !has_dm_risc(config.producer_risc_mask) && has_tensix_risc(config.producer_risc_mask);
         const bool consumer_is_tensix_only =
             !has_dm_risc(config.consumer_risc_mask) && has_tensix_risc(config.consumer_risc_mask);
-        // configs_finalized implies groups is non-empty. The TC counts are group-invariant (see
-        // get_tc_counts), and the txn descriptors are DFB-global (not per-core), so groups[0] is the
-        // representative group here.
         TT_FATAL(!groups.empty(), "DFB {}: finalized but has no groups; cannot recompute txn descriptors", id);
         const auto [num_producer_tcs, num_consumer_tcs] = get_tc_counts(groups[0]);
 
-        // The transaction-id count is preserved on re-entry, so the new num_entries must keep the same
-        // divisibility that compute_txn_descriptor() enforces. Check up front with an actionable message.
-        // TODO: #46893 tracks re-deriving/reassigning the txn-id count on resize (e.g. double->quad
-        // buffering).
         auto check_divisor = [&](bool is_producer, uint8_t num_txn_ids, uint8_t num_tcs) {
             const bool consumes_all = !is_producer && (config.cap == ::dfb::AccessPattern::ALL);
             const uint8_t num_pc = is_producer ? config.num_producers : config.num_consumers;
@@ -719,8 +1464,6 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
                 static_cast<uint32_t>(num_tcs));
         };
 
-        // Recompute one side's txn descriptor in place, preserving its already-allocated transaction
-        // IDs (only the thresholds change). No-op when that side has no implicit sync / is Tensix-only.
         auto recompute_txn_descriptor = [&](bool is_producer,
                                             dfb_txn_id_descriptor_t& desc,
                                             bool is_tensix_only,
@@ -747,6 +1490,27 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
             num_consumer_tcs);
     }
 
+    if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
+        log_debug(
+            tt::LogMetal,
+            "DFB {} size override applied: entry_size={} num_entries={} prod_threshold={} prod_per_tc={} "
+            "cons_threshold={} cons_per_tc={}",
+            id,
+            config.entry_size,
+            config.num_entries,
+            producer_txn_descriptor.num_entries_to_process_threshold,
+            producer_txn_descriptor.num_entries_per_txn_id_per_tc,
+            consumer_txn_descriptor.num_entries_to_process_threshold,
+            consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+    } else {
+        log_debug(
+            tt::LogMetal,
+            "DFB {} size override applied: entry_size={} num_entries={}",
+            id,
+            config.entry_size,
+            config.num_entries);
+    }
+
     if (serialized_size_before.has_value()) {
         TT_FATAL(
             serialized_size() == *serialized_size_before,
@@ -764,6 +1528,129 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
         config.num_entries);
 }
 
+std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(const CoreCoord& core) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before computing per-core risc configs", this->id);
+
+    auto it = this->core_lookup_.find(core);
+    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+    const auto& [group_idx, alloc_addr] = it->second;
+    TT_FATAL(
+        !this->borrows_memory() || alloc_addr != 0,
+        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+        this->id);
+
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
+
+    log_debug(
+        tt::LogMetal,
+        "DFB {} core ({},{}) {} producers {} consumers risc_mask=0x{:x} use_remapper={}",
+        this->id, core.x, core.y,
+        this->config.num_producers, this->config.num_consumers,
+        this->risc_mask, this->use_remapper);
+
+    uint8_t num_producer_tcs = 0, num_consumer_tcs = 0;
+    for (const auto& rc : hw_risc_configs) {
+        if (rc.is_producer) {
+            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
+        } else {
+            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
+        }
+    }
+
+    // Resolve the per-core address arithmetic used by Quasar serialization.
+    const uint32_t entry_size      = this->config.entry_size;
+    const uint32_t effective_stride = this->stride_in_entries;
+    const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
+
+    std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
+    uint32_t base = alloc_addr;
+    for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
+        for (auto& rc : per_core_rc) {
+            if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
+                rc.config.base_addr[tc] = base;
+                rc.config.limit[tc] =
+                    base + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+                base += base_step;
+            }
+        }
+    }
+    base = alloc_addr;
+    for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
+        for (auto& rc : per_core_rc) {
+            if (rc.is_producer) {
+                continue;
+            }
+            rc.config.base_addr[tc] = base;
+            rc.config.limit[tc] =
+                base + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
+                base += base_step;
+            }
+        }
+        if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
+            tc < num_consumer_tcs) {
+            base += base_step;
+        }
+    }
+
+    // RTL-sim correlation: log producer/consumer TC and txn-id assignments.
+    {
+        auto fmt_tcs = [](const DFBRiscConfig& rc) {
+            std::string s;
+            for (uint8_t t = 0; t < rc.config.num_tcs_to_rr; t++) {
+                if (t) {
+                    s += ",";
+                }
+                s += fmt::format(
+                    "(t{},c{})",
+                    ::dfb::get_tensix_id(rc.config.packed_tile_counter[t]),
+                    ::dfb::get_counter_id(rc.config.packed_tile_counter[t]));
+            }
+            return s;
+        };
+        auto fmt_txn_ids = [](const dfb_txn_id_descriptor_t& desc) -> std::string {
+            if (desc.num_txn_ids == 0) {
+                return "-";
+            }
+            std::string s;
+            for (uint8_t i = 0; i < desc.num_txn_ids; i++) {
+                if (i) {
+                    s += ",";
+                }
+                s += std::to_string(desc.txn_ids[i]);
+            }
+            return s;
+        };
+        std::string prod_part, cons_part;
+        for (const auto& rc : per_core_rc) {
+            if (rc.is_producer) {
+                if (!prod_part.empty()) {
+                    prod_part += "  ";
+                }
+                prod_part += fmt::format("r{}:[{}]", rc.risc_id, fmt_tcs(rc));
+                if (this->use_remapper) {
+                    prod_part += fmt::format("(rmp={})", rc.config.remapper_pair_index);
+                }
+            } else {
+                if (!cons_part.empty()) {
+                    cons_part += "  ";
+                }
+                cons_part += fmt::format("r{}:[{}]", rc.risc_id, fmt_tcs(rc));
+            }
+        }
+        log_debug(
+            tt::LogMetal,
+            "DFB {} corr: prod_txns=[{}] prod_tcs={{ {} }} | cons_txns=[{}] cons_tcs={{ {} }}",
+            this->id,
+            fmt_txn_ids(this->producer_txn_descriptor),
+            prod_part.empty() ? "-" : prod_part,
+            fmt_txn_ids(this->consumer_txn_descriptor),
+            cons_part.empty() ? "-" : cons_part);
+    }
+
+    return per_core_rc;
+}
+
 uint32_t finalize_dfbs(
     uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<tt::tt_metal::KernelGroup>>& kernel_groups,
@@ -775,7 +1662,13 @@ uint32_t finalize_dfbs(
         return base_offset;
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const ContextId context_id = dataflow_buffers.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
+
+    // WH/BH addresses a DFB's config by its device slot (slot N starts at N * serialized_size), so the
+    // region has to span the highest slot in use on the kernel group, not just hold one entry per DFB.
+    // Quasar uses a single program-wide packed layout sized by compute_dfb_config_serialized_size.
+    const bool slot_addressed = !hal.has_tile_counter_registers();
 
     dfb_offset = base_offset;
     dfb_size = 0;
@@ -784,21 +1677,37 @@ uint32_t finalize_dfbs(
         auto kernel_config = kg->launch_msg.view().kernel_config();
         kernel_config.local_cb_offset() = base_offset;
 
-        uint32_t kg_dfb_size = 0;
+        bool kg_has_dfb = false;
+        uint32_t max_slot_plus_one = 0;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_size += dfb->serialized_size();
+                    kg_has_dfb = true;
+                    if (slot_addressed) {
+                        max_slot_plus_one = std::max(max_slot_plus_one, dfb->device_slot + 1);
+                    }
                     break;
                 }
             }
         }
+        // compute_dfb_config_serialized_size covers the full layout: header + DM1/DM0 blobs +
+        // per-hart sequential blobs + producer-ready region + alignment padding.
+        uint32_t kg_dfb_size = (kg_has_dfb && hal.has_tile_counter_registers())
+                                   ? compute_dfb_config_serialized_size(dataflow_buffers)
+                                   : 0u;
+        if (slot_addressed && kg_has_dfb) {
+            // WH/BH: region spans the highest device slot used by DFBs on this kernel group.
+            kg_dfb_size = max_slot_plus_one * dfb_wh_bh_serialized_size();
+        }
 
+        if (hal.has_tile_counter_registers() && kg_dfb_size > 0) {
+            kg_dfb_size = align_dfb_config_transfer_size(hal, kg_dfb_size);
+        }
         dfb_size = std::max(dfb_size, kg_dfb_size);
     }
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {}",
         base_offset,
@@ -816,6 +1725,35 @@ namespace tt::tt_metal::detail {
 
 using namespace tt::tt_metal::experimental::dfb;
 using namespace tt::tt_metal::experimental::dfb::detail;
+
+// Picks the device-facing slot for a DFB whose core_ranges are already set.
+//
+// The slot is the index firmware and kernel accessors use for this DFB on a core. The only
+// constraint is that no core sees two DFBs at the same slot. Two DFBs conflict iff their core
+// ranges intersect, so assignment takes the lowest slot not claimed by a conflicting DFB.
+// DFBs on disjoint cores reuse low slots, so a core's config table stays as small as its own
+// DFB count rather than growing with the number of DFBs elsewhere in the program.
+uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) const {
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_arch_num_circular_buffers();
+
+    uint64_t used_slots = 0;
+    for (const auto& other : this->dataflow_buffers_) {
+        if (other->core_ranges.intersects(dfb.core_ranges)) {
+            used_slots |= (uint64_t(1) << other->device_slot);
+        }
+    }
+
+    const uint64_t free_slots = ~used_slots;
+    const uint32_t slot = free_slots ? static_cast<uint32_t>(__builtin_ctzll(free_slots)) : max_slots;
+    TT_FATAL(
+        slot < max_slots,
+        "Cannot create DFB {}: every one of the {} slots this arch supports per core is already taken by a dataflow "
+        "buffer sharing a core with it",
+        dfb.id,
+        max_slots);
+    return slot;
+}
 
 uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, const DataflowBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add dataflow buffer to an already compiled program {}", this->id);
@@ -836,8 +1774,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         TT_FATAL(
             *config.tensix_scope != TensixScope::INTER,
             "Inter-tensix DFBs are not yet supported. Use TensixScope::INTRA for same-Neo packer→unpacker DFBs.");
-        // INTRA: each Neo has an independent packer (TRISC2) → unpacker (TRISC0) credit flow, one Tensix-only TC per Neo.
-        // Always STRIDED for both producer and consumer — blocked access and remapper are never used.
+        // INTRA: each Neo has an independent packer (TRISC2) → unpacker (TRISC0) credit flow, one Tensix-only TC per
+        // Neo. Access pattern is always STRIDED producer → STRIDED consumer (no ALL / BLOCKED). The remapper may still
+        // be enabled as a HW workaround to alias the Tensix-only ClientL TC away from overlay TCs 0-15; that is
+        // not an ALL fan-out remapper path.
         // num_producers == num_consumers == number of Neos (one packer-unpacker pair per Neo).
         TT_FATAL(
             config.num_producers == config.num_consumers,
@@ -845,7 +1785,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             config.num_producers, config.num_consumers);
         TT_FATAL(
             config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
-            "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
+            "Intra-tensix DFBs require STRIDED producer → STRIDED consumer access patterns");
         TT_FATAL(
             !config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync,
             "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
@@ -854,28 +1794,51 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
-
-    // DFB IDs are auto-assigned contiguously from 0, so enforce the limit here.
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        uint32_t max_dfb_id = MetalContext::instance().hal().get_arch_num_circular_buffers();
-        TT_FATAL(
-            dfb->id < max_dfb_id,
-            "Cannot create DFB {}: WH/BH supports at most {} dataflow buffers",
-            dfb->id,
-            max_dfb_id);
-    }
+    dfb->context_id_ = this->context_id_;
 
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
 
+    dfb->device_slot = this->assign_dfb_device_slot(*dfb);
+
     log_debug(
         tt::LogMetal,
-        "Creating DFB {} with {} producers and {} consumers",
+        "Creating DFB {} (device slot {}) with {} producers and {} consumers",
         dfb->id,
+        dfb->device_slot,
         config.num_producers,
         config.num_consumers);
 
-    std::tie(dfb->capacity, dfb->stride_in_entries) = compute_capacity_and_stride(*dfb);
+    uint32_t capacity;
+    switch (config.cap) {
+        case dfb::AccessPattern::STRIDED:
+            TT_FATAL(
+                config.num_entries % std::max(config.num_producers, config.num_consumers) == 0,
+                "Num entries in DFB {} must be divisible by max of num producers and consumers {}",
+                config.num_entries,
+                std::max(config.num_producers, config.num_consumers));
+            capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
+            dfb->stride_in_entries = std::max(config.num_producers, config.num_consumers);
+            break;
+        case dfb::AccessPattern::ALL:
+            TT_FATAL(
+                config.num_entries % config.num_producers == 0,
+                "Num entries in DFB {} must be divisible by num producers {}",
+                config.num_entries,
+                config.num_producers);
+            capacity = config.num_entries / config.num_producers;
+            dfb->stride_in_entries = 1;
+            break;
+        default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
+    }
+    TT_FATAL(
+        capacity <= std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max(),
+        "DFB {}: capacity {} exceeds the maximum {} (HW BUFFER_CAPACITY is 16 bits)",
+        dfb->id,
+        capacity,
+        std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max());
+    dfb->capacity = static_cast<uint16_t>(capacity);
+    log_debug(tt::LogMetal, "Capacity: {}", capacity);
 
     dfb->configs_finalized = false;
 
@@ -902,6 +1865,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
+    this->compile_and_allocate_needed_ = true;
 
     return dfb->id;
 }
@@ -915,7 +1879,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     // On WH/BH there are no tile counters or remapper hardware.
     // Mark configs finalized and create a single dummy group per DFB so allocate_dataflow_buffers() can fill in the L1
     // address.
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         for (auto& dfb : this->dataflow_buffers_) {
             if (dfb->configs_finalized) {
                 continue;
@@ -956,16 +1920,32 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     // Process each core's DFBs together
     for (auto& [core, core_dfbs] : dfbs_by_core) {
         bool core_needs_remapper = false;
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_pair_counts{};
         for (const auto& dfb : core_dfbs) {
-            if (dfb->config.cap == dfb::AccessPattern::ALL) {
+            const bool is_intra =
+                dfb->config.tensix_scope.has_value() && *dfb->config.tensix_scope == TensixScope::INTRA;
+            if (is_intra) {
+                // Intra DFBs need remapper HW for the Tensix-only TC alias workaround.
+                core_needs_remapper = true;
+                for (uint8_t risc_id = ::dfb::TENSIX_RISC_OFFSET;
+                     risc_id < ::dfb::TENSIX_RISC_OFFSET + ::dfb::NUM_TENSIX;
+                     risc_id++) {
+                    if (dfb->config.producer_risc_mask & (1u << risc_id)) {
+                        packer_pair_counts[risc_id - ::dfb::TENSIX_RISC_OFFSET]++;
+                    }
+                }
+            } else if (dfb->config.cap == dfb::AccessPattern::ALL) {
                 bool dm_dm_all = !has_tensix_risc(dfb->config.producer_risc_mask) &&
                                      !has_tensix_risc(dfb->config.consumer_risc_mask);
                 if (!dm_dm_all) {
                     core_needs_remapper = true;
-                    break;
                 }
             }
         }
+        // Count every INTRA DFB on this core first, then reserve exact contiguous packer remapper
+        // blocks per Neo from pair 63 downward. Finalize sees the full core DFB set in one pass —
+        // there is no incremental reassignment if more INTRA DFBs are added later in the same program.
+        remapper_index_allocator_.reserve_packer_ranges(core, packer_pair_counts);
 
         log_debug(
             tt::LogMetal,
@@ -994,8 +1974,8 @@ void ProgramImpl::finalize_single_dfb_config(
 
     // Finds the DfbGroup whose hw_risc_configs match new_hw_risc_configs (creating one
     // if none exists), extends its core_ranges to include `core`, and appends an
-    // l1_by_core entry.  base_addr/limit are not part of the equality check because
-    // they are derived per-core in serialize_for_core() from each core's alloc_addr.
+    // l1_by_core entry. base_addr/limit are not part of the equality check because
+    // they are derived per-core during serialization from each core's alloc_addr.
     auto bin_into_group = [&]() {
         auto hw_risc_configs_equal = [](const std::vector<DFBRiscConfig>& a, const std::vector<DFBRiscConfig>& b) {
             if (a.size() != b.size()) {
@@ -1007,12 +1987,11 @@ void ProgramImpl::finalize_single_dfb_config(
                 }
                 const auto& ca = a[i].config;
                 const auto& cb = b[i].config;
-                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr ||
-                    ca.broadcast_tc != cb.broadcast_tc ||
-                    ca.remapper_pair_index != cb.remapper_pair_index ||
-                    ca.consumer_tcs != cb.consumer_tcs ||
+                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr || ca.broadcast_tc != cb.broadcast_tc ||
+                    ca.remapper_pair_index != cb.remapper_pair_index || ca.consumer_tcs != cb.consumer_tcs ||
                     ca.remapper_consumer_ids_mask != cb.remapper_consumer_ids_mask ||
-                    ca.producer_client_type != cb.producer_client_type) {
+                    ca.producer_client_type != cb.producer_client_type ||
+                    ca.intra_shadow_tc_id != cb.intra_shadow_tc_id) {
                     return false;
                 }
                 for (int j = 0; j < ca.num_tcs_to_rr; j++) {
@@ -1081,21 +2060,29 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
-    // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
+    // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
     // ---------------------------------------------------------------------------
     // Intra-tensix: packer TRISC2 (producer) → unpacker TRISC0 (consumer) within the same Neo.
-    // No DM RISC, no remapper, no strided/blocked access pattern — each Neo is a fully
-    // independent packer→unpacker credit flow backed by one Tensix-only TC on that Neo.
-    // For N Neos (num_producers == num_consumers == N): N Tensix-only TCs, one per Neo.
+    // Each Neo is a fully independent packer→unpacker credit flow backed by one Tensix-only TC on that Neo.
+    //
+    // HW workaround: a T6 update to a Tensix-only TC aliases into overlay TCs 0-15 unless the
+    // remapper routes that TC elsewhere, so each Neo also burns a sacrificial ClientR shadow TC as
+    // the remapper target and needs its own 1-to-1 remapper pair. Both packer and unpacker keep using
+    // the ClientL TC; nothing ever reads the shadow. ClientL/ClientR need not be adjacent. The pair
+    // must be programmed by that Neo's packer — DM1 cannot see the Tensix-only pool, and no Neo can
+    // see another Neo's TCs.
     // ---------------------------------------------------------------------------
     if (is_intra_tensix) {
-        // Iterate over every Neo bit in producer_risc_mask and allocate a separate Tensix-only
-        // TC for each, giving each Neo its own independent credit counter.
-        dfb->use_remapper = false;
+        TT_FATAL(
+            core_has_remapper,
+            "Intra-tensix DFBs require the remapper to alias the Tensix-only tile counter away from "
+            "overlay counters 0-15");
+        dfb->use_remapper = true;
+        dfb->remapper_programmer = RemapperProgrammer::TENSIX_PACKER;
 
         for (uint8_t risc_id = ::dfb::TENSIX_RISC_OFFSET;
              risc_id < ::dfb::TENSIX_RISC_OFFSET + ::dfb::NUM_TENSIX;
@@ -1105,16 +2092,20 @@ void ProgramImpl::finalize_single_dfb_config(
             }
             uint8_t tensix_id = risc_id - ::dfb::TENSIX_RISC_OFFSET;
 
-            ::dfb::PackedTileCounter t6_only_tc =
-                tile_counter_allocator_.allocate(core, tensix_id, /*use_t6_only=*/true);
+            auto [t6_only_tc, shadow_tc] = tile_counter_allocator_.allocate_intra_tensix_pair(core, tensix_id);
+            // Contiguous within this Neo's exact reserved block (see reserve_packer_ranges).
+            const uint8_t pair_index = remapper_index_allocator_.allocate_for_packer(core, tensix_id);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
-                "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
+                "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={}) aliased to shadow tc_id={} "
+                "via remapper pair {}",
                 dfb->id,
                 tensix_id,
                 (uint32_t)::dfb::get_tensix_id(t6_only_tc),
-                (uint32_t)::dfb::get_counter_id(t6_only_tc));
+                (uint32_t)::dfb::get_counter_id(t6_only_tc),
+                (uint32_t)::dfb::get_counter_id(shadow_tc),
+                (uint32_t)pair_index);
 
             DFBRiscConfig risc_config;
             risc_config.risc_id = risc_id;
@@ -1122,6 +2113,8 @@ void ProgramImpl::finalize_single_dfb_config(
             risc_config.config.packed_tile_counter[0] = t6_only_tc;
             risc_config.config.num_tcs_to_rr = 1;
             risc_config.config.broadcast_tc = false;
+            risc_config.config.remapper_pair_index = pair_index;
+            risc_config.config.intra_shadow_tc_id = ::dfb::get_counter_id(shadow_tc);
             new_hw_risc_configs.push_back(risc_config);
         }
 
@@ -1144,9 +2137,13 @@ void ProgramImpl::finalize_single_dfb_config(
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
+    // One risc id per bit of the risc masks: bits 0-7 are DM riscs, bits 8-15 are Tensix riscs.
+    constexpr uint8_t num_risc_ids = std::numeric_limits<decltype(config.producer_risc_mask)>::digits;
     std::vector<uint8_t> producer_risc_ids;
+    producer_risc_ids.reserve(num_risc_ids);
     std::vector<uint8_t> consumer_risc_ids;
-    for (uint8_t risc_id = 0; risc_id < 16; risc_id++) {
+    consumer_risc_ids.reserve(num_risc_ids);
+    for (uint8_t risc_id = 0; risc_id < num_risc_ids; risc_id++) {
         if (config.producer_risc_mask & (1 << risc_id)) {
             producer_risc_ids.push_back(risc_id);
         }
@@ -1154,6 +2151,7 @@ void ProgramImpl::finalize_single_dfb_config(
             consumer_risc_ids.push_back(risc_id);
         }
     }
+    new_hw_risc_configs.reserve(producer_risc_ids.size() + consumer_risc_ids.size());
 
     // Determine tensix_id based on which RISC in the pair is Tensix
     // Without remapper,Tensix RISCs can only access TCs from their own tensix_id
@@ -1330,7 +2328,6 @@ void ProgramImpl::finalize_single_dfb_config(
         risc_config.config.broadcast_tc = dm_dm_all;
 
         if (use_remapper) {
-            risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
             risc_config.config.producer_client_type = producer_client_types[producer_idx];
 
             // Build consumer_tcs packed and consumer_ids_mask for this producer
@@ -1356,6 +2353,11 @@ void ProgramImpl::finalize_single_dfb_config(
             }
             risc_config.config.consumer_tcs = packed;
             risc_config.config.remapper_consumer_ids_mask = consumer_ids_mask;
+
+            // The ClientR valid mask decides which pool this pair must come from: fan-out needs one
+            // of the 16 grouped-capable pairs, a single consumer can use the plentiful 1-to-1 pairs.
+            const bool one_to_many = __builtin_popcount(consumer_ids_mask) > 1;
+            risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core, one_to_many);
 
             log_debug(
                 tt::LogMetal,
@@ -1446,9 +2448,15 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.num_entries, config.num_producers, num_producer_tcs,
                 /*consumes_all=*/false);
             auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
-            dfb->producer_txn_descriptor =
-                make_txn_descriptor(*dfb, /*is_producer=*/true, producer_txn_ids, num_producer_tcs);
-            log_info(
+            dfb->producer_txn_descriptor = compute_txn_descriptor(
+                config.num_entries,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/true,
+                producer_txn_ids,
+                num_producer_tcs,
+                config.pap);
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
@@ -1464,9 +2472,15 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.num_entries, config.num_consumers, num_consumer_tcs,
                 /*consumes_all=*/consumes_all);
             auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
-            dfb->consumer_txn_descriptor =
-                make_txn_descriptor(*dfb, /*is_producer=*/false, consumer_txn_ids, num_consumer_tcs);
-            log_info(
+            dfb->consumer_txn_descriptor = compute_txn_descriptor(
+                config.num_entries,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/false,
+                consumer_txn_ids,
+                num_consumer_tcs,
+                config.cap);
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
@@ -1478,6 +2492,7 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     dfb->use_remapper = use_remapper;
+    dfb->remapper_programmer = use_remapper ? RemapperProgrammer::DM1 : RemapperProgrammer::NONE;
     log_debug(
         tt::LogMetal, "DFB {} finalized risc_mask: 0x{:x} use_remapper: {}", dfb->id, dfb->risc_mask, use_remapper);
 
@@ -1488,6 +2503,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
     // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
     this->scratchpads_allocated_ = false;
+    this->compile_and_allocate_needed_ = true;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
@@ -1615,8 +2631,6 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         return;
     }
 
-    // (a) Resolve each override to its new total_size (entry_size * num_entries), filling unset fields
-    //     from the current config. Indexed by dfb_id for the alias-group agreement check below.
     std::unordered_map<uint32_t, uint64_t> new_total_by_id;
     new_total_by_id.reserve(overrides.size());
     for (const auto& o : overrides) {
@@ -1626,9 +2640,6 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         new_total_by_id[o.dfb_id] = static_cast<uint64_t>(es) * ne;
     }
 
-    // (b) Alias-group coherence gate. Aliased DFBs total-size change is only safe if the whole group
-    //     agrees on one new total size. A change with total_size unchanged does not disturb the shared
-    //     region and is allowed.
     for (const auto& o : overrides) {
         auto dfb = get_dataflow_buffer(o.dfb_id);
         bool is_aliased = dfb->alias_primary_id.has_value() || !dfb->alias_secondary_ids.empty();
@@ -1636,10 +2647,8 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
             continue;
         }
         if (new_total_by_id.at(o.dfb_id) == dfb->total_size()) {
-            continue;  // isolated change -> footprint unchanged -> safe
+            continue;
         }
-        // total_size changes on an aliased member: every member of the group must be overridden to the
-        // same new total size. The primary sets the agreed size.
         uint32_t primary_id = dfb->alias_primary_id.value_or(o.dfb_id);
         auto primary = get_dataflow_buffer(primary_id);
         std::vector<uint32_t> group;
@@ -1673,20 +2682,17 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         }
     }
 
-    // (c) Apply: mutate each DFB's size.
     for (const auto& o : overrides) {
         get_dataflow_buffer(o.dfb_id)->update_size(o.entry_size, o.num_entries);
     }
 
-    // (d) Force allocate_dataflow_buffers() to recompute the L1 layout for the new total_size() on the next
-    //     launch. For ephemeral DFBs this re-lays-out the region (and may shift later DFBs); for borrowed
-    //     DFBs the base address is unchanged but this keeps the bookkeeping consistent.
     invalidate_dataflow_buffer_allocation();
 }
 
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
 ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
+    dfbs_on_core.reserve(dataflow_buffers_.size());
     for (const auto& dfb : dataflow_buffers_) {
         if (dfb->core_ranges.intersects(core)) {
             dfbs_on_core.push_back(dfb);
@@ -1697,6 +2703,7 @@ ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
 
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> ProgramImpl::dataflow_buffers_on_corerange(const CoreRange& cr) const {
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
+    dfbs_on_core.reserve(dataflow_buffers_.size());
     for (const auto& dfb : dataflow_buffers_) {
         if (dfb->core_ranges.intersects(cr)) {
             dfbs_on_core.push_back(dfb);
@@ -1707,6 +2714,12 @@ std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBuf
 
 std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
     std::vector<CoreRange> core_ranges;
+    size_t max_core_ranges = 0;
+    for (const auto& dfb : dataflow_buffers_) {
+        max_core_ranges += dfb->core_ranges.ranges().size();
+    }
+    core_ranges.reserve(max_core_ranges);
+
     for (const auto& dfb : dataflow_buffers_) {
         for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
@@ -1759,13 +2772,19 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 }
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
-    // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
+    TTZoneScopedD(PROGRAM);
+    // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB device slots map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
-            const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
+            const CBIndex cb_index = static_cast<CBIndex>(dfb->device_slot);
             const DataFormat data_format = dfb->config.data_format;
+            // Populate this DFB's CB-indexed JIT metadata only when a format was specified.
+            // A format-less DFB has no compute consumer, so its JIT slot is intentionally left
+            // at the defaults instead of deriving a tile size from DataFormat::Invalid.
+            if (data_format == DataFormat::Invalid) {
+                continue;
+            }
             const auto& tile_opt = dfb->config.tile;
             const auto& unpack_geom = dfb->config.unpack_face_geometry;
             build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);

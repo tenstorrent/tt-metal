@@ -10,16 +10,17 @@ from typing import List
 import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture
+from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
-from helpers.perf import PerfReport
+from helpers.perf.core import PerfReport
+from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
-from ttexalens.tt_exalens_lib import read_words_from_device
 
-from .fused_operand import OperandRegistry
-from .fused_operation import FusedOperation
-from .fuser_sentinel import FuserSentinel
+from .l1_operation import L1Operation
+from .operand import OperandRegistry
+from .sentinel import FuserSentinel
 
 
 @dataclass
@@ -31,6 +32,7 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
+    quasar_use_dvalid: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -59,13 +61,13 @@ class GlobalConfig:
 
 
 class FuserConfig(TestConfig):
-    pipeline: List[FusedOperation]
+    pipeline: List[L1Operation]
     global_config: GlobalConfig
     operand_registry: OperandRegistry
 
     def __init__(
         self,
-        pipeline: List[FusedOperation],
+        pipeline: List[L1Operation],
         global_config: GlobalConfig,
         operand_registry: OperandRegistry,
     ):
@@ -77,12 +79,6 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
-
-        num_stages = len(self.pipeline)
-
-        for i, operation in enumerate(self.pipeline, start=1):
-            operation.stage_id = i
-            operation.num_stages = num_stages
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -97,6 +93,8 @@ class FuserConfig(TestConfig):
             "pipeline",
             "global_config",
             "operand_registry",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         temp_str = [
@@ -108,7 +106,7 @@ class FuserConfig(TestConfig):
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
 
     def generate_and_build_test(self):
-        from .fused_generator import FusedKernelGenerator
+        from .kernel_generator import FusedKernelGenerator
 
         code_generator = FusedKernelGenerator(self)
         code_generator.write_kernel(self.test_name)
@@ -117,7 +115,7 @@ class FuserConfig(TestConfig):
     def run_perf_test(self, worker_id: str, run_count: int = 2):
         """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
 
-        from .fused_generator import FUSED_TESTS_DIR
+        from .kernel_generator import FUSED_TESTS_DIR
 
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes
@@ -136,6 +134,7 @@ class FuserConfig(TestConfig):
         for run_type in run_types:
             runs = []
             self.global_config.perf_run_type = run_type
+            self.global_config.sentinel = FuserSentinel()
 
             self.test_name = (
                 FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
@@ -175,16 +174,16 @@ class FuserConfig(TestConfig):
         if self.BUILD_MODE != BuildMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on="marker", how="outer", validate="1:1"
+                    left, right, on=MARKER, how="outer", validate="1:1"
                 ),
                 all_results,
             )
-            results["test_name"] = self.global_config.test_name
-            results["loop_factor"] = self.global_config.loop_factor
+            results[TEST_NAME_COLUMN] = self.global_config.test_name
+            results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 
-            csv_prefix = f"{self.global_config.test_name}_fused_test"
+            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")
@@ -192,8 +191,8 @@ class FuserConfig(TestConfig):
     def run_regular_test(self):
         """Run functional test: generate, build, write inputs to L1, execute kernel, read outputs and verify against golden."""
 
-        from .fused_generator import FUSED_TESTS_DIR
-        from .fused_golden import FusedGolden
+        from .golden_check import GoldenCheck
+        from .kernel_generator import FUSED_TESTS_DIR
 
         if self.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
             pytest.skip(self.SKIP_JUST_FOR_STIMULI_MARKER)
@@ -215,5 +214,5 @@ class FuserConfig(TestConfig):
         self.run_elf_files()
         self.wait_for_tensix_operations_finished()
         self.operand_registry.read_outputs_from_l1(self.TENSIX_LOCATION)
-        golden = FusedGolden()
+        golden = GoldenCheck()
         assert golden.check_pipeline(self)

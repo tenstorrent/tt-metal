@@ -27,11 +27,11 @@ namespace {
 using TestGraphCaptureArgumentsMorehDot = TTNNFixtureWithDevice;
 
 TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 1, 1, 32}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), L1_MEMORY_CONFIG));
-    auto tt_input1 = create_device_tensor(tensor_spec, device_);
-    auto tt_input2 = create_device_tensor(tensor_spec, device_);
+    auto tt_input1 = ttnn::create_device_tensor(tensor_spec, device_);
+    auto tt_input2 = ttnn::create_device_tensor(tensor_spec, device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::moreh_dot(tt_input1, tt_input2, std::nullopt, DataType::BFLOAT16, std::nullopt, std::nullopt);

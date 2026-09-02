@@ -15,7 +15,14 @@
 - name: runtime_fast_dispatch_on_eth
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*'
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*:RealtimeProfiler*'
+    # Offline-compile hit tests: AllSupportedProducts artifacts must load under the
+    # live ETH fast-dispatch build key without JIT (#53160).
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*Precompiled*'
+    if [ "$ARCH_NAME" = "wormhole_b0" ]; then
+      TT_METAL_TRACE_ALLOC_TRACKING=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTracker*'
+      TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTracker*'
+    fi
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -35,6 +42,16 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_rt_profiler
+  cmd: ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='RealtimeProfiler*'
+  skus:
+    wh_n150_civ2:
+      timeout: 6
+    bh_p150b_civ2_viommu:
+      timeout: 6
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -61,6 +78,8 @@
   cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter='-*NIGHTLY_*:*NocEstimator*'
   skus:
     wh_n150_civ2:
+      timeout: 40
+    wh_n300_civ2:
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
@@ -100,10 +119,11 @@
 # ~12.3 min on bh_p150b_civ2). Cost is genuine passing-test work (LLKMeshDeviceFixture reduce
 # family dominates); skipped Quasar-only tests are free (~130 ms total), not the cause.
 - name: runtime_llk
-  # 4 tests disabled by #44767.
-  disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
+  # No #44767 exclusions remain: Top32RmDevPipelineCompletes fixed by #46344; the 3 FP8e4m3
+  # tests (TensixComputePackUntilizeFp8e4m3/TensixComputeUnpackTilizeFp8e4m3/TensixFp8e4m3ToFp8e4m3)
+  # fixed by #49909 (BH packer input format Float16) + #49953 (dead unpacker writes).
   cmd: |
-    ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
@@ -115,8 +135,9 @@
 
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init, NOC Debugging) ---
 - name: runtime_debug_tools
-  # 60 tests disabled by #44767.
-  disabled_debug_tools_filter: &disabled_debug_tools 'MeshWatcherDelayFixture.TensixTestWatcherSanitizeInsertDelays:MeshWatcherFixture.ActiveEthTestWatcherDetectLinkUp:MeshWatcherFixture.ActiveEthTestWatcherEthLinkCheck:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthDestL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthSrcL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeL1Overflow:MeshWatcherFixture.HostMcastWrapAroundXY_DownRight:MeshWatcherFixture.HostMcastWrapAroundXY_UpLeft:MeshWatcherFixture.HostMcastWrapAroundX_Left:MeshWatcherFixture.HostMcastWrapAroundX_Right:MeshWatcherFixture.HostMcastWrapAroundY_Down:MeshWatcherFixture.HostMcastWrapAroundY_Up:MeshWatcherFixture.IdleEthTestWatcherSanitizeNOCInlineWriteDram:MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace:MeshWatcherFixture.TensixDramTestWatcherRingBufferDrisc:MeshWatcherFixture.TensixTestWatcherPause:MeshWatcherFixture.TensixTestWatcherSanitizeL1Overflow:MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:MeshWatcherFixture.TestWatcherRingBufferBrisc:MeshWatcherFixture.TestWatcherRingBufferErisc:MeshWatcherFixture.TestWatcherRingBufferIErisc:MeshWatcherFixture.TestWatcherRingBufferNCrisc:MeshWatcherFixture.TestWatcherRingBufferTrisc0:MeshWatcherFixture.TestWatcherRingBufferTrisc1:MeshWatcherFixture.TestWatcherRingBufferTrisc2:MeshWatcherFixture.TestWatcherWaypoints:RTATestFixture.CorrectArgDispatchAndPayloadValidation:RTATestFixture.QuasarMultiDMOutOfBoundsArgDetection:RTATestFixture.SentinelPatternHandlingAndMissingRTADetection:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_TRISC0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_TRISC0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Brisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM3:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Erisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCrisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCriscPacketTag:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc1:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc3:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0_QuasarMultiKernel:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16_QuasarMultiKernel'
+  # 2 tests disabled by #50483: TestWatcherWaypointsEth + EthernetTestWatcherPause.
+  # All #44767 debug-tools exclusions re-enabled.
+  disabled_debug_tools_filter: &disabled_debug_tools 'MeshWatcherFixture.TestWatcherWaypointsEth:MeshWatcherFixture.EthernetTestWatcherPause'
   cmd: |
     ./tests/scripts/run_tools_tests.sh
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
@@ -183,10 +204,16 @@
 # complete in time on 8 devices. Smaller SKUs above skip the multi-device (2x4/4x8) suites.
 
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
+# This job installs only the build artifact, not the Python wheel (see setup-job's wheel-artifact-name input,
+# which runtime-unit-tests-impl.yaml does not pass), so every command here must be a prebuilt C++ binary. The
+# matching pytest, test_large_read_only_file_backed_tensor_upload, runs from the ttnn sanity job instead, which
+# already covers all of tests/ttnn/unit_tests/tensor and does install the wheel.
 - name: runtime_iommu_pinned_memory
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
     ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/unit_tests_tensor --gtest_filter='*ReadOnly*:*UniformCopyToDevice_ReusesPinnedMemoryCacheEntries:*UniformCopyToHost_ReusesPinnedMemoryCacheEntries'
   skus:
     wh_n150_civ2:
       timeout: 5
@@ -238,11 +265,11 @@
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 8
     wh_n300_civ2:
       timeout: 10
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 8
     bh_p300:
       timeout: 10
     bh_p100a_civ2_viommu:
@@ -252,8 +279,10 @@
 
 # --- Debug Tools, Device, Dispatch (SD) ---
 - name: runtime_sd_debug_tools_device_dispatch
-  # See #44767.
-  disabled_debug_tools_filter: *disabled_debug_tools
+  # Base #50483 exclusions plus StackUsage0/16: those two fail only under slow dispatch on
+  # eth-capable boards (test appends a legacy idle-ETH kernel to a Metal 2.0 program already
+  # compiled by MakeProgramFromSpec); they pass in fast dispatch (runtime_debug_tools).
+  disabled_debug_tools_filter: 'MeshWatcherFixture.TestWatcherWaypointsEth:MeshWatcherFixture.EthernetTestWatcherPause:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16'
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
@@ -275,21 +304,20 @@
 
 # --- LLK Tests (SD) ---
 - name: runtime_sd_llk
-  # See #44767.
-  disabled_llk_filter: *disabled_llk
+  # No #44767 exclusions remain (see runtime_llk above).
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 12
     wh_n300_civ2:
       timeout: 12
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 12
     bh_p300:
       timeout: 12
     bh_p100a_civ2_viommu:
-      timeout: 12
+      timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -366,9 +394,11 @@
       --gtest_filter='UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites'
     TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch \
       --gtest_filter='UnitMeshMultiCQMultiDevice*Fixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='RealtimeProfilerStress.*'
   skus:
     wh_galaxy:
-      timeout: 15
+      timeout: 19
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -390,6 +420,8 @@
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests \
       --gtest_filter='*DispatchContext*'
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=120 ./build/test/tt_metal/distributed/distributed_unit_tests \
+      --gtest_filter='MeshWorkloadTest4x8.UnusedDeviceKernelConfigNotOverwritten'
     TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
       --gtest_filter='UnitMeshCQSingleCard*Fixture.*'
   skus:

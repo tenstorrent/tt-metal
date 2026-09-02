@@ -6,20 +6,25 @@
 
 #include "fold_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
 static constexpr const char* WRITER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
 
-ProgramDescriptor MorehFoldOperation::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -34,6 +39,7 @@ ProgramDescriptor MorehFoldOperation::create_descriptor(
     auto output_shape_rank = output.logical_shape().rank();
 
     std::vector<uint32_t> ls;
+    ls.reserve(2);
     for (uint32_t i = 0; i < 2; ++i) {
         uint32_t l = (((output_size[i] + 2 * padding[i] - dilation[i] * (kernel_size[i] - 1) - 1) / stride[i]) + 1);
         ls.push_back(l);
@@ -54,6 +60,10 @@ ProgramDescriptor MorehFoldOperation::create_descriptor(
     uint32_t LW = ls[1];
 
     IDevice* device = input.device();
+
+    // MeshTensors for the tensor-parameter bindings (Metal 2.0 speaks MeshTensor).
+    const auto& input_mesh_tensor = input.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
 
     uint32_t num_units = output.logical_volume() / output.logical_shape()[-1];
 
@@ -79,130 +89,184 @@ ProgramDescriptor MorehFoldOperation::create_descriptor(
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;    // input
-    uint32_t scratch_cb_index = tt::CBIndex::c_1;  // scratch for DRAM alignment
-    uint32_t output_cb_index = tt::CBIndex::c_16;  // output
+    // The scratch DFB (legacy c_1) is only needed for a two-step DRAM-aligned read:
+    // when the DRAM source page is not DRAM-aligned, or unconditionally on Blackhole.
+    bool use_scratch = (src_is_dram && (input_cb_page_size % dram_alignment != 0)) || is_blackhole;
 
-    ProgramDescriptor desc;
+    // ---- Resource names ----
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName INPUT_CB{"input_cb"};      // legacy c_0
+    const DFBSpecName OUTPUT_CB{"output_cb"};    // legacy c_16
+    const DFBSpecName SCRATCH_CB{"scratch_cb"};  // legacy c_1 (conditional)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
-    // Input CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = aligned_input_cb_page_size * 2,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = input_cb_index,
-            .data_format = data_format,
-            .page_size = aligned_input_cb_page_size,
-        }}},
-    });
+    // ---- Tensor parameters ----
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()};
 
-    // Scratch CB for DRAM alignment
-    // On Blackhole, always use two-step read for DRAM
-    if ((src_is_dram && (input_cb_page_size % dram_alignment != 0)) || is_blackhole) {
-        uint32_t scratch_cb_page_size = dram_aligned_input_cb_page_size;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 4 * scratch_cb_page_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = scratch_cb_index,
-                .data_format = data_format,
-                .page_size = scratch_cb_page_size,
-            }}},
+    // ---- Dataflow buffers (plain interleaved L1 CBs; no compute kernel, so format metadata is optional) ----
+    Group<DataflowBufferSpec> dfbs = {
+        DataflowBufferSpec{
+            .unique_id = INPUT_CB,
+            .entry_size = aligned_input_cb_page_size,
+            .num_entries = 2,
+            .data_format_metadata = data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = OUTPUT_CB,
+            .entry_size = aligned_output_cb_page_size,
+            .num_entries = 2,
+            .data_format_metadata = data_format,
+        },
+    };
+    // Scratch CB for DRAM alignment. On Blackhole, always use two-step read for DRAM.
+    if (use_scratch) {
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = SCRATCH_CB,
+            .entry_size = dram_aligned_input_cb_page_size,
+            .num_entries = 4,
+            .data_format_metadata = data_format,
         });
     }
 
-    // Output CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = aligned_output_cb_page_size * 2,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = data_format,
-            .page_size = aligned_output_cb_page_size,
-        }}},
-    });
-
-    // Kernel defines
-    KernelDescriptor::Defines reader_defines;
-    switch (input.dtype()) {
-        case DataType::BFLOAT16: reader_defines.emplace_back("DTYPE_BFLOAT16", "1"); break;
-        case DataType::FLOAT32: reader_defines.emplace_back("DTYPE_FLOAT32", "1"); break;
-        default: break;
+    // ---- Reader kernel ----
+    // c_0 (input): reader is the sole toucher (full FIFO on the reader) -> self-loop (PRODUCER + CONSUMER).
+    // c_16 (output): reader is the producer (reserve_back/push_back).
+    // c_1 (scratch): reader is the sole toucher (raw get_write_ptr peek) -> self-loop; only when allocated.
+    Group<DFBBinding> reader_dfb_bindings = {
+        DFBBinding{.dfb_spec_name = INPUT_CB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = INPUT_CB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = OUTPUT_CB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
+    };
+    if (use_scratch) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SCRATCH_CB, .accessor_name = "scratch", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SCRATCH_CB, .accessor_name = "scratch", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    // Reader kernel
-    KernelDescriptor::CompileTimeArgs reader_ct_args{input_cb_index, output_cb_index, scratch_cb_index};
-    TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
+    // Kernel defines
+    KernelSpec::CompilerOptions::Defines reader_defines;
+    switch (input.dtype()) {
+        case DataType::BFLOAT16: reader_defines.insert({"DTYPE_BFLOAT16", "1"}); break;
+        case DataType::FLOAT32: reader_defines.insert({"DTYPE_FLOAT32", "1"}); break;
+        default: break;
+    }
+    // The conditionally-bound scratch DFB is gated kernel-side by this define.
+    if (use_scratch) {
+        reader_defines.insert({"HAS_SCRATCH_CB", "1"});
+    }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = READER_KERNEL_PATH;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = READER_KERNEL_PATH,
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"N",
+                  "C",
+                  "H",
+                  "W",
+                  "kernel_size_h",
+                  "kernel_size_w",
+                  "stride_h",
+                  "stride_w",
+                  "padding_h",
+                  "padding_w",
+                  "dilation_h",
+                  "dilation_w",
+                  "LH",
+                  "LW",
+                  "input_cb_page_size",
+                  "dram_aligned_input_cb_page_size",
+                  "output_cb_page_size",
+                  "start_id",
+                  "num_units_per_core",
+                  "aligned"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    // Writer kernel
-    KernelDescriptor::CompileTimeArgs writer_ct_args{output_cb_index};
-    TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    // ---- Writer kernel ----
+    // c_16 (output): writer is the consumer (wait_front/pop_front).
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = WRITER_KERNEL_PATH,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUTPUT_CB, .accessor_name = "output", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"output_cb_page_size", "start_id", "num_units_per_core"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = std::move(all_cores);
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Runtime args per core
+    // ---- Runtime args per core ----
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     uint32_t g1_numcores = core_group_1.num_cores();
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
+
+    // Alignment info for the kernel. Loop-invariant (same on every node); legacy computed it identically
+    // per core. On Blackhole, always use two-step read for DRAM.
+    uint32_t aligned = (src_is_dram ? (input_cb_page_size % dram_alignment == 0) : 1);
+    aligned = aligned && !is_blackhole;
+
+    KernelRunArgs reader_kra{.kernel = READER};
+    KernelRunArgs writer_kra{.kernel = WRITER};
 
     uint32_t start_id = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        // Calculate alignment info for the kernel
-        // On Blackhole, always use two-step read for DRAM
-        uint32_t aligned = (src_is_dram ? (input_cb_page_size % dram_alignment == 0) : 1);
-        aligned = aligned && !is_blackhole;
-
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_kra.runtime_arg_values,
             core,
-            {input.buffer(),
-             N,
-             C,
-             H,
-             W,
-             kernel_size_h,
-             kernel_size_w,
-             stride_h,
-             stride_w,
-             padding_h,
-             padding_w,
-             dilation_h,
-             dilation_w,
-             LH,
-             LW,
-             input_cb_page_size,
-             dram_aligned_input_cb_page_size,
-             aligned_output_cb_page_size,
-             start_id,
-             num_units_per_core,
-             aligned});
+            {{"N", N},
+             {"C", C},
+             {"H", H},
+             {"W", W},
+             {"kernel_size_h", kernel_size_h},
+             {"kernel_size_w", kernel_size_w},
+             {"stride_h", stride_h},
+             {"stride_w", stride_w},
+             {"padding_h", padding_h},
+             {"padding_w", padding_w},
+             {"dilation_h", dilation_h},
+             {"dilation_w", dilation_w},
+             {"LH", LH},
+             {"LW", LW},
+             {"input_cb_page_size", input_cb_page_size},
+             {"dram_aligned_input_cb_page_size", dram_aligned_input_cb_page_size},
+             {"output_cb_page_size", aligned_output_cb_page_size},
+             {"start_id", start_id},
+             {"num_units_per_core", num_units_per_core},
+             {"aligned", aligned}});
 
-        writer_desc.emplace_runtime_args(
-            core, {output.buffer(), aligned_output_cb_page_size, start_id, num_units_per_core});
+        AddRuntimeArgsForNode(
+            writer_kra.runtime_arg_values,
+            core,
+            {{"output_cb_page_size", aligned_output_cb_page_size},
+             {"start_id", start_id},
+             {"num_units_per_core", num_units_per_core}});
 
         start_id += num_units_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    // ---- Assemble ----
+    ProgramSpec spec;
+    spec.name = "moreh_fold_rm";
+    spec.kernels = {std::move(reader), std::move(writer)};
+    spec.dataflow_buffers = std::move(dfbs);
+    spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_kra), std::move(writer_kra)};
+    run_args.tensor_args.insert({INPUT, input_mesh_tensor});
+    run_args.tensor_args.insert({OUTPUT, output_mesh_tensor});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_fold

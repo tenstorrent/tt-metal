@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
@@ -49,27 +50,27 @@ def torch_masked_bincount(
     [
         pytest.param(
             (1, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
             id="single",
         ),
         pytest.param(
             (1, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="linear-1x2",
+            id="disabled-1x2",
         ),
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="mesh-1x4"),
-            id="linear-1x4",
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+            id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -116,15 +117,10 @@ def test_masked_bincount(
             hist = torch_masked_bincount(chip_indices, dispatch_table[group], n_routed_experts)
             torch_histograms[(group, chip)] = hist
 
-    # Height-shard config matching the gate module pattern: 8x8 core grid
+    # masked_bincount consumes the gate's output directly: UINT16, TILE, L1-interleaved. The op
+    # untiles in-kernel and splits the token rows across a fixed 8x8 (64-core) grid internally.
     num_cores = 64
     assert sp_dim % num_cores == 0, f"sp_dim={sp_dim} must be divisible by {num_cores}"
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(sp_dim // num_cores, topk),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
 
     # Shard dim 0 across the dispatch axis, replicate across TP axis
     mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -133,15 +129,15 @@ def test_masked_bincount(
         dims=(0, None) if sp_axis == 0 else (None, 0),
     )
 
-    # UINT16 as required by the kernel
+    # UINT16, TILE, L1-interleaved: mirrors the gate's actual indices output that the op consumes.
     tt_indices = ttnn.from_torch(
         indices.to(torch.int16),
         mesh_mapper=mesh_mapper,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
     tt_dispatch_table = ttnn.from_torch(
         dispatch_table,
@@ -198,7 +194,7 @@ def test_masked_bincount(
     [
         pytest.param(
             (1, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
             id="single",
         ),
@@ -216,6 +212,9 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     the root's gather_sem before the slow leaf finishes, exposing data races
     where a parent reads a child's incomplete histogram.
     """
+    # sp_dim stays at 4096 rather than moving to the 640-token prefill ISL: this test exists to
+    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=64
+    # here, 10 at 640). Shrinking it would narrow the race window this test is built to catch.
     sp_dim = 4096
     topk = 8
     n_routed_experts = 256
@@ -229,14 +228,6 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     num_present = 8
     for e in range(num_present):
         dispatch_table[0, e] = 0
-
-    # Height-shard config matching the gate module pattern: 8x8 core grid
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(rows_per_core, topk),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
 
     # Place dispatch table on device (static across iterations)
     tt_dispatch_table = ttnn.from_torch(
@@ -267,15 +258,15 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
         # Torch reference
         reference = torch_masked_bincount(indices, dispatch_table[0], n_routed_experts)
 
-        # Place indices on device
+        # Place indices on device: UINT16, TILE, L1-interleaved (as the gate emits; untiled in-kernel)
         tt_indices = ttnn.from_torch(
             indices.to(torch.int16),
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=ttnn.uint16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
         # Run TTNN op
         tt_hist = ttnn.experimental.deepseek_prefill.masked_bincount(

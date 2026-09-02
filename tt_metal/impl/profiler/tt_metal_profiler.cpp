@@ -10,7 +10,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <tt_metal_profiler.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -36,7 +36,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -53,6 +53,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "program/program_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
@@ -63,6 +64,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include "tools/profiler/noc_event_profiler_utils.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -426,8 +428,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
         try {
-            detail::CompileProgram(device_sender, program_sender);
-            detail::CompileProgram(device_receiver, program_receiver);
+            program_sender.impl().compile(device_sender);
+            program_receiver.impl().compile(device_receiver);
         } catch (std::exception& e) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
@@ -538,6 +540,7 @@ void syncAllDevices(ChipId host_connected_device) {
     for (auto& sender : profiler_state_manager->device_device_time_pair) {
         for (auto& receiver : sender.second) {
             std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+            timePairs.reserve(receiver.second.size() / 2);
             for (int i = 0; i < receiver.second.size(); i += 2) {
                 uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                 timePairs.push_back({senderTime, receiver.second[i].second});
@@ -795,7 +798,10 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.setProfileBufferBankSizeBytes(bank_size_bytes, num_dram_banks);
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    // Quasar uses the L1-only path for now;
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    }
 
     if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
@@ -809,8 +815,8 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        profiler.dumpRoutingInfo();
-        profiler.dumpClusterCoordinates();
+        tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }
@@ -819,6 +825,11 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(
+            MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
+            device_id,
+            dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(
              MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
@@ -826,7 +837,7 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
              device_num_hw_cqs,
              dispatch_core_config)) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -915,6 +926,9 @@ static void ReadDeviceProfilerResultsImpl(
         // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -966,6 +980,9 @@ void ReadDeviceProfilerResultsInternal(
         MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance(context_id).hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -1021,6 +1038,9 @@ void ProcessDeviceProfilerResults(
     if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
         MetalContext::instance().rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -1053,10 +1073,11 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     }
 
     if (env.get_rtoptions().get_profiler_do_dispatch_cores()) {
+        const CoreType dispatch_core_type =
+            resolve_dispatch_core_type(env, device_id, dispatch_core_config);
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            const CoreCoord curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
             virtual_cores.push_back(curr_core);
         }
     }
@@ -1211,9 +1232,12 @@ void ReadMeshDeviceProfilerResults(
         if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
             noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            // Only print when called by the user (state == normal) to avoid duplicate printing
             if (state != ProfilerReadState::LAST_FD_READ) {
+                // User-initiated read: print the full aggregated summary.
                 noc_debug_state->print_aggregated_errors();
+            } else {
+                // Device close / final read: no full summary.
+                noc_debug_state->report_new_issues();
             }
         }
         return;

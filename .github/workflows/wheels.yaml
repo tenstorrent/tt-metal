@@ -33,6 +33,13 @@ on:
         type: string
         default: "tt-ubuntu-2204-large-stable"
         description: "Runner label for the wheel build job"
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
@@ -104,6 +111,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ (startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
@@ -161,19 +169,25 @@ jobs:
         if: always()
         run: |
           if [ -f /tmp/ccache-wheel-stats.txt ]; then
-            echo "## ccache stats" >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>ccache stats</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat /tmp/ccache-wheel-stats.txt >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache-wheel.log ]; then
-            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             .github/scripts/ccache_log_filter.sh /tmp/ccache-wheel.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
           # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
@@ -182,12 +196,15 @@ jobs:
             head -30 /tmp/ccache-storage-s3-wheel.log
             echo "=== ccache-storage-s3 log (last 80 lines) ==="
             tail -80 /tmp/ccache-storage-s3-wheel.log
-            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Storage Helper Log</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             head -30 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
             echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
             tail -200 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: 📦 Pack CPM cache

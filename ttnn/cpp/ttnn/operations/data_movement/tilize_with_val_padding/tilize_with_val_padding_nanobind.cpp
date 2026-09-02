@@ -48,7 +48,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
         nb::overload_cast<
             const ttnn::Tensor&,
             const ttnn::Shape&,
-            tt::tt_metal::PadValue,
+            ttnn::PadValue,
             const std::optional<MemoryConfig>&,
             std::optional<DataType>,
             bool,

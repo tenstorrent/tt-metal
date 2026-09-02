@@ -22,13 +22,14 @@ std::vector<Tensor> addcmul_bw(
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(3);
     grad_tensor.emplace_back(grad);
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
+    grad_tensor.emplace_back(std::move(grad_a));
     Tensor grad_b = ttnn::multiply(
         ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
+    grad_tensor.emplace_back(std::move(grad_b));
     return grad_tensor;
 }
 
@@ -41,11 +42,18 @@ std::vector<Tensor> addcdiv_bw(
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(3);
+    // grad is passed through unchanged, so output[0] keeps grad's memory config rather
+    // than output_mem_config. Intentional: no eltwise backward op relocates the
+    // passthrough gradient. See #53874.
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config),
+        ttnn::reciprocal(tensor2, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
         ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
@@ -79,13 +87,14 @@ std::vector<std::optional<Tensor>> where_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result;
+    result.reserve(2);
     if (are_required_outputs.at(0)) {
         if (input_grad.has_value()) {
             ttnn::where(condition, grad, 0.0f, output_mem_config, input_grad);
         } else {
             input_grad = ttnn::where(condition, grad, 0.0f, output_mem_config);
         }
-        result.emplace_back(input_grad);
+        result.emplace_back(std::move(input_grad));
     } else {
         result.emplace_back(std::nullopt);
     }
@@ -95,7 +104,7 @@ std::vector<std::optional<Tensor>> where_bw(
         } else {
             other_grad = ttnn::where(condition, 0.0f, grad, output_mem_config);
         }
-        result.emplace_back(other_grad);
+        result.emplace_back(std::move(other_grad));
     } else {
         result.emplace_back(std::nullopt);
     }
@@ -110,14 +119,15 @@ std::vector<Tensor> lerp_bw(
     const Tensor& weight,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(3);
     Tensor result_1 = ttnn::multiply(
         grad, ttnn::rsub(weight, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_1);
+    grad_tensor.emplace_back(std::move(result_1));
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_2);
+    grad_tensor.emplace_back(std::move(result_2));
     Tensor zero = ttnn::multiply(
         grad, ttnn::subtract(end, input, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero);
+    grad_tensor.emplace_back(std::move(zero));
     return grad_tensor;
 }
 

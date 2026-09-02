@@ -8,6 +8,7 @@
 #include <string_view>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -93,6 +94,23 @@ private:
 
 // Use ASICPosition type alias for consistency with TopologyMapper
 using AsicPosition = tt::tt_metal::ASICPosition;
+
+// A many-to-many ASIC pinning group parsed from a single AsicPinning entry in the MGD. Any of
+// `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
+// bijection, so distinct nodes land on distinct ASICs. A group with a single node and a single position is
+// the classic one-to-one pin. The same shape is used as TopologyMappingConfig::PinningConstraint.
+struct AsicPinningGroup {
+    std::vector<FabricNodeId> fabric_nodes;
+    std::vector<AsicPosition> asic_positions;
+
+    bool operator==(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions;
+    }
+    bool operator<(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes ? asic_positions < other.asic_positions
+                                                  : fabric_nodes < other.fabric_nodes;
+    }
+};
 
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
@@ -215,8 +233,12 @@ public:
 
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
+    static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
+    // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section, keyed by local
+    // mesh id. Each entry may bind multiple logical fabric nodes to multiple physical ASIC positions
+    // (all-to-all). Groups are split by mesh at construction (regex and literal entries).
+    const std::map<MeshId, std::vector<AsicPinningGroup>>& get_pinnings() const { return pinnings_; }
 
 private:
     // Descriptor fast lookup
@@ -240,10 +262,12 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
+    // Must use owning std::string keys: keys were previously string_views into InstanceData::type, which broke
+    // move/copy (e.g. std::vector<MeshGraphDescriptor>::emplace_back / reallocation) by leaving dangling views.
+    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
-    std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+    std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(

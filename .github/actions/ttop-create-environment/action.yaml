@@ -26,10 +26,6 @@ inputs:
     description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
     required: false
     default: 'false'
-  timeout:
-    description: 'Timeout duration'
-    required: false
-    default: '5m'
   namespace:
     description: 'Target namespace for the environment'
     required: false
@@ -42,6 +38,14 @@ inputs:
     description: 'Path to dump configs'
     required: false
     default: '/etc/ttop'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying before failing.'
+    required: false
+    default: '300'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
 
 runs:
   using: 'composite'
@@ -108,12 +112,20 @@ runs:
 
     - name: Wait for environment
       shell: bash
-      run: |
-        echo "Waiting for environment to be ready..."
-        kubectl --token ${{ steps.token.outputs.idToken }} -n${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: helmrelease/${{ inputs.environmentName }}
+        MODE: poll
+        JSONPATH: '{.status.conditions[?(@.type=="Ready")].status}'
+        EXPECTED: 'True'
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"
 
     - name: Connect to the environment
       shell: bash
       run: |
         echo "Connecting to environment..."
-        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | .github/scripts/environment-ssh-setup.sh
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        kubectl --token "$IDTOKEN" -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | "$GITHUB_ACTION_PATH/../../scripts/environment-ssh-setup.sh"

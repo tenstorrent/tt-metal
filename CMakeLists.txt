@@ -36,6 +36,8 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+GenerateVersionHeader()
+AddVersionHeaderTarget()
 
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
@@ -196,8 +198,10 @@ if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
     set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 endif()
 
+set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
+
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
@@ -256,6 +260,18 @@ if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 
+# Descriptor cache-hit fast-path parity check: on every fast-path hit, rebuild the descriptor and
+# assert the patched runtime args + CB addresses match a full rebuild. A debug/CI regression net for
+# incomplete in-place re-application (SDXL silu / MorehAdamW). OFF by default (per-hit rebuild cost).
+# The check is compiled only in ttnn (mesh_device_operation_adapter.hpp), so the
+# TT_DESCRIPTOR_PATCHING_PARITY_CHECK definition is scoped to the ttnn target in ttnn/CMakeLists.txt
+# rather than applied globally.
+option(
+    ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    "Assert descriptor cache-hit fast-path parity against a full rebuild (debug/CI)."
+    OFF
+)
+
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
@@ -285,8 +301,8 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(metal_common_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_common_pch)
 endif()
 
 ############################################################################################################################

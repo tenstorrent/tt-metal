@@ -51,8 +51,14 @@ permissions:
   pull-requests: write
   checks: write
   packages: write
+  # The producer downloads the artifact via REST; a called workflow only downgrades.
+  actions: read
 
 jobs:
+  # ===========================================================================
+  # Infrastructure (shared builds / images / change detection)
+  # ===========================================================================
+
   static-checks:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
@@ -83,10 +89,9 @@ jobs:
     with:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
-
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -99,6 +104,8 @@ jobs:
       llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
       llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
       llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
+      llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
+      llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
@@ -130,10 +137,13 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
-      build-wheel: true
+      build-inplace-wheel: true
       platform: "Ubuntu 22.04"
       enable-lto: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
@@ -142,6 +152,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -162,6 +173,9 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
@@ -170,6 +184,39 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
+
+  build-asan:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: [find-changes, docker-images, check-harbor]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ASan
+      platform: "Ubuntu 24.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      skip-tt-train: false
+      publish-artifact: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      fetch-depth: 1
+      checkout-filter: tree:0
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
@@ -193,121 +240,223 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
       fetch-depth: 1
 
-  resolve-docker-pull-refs-tsan:
-    needs: [check-harbor, build-tsan]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
-
-  metalium-smoke-tests:
-    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
-      product: tt-metalium
-      enable-kernel-ccache: true
-
-  ttnn-smoke-tests:
-    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
-      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
-      product: tt-nn
-      enable-kernel-ccache: true
-
-  build-asan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
-    needs: [find-changes, docker-images, check-harbor]
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: ASan
-      platform: "Ubuntu 24.04"
-      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-      skip-tt-train: false
-      publish-artifact: false
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
-      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
-      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
-      fetch-depth: 1
-
-  resolve-docker-pull-refs-asan:
-    needs: [check-harbor, build-asan]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
-
-  metalium-basic-tests:
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
-    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
-      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11
-      product: tt-metalium
-
-  ttnn-basic-tests:
-    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
-      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11
-      product: tt-nn
-
   resolve-docker-pull-refs:
     needs: [check-harbor, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       dev-docker-image: ${{ needs.build.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
       ci-test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+
+  resolve-docker-pull-refs-tsan:
+    needs: [check-harbor, build-tsan]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+
+  resolve-docker-pull-refs-asan:
+    needs: [check-harbor, build-asan]
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+
+  # ===========================================================================
+  # Team: runtime
+  # test list: runtime_validation_merge_gate_tests.yaml,
+  #            runtime_validation_basic_tests.yaml
+  # ===========================================================================
+
+  build-runtime-smoke-image:
+    needs: [find-changes, docker-images, build-tsan]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-smoke-tests:
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-runtime-smoke-image]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        ) }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      # Empty on forks or a failed build, where smoke falls back to the artifact.
+      prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
+      # Canonical (non-Harbor-prefixed) ref for the github_hosted_cpu leg, which runs
+      # on GitHub-hosted runners without Harbor access.
+      cpu-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
+      product: tt-metalium
+      enable-kernel-ccache: true
+
+  build-runtime-basic-image:
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changes.outputs.cmake-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    needs: [build-asan, docker-images, find-changes]
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-basic-tests:
+    # Not !failure(): a failed image build must still let basic use the artifact.
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changes.outputs.cmake-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-runtime-basic-image]
+    uses: ./.github/workflows/basic.yaml
+    with:
+      # Empty on forks or a failed build; basic then uses the artifact.
+      prebuilt-image: ${{ needs.build-runtime-basic-image.outputs.image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
+      product: tt-metalium
+
+  # ===========================================================================
+  # Team: triage
+  # test list: triage_merge_gate_tests.yaml
+  # ===========================================================================
+
+  triage-tests:
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.resolve-docker-pull-refs.result == 'success' && needs.find-changes.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/triage-tests-impl.yaml
+    with:
+      test-category: merge_gate
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15
+
+  # ===========================================================================
+  # Team: ttnn
+  # test list: ttnn_validation_merge_gate_tests.yaml,
+  #            ttnn_validation_basic_tests.yaml,
+  #            ttnn_merge_gate_tests.yaml
+  # ===========================================================================
+
+  build-ttnn-smoke-image:
+    needs: [find-changes, docker-images, build-tsan]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-smoke-tests:
+    needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor, docker-images, build-ttnn-smoke-image]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        ) }}
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      # Empty on forks or a failed build, where smoke falls back to the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
+      product: tt-nn
+      enable-kernel-ccache: true
+
+  build-ttnn-basic-image:
+    needs: [build-asan, docker-images, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-basic-tests:
+    needs: [build-asan, resolve-docker-pull-refs-asan, find-changes, check-harbor, docker-images, build-ttnn-basic-image]
+    # Not !failure(): a failed image build must still let basic use the artifact.
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' && (github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+        }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      # Empty on forks or a failed build; basic then uses the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-basic-image.outputs.image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
+      product: tt-nn
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
@@ -322,6 +471,12 @@ jobs:
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
+
+  # ===========================================================================
+  # Team: models
+  # test list: models_merge_gate_tests.yaml (currently empty)
+  # ===========================================================================
 
   models-smoke-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
@@ -334,13 +489,19 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/models-smoke-tests-impl.yaml
     with:
-      enabled-skus: wh_galaxy_merge_gate
+      enabled-skus: ALL_SKUS_IN_TESTS
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
-  tt-train-smoke-tests:
+  # ===========================================================================
+  # Team: train
+  # test list: train_merge_gate_tests.yaml
+  # ===========================================================================
+
+  train-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ github.event_name == 'workflow_dispatch' ||
             github.ref_name == 'main' ||
@@ -353,11 +514,18 @@ jobs:
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: merge_gate
-      enabled-skus: "wh_n150_civ2"
+      enabled-skus: ALL_SKUS_IN_TESTS
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      per-test-timeout: 15
 
-  fabric-unit-tests:
+  # ===========================================================================
+  # Team: scaleout (fabric)
+  # test list: fabric_merge_gate_tests.yaml,
+  #            fabric_cpu_only_smoke_merge_gate_tests.yaml
+  # ===========================================================================
+
+  scaleout-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
@@ -372,12 +540,13 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
   # Fabric CPU-only tests removed from merge gate — https://github.com/tenstorrent/tt-metal/pull/47987
   # Scaffolding kept for a future smoke subset (fabric_cpu_only_smoke_merge_gate_tests.yaml).
   # When re-enabling: uncomment tests in that yaml, replace `if: false` with a real trigger,
-  # and add fabric-cpu-only-unit-tests back to workflow-status needs + optional-jobs below.
-  fabric-cpu-only-unit-tests:
+  # and add scaleout-cpu-only-unit-tests back to workflow-status needs + optional-jobs below.
+  scaleout-cpu-only-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: false
     secrets: inherit
@@ -385,25 +554,48 @@ jobs:
     with:
       tests-yaml-path: ./tests/pipeline_reorg/fabric_cpu_only_smoke_merge_gate_tests.yaml
       test-category: smoke
-      runs-on-sku: ${{ github.event_name == 'merge_group' && 'cpu_medium_prio' || 'cpu_medium' }}
+      runs-on-sku: cpu_medium
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
-  triage-tests:
-    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    secrets: inherit
-    uses: ./.github/workflows/triage-tests-impl.yaml
-    with:
-      test-category: merge_gate
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
+  # ===========================================================================
+  # Team: llk
+  # test list: llk_merge_gate_tests.yaml
+  # ===========================================================================
 
   # Merge-gate LLK gtest matrix (tests/pipeline_reorg/llk_merge_gate_tests.yaml).
-  # SKU coverage is narrowed below based on find-changes outputs. L2 nightly uses
-  # tests/pipeline_reorg/llk_unit_tests.yaml.
+  # SKU coverage is narrowed via sku-allowlist from find-changes. L2 nightly uses
+  # tests/pipeline_reorg/llk_unit_tests.yaml. merge_group prio routing is via
+  # prepare_test_matrix --event + sku_config merge_queue_sku.
+  resolve-docker-pull-refs-llk:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    needs: [check-harbor, docker-images]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      llk-ci-docker-image: ${{ needs.docker-images.outputs.llk-ci-tag }}
+
+  llk-build-quasar-perf:
+    name: Build Quasar Perf
+    needs: [docker-images, resolve-docker-pull-refs-llk, find-changes]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changes.outputs.llk-common-changed == 'true' ||
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
+      }}
+    uses: ./.github/workflows/build-quasar-perf.yml
+    with:
+      docker_image: ${{ needs.resolve-docker-pull-refs-llk.outputs.llk-ci-docker-image }}
+      runs_on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      timeout_minutes: 15
+
   llk-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes]
     if: ${{
@@ -423,10 +615,10 @@ jobs:
       test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      # Prio runner pool is reserved for merge-queue traffic; any other trigger
-      # (pull_request, push, etc.) routes blackhole jobs to the non-prio viommu
-      # variant so PR runs don't starve the merge-group queue.
-      enabled-skus: ${{
+      per-test-timeout: 15
+      enabled-skus: ALL_SKUS_IN_TESTS
+      # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
+      sku-allowlist: ${{
           (github.ref_name == 'main'
            || needs.find-changes.outputs.llk-common-changed == 'true'
            || needs.find-changes.outputs.llk-sfpi-changed == 'true'
@@ -434,10 +626,24 @@ jobs:
            || needs.find-changes.outputs.llk-ci-changed == 'true'
            || (needs.find-changes.outputs.llk-wormhole-changed == 'true'
                && needs.find-changes.outputs.llk-blackhole-changed == 'true'))
-          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu')
+          && '*'
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2_viommu'))
+          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
+
+  # ===========================================================================
+  # Team: shield
+  # No merge-gate jobs yet.
+  # ===========================================================================
+
+  # ===========================================================================
+  # Team: blaze
+  # No merge-gate jobs yet.
+  # ===========================================================================
+
+  # ===========================================================================
+  # Status
+  # ===========================================================================
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -452,14 +658,15 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests]
-    runs-on: ubuntu-latest
+
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests]
+    runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

@@ -473,3 +473,58 @@ def test_unary_rm_block_shard(device, torch_dtype, ttnn_dtype):
 
     ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
     assert torch.equal(ttnn_output, torch_output)
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _assert_unary_shrink_h_or_w(device, result_mc, n_used):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= n_used:
+        pytest.skip(f"Device grid too small to observe shrink (need > {n_used} cores)")
+    grid = result_mc.shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(n_used, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+
+
+def test_unary_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: shape=(2,2,32,64) TILE → tensor_h=128, shard_h=32 → 4 populated cores."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.abs(ttnn_in, memory_config=out_mc)
+    _assert_unary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert torch.equal(ttnn.to_torch(result), torch.abs(x))
+
+
+def test_unary_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: shape=(1,1,32,128) TILE → tensor_w=128, shard_w=32 → 4 populated cores."""
+    shape = (1, 1, 32, 128)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.abs(ttnn_in, memory_config=out_mc)
+    _assert_unary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert torch.equal(ttnn.to_torch(result), torch.abs(x))
+
+
+def test_unary_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: 64x64 TILE → 2x2 rectangle = 4 cores."""
+    shape = (1, 1, 64, 64)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 2x2 BLOCK shrink test")
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.abs(ttnn_in, memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 4, f"Expected 2x2 = 4 populated cores, got {grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
+    assert torch.equal(ttnn.to_torch(result), torch.abs(x))

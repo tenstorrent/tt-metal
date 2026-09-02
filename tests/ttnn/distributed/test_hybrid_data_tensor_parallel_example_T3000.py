@@ -27,16 +27,12 @@ class TtFalconMLP:
         ff1_linear: ttnn.Tensor = ttnn.linear(x, self.dense_h_to_4h_weights)
         gelu = ttnn.gelu(ff1_linear)
 
-        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
-        # Effectively invokes CCL Line All Gather for every row of the mesh
-        # gelu = ttnn.all_gather(
-        #     gelu,
-        #     dim=-1,
-        #     num_links=1,
-        #     cluster_axis=CLUSTER_AXIS_X,
-        #     mesh_device=self.mesh_device,
-        #     topology=ttnn.Topology.Linear,
-        # )
+        # Effectively invokes CCL Line All Gather for every row of the mesh.
+        gelu = ttnn.all_gather(
+            gelu,
+            dim=-1,
+            cluster_axis=CLUSTER_AXIS_X,
+        )
 
         ff2_linear: ttnn.Tensor = ttnn.linear(gelu, self.dense_4h_to_h_weights)
 
@@ -44,13 +40,11 @@ class TtFalconMLP:
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-def test_tensor_parallel_falcon_mlp():
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_tensor_parallel_falcon_mlp(mesh_device):
     if ttnn.get_num_devices() < 8:
         pytest.skip()
-
-    mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(2, 4),
-    )
 
     # Set PyTorch seed for reproducibility
     torch.manual_seed(0)

@@ -11,7 +11,7 @@ on:
 jobs:
   remove-stale-branches:
     if: github.repository == 'tenstorrent/tt-metal'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: fpicalausa/remove-stale-branches@68ab5e762e74b8c055007c62e5e85afdf0ec54be
         with:

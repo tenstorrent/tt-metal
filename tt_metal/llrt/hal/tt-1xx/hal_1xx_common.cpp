@@ -11,6 +11,9 @@ namespace tt::tt_metal::hal_1xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
+    // Upper bound: PROCESSOR_INDEX, ENABLE_L1_DATA_CACHE, at most 4 from the core type switch
+    // (ACTIVE_ETH), and PROGRAMMABLE_CORE_TYPE.
+    defines.reserve(7);
     const auto& l1_cache_enable_processors =
         params.rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
     auto processor_index = hal_.get_processor_index(params.core_type, params.processor_class, params.processor_id);
@@ -66,12 +69,10 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             break;
     }
 
-    // Defines for the shared subordinate eth fw source
-    if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
-        params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-        defines.push_back(fmt::format(
-            "PROGRAMMABLE_CORE_TYPE={} ", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
-    }
+    // Index into kernel_config_base[] / mailboxes for the core type of this build.
+    defines.push_back(fmt::format(
+        "PROGRAMMABLE_CORE_TYPE={}",
+        static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
 
     return defines;
 }

@@ -41,7 +41,12 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Architecture, instruction, or LLK questions | `arch-lookup` (`.claude/skills/arch-lookup/SKILL.md`) | Orchestrates sage agents in parallel, aggregates results |
 | Running tests | `run-test` (`.claude/skills/run-test/SKILL.md`) | Dispatches llk-test-runner with correct scenario flags |
 | Debugging kernel errors | `debug-kernel` (`.claude/skills/debug-kernel/SKILL.md`) | Dispatches llk-debugger with inferred arch/kernel type |
+| Inspecting VCS/FSDB waves for a Quasar runtime failure | `llk-wave-debug` (`.claude/skills/llk-wave-debug/SKILL.md`) | Runs deterministic private waveform diagnosis and reports evidence (Quasar only) |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
+| Creating or repairing Quasar perf tests | `quasar-perf-test` (`.claude/skills/quasar-perf-test/SKILL.md`) | Reuses correctness tests, wires `PerfConfig`, implements `PerfRunType` paths, and selects tile/dimension coverage via `PERF_TILE_SIZES` |
+| Generating or refreshing a performance report | `perf-report` (`.claude/skills/perf-report/SKILL.md`) | Runs the producer/consumer perf sweep, combines `perf_data` CSVs, and validates schema, coverage, and metric plausibility |
+| Analyzing performance-report CSV parameter impact | `perf-parameter-impact` (`.claude/skills/perf-parameter-impact/SKILL.md`) | Builds paired, bottleneck-aware Canvas reports for formats, fidelity, dimensions, accumulation, indexing, and related parameters |
+| TensorShape / tile-size API conversion or coverage | `tensor-shape` (`.claude/skills/tensor-shape/SKILL.md`) | Plumbs `TensorShape` through lib/API, TRISC coverage, review checklist |
 
 Trigger examples for `arch-lookup`:
 - "How does SFPMAD work?", "What is BroadcastType?", "How does unpack handle Float16?"

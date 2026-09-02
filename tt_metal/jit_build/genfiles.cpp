@@ -14,6 +14,9 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+// Blaze-only experimental named args (removal tracked by issue #50953): <map>/<set> below
+#include <map>
+#include <set>
 #include <iostream>
 #include <ostream>
 #include <fstream>
@@ -23,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -38,6 +42,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
@@ -63,13 +68,21 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 // Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
-string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named blaze_ct_args::/blaze_rt_args:: header — presence-gated, NOT is_metal2-gated.
+    if (has_blaze_experimental_ct_args) {
+        prolog << "#include \"named_args_generated.h\"\n";
+    }
+    ////////////////////////////////////////////////////////////
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
@@ -87,6 +100,29 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
+// of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
+// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// Returns true if a header was written.
+//
+// Written here rather than in the build step so it lands in the kernel's generated-files directory
+// alongside the other generated headers, which is what the remote JIT path uploads to the compile
+// server (Program's read_directory_files) and what preprocess-and-ship inlines into the .ii. Every
+// caller of jit_build_genfiles_* runs it immediately before jit_build(), so the file is in place for
+// the local compile too.
+bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings& settings) {
+    std::unordered_map<std::string, uint32_t> named_args;
+    settings.process_named_compile_time_args(
+        [&named_args](const std::unordered_map<std::string, uint32_t>& args) { named_args = args; });
+    if (named_args.empty()) {
+        return false;
+    }
+    write_file(
+        out_dir + string(jit_build::utils::NAMED_CT_ARG_MAP_HEADER),
+        jit_build::utils::format_named_ct_arg_map_header(named_args));
+    return true;
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -97,14 +133,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint16_t>> dfb_entries;
-    settings.process_dataflow_buffer_local_accessor_handles(
+    settings.process_dataflow_buffer_binding_handles(
         [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
     vector<pair<string, uint16_t>> sem_entries;
-    settings.process_semaphore_local_accessor_handles(
+    settings.process_semaphore_binding_handles(
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
@@ -136,26 +172,40 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+    struct TensorBindingSequenceEntry {
+        string name;
+        vector<string> members;
+    };
+    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences(
+        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
+            tensor_binding_sequence_entries.push_back({name, members});
+        });
+
     // Emit the header content:
-    //  - DFB accessors are emitted into the dfb namespace
-    //  - Semaphore accessors are emitted into the sem namespace
+    //  - DFB binding tokens are emitted into the dfb namespace
+    //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
+    //    the kernel constructs a Semaphore straight from the bare id)
     //  - TensorBindings are emitted into the tensor namespace
+    //  - Scratchpad binding tokens are emitted into the scratch namespace
     //
-    // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB tokens and semaphore ids are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
-    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
+    //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
-    //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
+    //       TensorBindings are the first binding category to use implicit CRTAs (for the tensor base address).
     //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
     //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
     //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
+        tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -169,9 +219,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
         }
+        if (!tensor_binding_sequence_entries.empty()) {
+            content << "#include <tuple>\n";
+        }
         if (!scratch_entries.empty()) {
-            // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadAccessor binding type.
+            // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
+            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
             content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
@@ -179,7 +232,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
             for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBAccessor " << name << "{" << id << "};\n";
+                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
             }
             content << "}  // namespace dfb\n";
         }
@@ -192,7 +245,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty()) {
+        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -200,25 +253,31 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
+            //
+            // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
+            for (const auto& sequence : tensor_binding_sequence_entries) {
+                content << fmt::format(
+                    "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
+            }
             content << "}  // namespace tensor\n";
         }
 
         if (!scratch_entries.empty()) {
-            // ScratchpadAccessor scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+            // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
             // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
             // and the scratchpad's compile-time per-node size.
-            // The kernel-side Scratchpad(accessor) constructor unpacks both.
-            // The accessor's members are opaque, so the framework can extend it later without touching
+            // The kernel-side Scratchpad(token) constructor unpacks both.
+            // The token's members are opaque, so the framework can extend it later without touching
             // kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "
+                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                         << entry.size_bytes << "u};\n";
             }
             content << "}  // namespace scratch\n";
@@ -261,10 +320,17 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
+    // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
+    const uint32_t cta_vararg_size = settings.get_compile_time_vararg_count();
+
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
-               "#include \"experimental/kernel_args.h\"\n\n";
+               "#include <array>\n"
+               "#include \"experimental/kernel_args.h\"\n"
+               "#include \"api/compile_time_args.h\"\n"
+               "#include \"api/debug/assert.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
@@ -298,7 +364,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         content << "}  // namespace args\n\n";
     }
 
-    // Vararg helpers — always emitted.
+    // Runtime / common-runtime vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
@@ -310,6 +376,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+
+    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
+    // Three accessors:
+    //   1. get_num_compile_time_varargs() — baked prefix length
+    //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
+    content << fmt::format(
+        R"(
+FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
+    return {0}u;
+}}
+template <uint32_t idx>
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
+    static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
+    return kernel_compile_time_args[idx];
+}}
+// Called when an OOB access to vararg CTA is attempted. Meant to trigger the assertion
+// failure as an indirection: the ASSERT macro may expand to inline asm, which cannot be
+// present in a C++17 constexpr function. This is a workaround and can be inlined once we
+// migrate to C++20.
+inline void assert_compile_time_vararg_index_out_of_range() {{
+    ASSERT(false);  // Attempt to access out of bound vararg CTA.
+}}
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
+    if (idx >= get_num_compile_time_varargs()) {{
+        assert_compile_time_vararg_index_out_of_range();
+    }}
+    return kernel_compile_time_args[idx];
+}}
+)",
+        cta_vararg_size);
 
     write_file(path, content.str());
 }
@@ -350,6 +447,7 @@ std::string generate_tt_kernel_shim_if_present(
     // a silently-unused arg (registered name the kernel never takes).
     std::vector<std::string> cta_names;
     settings.process_named_compile_time_args([&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+        cta_names.reserve(cta_names.size() + named.size());
         for (const auto& entry : named) {
             cta_names.push_back(entry.first);
         }
@@ -358,6 +456,88 @@ std::string generate_tt_kernel_shim_if_present(
         *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
     return generate_kernel_main_shim(*sig);
 }
+
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+// Blaze EXPERIMENTAL named args (NOT Metal 2.0):
+// Emits named_args_generated.h with a single blaze_ct_args:: namespace. Each prefix becomes a
+// struct containing both CT values (uint32_t) and RT arg descriptors (blaze_rt_args::Arg /
+// blaze_rt_args::ArrayArg). Gated on named-arg PRESENCE, NOT on is_metal2_kernel(): named_*_namespaces_
+// are set via setters (program.cpp) independent of the Metal 2.0 fence.
+// Returns true if a header was written (i.e. the kernel has named args), so callers can
+// decide whether to add the #include.
+bool write_named_args_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    // Accumulate RT entries per namespace.
+    std::map<std::string, std::vector<NamedRuntimeArgEntry>> rt_by_ns;
+    settings.process_named_runtime_args([&rt_by_ns](const NamedRuntimeArgNamespaces& namespaces) {
+        for (const auto& [ns, entries] : namespaces) {
+            rt_by_ns[ns].insert(rt_by_ns[ns].end(), entries.begin(), entries.end());
+        }
+    });
+
+    // Accumulate CT entries per namespace.
+    std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> ct_by_ns;
+    settings.process_named_ct_arg_namespaces([&ct_by_ns](const NamedCTArgNamespaces& namespaces) {
+        for (const auto& [ns, entries] : namespaces) {
+            ct_by_ns[ns].insert(ct_by_ns[ns].end(), entries.begin(), entries.end());
+        }
+    });
+
+    // Collect all non-empty namespaces from both CT and RT maps.
+    std::set<std::string> all_ns;
+    for (const auto& [ns, _] : ct_by_ns) {
+        all_ns.insert(ns);
+    }
+    for (const auto& [ns, _] : rt_by_ns) {
+        if (!ns.empty()) {
+            all_ns.insert(ns);
+        }
+    }
+
+    // Emit one struct per namespace containing both CT fields and RT descriptors.
+    std::ostringstream header_ct;
+    for (const auto& ns : all_ns) {
+        if (!ns.empty()) {
+            header_ct << "struct " << ns << " {\n";
+        }
+        // CT fields
+        if (auto it = ct_by_ns.find(ns); it != ct_by_ns.end()) {
+            for (const auto& [field, value] : it->second) {
+                header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
+            }
+        }
+        // RT descriptors
+        if (auto it = rt_by_ns.find(ns); it != rt_by_ns.end()) {
+            for (const auto& entry : it->second) {
+                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                               ? "blaze_rt_args::Dispatch::COMMON"
+                                               : "blaze_rt_args::Dispatch::PER_CORE";
+                if (entry.length > 1) {
+                    header_ct << "    static constexpr blaze_rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                              << ", " << entry.length << ", " << dispatch_str << "};\n";
+                } else {
+                    header_ct << "    static constexpr blaze_rt_args::Arg " << entry.field << " = {" << entry.index
+                              << ", " << dispatch_str << "};\n";
+                }
+            }
+        }
+        if (!ns.empty()) {
+            header_ct << "};\n";
+        }
+    }
+
+    auto ct_str = header_ct.str();
+    if (ct_str.empty()) {
+        return false;  // no named args, no header, no #include
+    }
+    std::ostringstream content;
+    content << "#pragma once\n#include \"experimental/blaze_rt_arg.h\"\n\n";
+    content << "namespace blaze_ct_args {\n" << ct_str << "}\n";
+    write_file(out_dir + "named_args_generated.h", content.str());
+    return true;
+}
+////////////////////////////////////////////////////////////
 
 }  // namespace
 
@@ -378,6 +558,17 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
+    // No #include line: this one is force-included by the compile recipe so the map is defined
+    // before any header that reads it (api/compile_time_args.h) can be pulled in.
+    write_named_ct_arg_map_header(out_dir, settings);
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named args — presence-gated, independent of is_metal2.
+    if (write_named_args_generated_header(out_dir, settings)) {
+        kernel_header_content += "#include \"named_args_generated.h\"\n";
+    }
+    ////////////////////////////////////////////////////////////
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
@@ -402,17 +593,28 @@ void jit_build_genfiles_triscs_src(
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
+    // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead
+    // of any header that reads it (api/compile_time_args.h).
+    write_named_ct_arg_map_header(out_dir, settings);
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Blaze EXPERIMENTAL named args — emitted once per kernel here (was build.cpp per-source loop).
+    const bool has_blaze_experimental_ct_args = write_named_args_generated_header(out_dir, settings);
+    ////////////////////////////////////////////////////////////
 
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
     const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
 
-    // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
-    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
+    // Build prologs for each TRISC.
+    // Blaze: the 3rd arg (has_blaze_experimental_ct_args) gates the experimental named_args_generated.h include.
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2, has_blaze_experimental_ct_args);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2, has_blaze_experimental_ct_args);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2, has_blaze_experimental_ct_args);
+    const string isolate_sfpu_prolog =
+        build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2, has_blaze_experimental_ct_args);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
@@ -496,7 +698,6 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
@@ -505,8 +706,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         std::move(unpack_to_dest_mode),
-        /*int_fpu_en=*/false,
-        enable_2x_src_format);
+        /*int_fpu_en=*/false);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -640,7 +840,6 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         unpack_conditional_dst_format,
         options.fp32_dest_acc_en,
         options.unpack_to_dest_mode,
-        options.enable_2x_src_format,
         max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
@@ -762,13 +961,13 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
-    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
-    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
-    // for them doing so would redefine their constexpr.
+    // (Quasar only) Kernel-wide unpack-to-dest sync selector. Derived from the per-DFB
+    // unpack_to_dest_mode vector: true iff any operand routes to Dest. Keeps unpack_modes the single source of truth.
     if (arch == tt::ARCH::QUASAR) {
         fmt::format_to(
-            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
+            std::ostreambuf_iterator<char>(out),
+            "constexpr bool UnpackToDestEn = {};\n",
+            tt::any_unpack_to_dest(options.unpack_to_dest_mode));
     }
 }
 
@@ -815,7 +1014,6 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
-    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack
@@ -835,9 +1033,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    //ZoneScoped;
-    //const std::string tracyPrefix = "generate_descriptors_";
-    //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    TTZoneScopedDN(JIT, "generate_descriptors");
+    TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }

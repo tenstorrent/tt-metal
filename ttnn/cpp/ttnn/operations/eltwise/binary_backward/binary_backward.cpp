@@ -52,6 +52,7 @@ std::vector<Tensor> _min_or_max_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(2);
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5f, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
@@ -70,12 +71,12 @@ std::vector<Tensor> _min_or_max_bw(
 
     if (min_or_max) {
         // MAX
-        grad_tensor.emplace_back(grad_other);
-        grad_tensor.emplace_back(grad_input);
+        grad_tensor.emplace_back(std::move(grad_other));
+        grad_tensor.emplace_back(std::move(grad_input));
     } else {
         // MIN
-        grad_tensor.emplace_back(grad_input);
-        grad_tensor.emplace_back(grad_other);
+        grad_tensor.emplace_back(std::move(grad_input));
+        grad_tensor.emplace_back(std::move(grad_other));
     }
     return grad_tensor;
 }

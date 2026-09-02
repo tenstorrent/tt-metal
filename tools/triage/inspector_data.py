@@ -23,8 +23,9 @@ Owner:
     tt-vjovanovic
 """
 
-from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
+from triage import triage_singleton, ScriptConfig, TTTriageError, run_script
 from parse_inspector_logs import get_log_directory
+from utils import resolve_mpi_rank
 import asyncio
 import atexit
 import capnp
@@ -180,13 +181,7 @@ def run(args, context) -> InspectorData:
 
     if not args["--inspector-disable-rank"]:
         # If MPI rank is available, add rank to the RPC host and port
-        try:
-            rank_env = os.environ.get("TT_RUN_RANK")
-            if rank_env is not None:
-                rank = int(rank_env)
-        except Exception as e:
-            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
-            pass
+        rank = resolve_mpi_rank()
 
     # First try to connect to Inspector RPC
     try:
@@ -214,7 +209,7 @@ def run(args, context) -> InspectorData:
     except:
         raise InspectorException(
             f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
-            "This usually means no Metal workload is currently running — there's nothing to triage.\n"
+            "This usually means no Metal workload is currently running - there's nothing to triage.\n"
             "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
             "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
         )

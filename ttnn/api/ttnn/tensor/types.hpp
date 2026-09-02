@@ -4,10 +4,18 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <variant>
+
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {
+
+using PadValue = std::variant<uint32_t, float>;
+
 enum class PyDType {
     FLOAT32,
     FLOAT64,
@@ -23,9 +31,6 @@ enum class PyDType {
     UINT64,
     BOOL
 };
-}
-
-namespace tt::tt_metal {
 
 // Specifies Tensor storage type.
 enum class StorageType {
@@ -44,4 +49,4 @@ using Array6D = std::array<uint32_t, 6>;
 using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

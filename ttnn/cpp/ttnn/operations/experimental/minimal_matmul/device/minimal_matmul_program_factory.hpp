@@ -21,6 +21,9 @@ struct MinimalMatmulProgramFactory {
         tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
+        // Fused concatenation: in0's K is sourced from input_tensor + optional_input_tensor (no
+        // materialized concat). When set, optional_input_tensor feeds the in3 address on re-runs.
+        bool two_input_split{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -46,7 +49,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler);
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
+    bool fuse_swiglu = false);
 
 // Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
 // Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
@@ -65,6 +69,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt);
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt,
+    bool fuse_swiglu = false,
+    // Fused concat (concat-free): when set, in0's K is sourced from input_tensor (prefix tiles) then
+    // optional_input_tensor (suffix tiles). The split point is input_tensor's own K width.
+    const std::optional<const Tensor>& optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

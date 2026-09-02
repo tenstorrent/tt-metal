@@ -1,18 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Model-agnostic utilities for the prefill runner.
-
-Only metal-native helpers live here — pure ttnn, no upward dependencies
-on blaze (`_migration`, `_mpi_test_helpers`) and no dependency on any specific
-model package. Migration-coupled diagnostics live in blaze at
-`disaggregation/migration/python/prefill_runner_util.py`.
-
-Per-model plumbing (which model to build, where its weights/config/trace live,
-how to allocate its KV cache, how to call chunked prefill) lives behind the
-PrefillModelAdapter (../adapter.py), NOT here. Model-specific KV diagnostics /
-PCC live in the model package's own runner_utils.
-"""
 
 import os
 from pathlib import Path
@@ -23,33 +11,28 @@ import ttnn
 
 
 def _create_fabric_router_config(max_payload_size):
-    """FabricRouterConfig with a custom max payload size. Inlined here (a 3-line
-    ttnn wrapper) so this common module needs no model-package import."""
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
 
 
-# ---------------------------------------------------------------------------
-# Device / H2D-service setup
-# ---------------------------------------------------------------------------
-def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
-    """Configure fabric and open the mesh device.
-
-    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
-    this: the D2D-socket pipeline needs 2D even at sp=8 because a MeshSocket routes
-    over 2D fabric, and set_fabric_config is one global config for the whole run.
-
-    `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
-    semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
+def open_mesh_device(
+    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
+) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
-    if fabric_mode == "2d":
-        fabric_config = ttnn.FabricConfig.FABRIC_2D
-    elif fabric_mode == "1d":
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_mode_map = {
+        "1d": ttnn.FabricConfig.FABRIC_1D,
+        "2d": ttnn.FabricConfig.FABRIC_2D,
+        "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
+        "2d_torus_x": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        "2d_torus_y": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
+    if fabric_mode in fabric_mode_map:
+        fabric_config = fabric_mode_map[fabric_mode]
     elif fabric_mode:
-        raise ValueError(f"PREFILL_FABRIC_MODE must be '1d' or '2d', got {fabric_mode!r}")
+        raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
         fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
@@ -67,13 +50,12 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
+    )
 
 
 def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:
-    """Per-push input spec used by `build_h2d_service` to set the service's
-    global tensor shape (the producer matches it on the host side). One push carries one
-    chunk_size-token chunk. Shape `(sp_factor, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM."""
     sp_factor = mesh_shape[0]
     isl_per_chip = chunk_size // sp_factor
     return ttnn.TensorSpec(
@@ -93,32 +75,18 @@ def build_h2d_service(
     worker_cores: ttnn.CoreRange,
     metadata_size_bytes: int,
 ) -> ttnn.H2DStreamService:
-    """Construct an H2DStreamService whose per-shard backing tensor matches
-    what `prepare_prefill_input_tensor` would have produced. Each push carries one chunk_size-token
-    chunk (chunked prefill streams one chunk per push), not the full sequence.
-
-    Per-shard target: `(1, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM.
-    Achieved by setting global_spec.shape = `(sp_factor, 1, chunk_size // sp_factor)` and
-    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
-    tensor is sharded across mesh rows (sp), nothing else is split.
-    """
     sp_factor, tp_factor = mesh_shape
     assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
     isl_per_chip = chunk_size // sp_factor
-    per_chip_bytes = isl_per_chip * 4  # uint32
+    per_chip_bytes = isl_per_chip * 4
 
     global_spec = make_global_spec(mesh_shape, chunk_size)
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
-    # worker_cores set so the service-core kernel multicasts a data-ready inc
-    # after each transfer; inbound_socket_service_sync() waits on that on-device, which
-    # avoids the host-side barrier() round-trip per iteration.
-    # metadata_size_bytes set so the producer can ship per-iter control bytes
-    # (slot_id, actual_start, actual_end) inline with the token push.
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom (0 would auto-size)
-        max_socket_page_size_bytes=per_chip_bytes,  # cap socket page at one tensor page (0 = auto/coalesced)
+        fifo_size_bytes=8 * per_chip_bytes,
+        max_socket_page_size_bytes=per_chip_bytes,
         mapper=mapper,
         worker_cores=worker_cores,
         metadata_size_bytes=metadata_size_bytes,
@@ -131,9 +99,6 @@ def build_h2d_service(
 
 
 def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
-    """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
-    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
-    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
     return ttnn.TensorSpec(
         shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
         dtype=ttnn.bfloat16,
@@ -143,9 +108,6 @@ def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec
 
 
 def resolve_trace_dir(path) -> Path:
-    """Resolve a trace dir to the one holding metadata.json. vllm traces nest metadata.json + kv_cache
-    under a single run-hash subdir, so if `path` itself has no metadata.json, descend into the sole
-    subdir that does."""
     path = Path(path)
     if (path / "metadata.json").exists():
         return path
@@ -156,10 +118,66 @@ def resolve_trace_dir(path) -> Path:
 
 
 def load_trace_token_ids(trace_dir, total_len=None) -> list:
-    """Input token_ids from a resolved trace's metadata.json (optionally truncated to total_len)."""
     import json
 
     with open(Path(trace_dir) / "metadata.json") as f:
         md = json.load(f)
     tids = list(md["token_ids"])
     return tids[:total_len] if total_len is not None else tids
+
+
+def _snap_counts_to_starts(counts, valid_starts, num_layers):
+    valid = sorted(valid_starts)
+    boundaries, s = [], 0
+    for c in counts[:-1]:
+        s += c
+        boundaries.append(s)
+    snapped, prev = [], 0
+    for b in boundaries:
+        cand = min(
+            (v for v in valid if prev < v < num_layers and v not in snapped),
+            key=lambda v: (abs(v - b), v),
+            default=None,
+        )
+        if cand is None:
+            raise ValueError(f"cannot place {len(counts)} pipeline ranks on valid layer boundaries {valid}")
+        snapped.append(cand)
+        prev = cand
+    out, prev = [], 0
+    for b in [*snapped, num_layers]:
+        out.append(b - prev)
+        prev = b
+    return out
+
+
+def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
+    override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
+    if override:
+        counts = [int(x) for x in override.split(",")]
+        if len(counts) != num_ranks or sum(counts) != num_layers:
+            raise ValueError(
+                f"PREFILL_PP_LAYER_COUNTS={override!r} must list {num_ranks} counts summing to "
+                f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
+            )
+    else:
+        base, rem = divmod(num_layers, num_ranks)
+        counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        if valid_starts is not None:
+            counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
+
+    ranges = []
+    start = 0
+    for count in counts:
+        ranges.append((start, count))
+        start += count
+
+    if valid_starts is not None:
+        for first_idx, _ in ranges:
+            if first_idx not in valid_starts:
+                near = sorted(b for b in valid_starts if abs(b - first_idx) <= 4)
+                raise ValueError(
+                    f"pipeline rank starts at layer {first_idx}, not a valid boundary for this model "
+                    f"(nearest valid: {near}). Set PREFILL_PP_LAYER_COUNTS so every cumulative boundary "
+                    f"is a valid start."
+                )
+    return ranges

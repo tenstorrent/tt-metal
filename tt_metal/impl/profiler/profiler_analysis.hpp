@@ -33,7 +33,31 @@ inline const AnalysisRiscTypes AnalysisRiscTypesAny = {
     tracy::RiscType::TRISC_1,
     tracy::RiscType::TRISC_2,
     tracy::RiscType::ERISC,
-    tracy::RiscType::TENSIX_RISC_AGG};
+    tracy::RiscType::TENSIX_RISC_AGG,
+    tracy::RiscType::QUASAR_DM0,
+    tracy::RiscType::QUASAR_DM1,
+    tracy::RiscType::QUASAR_DM2,
+    tracy::RiscType::QUASAR_DM3,
+    tracy::RiscType::QUASAR_DM4,
+    tracy::RiscType::QUASAR_DM5,
+    tracy::RiscType::QUASAR_DM6,
+    tracy::RiscType::QUASAR_DM7,
+    tracy::RiscType::QUASAR_NEO0_TRISC0,
+    tracy::RiscType::QUASAR_NEO0_TRISC1,
+    tracy::RiscType::QUASAR_NEO0_TRISC2,
+    tracy::RiscType::QUASAR_NEO0_TRISC3,
+    tracy::RiscType::QUASAR_NEO1_TRISC0,
+    tracy::RiscType::QUASAR_NEO1_TRISC1,
+    tracy::RiscType::QUASAR_NEO1_TRISC2,
+    tracy::RiscType::QUASAR_NEO1_TRISC3,
+    tracy::RiscType::QUASAR_NEO2_TRISC0,
+    tracy::RiscType::QUASAR_NEO2_TRISC1,
+    tracy::RiscType::QUASAR_NEO2_TRISC2,
+    tracy::RiscType::QUASAR_NEO2_TRISC3,
+    tracy::RiscType::QUASAR_NEO3_TRISC0,
+    tracy::RiscType::QUASAR_NEO3_TRISC1,
+    tracy::RiscType::QUASAR_NEO3_TRISC2,
+    tracy::RiscType::QUASAR_NEO3_TRISC3};
 
 using AnalysisMarkerTypes = std::unordered_set<tracy::TTDeviceMarkerType>;
 inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {

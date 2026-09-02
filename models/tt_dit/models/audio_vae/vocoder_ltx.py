@@ -26,18 +26,20 @@ from ...layers.audio_ops import (
     _all_gather_t,
     _partition_t,
     _set_tpad_tail,
+    channel_factor,
     partition_channel,
 )
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils.tensor import local_device_to_torch
+from ...utils.tracing import traced_function
 
 
 class DilatedConv1d(_AlignedOutConv1d):
-    """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
-    ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
-    even) the base's ``eff_k // 2`` halo equals the symmetric ``same_pad``."""
+    """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP
+    block's even ``(k-1)*d``, the base's ``eff_k // 2`` halo equals the symmetric pad."""
 
     def __init__(
         self,
@@ -51,6 +53,7 @@ class DilatedConv1d(_AlignedOutConv1d):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -64,6 +67,7 @@ class DilatedConv1d(_AlignedOutConv1d):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            split_mode=split_mode,
         )
 
 
@@ -81,6 +85,7 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -102,6 +107,7 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
                 )
                 for i in range(self.num_branches)
             ]
@@ -118,12 +124,12 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
                 )
                 for i in range(self.num_branches)
             ]
         )
-        # alpha_logscale=True: the checkpoint stores log α / log β and
-        # Snake/SnakeBeta collapses it at load time.
+        # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
         self.acts1 = ModuleList(
             [
                 Activation1d(
@@ -163,9 +169,10 @@ class AMPBlock1(Module):
             ]
         )
 
-    def forward(self, x_BTC: ttnn.Tensor, set_tail=None) -> ttnn.Tensor:
-        # set_tail(xd, mode) materializes the tile-align pad image to each op's boundary when
-        # T-sharded (acts replicate the real boundary, convs zero it); identity when unsharded.
+    def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
+        # set_tail(xd, mode): materialize the tile-align pad image to an op's boundary when
+        # T-sharded (acts replicate, convs zero); identity when unsharded.
+        # x_rep: x_BTC pre-replicate-tailed by the caller and shared read-only for acts1[0].
         st = set_tail if set_tail is not None else (lambda xd, mode: xd)
 
         def _apply(op, x, mode):
@@ -176,7 +183,10 @@ class AMPBlock1(Module):
             return y
 
         for i in range(self.num_branches):
-            xt = _apply(self.acts1[i], x_BTC, "replicate")
+            if i == 0 and x_rep is not None:
+                xt = self.acts1[0](x_rep)
+            else:
+                xt = _apply(self.acts1[i], x_BTC, "replicate")
             nxt = _apply(self.convs1[i], xt, "zeros")
             ttnn.deallocate(xt)
             xt = _apply(self.acts2[i], nxt, "replicate")
@@ -218,6 +228,7 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
     ) -> None:
         super().__init__()
 
@@ -245,7 +256,21 @@ class Vocoder(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
+        self._t_pad = 0  # set per-input by _host_to_device
+        # Traced decode: _forward_device is @traced_function, keyed per input shape via
+        # tracer_trace_key. prep_run=False (capture never allocs), so lazy device state (snake α/β,
+        # CCL buffers, tpad-mask, zeros) must already be live and the allocator free-list stable —
+        # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
+        # deterministic state, so capture and replay share one free-list.
 
+        # conv_pre stays UNSHARDED under T-sharding: at (2048 -> 1024, k=7), the widest conv in the
+        # decode, the sharded path returns uninitialized memory (absmax 2.6e+11 vs a reference 1.391,
+        # -204 dB), which made every T-sharded decode wrong. A shape sweep found it the only one
+        # affected; `_partition_t` and `_t_neighbor_pad` were exact here. Replicating is near-free --
+        # conv_pre sees the 207-latent input, ~1/800th of the waveform -- so `_forward_device` runs it
+        # first and partitions T after. Not under channel-TP, where conv_pre's own
+        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
+        self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=upsample_initial_channel,
@@ -255,8 +280,9 @@ class Vocoder(Module):
             bias=True,
             mesh_device=mesh_device,
             dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
+            parallel_config=None if self._conv_pre_unsharded else parallel_config,
+            ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
+            split_mode=split_mode,
         )
 
         self.ups = ModuleList(
@@ -271,12 +297,13 @@ class Vocoder(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
                 )
                 for i in range(self.num_upsamples)
             ]
         )
 
-        # 3 x num_upsamples AMP blocks, row-major over (stage, branch).
+        # num_kernels x num_upsamples AMP blocks, row-major over (stage, branch).
         self.resblocks = ModuleList()
         for i in range(self.num_upsamples):
             ch = upsample_initial_channel // (2 ** (i + 1))
@@ -291,6 +318,7 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
+                        split_mode=split_mode,
                     )
                 )
 
@@ -322,9 +350,9 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # Final waveform has out_channels=2 — too small to channel-shard; keep
-            # the output full so the trailing all-gather is a no-op.
+            # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
+            split_mode=split_mode,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -334,48 +362,106 @@ class Vocoder(Module):
         """``mel_spec``: ``(B, 2, T_frames, mel_bins)`` stereo or
         ``(B, T_frames, mel_bins)`` mono → ``(B, out_channels, T_frames * prod(rates))``.
         """
+        x_dev = self._host_to_device(mel_spec)
+        y_dev = self._forward_device(x_dev)
+        return self._device_to_host(y_dev)
+
+    def forward_BCT(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """``(B, C, T)`` in, ``(B, out_channels, T * prod(rates))`` out.
+
+        The same device graph as :meth:`forward`, minus the mel-specific input reshape.
+        Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
+        """
+        return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
+
+    def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """:meth:`forward_BCT` with the device graph captured and replayed.
+
+        The channels-over-time counterpart of :meth:`forward_traced`, for MiniMax-H3's audio
+        decoder. Same argument for it: this vocoder is ~70 % host-bound, so removing per-op
+        dispatch is the dominant lever, and ``_forward_device`` is already a fixed-shape
+        device-in/device-out region for exactly this reason.
+        """
+        y_dev = self._forward_device(self._upload_BCT(x_BCT), traced=True, tracer_trace_key=tuple(x_BCT.shape))
+        return self._device_to_host(y_dev)
+
+    def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
+        """Like ``forward`` but captures and replays the device graph to remove per-op host
+        dispatch (the vocoder is ~70% host-bound). The first call at a shape captures on warm state
+        (the pipeline warms the decode eagerly at warmup); later calls copy the new mel into the
+        persistent buffer and replay. Requires a ``trace_region_size`` large enough for the traces.
+        """
+        y_dev = self._forward_device(
+            self._host_to_device(mel_spec), traced=True, tracer_trace_key=tuple(mel_spec.shape)
+        )
+        return self._device_to_host(y_dev)
+
+    def release_trace(self) -> None:
+        """Free all captured decode traces (call on shutdown or before re-warming)."""
+        for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()
+
+    def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
+        """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
+        ``forward`` so the device graph is trace-capturable; sets ``self._t_pad``."""
         x_t = mel_spec.transpose(2, 3) if mel_spec.dim() == 4 else mel_spec.transpose(1, 2).unsqueeze(1)
         if x_t.dim() == 4:
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
             B, S, F, T = x_t.shape
             x_t = x_t.reshape(B, S * F, T)
-        B, C, T = x_t.shape
+        return self._upload_BCT(x_t)
+
+    def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
+        """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
+
+        Split out of ``_host_to_device`` so a caller whose input is already ``(B, C, T)`` --
+        MiniMax-H3's audio decoder, whose ``dec_in_proj`` emits ``(B, 2048, T)`` rather than
+        a mel spectrogram -- can reuse the padding and upload without going through the
+        mel-specific reshape above. Sets ``self._t_pad``.
+        """
+        B, C, T = x_BCT.shape
         assert C == self.in_channels, f"expected {self.in_channels} input channels, got {C}"
 
-        x_BTC_torch = x_t.transpose(1, 2).float().contiguous()
+        x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        # Pad T to a multiple of (TILE_HEIGHT * factor) so mesh_partition produces
-        # tile-aligned per-chip shards. The extras propagate at upsampled length
-        # and get cropped from the final waveform.
+        # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;
+        # the extras propagate and get cropped from the final waveform.
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
-            tile_h = 32
-            align = tile_h * factor
+            # `factor` alone, not `32 * factor`: partitioning happens in ROW_MAJOR, which needs no
+            # tile-aligned split offset. See audio_ops.py's `_partition_t` header.
+            align = factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:
                 t_pad = align - rem
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
+        self._t_pad = t_pad
 
-        x_dev = ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
-        if sharded:
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+    @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
+    def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
+        """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
+        T-gather. Fixed-shape device in/out, so this region is trace-capturable."""
+        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
+        t_pad = self._t_pad
+        pre_unsharded = self._conv_pre_unsharded
 
-        # Channel-TP: split C across the channel axis up front so conv_pre's gather
-        # reconstructs full C_in. (Gathering a channel-replicated tensor would
-        # duplicate it.) conv_post leaves its output full, so no trailing gather.
+        if sharded and not pre_unsharded:
+            # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+
+        # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
+        # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
+        # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
         def _set_tail(xd, cumrate, mode):
-            # The tile-align pad image (t_pad*cumrate rows at the global tail) propagates as
-            # signal. Each non-causal op's kept-boundary output must see what unsharded sees:
-            # the gather-to-full upsamplers and zeros-pad convs want zeros, the replicate-pad
-            # activations want the real last row. Materialize the pad image to the op's own
-            # boundary right before it. No-op when unsharded (t_pad == 0).
+            # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
+            # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
+            # replicate-pad activations. No-op when unsharded (t_pad == 0).
             if t_pad == 0:
                 return xd
             return _set_tpad_tail(
@@ -388,7 +474,13 @@ class Vocoder(Module):
             )
 
         cumrate = 1
+        # Runs on the full replicated sequence -- see the constructor for why this one conv is not
+        # sharded. T is partitioned immediately afterwards, so everything downstream is sharded as
+        # before.
         x_dev = self.conv_pre(x_dev)
+
+        if sharded and pre_unsharded:
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
@@ -396,11 +488,14 @@ class Vocoder(Module):
             cumrate *= self.upsample_rates[i]
             stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
             start = i * self.num_kernels
-            # Mean over the num_kernels parallel AMP branches. Each block sets its own op
-            # boundaries (acts replicate, convs zeros) via stage_set_tail.
+            # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
+            # All blocks share the same replicate-tailed stage input; tail-set it once, read-only.
+            x_rep = stage_set_tail(x_dev, "replicate")
             for idx in range(start, start + self.num_kernels):
-                block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail))
+                block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail, x_rep=x_rep))
+            if x_rep is not x_dev:
+                ttnn.deallocate(x_rep)
             ttnn.deallocate(x_dev)
             acc = block_outputs[0]
             for k in range(1, self.num_kernels):
@@ -427,14 +522,18 @@ class Vocoder(Module):
             x_dev = _all_gather_t(self.ccl_manager, x_dev, self.parallel_config)
             x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
-        x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
-        # Trim padded out channels in case the conv left them.
-        x_host = x_host[..., : self.out_channels]
+        return x_dev
+
+    def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
+        """Readback + host crop. Trims padded out-channels and the upsampled image of the
+        input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
+        x_host = local_device_to_torch(x_dev)
+        x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
-        if t_pad > 0:
+        if self._t_pad > 0:
             prod_rates = 1
             for r in self.upsample_rates:
                 prod_rates *= r
-            x_host = x_host[:, : x_host.shape[1] - t_pad * prod_rates, :]
+            x_host = x_host[:, : x_host.shape[1] - self._t_pad * prod_rates, :]
         x_host = x_host.transpose(-1, -2).contiguous()
         return x_host

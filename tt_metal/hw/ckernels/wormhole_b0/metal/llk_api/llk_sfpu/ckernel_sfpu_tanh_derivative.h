@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
+#include "cmath_common.h"
 
 using namespace sfpi;
 
@@ -45,9 +46,9 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    l_reg[LRegs::LReg0] = vUInt(0x1DFF);  // 0.90625*x
-    l_reg[LRegs::LReg1] = vUInt(0x481A);  // 0.09375*x + 0.8125
-    l_reg[LRegs::LReg2] = vUInt(0xFF00);  // 1
+    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x1DFF));  // 0.90625*x
+    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x481A));  // 0.09375*x + 0.8125
+    l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF00));  // 1
 }
 
 // =============================================================================
@@ -163,7 +164,7 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 constexpr float CORE_REGION_LIMIT = 3.0f;   // Polynomial ↔ exp boundary
 constexpr float TAIL_REGION_LIMIT = 45.0f;  // Exp ↔ zero saturation boundary
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -211,6 +212,7 @@ inline void calculate_tanh_derivative_sech2() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // No special initialization needed — no reciprocal, no LUT.
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }

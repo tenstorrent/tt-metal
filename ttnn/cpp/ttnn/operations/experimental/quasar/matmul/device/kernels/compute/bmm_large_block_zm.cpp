@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -32,7 +33,8 @@ void kernel_main() {
     CircularBuffer out_cb(cb_out);
     CircularBuffer intermed0_cb(cb_intermed0);
 
-    mm_init(cb_in0, cb_in1, cb_intermed0);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_intermed0);
+    matmul_init(cb_in0, cb_in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -51,13 +53,15 @@ void kernel_main() {
                     tile_regs_acquire();
 
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(cb_in1, cb_intermed0);
+                        reconfig_data_format_srca(cb_in1, cb_intermed0);
+                        copy_init(cb_intermed0);
                         intermed0_cb.wait_front(out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(cb_intermed0, i, i);
                         }
                         intermed0_cb.pop_front(out_subblock_num_tiles);
-                        mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0);
+                        reconfig_data_format_srca(cb_intermed0, cb_in1);
+                        matmul_init(cb_in0, cb_in1);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.DISABLED,
         }
     ],
     indirect=True,
@@ -70,7 +70,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        kvpe_cache=tt_kvpe_cache,
         chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
@@ -102,7 +102,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.DISABLED,
         }
     ],
     indirect=True,

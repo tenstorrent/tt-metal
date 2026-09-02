@@ -2,25 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import time
-import pytest
-import numpy as np
-import ttnn
 from collections import Counter
+from enum import Enum
+
+import numpy as np
+import pytest
+import torch
+import ttnn
 from loguru import logger
+
 from tests.ttnn.unit_tests.operations.test_utils import (
-    get_compute_kernel_options,
-    compute_kernel_options,
     compute_kernel_ids,
+    compute_kernel_options,
+    get_compute_kernel_options,
     get_lib_dtype,
 )
-from enum import Enum
 
 
 class TestMode(Enum):
     VALIDATE = 0
     BENCHMARK = 1
+
+
+TEST_SEED = 17
+
+
+def _zeros(device, shape, dtype):
+    return ttnn.from_torch(torch.zeros(shape), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
 def check_torch_uniform_bfloat16():
@@ -113,6 +122,12 @@ def test_uniform(shape, rand_range, dtype, seed, device):
     run_uniform(shape, rand_range, dtype, device, seed=seed)
 
 
+def test_uniform_rejects_unsupported_dtype(device, expect_error):
+    input_tensor = _zeros(device, (32, 32), ttnn.int32)
+    with expect_error(RuntimeError, "Uniform: Input tensor must be Float32 or Bfloat16"):
+        ttnn.uniform(input_tensor)
+
+
 @pytest.mark.parametrize(
     "shape",
     [[2, 32, 32, 16]],
@@ -147,6 +162,8 @@ def test_uniform_seed_distinguishes_cache_entries(device):
       * different seed must change the output    -> guards against the frozen-runtime-arg bug on
         the in-place fast path (only reachable now that resolve_bindings allows input==output).
       * same seed must reproduce the output      -> guards against wrongly re-randomizing.
+      * different from/to range on a hit         -> must NOT grow the cache and must be re-applied
+        (from/to are also hash-excluded and re-derived by override_runtime_arguments).
     """
     device.enable_program_cache()
     device.clear_program_cache()
@@ -168,12 +185,81 @@ def test_uniform_seed_distinguishes_cache_entries(device):
     out_c = ttnn.to_torch(npu).float().clone()
     entries_c = device.num_program_cache_entries()
 
+    ttnn.uniform(npu, 5.0, 10.0, 1234)
+    out_d = ttnn.to_torch(npu).float().clone()
+    entries_d = device.num_program_cache_entries()
+
     assert entries_b == entries_a, "same seed must reuse the cached program"
     assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert (
+        entries_d == entries_a
+    ), "a different from/to range must NOT add a cache entry -- range is dynamic, not hashed"
     assert torch.equal(out_a, out_a2), "same seed must reproduce identical output"
     assert not torch.equal(out_a, out_c), "a different seed must change the output (seed re-patched on the fast path)"
+    assert out_d.min() >= 5.0 and out_d.max() < 10.0, "a different from/to range must be re-applied on the cache hit"
 
     device.disable_and_clear_program_cache()
+
+
+def test_uniform_respects_narrow_fp32_range(device):
+    low, high = 0.0, 5e-7
+    npu = _zeros(device, (256, 256), ttnn.float32)
+
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_uniform_preserves_fp32_range_below_fold_threshold(device):
+    low, high = 0.0, 2.0**-95
+    npu = _zeros(device, (256, 256), ttnn.float32)
+
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+@pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
+def test_uniform_respects_bfloat16_ranges(device, low, high):
+    npu = _zeros(device, (256, 256), ttnn.bfloat16)
+
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_uniform_rejects_range_without_bfloat16_value(device, expect_error):
+    low, high = 1.001, 1.002
+    npu = _zeros(device, (32, 32), ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.uniform(npu, low, high, seed=TEST_SEED)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_uniform_respects_flush_to_zero_range_ending_at_zero(device, dtype):
+    min_normal = torch.finfo(torch.float32).tiny
+    low, high = -min_normal, 0.0
+    npu = _zeros(device, (32, 32), dtype)
+
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.all(data == low)
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
 
 
 @pytest.mark.parametrize(

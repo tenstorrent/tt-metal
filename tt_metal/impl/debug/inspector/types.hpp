@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,7 +14,7 @@
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
@@ -23,6 +24,7 @@ namespace tt::tt_metal {
     namespace distributed {
     class MeshDeviceImpl;
     class MeshWorkloadImpl;
+    class MeshBuffer;
     }
 }
 
@@ -56,6 +58,30 @@ struct MeshDeviceData {
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
+};
+
+struct MeshSocketCore {
+    uint32_t fabric_chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+};
+
+struct MeshSocketLocalCoreData {
+    MeshSocketCore core;
+    uint32_t chip_id{};
+    std::vector<MeshSocketCore> peers;
+};
+
+struct MeshSocketData {
+    bool is_sender{};
+    uint64_t config_buffer_address{};
+    uint64_t data_buffer_address{};
+    uint64_t fifo_size{};
+    uint32_t bytes_acked_offset_bytes{};
+    uint32_t bytes_acked_stride_bytes{};
+    uint32_t local_mesh_id{};
+    uint32_t peer_mesh_id{};
+    std::vector<MeshSocketLocalCoreData> local_cores;
 };
 
 struct MeshWorkloadRuntimeEntry {

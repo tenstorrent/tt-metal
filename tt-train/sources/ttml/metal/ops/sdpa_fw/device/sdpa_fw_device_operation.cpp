@@ -24,7 +24,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
                                  const tt::tt_metal::Layout required_layout,
                                  const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SDPAForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -52,7 +52,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -60,6 +60,27 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(query, "Query", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+
+    // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
+    // iterate the padded sequence, so tile padding on S or Q/K head_dim would silently
+    // mis-scale attention instead of erroring out. V's head_dim never feeds the scaler
+    // and non-tile-aligned vdim is a supported configuration (DiffVDim), so V is only
+    // checked on the sequence dim.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name, bool check_last_dim) {
+        const auto& logical = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
+        TT_FATAL(
+            (!check_last_dim || logical[-1] == padded[-1]) && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence{} (padded shape == logical shape). "
+            "Got logical={}, padded={}",
+            name,
+            check_last_dim ? " and head_dim" : "",
+            logical,
+            padded);
+    };
+    check_tile_aligned(query, "Query", /*check_last_dim=*/true);
+    check_tile_aligned(key, "Key", /*check_last_dim=*/true);
+    check_tile_aligned(value, "Value", /*check_last_dim=*/false);
 
     auto query_shape = query.logical_shape();
     auto key_shape = key.logical_shape();
@@ -234,14 +255,14 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_output.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.query.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.query.device()));
     }
 
     if (args.return_intermediates) {
         if (tensor_args.preallocated_intermediate.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_intermediate.value());
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.query.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.query.device()));
         }
     }
 

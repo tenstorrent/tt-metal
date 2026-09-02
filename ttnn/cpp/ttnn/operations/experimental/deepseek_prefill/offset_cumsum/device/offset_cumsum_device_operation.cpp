@@ -35,9 +35,9 @@ OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::co
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
 
-    auto offsets_spec = TensorSpec(ttnn::Shape({1, W}), layout);
-    auto totals_spec = TensorSpec(ttnn::Shape({1, W}), layout);
-    auto expert_region_spec = TensorSpec(ttnn::Shape({1, W}), layout);
+    auto offsets_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
+    auto totals_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
+    auto expert_region_spec = tt::tt_metal::TensorSpec(ttnn::Shape({1, W}), layout);
     return {offsets_spec, totals_spec, expert_region_spec};
 }
 

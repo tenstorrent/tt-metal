@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/work_split.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -178,16 +179,40 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         // logical width, so the grid must own at least one core.
         TT_FATAL(shard_spec.grid.num_cores() >= 1, "Sharded layernorm requires a non-empty shard grid");
         const auto bbox = shard_spec.grid.bounding_box();
-        uint32_t bbox_num_cores =
-            (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
-        TT_FATAL(
-            shard_spec.grid.num_cores() == bbox_num_cores,
-            "Sharded layernorm does not support non-rectangular core grids. "
-            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
-            shard_spec.grid.num_cores(),
-            bbox_num_cores,
-            bbox.end_coord.x - bbox.start_coord.x + 1,
-            bbox.end_coord.y - bbox.start_coord.y + 1);
+        const CoreCoord bbox_grid_size = {
+            bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+        uint32_t bbox_num_cores = bbox_grid_size.x * bbox_grid_size.y;
+        if (shard_spec.grid.num_cores() != bbox_num_cores) {
+            const uint32_t M = a.physical_volume() / a.padded_shape()[-1];
+            const auto& sharded_pc =
+                std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+            TT_FATAL(
+                M == sharded_pc.block_h * tile_height,
+                "Sharded layernorm supports a non-rectangular core grid only when the whole height fits on "
+                "one core (M == block_h), got M {} and block_h {} tiles.",
+                M,
+                sharded_pc.block_h);
+            TT_FATAL(
+                operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+                "Sharded layernorm does not support a non-rectangular core grid for distributed norm.");
+            const CoreRangeSet shard_order_prefix = num_cores_to_corerangeset_in_subcoregrids(
+                bbox.start_coord,
+                shard_spec.grid.num_cores(),
+                CoreRangeSet(bbox),
+                shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+            for (const auto& core : corerange_to_cores(shard_order_prefix)) {
+                TT_FATAL(
+                    shard_spec.grid.contains(core),
+                    "Sharded layernorm requires a non-rectangular core grid to fill its {} x {} bounding box in "
+                    "shard order, leaving the unused cores at the end. Got grid {}, which is missing core "
+                    "({}, {}).",
+                    bbox_grid_size.x,
+                    bbox_grid_size.y,
+                    shard_spec.grid.str(),
+                    core.x,
+                    core.y);
+            }
+        }
 
         const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
         // block_w is the per-core width in tiles and is used as a modulo divisor when indexing the
@@ -388,7 +413,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config);
 }
 
-TensorSpec LayerNormDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
@@ -414,7 +439,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         operation_attributes.output_mem_config.memory_layout(),
                         operation_attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return TensorSpec(
+                    return tt::tt_metal::TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -435,7 +460,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
-                return ttnn::TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
@@ -445,7 +470,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_padded_shape));
             } else {
                 const auto output_layout = input_tensor.layout();
-                return TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
                         input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));

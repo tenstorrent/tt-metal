@@ -8,6 +8,8 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+
 namespace ttml::metal::ops::ring_sdpa_bw::kv {
 
 using namespace tt::tt_metal;
@@ -17,27 +19,50 @@ using namespace ttnn;
 
 void RingSDPABwKVDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.query.device() != nullptr, "Query tensor must be on device");
-    TT_FATAL(attrs.ring_size > 0, "Ring size must be > 0");
-    TT_FATAL(attrs.step < attrs.ring_size, "Step must be < ring_size");
+    validate_ring_attributes(attrs, tensor_args.query);
+    validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
+    validate_output_like_tensor(tensor_args.grad_output, "Grad output", tensor_args.query, tensor_args.value);
+    validate_intermediates_tensor(tensor_args.intermediates, tensor_args.query);
+
+    // u_scaler comes from the bw_q op: one FP32 tile column per query row.
+    validate_sdpa_tensor(tensor_args.u_scaler, "U scaler", tensor_args.query, ttnn::DataType::FLOAT32);
+    const auto [B, NH, S, E] = tensor_args.query.padded_shape().to_array_4D();
+    const ttnn::Shape expected_u_scaler_shape{1, 1, B * NH * S, tt::constants::TILE_WIDTH};
+    TT_FATAL(
+        tensor_args.u_scaler.logical_shape() == expected_u_scaler_shape,
+        "U scaler shape {} must be {} (one FP32 tile column per query row)",
+        tensor_args.u_scaler.logical_shape(),
+        expected_u_scaler_shape);
+
+    if (tensor_args.preallocated_grad_key.has_value()) {
+        validate_grad_like_tensor(
+            tensor_args.preallocated_grad_key.value(), "Preallocated grad key", tensor_args.key, tensor_args.query);
+    }
+    if (tensor_args.preallocated_grad_value.has_value()) {
+        validate_grad_like_tensor(
+            tensor_args.preallocated_grad_value.value(),
+            "Preallocated grad value",
+            tensor_args.value,
+            tensor_args.query);
+    }
 }
 
 RingSDPABwKVDeviceOperation::spec_return_value_t RingSDPABwKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
-    ttnn::TensorSpec grad_key_spec =
+    tt::tt_metal::TensorSpec grad_key_spec =
         tensor_args.preallocated_grad_key.has_value()
             ? tensor_args.preallocated_grad_key->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.key.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
 
     // Handle grad_value spec
-    ttnn::TensorSpec grad_value_spec =
+    tt::tt_metal::TensorSpec grad_value_spec =
         tensor_args.preallocated_grad_value.has_value()
             ? tensor_args.preallocated_grad_value->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.value.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.value.dtype(), tt::tt_metal::Layout::TILE, tensor_args.value.memory_config()));
@@ -52,12 +77,12 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     // Handle grad_key
     ttnn::Tensor grad_key = tensor_args.preallocated_grad_key.has_value()
                                 ? tensor_args.preallocated_grad_key.value()
-                                : create_device_tensor(grad_key_spec, tensor_args.key.device());
+                                : ttnn::create_device_tensor(grad_key_spec, tensor_args.key.device());
 
     // Handle grad_value
     ttnn::Tensor grad_value = tensor_args.preallocated_grad_value.has_value()
                                   ? tensor_args.preallocated_grad_value.value()
-                                  : create_device_tensor(grad_value_spec, tensor_args.value.device());
+                                  : ttnn::create_device_tensor(grad_value_spec, tensor_args.value.device());
 
     return {grad_key, grad_value};
 }

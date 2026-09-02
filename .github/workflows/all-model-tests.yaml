@@ -3,7 +3,7 @@ name: "All Model Tests"
 run-name: >-
   All Model Tests —
   Tiers[${{ inputs.tier-1 && '1' || '' }}${{ inputs.tier-1 && inputs.tier-2 && ',' || '' }}${{ inputs.tier-2 && '2' || '' }}${{ (inputs.tier-1 || inputs.tier-2) && inputs.tier-3 && ',' || '' }}${{ inputs.tier-3 && '3' || '' }}]
-  Tests[${{ inputs.run-unit-tests && 'unit' || '' }}${{ inputs.run-unit-tests && inputs.run-e2e-tests && ',' || '' }}${{ inputs.run-e2e-tests && 'e2e' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests) && inputs.run-sweep-tests && ',' || '' }}${{ inputs.run-sweep-tests && 'sweep' || '' }}]
+  Tests[${{ inputs.run-unit-tests && 'unit' || '' }}${{ inputs.run-unit-tests && inputs.run-e2e-tests && ',' || '' }}${{ inputs.run-e2e-tests && 'e2e' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests) && inputs.run-sweep-tests && ',' || '' }}${{ inputs.run-sweep-tests && 'sweep' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests || inputs.run-sweep-tests) && inputs.run-vllm-tests && ',' || '' }}${{ inputs.run-vllm-tests && 'vllm' || '' }}]
   Model[${{ inputs.model || 'all' }}]
   SKUs[${{ inputs.skus }}]
 
@@ -23,6 +23,11 @@ on:
         default: true
       run-sweep-tests:
         description: "Model Sweep tests"
+        required: false
+        type: boolean
+        default: false
+      run-vllm-tests:
+        description: "vLLM Model tests (single pipeline; not tier-gated)"
         required: false
         type: boolean
         default: false
@@ -46,7 +51,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n150_civ2, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
         required: false
         type: string
         default: "all"
@@ -90,11 +95,17 @@ on:
 permissions:
   packages: write
   contents: write
+  # models-unit-tests-impl has a multihost leg that requests id-token: write (multihost-ci runner
+  # chart). A reusable workflow can't request more than its caller grants, and that check runs at
+  # startup regardless of the leg's `if:` guard — so the unit-test caller jobs must be able to pass
+  # id-token down even when no exabox SKU is selected, or the whole run fails at startup. Granted
+  # here (workflow-wide) so the caller jobs inherit it without per-job blocks.
+  id-token: write
 
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
       has-t1-unit: ${{ steps.check.outputs.has-t1-unit }}
@@ -105,6 +116,7 @@ jobs:
       has-t2-sweep: ${{ steps.check.outputs.has-t2-sweep }}
       has-t3-unit: ${{ steps.check.outputs.has-t3-unit }}
       has-t3-e2e: ${{ steps.check.outputs.has-t3-e2e }}
+      has-vllm-tests: ${{ steps.check.outputs.has-vllm-tests }}
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
     steps:
       - name: Checkout test definitions
@@ -117,10 +129,23 @@ jobs:
       - name: Resolve SKU selection
         id: resolve-skus
         run: |
-          WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
-          BH_SKUS="bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          WH_SKUS="wh_n150,wh_n150_civ2,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
+          BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy,bh_loudbox"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
+          # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc16 → exabox-multihost-ci-*)
+          # are intentionally NOT dispatchable from all-model-tests yet — exabox model-unit
+          # tests are dispatched via the standalone models-t1/t2/t3-unit-tests workflows
+          # (which grant id-token on their caller jobs for the multihost-ci runner chart).
+          # This workflow already grants `id-token: write` workflow-wide (see top-level
+          # permissions), so the caller jobs can pass it down.
+          # TODO: to dispatch exabox jobs here alongside everything else, we must:
+          #   1. add the exabox SKUs to VALID_SKUS below (keep them out of ALL_SKUS/bh_all so `all`
+          #      never auto-schedules scarce exabox hardware);
+          #   2. fix run reconciliation — models-unit-tests-impl exposes multihost legs in a separate
+          #      `matrix_multihost` output that the "Aggregate child matrices" step here does not
+          #      union, and the multihost job emits no per-leg summary artifact; without both,
+          #      dispatched multihost legs would be misreported as INFRA_FAILURE.
+          VALID_SKUS="wh_n150 wh_n150_civ2 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy bh_loudbox wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -137,7 +162,7 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n150_civ2, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
                 exit 1
               fi
               if [[ "$item" == "wh_all" ]]; then
@@ -183,6 +208,7 @@ jobs:
           RUN_UNIT: ${{ inputs.run-unit-tests }}
           RUN_E2E: ${{ inputs.run-e2e-tests }}
           RUN_SWEEP: ${{ inputs.run-sweep-tests }}
+          RUN_VLLM: ${{ inputs.run-vllm-tests }}
         run: |
           python3 - <<'PYEOF'
           import yaml, os, sys
@@ -209,10 +235,16 @@ jobs:
           }
 
           def model_matches(test_model, filter_str):
-              """Substring match: 'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc."""
+              """Substring match, comma-separated OR-list.
+
+              'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc.
+              'llama3.1-8b,qwen3-32b' matches a model containing either token.
+              """
               if filter_str == "all":
                   return True
-              return filter_str.lower() in test_model.lower()
+              tm = test_model.lower()
+              return any(tok.strip() and tok.strip().lower() in tm
+                         for tok in filter_str.split(","))
 
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
@@ -247,6 +279,34 @@ jobs:
                   # Only count toward any_tests if the user actually selected this tier and test type
                   if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
+
+          # vLLM Model Tests: single pipeline. Not tier-gated on scheduled/standalone
+          # runs, but all-model-tests forwards a single selected tier to the vLLM impl
+          # (see the vllm-tests job). Mirror that effective tier here so preflight
+          # doesn't pass (and build an artifact) for a tier/SKU/model combination the
+          # downstream vLLM matrix would filter to empty.
+          vllm_path = "tests/pipeline_reorg/vllm_model_tests.yaml"
+          run_vllm = os.environ.get("RUN_VLLM") == "true"
+          # Effective vLLM tier: exactly one selected tier is forwarded; any other
+          # combination (none / multiple / the default all-on) runs every tier.
+          eff_vllm_tier = next(iter(enabled_tiers)) if len(enabled_tiers) == 1 else None
+          has_vllm = False
+          if os.path.exists(vllm_path):
+              with open(vllm_path) as f:
+                  vtests = yaml.safe_load(f) or []
+              for test in vtests:
+                  skus = test.get("skus", {})
+                  if not isinstance(skus, dict) or not model_matches(test.get("model", ""), model_filter):
+                      continue
+                  for sku_name, sku_cfg in skus.items():
+                      if sku_name in enabled_skus and (eff_vllm_tier is None or sku_cfg.get("tier") == eff_vllm_tier):
+                          has_vllm = True
+                          break
+                  if has_vllm:
+                      break
+          results["has-vllm-tests"] = "true" if has_vllm else "false"
+          if has_vllm and run_vllm:
+              any_tests = True
 
           results["has-any-tests"] = "true" if any_tests else "false"
 
@@ -293,7 +353,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
@@ -414,6 +474,28 @@ jobs:
 
   # Note: Tier 3 sweep tests not yet defined — no sweep entries with tier 3 exist in models_sweep_tests.yaml
 
+  # ── vLLM (single pipeline; runs the whole curated set, tier filter optional) ──
+  vllm-tests:
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.run-vllm-tests && needs.preflight.outputs.has-vllm-tests == 'true' }}
+    secrets: inherit
+    uses: ./.github/workflows/vllm-model-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      # Pass the tier filter through only when exactly one tier checkbox is
+      # selected; any other combination (multiple, or the default all-on) runs
+      # the full curated set (tier=all).
+      tier: >-
+        ${{ (inputs.tier-1 && !inputs.tier-2 && !inputs.tier-3) && '1'
+         || (!inputs.tier-1 && inputs.tier-2 && !inputs.tier-3) && '2'
+         || (!inputs.tier-1 && !inputs.tier-2 && inputs.tier-3) && '3'
+         || 'all' }}
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates per-leg ai-job-summary artifacts into one run-level report.
   ai-run-summary:
@@ -426,7 +508,11 @@ jobs:
       - t2-sweep-tests
       - t3-unit-tests
       - t3-e2e-tests
-    if: always()
+      - vllm-tests
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

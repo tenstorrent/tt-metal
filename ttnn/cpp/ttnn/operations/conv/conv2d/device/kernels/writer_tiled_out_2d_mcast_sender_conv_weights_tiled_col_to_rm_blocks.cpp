@@ -63,12 +63,12 @@ void kernel_main() {
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
 
-    experimental::CB cb_act_second_obj(cb_id_act_second_reader);
+    DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
     const uint32_t split_reader_cb_write_addr =
-        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset : 0;
+        (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset : 0;
     // In case of double buffering the split reader can write to two different addresses
     const uint32_t split_reader_cb_write_addr_last =
-        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
+        (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
     constexpr uint32_t ct_arg_idx = 36;
@@ -93,10 +93,10 @@ void kernel_main() {
     Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
     Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
     MulticastEndpoint mcast_ep;
-    experimental::CB cb_weight_obj(cb_id_weight);
-    experimental::CB cb_bias_obj(bias_cb_id);
-    experimental::CB cb_reader_indices_obj(cb_reader_indices);
-    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    DataflowBuffer dfb_weight_obj(cb_id_weight);
+    DataflowBuffer dfb_bias_obj(bias_cb_id);
+    DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
+    DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
     // Pre-built mcast destination; .addr is updated per mcast call
     McastDst mcast_dst = {
         .noc_x_start = mcast_rect.noc_x_start,
@@ -115,16 +115,16 @@ void kernel_main() {
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        cb_reader_indices_obj.wait_front(1);
+        dfb_reader_indices_obj.wait_front(1);
 #endif
         if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>(noc, cb_act_second_obj);
+            zero_out_tiles<cb_id_act_second_reader>(noc, dfb_act_second_obj);
         }
     }
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         (split_reader_enabled && is_sender_core)
-            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr())
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr())
             : nullptr;
     // Initial setup for second reader (starting from second reader's data)
     // Only read reader indices on cores that have sharded input (is_sender_core).
@@ -138,7 +138,7 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
-    const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
+    const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -178,7 +178,7 @@ void kernel_main() {
                 if constexpr (split_reader_enabled) {
                     reader_idx = start_reader_idx;
                     if constexpr (!split_reader_cb_shared) {
-                        cb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
+                        dfb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
                     }
                     if (is_sender_core) {
                         if constexpr (split_reader_cb_shared) {
@@ -186,7 +186,7 @@ void kernel_main() {
                             reserve_done_sem.set(INVALID);
                             prev_addr = l1_write_addr_act;
                         } else {
-                            l1_write_addr_act = cb_act_second_obj.get_write_ptr();
+                            l1_write_addr_act = dfb_act_second_obj.get_write_ptr();
                         }
                         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                         read_activation_data<
@@ -215,7 +215,7 @@ void kernel_main() {
                         }
                     }
                     if constexpr (!split_reader_cb_shared) {
-                        cb_act_second_obj.push_back(act_block_num_tiles_split_last);
+                        dfb_act_second_obj.push_back(act_block_num_tiles_split_last);
                     }
                     if (skip_work) {
                         continue;
@@ -225,7 +225,7 @@ void kernel_main() {
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
-                    cb_weight_obj.reserve_back(weight_block_num_tiles);
+                    dfb_weight_obj.reserve_back(weight_block_num_tiles);
 
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
                     uint32_t tile_id = weight_start_tile_id + height_block_offset + outer_block_offset;
@@ -237,7 +237,7 @@ void kernel_main() {
                              ++weight_tile_w_i) {
                             noc.async_read(
                                 s_weight,
-                                cb_weight_obj,
+                                dfb_weight_obj,
                                 weight_tile_nbytes,
                                 {.page_id = weight_tile_id++},
                                 {.offset_bytes = weight_write_offset});
@@ -256,9 +256,9 @@ void kernel_main() {
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    mcast_dst.addr = cb_weight_obj.get_write_ptr();
+                    mcast_dst.addr = dfb_weight_obj.get_write_ptr();
                     noc.async_write_multicast(
-                        use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
+                        CoreLocalMem<uint32_t>(dfb_weight_obj.get_write_ptr()),
                         mcast_ep,
                         weights_block_size_bytes,
                         weights_mcast_num_cores,
@@ -279,7 +279,7 @@ void kernel_main() {
                         mcast_rect.noc_y_end,
                         weights_mcast_num_cores);
 #endif
-                    cb_weight_obj.push_back(weight_block_num_tiles);
+                    dfb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
             if constexpr (split_reader_enabled) {
@@ -295,7 +295,7 @@ void kernel_main() {
             }
             if constexpr (fuse_bias) {
                 if (load_bias) {
-                    cb_bias_obj.reserve_back(bias_ntiles);
+                    dfb_bias_obj.reserve_back(bias_ntiles);
 
                     uint32_t bias_write_offset = 0;
                     uint32_t bias_block_size_bytes = 0;
@@ -303,7 +303,7 @@ void kernel_main() {
                          ++bias_tile) {
                         noc.async_read(
                             s_bias,
-                            cb_bias_obj,
+                            dfb_bias_obj,
                             bias_pagesize,
                             {.page_id = bias_tile},
                             {.offset_bytes = bias_write_offset});
@@ -322,9 +322,9 @@ void kernel_main() {
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    mcast_dst.addr = cb_bias_obj.get_write_ptr();
+                    mcast_dst.addr = dfb_bias_obj.get_write_ptr();
                     noc.async_write_multicast(
-                        use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
+                        CoreLocalMem<uint32_t>(dfb_bias_obj.get_write_ptr()),
                         mcast_ep,
                         bias_block_size_bytes,
                         weights_mcast_num_cores,
@@ -346,7 +346,7 @@ void kernel_main() {
                         weights_mcast_num_cores);
 #endif
 
-                    cb_bias_obj.push_back(bias_ntiles);
+                    dfb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
                 }
             }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/dest_format_helpers.hpp"
@@ -10,285 +11,306 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
 ALWI void maybe_typecast_stat(
-    CircularBuffer& src_obj,
-    uint32_t src_cb,
-    uint32_t dst_cb,
-    uint32_t& last_srca_cb,
-    uint32_t tile_index) {
+    DataflowBuffer& src_obj, uint32_t src_dfb, uint32_t dst_dfb, uint32_t& last_srca_dfb, uint32_t tile_index) {
     if constexpr (NeedsTypecast) {
         constexpr uint32_t onetile = 1;
         src_obj.wait_front(onetile);
-        CircularBuffer dst_obj(dst_cb);
+        DataflowBuffer dst_obj(dst_dfb);
         dst_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, src_cb);
-        last_srca_cb = src_cb;
-        copy_tile(src_cb, tile_index, tile_index * 2);
+        reconfig_data_format_srca(last_srca_dfb, src_dfb);
+        copy_init(src_dfb);
+        last_srca_dfb = src_dfb;
+        copy_tile(src_dfb, tile_index, tile_index * 2);
         typecast_tile_init<TcInFmt, TcOutFmt>();
         typecast_tile<TcInFmt, TcOutFmt>(tile_index * 2);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_reconfig_data_format(dst_cb);
-        pack_tile(tile_index * 2, dst_cb);
+        pack_reconfig_data_format(dst_dfb);
+        pack_tile(tile_index * 2, dst_dfb);
         tile_regs_release();
 
-        pack_reconfig_data_format(dst_cb, src_cb);
+        pack_reconfig_data_format(dst_dfb, src_dfb);
 
         src_obj.pop_front(onetile);
         dst_obj.push_back(onetile);
     }
 }
 
+// A writer-facing stat DFB is only bound when the accumulation format is wider than the stat dtype;
+// on the other path the writer drains the compute output directly, so the same kernel-side handle
+// has to name a different DFB. The aliases are gated at the preprocessor stage because
+// dfb::writer_updated_* simply does not exist on the untypecast build. The host computes each flag
+// (stat present AND the stat format needs a typecast) so one define gates one alias; the two stats
+// are keyed independently, and either may typecast without the other.
+#ifdef NEEDS_MEAN_TYPECAST
+constexpr bool needs_mean_typecast = true;
+constexpr auto dfb_writer_updated_mean = dfb::writer_updated_mean;
+#else
+constexpr bool needs_mean_typecast = false;
+constexpr auto dfb_writer_updated_mean = dfb::updated_mean;
+#endif
+
+#ifdef NEEDS_VAR_TYPECAST
+constexpr bool needs_var_typecast = true;
+constexpr auto dfb_writer_updated_var = dfb::writer_updated_var;
+#else
+constexpr bool needs_var_typecast = false;
+constexpr auto dfb_writer_updated_var = dfb::updated_var;
+#endif
+
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
+    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
+    static_assert(
+        old_running_mean_has_value || old_running_var_has_value,
+        "running_statistics requires at least one of running_mean / running_var");
 
-    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);  // batch mean
-    constexpr auto cb_batch_var = get_compile_time_arg_val(3);   // batch var
-    constexpr auto cb_out0 = get_compile_time_arg_val(4);
-    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
-    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
-    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
-    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
-    constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
-    constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
-    constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
-    constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
-    constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
-    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(14);  // writer-facing updated mean
-    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);   // writer-facing updated var
-    constexpr bool stat_needs_typecast = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(17);
-    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(18);
-    constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
-    constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
+    constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
+    constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
-    CircularBuffer cb_batch_mean_obj(cb_batch_mean);
-    CircularBuffer cb_batch_var_obj(cb_batch_var);
-    CircularBuffer cb_out0_obj(cb_out0);
-    CircularBuffer cb_old_running_mean_obj(cb_old_running_mean);
-    CircularBuffer cb_old_running_var_obj(cb_old_running_var);
-    CircularBuffer cb_updated_running_mean_obj(cb_updated_running_mean);
-    CircularBuffer cb_updated_running_var_obj(cb_updated_running_var);
-    CircularBuffer cb_momentum_obj(cb_momentum);
-    CircularBuffer cb_one_obj(cb_one);
-    CircularBuffer cb_tmp1_obj(cb_tmp1);
-    CircularBuffer cb_tmp2_obj(cb_tmp2);
-    CircularBuffer cb_tmp3_obj(cb_tmp3);
+    DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
+    DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
+    DataflowBuffer dfb_out0_obj(dfb::out);
+    DataflowBuffer dfb_old_running_mean_obj(dfb::old_running_mean);
+    DataflowBuffer dfb_old_running_var_obj(dfb::old_running_var);
+    DataflowBuffer dfb_updated_running_mean_obj(dfb::updated_mean);
+    DataflowBuffer dfb_updated_running_var_obj(dfb::updated_var);
+    DataflowBuffer dfb_momentum_obj(dfb::momentum);
+    DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
+    DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+    DataflowBuffer dfb_tmp2_obj(dfb::tmp2);
+    DataflowBuffer dfb_tmp3_obj(dfb::tmp3);
 
-    unary_op_init_common(cb_batch_mean, cb_out0);
-    uint32_t last_srca_cb = cb_batch_mean;
+    compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
+    copy_init(dfb::batch_mean);
+    uint32_t last_srca_dfb = dfb::batch_mean;
     constexpr uint32_t onetile = 1;
 
-    cb_momentum_obj.wait_front(1);
-    cb_one_obj.wait_front(1);
+    dfb_momentum_obj.wait_front(1);
+    dfb_one_obj.wait_front(1);
 
     // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // cb tile index
+        // dfb tile index
         constexpr uint32_t tile_index = 0;
 
-        cb_batch_mean_obj.wait_front(onetile);
-        cb_out0_obj.reserve_back(1);
+        dfb_batch_mean_obj.wait_front(onetile);
+        dfb_batch_var_obj.wait_front(onetile);
+        dfb_out0_obj.reserve_back(1);
 
         if constexpr (old_running_mean_has_value) {
             // 1 - momentum
-            cb_tmp1_obj.reserve_back(onetile);
+            dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
             sub_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_one);
-            last_srca_cb = cb_one;
-            copy_tile(cb_one, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
-            last_srca_cb = cb_momentum;
-            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::one);
+            copy_init(dfb::one);
+            last_srca_dfb = dfb::one;
+            copy_tile(dfb::one, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
+            last_srca_dfb = dfb::momentum;
+            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_reconfig_data_format(cb_tmp1);
-            pack_tile_with_dt(tile_index * 2, cb_tmp1);
+            pack_reconfig_data_format(dfb::tmp1);
+            pack_tile_with_dt(tile_index * 2, dfb::tmp1);
             tile_regs_release();
-            cb_tmp1_obj.push_back(onetile);
+            dfb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
-            cb_tmp2_obj.reserve_back(onetile);
+            dfb_tmp2_obj.reserve_back(onetile);
             tile_regs_acquire();
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_mean);
-            last_srca_cb = cb_batch_mean;
-            copy_tile(cb_batch_mean, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
-            last_srca_cb = cb_momentum;
-            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::batch_mean);
+            copy_init(dfb::batch_mean);
+            last_srca_dfb = dfb::batch_mean;
+            copy_tile(dfb::batch_mean, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
+            last_srca_dfb = dfb::momentum;
+            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            // No pack reconfig needed: cb_tmp1 and cb_tmp2 share interm_data_format
-            pack_tile_with_dt(tile_index * 2, cb_tmp2);
+            // No pack reconfig needed: tmp1 and tmp2 share interm_data_format
+            pack_tile_with_dt(tile_index * 2, dfb::tmp2);
             tile_regs_release();
-            cb_tmp2_obj.push_back(onetile);
+            dfb_tmp2_obj.push_back(onetile);
 
-            // cb_tmp1 * running stats --> (1 - momentum) * running stats
-            cb_tmp1_obj.wait_front(onetile);
-            cb_old_running_mean_obj.wait_front(onetile);
-            cb_tmp3_obj.reserve_back(onetile);
+            // tmp1 * running stats --> (1 - momentum) * running stats
+            dfb_tmp1_obj.wait_front(onetile);
+            dfb_old_running_mean_obj.wait_front(onetile);
+            dfb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_old_running_mean);
-            last_srca_cb = cb_old_running_mean;
-            copy_tile(cb_old_running_mean, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp1);
-            last_srca_cb = cb_tmp1;
-            copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::old_running_mean);
+            copy_init(dfb::old_running_mean);
+            last_srca_dfb = dfb::old_running_mean;
+            copy_tile(dfb::old_running_mean, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
+            copy_init(dfb::tmp1);
+            last_srca_dfb = dfb::tmp1;
+            copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            // No pack reconfig needed: cb_tmp2 and cb_tmp3 share interm_data_format
-            pack_tile_with_dt(tile_index * 2, cb_tmp3);
+            // No pack reconfig needed: tmp2 and tmp3 share interm_data_format
+            pack_tile_with_dt(tile_index * 2, dfb::tmp3);
             tile_regs_release();
-            cb_tmp3_obj.push_back(onetile);
+            dfb_tmp3_obj.push_back(onetile);
 
-            cb_old_running_mean_obj.pop_front(onetile);
-            cb_tmp1_obj.pop_front(onetile);
+            dfb_old_running_mean_obj.pop_front(onetile);
+            dfb_tmp1_obj.pop_front(onetile);
 
-            // cb_tmp2 + cb_tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
-            cb_tmp2_obj.wait_front(onetile);
-            cb_tmp3_obj.wait_front(onetile);
-            cb_updated_running_mean_obj.reserve_back(onetile);
+            // tmp2 + tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
+            dfb_tmp2_obj.wait_front(onetile);
+            dfb_tmp3_obj.wait_front(onetile);
+            dfb_updated_running_mean_obj.reserve_back(onetile);
             tile_regs_acquire();
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp3);
-            last_srca_cb = cb_tmp3;
-            copy_tile(cb_tmp3, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp2);
-            last_srca_cb = cb_tmp2;
-            copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp3);
+            copy_init(dfb::tmp3);
+            last_srca_dfb = dfb::tmp3;
+            copy_tile(dfb::tmp3, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
+            copy_init(dfb::tmp2);
+            last_srca_dfb = dfb::tmp2;
+            copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            // No pack reconfig needed: cb_tmp3 and cb_updated_running_mean share interm_data_format
-            pack_tile_with_dt(tile_index * 2, cb_updated_running_mean);
+            // No pack reconfig needed: tmp3 and updated_mean share interm_data_format
+            pack_tile_with_dt(tile_index * 2, dfb::updated_mean);
             // For the output tensor, return the same values as either of the stats.
             if constexpr (!old_running_var_has_value) {
-                pack_reconfig_data_format(cb_updated_running_mean, cb_out0);
-                pack_tile_with_dt(tile_index * 2, cb_out0);
+                pack_reconfig_data_format(dfb::updated_mean, dfb::out);
+                pack_tile_with_dt(tile_index * 2, dfb::out);
             }
             tile_regs_release();
-            cb_updated_running_mean_obj.push_back(onetile);
+            dfb_updated_running_mean_obj.push_back(onetile);
 
             maybe_typecast_stat<needs_mean_typecast, tc_in_fmt, tc_out_fmt>(
-                cb_updated_running_mean_obj, cb_updated_running_mean, cb_writer_updated_mean, last_srca_cb, tile_index);
+                dfb_updated_running_mean_obj, dfb::updated_mean, dfb_writer_updated_mean, last_srca_dfb, tile_index);
 
-            cb_tmp3_obj.pop_front(onetile);
-            cb_tmp2_obj.pop_front(onetile);
+            dfb_tmp3_obj.pop_front(onetile);
+            dfb_tmp2_obj.pop_front(onetile);
         }
-
-        cb_batch_mean_obj.pop_front(onetile);
 
         if constexpr (old_running_var_has_value) {
             // 1 - momentum
-            cb_tmp1_obj.reserve_back(onetile);
+            dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
             sub_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_one);
-            last_srca_cb = cb_one;
-            copy_tile(cb_one, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
-            last_srca_cb = cb_momentum;
-            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::one);
+            copy_init(dfb::one);
+            last_srca_dfb = dfb::one;
+            copy_tile(dfb::one, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
+            last_srca_dfb = dfb::momentum;
+            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_reconfig_data_format(cb_tmp1);
-            pack_tile_with_dt(tile_index * 2, cb_tmp1);
+            pack_reconfig_data_format(dfb::tmp1);
+            pack_tile_with_dt(tile_index * 2, dfb::tmp1);
             tile_regs_release();
-            cb_tmp1_obj.push_back(onetile);
+            dfb_tmp1_obj.push_back(onetile);
 
             // momentum * batch stat
-            cb_batch_var_obj.wait_front(onetile);
-            cb_tmp2_obj.reserve_back(onetile);
+            dfb_tmp2_obj.reserve_back(onetile);
             tile_regs_acquire();
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_var);
-            last_srca_cb = cb_batch_var;
-            copy_tile(cb_batch_var, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
-            last_srca_cb = cb_momentum;
-            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::batch_var);
+            copy_init(dfb::batch_var);
+            last_srca_dfb = dfb::batch_var;
+            copy_tile(dfb::batch_var, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
+            last_srca_dfb = dfb::momentum;
+            copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(tile_index * 2, cb_tmp2);
+            pack_tile_with_dt(tile_index * 2, dfb::tmp2);
             tile_regs_release();
-            cb_tmp2_obj.push_back(onetile);
+            dfb_tmp2_obj.push_back(onetile);
 
-            cb_batch_var_obj.pop_front(onetile);
-
-            // cb_tmp1 * running stats --> (1 - momentum) * running stats
-            cb_tmp1_obj.wait_front(onetile);
-            cb_old_running_var_obj.wait_front(onetile);
-            cb_tmp3_obj.reserve_back(onetile);
+            // tmp1 * running stats --> (1 - momentum) * running stats
+            dfb_tmp1_obj.wait_front(onetile);
+            dfb_old_running_var_obj.wait_front(onetile);
+            dfb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_old_running_var);
-            last_srca_cb = cb_old_running_var;
-            copy_tile(cb_old_running_var, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp1);
-            last_srca_cb = cb_tmp1;
-            copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::old_running_var);
+            copy_init(dfb::old_running_var);
+            last_srca_dfb = dfb::old_running_var;
+            copy_tile(dfb::old_running_var, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
+            copy_init(dfb::tmp1);
+            last_srca_dfb = dfb::tmp1;
+            copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(tile_index * 2, cb_tmp3);
+            pack_tile_with_dt(tile_index * 2, dfb::tmp3);
             tile_regs_release();
-            cb_tmp3_obj.push_back(onetile);
+            dfb_tmp3_obj.push_back(onetile);
 
-            cb_old_running_var_obj.pop_front(onetile);
-            cb_tmp1_obj.pop_front(onetile);
+            dfb_old_running_var_obj.pop_front(onetile);
+            dfb_tmp1_obj.pop_front(onetile);
 
-            // cb_tmp2 + cb_tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
-            cb_tmp2_obj.wait_front(onetile);
-            cb_tmp3_obj.wait_front(onetile);
-            cb_updated_running_var_obj.reserve_back(onetile);
+            // tmp2 + tmp3 --> (momentum * batch stat) + ((1 - momentum) * running stats)
+            dfb_tmp2_obj.wait_front(onetile);
+            dfb_tmp3_obj.wait_front(onetile);
+            dfb_updated_running_var_obj.reserve_back(onetile);
             tile_regs_acquire();
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp3);
-            last_srca_cb = cb_tmp3;
-            copy_tile(cb_tmp3, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp2);
-            last_srca_cb = cb_tmp2;
-            copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp3);
+            copy_init(dfb::tmp3);
+            last_srca_dfb = dfb::tmp3;
+            copy_tile(dfb::tmp3, tile_index, tile_index * 2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
+            copy_init(dfb::tmp2);
+            last_srca_dfb = dfb::tmp2;
+            copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(tile_index * 2, cb_updated_running_var);
-            pack_reconfig_data_format(cb_updated_running_var, cb_out0);
-            pack_tile_with_dt(tile_index * 2, cb_out0);
+            pack_tile_with_dt(tile_index * 2, dfb::updated_var);
+            pack_reconfig_data_format(dfb::updated_var, dfb::out);
+            pack_tile_with_dt(tile_index * 2, dfb::out);
             tile_regs_release();
-            cb_updated_running_var_obj.push_back(onetile);
+            dfb_updated_running_var_obj.push_back(onetile);
 
             maybe_typecast_stat<needs_var_typecast, tc_in_fmt, tc_out_fmt>(
-                cb_updated_running_var_obj, cb_updated_running_var, cb_writer_updated_var, last_srca_cb, tile_index);
+                dfb_updated_running_var_obj, dfb::updated_var, dfb_writer_updated_var, last_srca_dfb, tile_index);
 
-            cb_tmp3_obj.pop_front(onetile);
-            cb_tmp2_obj.pop_front(onetile);
+            dfb_tmp3_obj.pop_front(onetile);
+            dfb_tmp2_obj.pop_front(onetile);
         }
 
-        cb_out0_obj.push_back(1);
+        dfb_batch_mean_obj.pop_front(onetile);
+        dfb_batch_var_obj.pop_front(onetile);
+        dfb_out0_obj.push_back(1);
     }
-    cb_momentum_obj.pop_front(1);
-    cb_one_obj.pop_front(1);
+    dfb_momentum_obj.pop_front(1);
+    dfb_one_obj.pop_front(1);
 }

@@ -111,7 +111,7 @@ def verify_halted_cores(run_checks: RunChecks) -> None:
         risc_debug = location.noc_block.get_risc_debug(risc_name)
         if not risc_debug.is_halted():
             log_warning_risc(
-                risc_name, location, "Was halted by triage but is no longer halted — core was broken during triage."
+                risc_name, location, "Was halted by triage but is no longer halted - core was broken during triage."
             )
             session.add_broken_core(location, risc_name)
         return None

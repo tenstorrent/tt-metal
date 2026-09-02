@@ -27,8 +27,8 @@ using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 using namespace tt::tt_metal;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
@@ -40,7 +40,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
     Tensor original_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32));
 
-    EXPECT_TRUE(original_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(original_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), original_tensor);
 
@@ -49,7 +49,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), original_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), original_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), original_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     EXPECT_THAT(loaded_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
 }
@@ -65,6 +65,18 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
 
         EXPECT_EQ(loaded_tensor.dtype(), DataType::UINT32);
         EXPECT_THAT(loaded_tensor.to_vector<uint32_t>(), Pointwise(testing::Eq(), test_data));
+    }
+
+    {
+        TemporaryFile test_file("int8.tensorbin");
+        std::vector<int8_t> test_data{-128, -1, 0, 1, 42, 127};
+        Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 3}, DataType::INT8));
+
+        dump_tensor_flatbuffer(test_file.string(), original_tensor);
+        Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+        EXPECT_EQ(loaded_tensor.dtype(), DataType::INT8);
+        EXPECT_THAT(loaded_tensor.to_vector<int8_t>(), Pointwise(testing::Eq(), test_data));
     }
 
     {
@@ -92,12 +104,12 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
 
     Tensor original_tensor = Tensor::from_vector(
         test_data,
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape{1, 2, 3, 1},
             TensorLayout(
                 DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
 
-    EXPECT_TRUE(original_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(original_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), original_tensor);
 
@@ -108,7 +120,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
         EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), original_tensor.tensor_spec().logical_shape());
         EXPECT_EQ(loaded_tensor.dtype(), original_tensor.dtype());
         EXPECT_EQ(loaded_tensor.layout(), original_tensor.layout());
-        EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+        EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
         EXPECT_TRUE(loaded_tensor.memory_config() == original_tensor.memory_config());
     }
 
@@ -119,7 +131,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
         EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), original_tensor.tensor_spec().logical_shape());
         EXPECT_EQ(loaded_tensor.dtype(), original_tensor.dtype());
         EXPECT_EQ(loaded_tensor.layout(), original_tensor.layout());
-        EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::DEVICE);
+        EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::DEVICE);
         EXPECT_TRUE(loaded_tensor.memory_config() == original_tensor.memory_config());
     }
 }
@@ -141,7 +153,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
-    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
 
@@ -150,7 +162,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
@@ -188,7 +200,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2DTensorRoundtrip) {
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
-    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
 
@@ -197,7 +209,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2DTensorRoundtrip) {
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
@@ -227,7 +239,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DFewerShardsThanDevicesRoundt
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
-    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
 
@@ -236,7 +248,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DFewerShardsThanDevicesRoundt
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
@@ -276,7 +288,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2x3SubmeshRoundtrip) {
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
-    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
 
@@ -285,7 +297,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2x3SubmeshRoundtrip) {
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
@@ -324,7 +336,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
-    EXPECT_TRUE(sharded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
 
@@ -333,7 +345,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
     EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
     EXPECT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
     EXPECT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
-    EXPECT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
     std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);

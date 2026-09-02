@@ -581,7 +581,7 @@ class CompressedTensor:
             per_core = self._multi_device_data_per_core.get(device_coord, {})
             key = (core_coord.x, core_coord.y)
             assert key in per_core, f"Core {core_coord} not found in per-core data for device {device_coord}"
-            return per_core[key].experimental_per_core_buffer_address(core_coord)
+            return per_core[key].experimental_per_core_buffer_address(device_coord, core_coord)
         return self.data.buffer_address()
 
     def get_assignment_l1_address(self) -> int:
@@ -596,7 +596,7 @@ class CompressedTensor:
         per_core = self._multi_device_assignment_per_core.get(device_coord, {})
         key = (core_coord.x, core_coord.y)
         assert key in per_core, f"Core {core_coord} not found in per-core assignment for device {device_coord}"
-        return per_core[key].experimental_per_core_buffer_address(core_coord)
+        return per_core[key].experimental_per_core_buffer_address(device_coord, core_coord)
 
     @property
     def data_bytes(self) -> int:

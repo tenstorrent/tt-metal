@@ -22,7 +22,7 @@ namespace ttnn::operations::experimental::quasar::detail {
 void bind_pad(nb::module_& mod) {
     const auto* doc = R"doc(
         Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
-        Any rank of tensor is supported, however tensors with rank > 4 can only apply padding to the lower 3 dimensions.
+        Any rank of tensor is supported. For rank > 4, leading dimensions are padded via a reshape path before the 4D device kernel; tile layout still does not support front padding on device.
 
         Args:
             * :attr:`input_tensor`: (ttnn.Tensor): the input tensor.
@@ -59,8 +59,8 @@ void bind_pad(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const tt::tt_metal::Array4D&,
-                const tt::tt_metal::Array4D&,
+                const ttnn::Array4D&,
+                const ttnn::Array4D&,
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,

@@ -150,7 +150,7 @@ public:
         uint32_t addr = static_cast<uint32_t>(get_address());
         uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
-        return Lock([this, addr, num_bytes]() {
+        return Lock([addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
         });
     }
@@ -196,4 +196,15 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
         static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
+
+template <typename T, typename AddressType>
+inline constexpr bool noc_zero_l1_endpoint_v<CoreLocalMem<T, AddressType>> = true;
+#if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#elif !defined(ARCH_QUASAR)
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#if !defined(ARCH_QUASAR) || !defined(NOC_API_V1)
+#include "internal/noc_zero_dram.inl"
+#endif
 #endif  // !defined(COMPILE_FOR_TRISC)

@@ -31,75 +31,48 @@ namespace sfpu {
  * @param tile_idx_dst The index of the result tile in the Dest register where the result will be stored.
  */
 template <DataFormat format>
-inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx_1 = 0, const uint tile_idx_dst = 0) {
+inline void calculate_add_top_row(
+    const std::uint32_t tile_idx_0 = 0, const std::uint32_t tile_idx_1 = 0, const std::uint32_t tile_idx_dst = 0) {
     static_assert(
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::Float32");
 
-    // Integer load/store mode selection:
-    // UInt32 is stored as raw unsigned bits — use INT32 (no conversion).
-    // Int32 stimuli are non-negative, so sign-magnitude == two's complement — use INT32 (no conversion).
-    // On Blackhole, INT32_2S_COMP load/store has no effect (RTL bug), so both integer formats use INT32.
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::INT32;
+    // sfpi dst_reg[] indexes in row units where a full tile is 32 (SFP_DESTREG_STRIDE),
+    // i.e. half the raw TT_SFPLOAD immediate (tile = 64). The four raw sub-face offsets
+    //   {0, +2, +16, +18}  ->  sfpi indices  {0, +1, +8, +9}
+    // pick face0/face2 (even/odd cols) and face1/face3 (even/odd cols) of the top rows.
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const std::uint32_t off0 = tile_idx_0 * dst_tile_size_sfpi;
+    const std::uint32_t off1 = tile_idx_1 * dst_tile_size_sfpi;
+    const std::uint32_t offd = tile_idx_dst * dst_tile_size_sfpi;
 
-    constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
-    constexpr std::uint32_t REPLAY_BUFFER_COUNT = 4;
+    constexpr std::uint32_t sub[4] = {0, 1, 8, 9};
 
-    // size of each tile in Dest is 64 rows
-    constexpr std::uint32_t dst_tile_size = 64;
-    const std::uint32_t tile_offset_0 = tile_idx_0 * dst_tile_size;
-    const std::uint32_t tile_offset_1 = tile_idx_1 * dst_tile_size;
-    const std::uint32_t tile_offset_dst = tile_idx_dst * dst_tile_size;
-
-    // Load upper row (Face 0 and Face 1) of Tile 0
-    TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_0);           // face 0, rows 0-3, even columns
-    TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_0 + 2);       // face 0, rows 0-3, odd columns
-    TT_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_0 + 16);      // face 1, rows 0-3, even columns
-    TT_SFPLOAD(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_0 + 16 + 2);  // face 1, rows 0-3, odd columns
-
-    // Load upper row (Face 2 and Face 3) of Tile 1
-    TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1);           // face 2, rows 0-3, even columns
-    TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 2);       // face 2, rows 0-3, odd columns
-    TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 16);      // face 3, rows 0-3, even columns
-    TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 16 + 2);  // face 3, rows 0-3, odd columns
-
-    // Call replay buffer (integer: index 0, 4 instructions; float: index 4, 8 instructions)
-    lltt::replay(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT);
-
-    TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst);
-    TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 2);
-    TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 16);
-    TT_SFPSTORE(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 16 + 2);
+    if constexpr (format == DataFormat::Float32) {
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; i++) {
+            sfpi::vFloat a = sfpi::dst_reg[off0 + sub[i]];
+            sfpi::vFloat b = sfpi::dst_reg[off1 + sub[i]];
+            sfpi::dst_reg[offd + sub[i]] = a + b;
+        }
+    } else {
+        // Int32 / UInt32. INT32 layout leaves UInt32 raw and (on Blackhole) is a no-op
+        // sign-magnitude conversion, matching the original INSTRUCTION_MODE == INT32 path.
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; i++) {
+            sfpi::vInt a = sfpi::dst_reg[off0 + sub[i]].mode<sfpi::DataLayout::I32>();
+            sfpi::vInt b = sfpi::dst_reg[off1 + sub[i]].mode<sfpi::DataLayout::I32>();
+            sfpi::dst_reg[offd + sub[i]].mode<sfpi::DataLayout::I32>() = a + b;
+        }
+    }
 }
 
 /**
- * @brief Initialize SFPU configuration register and set up replay buffers for add top row kernel.
- *        Sets up two replay buffers:
- *        - Integer replay buffer (index 0, 4 instructions): TTI_SFPIADD operations
- *        - Float replay buffer (index 4, 8 instructions): TT_SFPADD + TTI_SFPNOP operations
+ * @brief Initialize SFPU configuration register for the add-top-row kernel.
+ *        The compute path is now pure sfpi (see calculate_add_top_row), so the integer/float
+ *        replay buffers the raw implementation programmed here are no longer needed.
  */
-inline void init_add_top_row() {
-    _init_sfpu_config_reg();
-
-    // Set up integer replay buffer (index 0, 4 instructions)
-    // Contains: 4 TTI_SFPIADD operations for adding top rows
-    load_replay_buf(0, 4, [] {
-        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG2, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG3, 4);
-    });
-
-    // Set up floating-point replay buffer (index 4, 8 instructions)
-    // Contains: 4 TT_SFPADD + 4 TTI_SFPNOP operations for adding top rows
-    load_replay_buf(4, 4, [] {
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
-        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-        TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
-    });
-}
+inline void init_add_top_row() { _init_sfpu_config_reg(); }
 
 }  // namespace sfpu
 }  // namespace ckernel

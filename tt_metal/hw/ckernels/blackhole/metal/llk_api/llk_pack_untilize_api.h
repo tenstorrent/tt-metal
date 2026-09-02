@@ -3,46 +3,72 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
-#include "llk_param_structs.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
 
-/**
- * Configure the packer hardware for an untilize output operand.
- *
- * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag
- * and tile size are all derived from the output CB metadata associated with the
- * operand id. Callers no longer thread face geometry through the API, since per-CB
- * face geometry is recorded in the CB descriptor at program creation time. The relu
- * configuration is taken from the supplied pack params.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @tparam pack_mode           Packer program mode (e.g. Default, Untilize).
- * @param  pack_params         Pack parameters carrying the output operand and relu config.
- */
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+// Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). They take
+// already-resolved scalar formats/geometry + a runtime write address / per-row stride; the per-source
+// prologue (resolving these from a CB id, or from an LLKMemDescriptor) lives in the callers. The CB-id
+// callers pass base_addr = fifo_wr_ptr - 1 and page_stride = full_ct_dim * fifo_page_size; the id-free
+// callers pass base_addr = cb_write_address(...) and a compile-time page_stride derived from the output
+// descriptor (fifo_page_size == a single tile size assumption -- see experimental/2_0/llk_pack_untilize.h).
 
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
+inline void llk_pack_untilize_init_impl(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces) {
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+        pack_src_format, pack_dst_format, face_r_dim, num_faces);
+}
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        partial_face,
-        pack_params->relu_config.val);
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset = 0,
+    bool dense = false>
+inline void llk_pack_untilize_impl(
+    const std::uint32_t block_rt_dim,
+    const std::uint32_t base_addr,
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t page_stride,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces,
+    const std::uint32_t block_c_index,
+    const std::uint32_t tile_dst_rt_offset) {
+    std::uint32_t pack_tile_addr =
+        base_addr + SCALE_DATUM_SIZE(
+                        pack_dst_format,
+                        (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
+                        16;
+
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
+
+    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
+            pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
+
+        pack_tile_addr += page_stride;
+    }
+}
+
+inline void llk_pack_untilize_uninit_impl(const std::uint32_t pack_src_format) {
+    _llk_pack_untilize_uninit_(pack_src_format);
 }
 
 /**
@@ -73,9 +99,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
-
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+    llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
@@ -87,7 +111,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  */
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
-    _llk_pack_untilize_uninit_(pack_src_format[output_id]);
+    llk_pack_untilize_uninit_impl(pack_src_format[output_id]);
 }
 
 /**
@@ -115,7 +139,7 @@ template <
     bool diagonal = false /* unused */,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
-    uint32_t tile_dst_ct_offset = 0,
+    std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
@@ -126,19 +150,15 @@ inline void llk_pack_untilize(
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    std::uint32_t pack_tile_addr =
-        get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
-        SCALE_DATUM_SIZE(
-            pack_dst_format[output_id],
-            (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
-            16;
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
-
-    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
-            pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
-
-        pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
-    }
+    llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
+        block_rt_dim,
+        get_local_cb_interface(output_id).fifo_wr_ptr - 1,
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        num_faces,
+        block_c_index,
+        tile_dst_rt_offset);
 }

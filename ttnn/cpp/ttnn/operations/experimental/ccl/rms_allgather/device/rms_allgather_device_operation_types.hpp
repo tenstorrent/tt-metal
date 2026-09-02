@@ -69,6 +69,7 @@ struct RMSAllGatherParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(10);
         attrs.emplace_back("eps", eps);
         attrs.emplace_back("subblock_wt", subblock_wt);
         attrs.emplace_back("block_wt", block_wt);

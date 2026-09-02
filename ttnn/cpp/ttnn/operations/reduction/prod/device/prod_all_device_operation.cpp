@@ -11,7 +11,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
 
     TT_FATAL(
-        input.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input.storage_type() == ttnn::StorageType::DEVICE,
         "Operands need to be on device! Got storage type: {}",
         input.storage_type());
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -35,7 +35,7 @@ ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_outp
         (input.dtype() == tt::tt_metal::DataType::FLOAT32 || tt::tt_metal::is_block_float(input.dtype()))
             ? tt::tt_metal::DataType::FLOAT32
             : input.dtype();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, input.tensor_spec().tile().get_tile_hw()}),
         tt::tt_metal::TensorLayout(
             output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));

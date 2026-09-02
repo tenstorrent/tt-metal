@@ -9,14 +9,14 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape.hpp>
 
@@ -52,8 +52,8 @@ TEST_P(CreateTensorTest, Tile) {
     std::vector<bfloat16> host_data(input_shape.volume(), bfloat16(1.0f));
 
     auto host_tensor = HostTensor::from_vector(host_data, tensor_spec);
-    auto device_tensor = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host_tensor, *mesh_device_);
-    auto readback_tensor = enqueue_read_tensor(mesh_device_->mesh_command_queue(), device_tensor);
+    auto device_tensor = mesh_device_->mesh_command_queue().enqueue_write_tensor(host_tensor);
+    auto readback_tensor = mesh_device_->mesh_command_queue().enqueue_read_tensor(device_tensor);
 
     auto readback_data = readback_tensor.to_vector<bfloat16>();
 
@@ -103,7 +103,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     auto tensor = MeshTensor::allocate_on_device(
-        *mesh_device_, TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), TensorTopology());
+        *mesh_device_, TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)));
     EXPECT_EQ(tensor.logical_shape(), shape);
 
     ::test_utils::test_tensor_on_device(shape, tensor_layout, *mesh_device_);

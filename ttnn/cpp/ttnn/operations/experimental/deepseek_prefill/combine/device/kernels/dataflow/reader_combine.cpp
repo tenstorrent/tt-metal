@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -127,8 +128,6 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
-    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
-    uint32_t output_init_barrier_address = get_semaphore(output_init_barrier_semaphore_id);
 
     DPRINT_COMBINE(
         "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
@@ -136,25 +135,23 @@ void kernel_main() {
         expert_end_idx,
         linearized_mesh_coord);
 
+#if INIT_ZEROS
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-#if INIT_ZEROS
     // Hybrid row output-zeroing: this core zeroes its assigned page range, then waits for untilizer row cores
     {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-        uint32_t output_init_done_sem_address = get_semaphore(output_init_done_semaphore_id);
 
         {
             // DeviceZoneScopedN("combine-output-zeroing-SENDER-writing");
             zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
 
-        volatile tt_l1_ptr uint32_t* output_init_done_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_done_sem_address);
-        noc_semaphore_wait(output_init_done_sem_ptr, num_total_untilizer_cores);
-        noc_semaphore_set(output_init_done_sem_ptr, 0);
+        Semaphore<> output_init_done_sem(output_init_done_semaphore_id);
+        output_init_done_sem.wait(num_total_untilizer_cores);
+        output_init_done_sem.set(0);
     }
 #endif
 
@@ -164,11 +161,10 @@ void kernel_main() {
     uint32_t mcast_end_x = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_end_y = get_arg_val<uint32_t>(rt_args++);
     uint32_t untilizer_counter_l1_offset = get_write_ptr(cb_dispatched_metadata_id);
-    uint32_t counter_ready_sem_l1_offset = get_semaphore(counter_ready_semaphore_id);
     uint64_t mcast_counter_noc_addr =
         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, untilizer_counter_l1_offset);
-    uint64_t mcast_counter_sem_noc_addr =
-        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
+    Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
+    Noc noc_obj;
 
     // Per-untilizer semaphores (each scoped to just the (this sender, untilizer) pair):
     //   data_ready: untilizer ++ after each non-local row it writes into receive_buf.  We do
@@ -197,17 +193,15 @@ void kernel_main() {
 
 #if INIT_ZEROS
     // Signal writer that output-zeroing is complete
-    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
-    noc_semaphore_set(output_init_complete_sem_ptr, 1);
+    Semaphore<> output_init_complete_sem(output_init_complete_semaphore_id);
+    output_init_complete_sem.set(1);
 
     // Wait for ALL writers (all cores) to complete init exchange.
     // Each writer signals all readers' barrier sems via noc_semaphore_inc,
     // so this reader waits for num_cores signals before proceeding.
-    volatile tt_l1_ptr uint32_t* barrier_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_barrier_address);
-    noc_semaphore_wait(barrier_sem_ptr, num_cores);
-    noc_semaphore_set(barrier_sem_ptr, 0);
+    Semaphore<> barrier_sem(output_init_barrier_semaphore_id);
+    barrier_sem.wait(num_cores);
+    barrier_sem.set(0);
 #endif
 
     // Read expert token counts
@@ -258,7 +252,8 @@ void kernel_main() {
             off += chunk;
         }
         noc_async_write_barrier();
-        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_untilizer_cores_group);
+        counter_ready_sem.inc_multicast(
+            noc_obj, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, /*value=*/1, num_untilizer_cores_group);
     }
 
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);

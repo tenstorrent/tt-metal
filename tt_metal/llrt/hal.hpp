@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "tt_memory.h"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
 #include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
@@ -155,6 +156,8 @@ enum class DispatchFeature : uint8_t {
     DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
     // Dispatch to Tensix cores utilize a kernel config buffer
     DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Quasar dispatch-engine cores utilize a kernel config buffer for kernel binaries
+    DISPATCH_KERNEL_CONFIG_BUFFER,
 };
 
 class Hal;
@@ -228,7 +231,18 @@ public:
     const dev_msgs::Factory& get_dev_msgs_factory() const;
     const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
     const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory() const;
+
+    const std::vector<std::vector<HalJitBuildConfig>>& processor_classes() const { return processor_classes_; }
+    const std::vector<DeviceAddr>& mem_map_bases() const { return mem_map_bases_; }
+    const std::vector<uint32_t>& mem_map_sizes() const { return mem_map_sizes_; }
+    const std::vector<uint32_t>& eth_fw_mailbox_msgs() const { return eth_fw_mailbox_msgs_; }
 };
+
+// Placeholder core_info slot (empty processor classes) for enum indices with no HAL registration on this arch.
+HalCoreInfoType create_unregistered_programmable_core(
+    HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source);
+
+void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source);
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
@@ -293,6 +307,11 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
+    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
+    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
+    // empty string when the processor has no vector unit / the arch does not support it.
+    // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
+    virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
     // Returns a string of linker flags to be added to linker command line.
@@ -323,7 +342,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::SemVer)>;
 
 private:
     tt::ARCH arch_;
@@ -361,6 +380,9 @@ private:
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
+    // Whether this arch addresses its PCIE/DRAM non-worker cores through virtual coordinates
+    // (Blackhole, Quasar) rather than physical ones (Wormhole). ETH is virtualized on every arch.
+    bool virtualizes_non_worker_cores_{};
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
@@ -428,6 +450,15 @@ public:
         bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    bool has_mpsc_ring_buffer() const { return arch_ == tt::ARCH::QUASAR || arch_ == tt::ARCH::BLACKHOLE; }
+    uint32_t get_ring_buffer_capacity() const {
+        switch (arch_) {
+            case tt::ARCH::QUASAR: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR;
+            case tt::ARCH::BLACKHOLE: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE;
+            default: return DEBUG_RING_BUFFER_SPSC_ELEMENTS;
+        }
+    }
 
     // Returns the NoC topology type (MESH or TORUS)
     NoCTopologyType get_noc_topology() const { return noc_topology_; }
@@ -514,6 +545,7 @@ public:
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+    bool virtualizes_non_worker_cores() const { return this->virtualizes_non_worker_cores_; }
 
     bool get_supports_eth_fw_mailbox() const;
     bool get_supports_eth_debug_regs() const;
@@ -525,7 +557,8 @@ public:
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     bool has_programmable_core_type(HalProgrammableCoreType programmable_core_type) const {
-        return static_cast<uint32_t>(programmable_core_type) < get_programmable_core_type_count();
+        const uint32_t index = static_cast<uint32_t>(programmable_core_type);
+        return index < get_programmable_core_type_count() && get_processor_classes_count(programmable_core_type) > 0;
     }
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
@@ -876,6 +909,8 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
         case HalProgrammableCoreType::DRAM:
             // DRAM kernels are always loaded directly to L1; no config buffer indirection.
             return false;
+        case HalProgrammableCoreType::DISPATCH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }
@@ -888,6 +923,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
         case CoreType::DRAM: return HalProgrammableCoreType::DRAM;
+        case CoreType::DISPATCH: return HalProgrammableCoreType::DISPATCH;
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
@@ -898,24 +934,3 @@ template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
     std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
 };
-
-#define HAL_MEM_L1_BASE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_ETH_BASE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_DRAM_L1_BASE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_DRAM_L1_SIZE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

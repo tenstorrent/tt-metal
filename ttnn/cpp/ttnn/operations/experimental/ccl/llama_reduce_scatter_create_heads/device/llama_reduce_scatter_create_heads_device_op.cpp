@@ -96,15 +96,15 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
         tt::tt_metal::MemoryConfig(qkv_memory_config.memory_layout(), qkv_memory_config.buffer_type(), v_shard_spec);
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
@@ -115,9 +115,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     std::vector<ttnn::Tensor> tensors{};
+    tensors.reserve(output_specs.size());
     for (auto& output_spec : output_specs) {
         auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-        tensors.push_back(tensor);
+        tensors.push_back(std::move(tensor));
     }
     return tensors;
 }

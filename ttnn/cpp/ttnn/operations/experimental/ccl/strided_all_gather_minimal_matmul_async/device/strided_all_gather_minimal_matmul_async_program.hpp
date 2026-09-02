@@ -6,14 +6,14 @@
 
 #include "strided_all_gather_minimal_matmul_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_fabric_bound_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
         StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
-        MinimalMatmulProgramFactory::shared_variables_t mm_shared_variables;
+        MinimalMatmulFabricBoundProgramFactory::shared_variables_t mm_shared_variables;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

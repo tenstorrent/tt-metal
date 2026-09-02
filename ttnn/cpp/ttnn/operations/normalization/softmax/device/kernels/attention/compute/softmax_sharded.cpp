@@ -9,267 +9,271 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "experimental/kernel_args.h"
 
 template <
-    uint32_t block_w,
-    uint32_t num_subblocks_w,
-    uint32_t subblock_w,
-    uint32_t cb_in_id,
-    uint32_t cb_max_scaler_id,
-    uint32_t cb_max_id,
-    uint32_t cb_out_id>
+    std::uint32_t block_w,
+    std::uint32_t num_subblocks_w,
+    std::uint32_t subblock_w,
+    std::uint32_t dfb_in_id,
+    std::uint32_t dfb_max_scaler_id,
+    std::uint32_t dfb_max_id,
+    std::uint32_t dfb_out_id>
 ALWI void calc_numeric_stable() {
-    auto cb_in_obj = CircularBuffer(cb_in_id);
-    auto cb_max_obj = CircularBuffer(cb_max_id);
-    auto cb_out_obj = CircularBuffer(cb_out_id);
+    DataflowBuffer dfb_in_obj(dfb_in_id);
+    DataflowBuffer dfb_max_obj(dfb_max_id);
+    DataflowBuffer dfb_out_obj(dfb_out_id);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        cb_in_id,
-        cb_max_scaler_id,
-        cb_max_id,
+        dfb_in_id,
+        dfb_max_scaler_id,
+        dfb_max_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
-    reconfig_data_format_srcb(cb_max_id);
-    cb_max_obj.wait_front(1);
-    sub_bcast_cols_init_short(cb_in_id, cb_max_id);
-    uint32_t index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
+    reconfig_data_format_srcb(dfb_max_id);
+    dfb_max_obj.wait_front(1);
+    sub_bcast_cols_init(dfb_in_id, dfb_max_id);
+    std::uint32_t index_subblock_w_offset = 0;
+    for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
         tile_regs_acquire();
-        cb_out_obj.reserve_back(subblock_w);
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            uint32_t index = w + index_subblock_w_offset;
-            sub_tiles_bcast_cols(cb_in_id, cb_max_id, index, 0, w);
+        dfb_out_obj.reserve_back(subblock_w);
+        for (std::uint32_t w = 0; w < subblock_w; w++) {
+            std::uint32_t index = w + index_subblock_w_offset;
+            sub_tiles_bcast_cols(dfb_in_id, dfb_max_id, index, 0, w);
         }
-        cb_out_obj.reserve_back(subblock_w);
-        for (uint32_t w = 0; w < subblock_w; w++) {
+        dfb_out_obj.reserve_back(subblock_w);
+        for (std::uint32_t w = 0; w < subblock_w; w++) {
             exp_tile<EXP_APPROX>(w);
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            pack_tile(w, cb_out_id);
+        for (std::uint32_t w = 0; w < subblock_w; w++) {
+            pack_tile(w, dfb_out_id);
         }
         tile_regs_release();
-        cb_out_obj.push_back(subblock_w);
+        dfb_out_obj.push_back(subblock_w);
         index_subblock_w_offset += subblock_w;
     }
-    cb_in_obj.pop_front(block_w);
-    cb_max_obj.pop_front(1);
-    cb_out_obj.wait_front(block_w);
+    dfb_in_obj.pop_front(block_w);
+    dfb_max_obj.pop_front(1);
+    dfb_out_obj.wait_front(block_w);
 }
 
 void kernel_main() {
-    constexpr uint32_t block_h = get_compile_time_arg_val(0);
-    constexpr uint32_t block_w = get_compile_time_arg_val(1);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
+    constexpr std::uint32_t block_h = get_arg(args::block_h);
+    constexpr std::uint32_t block_w = get_arg(args::block_w);
+    constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
+    constexpr std::uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
+    constexpr auto dfb_in0 = dfb::in0;
+    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    constexpr auto dfb_exps = dfb::exps;
+    constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
+    constexpr auto dfb_out0 = dfb::out0;
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_max_scaler = tt::CBIndex::c_1;
-    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
-    constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    constexpr auto cb_fused_attn = tt::CBIndex::c_3;
-    constexpr auto cb_exps = tt::CBIndex::c_6;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
-    constexpr auto cb_out0 = tt::CBIndex::c_11;
+    compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
+#if FUSED_SCALE_MASK
+    // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
+    constexpr auto dfb_fused_scale = dfb::fused_scale;
+    constexpr auto dfb_fused_attn = dfb::fused_attn;
+    constexpr auto dfb_scale_mask = dfb::scale_mask;
+#endif
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_9;
-    constexpr auto cb_x = tt::CBIndex::c_10;
+    constexpr auto dfb_max = dfb::max;
+    constexpr auto dfb_x = dfb::x;
 #else
-    constexpr auto cb_x = cb_exps;
+    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse).
+    constexpr auto dfb_x = dfb_exps;
 #endif
 
-    auto cb_in0_obj = CircularBuffer(cb_in0);
-    auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
-    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
-    auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
-    auto cb_exps_obj = CircularBuffer(cb_exps);
-    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
-    auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
-    auto cb_out0_obj = CircularBuffer(cb_out0);
-    auto cb_x_obj = CircularBuffer(cb_x);
-#ifdef NUMERIC_STABLE
-    auto cb_max_obj = CircularBuffer(cb_max);
+    DataflowBuffer dfb_in0_obj(dfb_in0);
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    DataflowBuffer dfb_exps_obj(dfb_exps);
+    DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
+    DataflowBuffer dfb_out0_obj(dfb_out0);
+    DataflowBuffer dfb_x_obj(dfb_x);
+#if FUSED_SCALE_MASK
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
+    DataflowBuffer dfb_scale_mask_obj(dfb_scale_mask);
 #endif
 
     constexpr int dst0 = 0;
     int index_subblock_w_offset = 0;
     int index = 0;
 
-    for (uint32_t i = 0; i < block_h; i++) {
+    for (std::uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
         // fused scale
-        reconfig_data_format(cb_in0, cb_fused_scale);
-        pack_reconfig_data_format(cb_scale_mask);
-        cb_fused_scale_obj.wait_front(1);
-        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
+        reconfig_data_format(dfb_in0, dfb_fused_scale);
+        pack_reconfig_data_format(dfb_scale_mask);
+        dfb_fused_scale_obj.wait_front(1);
+        mul_bcast_scalar_init(dfb_in0, dfb_fused_scale);
         index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
-            cb_scale_mask_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            dfb_scale_mask_obj.reserve_back(subblock_w);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
+                mul_tiles_bcast_scalar(dfb_in0, dfb_fused_scale, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_scale_mask);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile(w, dfb_scale_mask);
             }
             tile_regs_release();
-            cb_scale_mask_obj.push_back(subblock_w);
+            dfb_scale_mask_obj.push_back(subblock_w);
             index_subblock_w_offset += subblock_w;
         }
-        cb_in0_obj.pop_front(block_w);
-        reconfig_data_format(cb_scale_mask, cb_fused_attn);
+        dfb_in0_obj.pop_front(block_w);
+        reconfig_data_format(dfb_scale_mask, dfb_fused_attn);
 
         // fused attn
-        cb_scale_mask_obj.wait_front(block_w);
+        dfb_scale_mask_obj.wait_front(block_w);
 
 #ifndef SHARDED_CAUSAL_MASK
-        cb_fused_attn_obj.wait_front(block_w);
+        dfb_fused_attn_obj.wait_front(block_w);
 #endif
 
         index_subblock_w_offset = 0;
 
 #ifdef CAUSAL_MASK
-        add_tiles_init(cb_scale_mask, cb_fused_attn);
+        add_init(dfb_scale_mask, dfb_fused_attn);
 #else
-        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+        add_bcast_rows_init(dfb_scale_mask, dfb_fused_attn);
 #endif
 
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
 #endif
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
 #ifdef CAUSAL_MASK
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
+                add_tiles(dfb_scale_mask, dfb_fused_attn, index, index, w);
             }
 #else
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
+                add_tiles_bcast_rows(dfb_scale_mask, dfb_fused_attn, index, index, w);
             }
 #endif
-            cb_x_obj.reserve_back(subblock_w);
+            dfb_x_obj.reserve_back(subblock_w);
 #ifndef NUMERIC_STABLE
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 exp_tile<EXP_APPROX>(w);
             }
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_x);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile(w, dfb_x);
             }
             tile_regs_release();
-            cb_x_obj.push_back(subblock_w);
+            dfb_x_obj.push_back(subblock_w);
             index_subblock_w_offset += subblock_w;
         }
-        cb_scale_mask_obj.pop_front(block_w);
+        dfb_scale_mask_obj.pop_front(block_w);
 
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        cb_x_obj.wait_front(block_w);
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_x, cb_max_scaler, cb_max, cb_exps>();
+        dfb_x_obj.wait_front(block_w);
+        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb_x, dfb_max_scaler, dfb_max, dfb_exps>();
 #endif
 
 #ifdef CAUSAL_MASK
-        cb_fused_attn_obj.pop_front(block_w);
+        dfb_fused_attn_obj.pop_front(block_w);
 #endif
-        reconfig_data_format(cb_exps, cb_sum_scaler);
+        reconfig_data_format(dfb_exps, dfb_sum_scaler);
 
 #else
 
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
+        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb_in0, dfb_max_scaler, dfb_max, dfb_exps>();
 #else
-        reconfig_data_format(cb_in0, cb_in0);
-        pack_reconfig_data_format(cb_exps);
+        reconfig_data_format(dfb_in0, dfb_in0);
+        pack_reconfig_data_format(dfb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(cb_in0);
+        copy_init(dfb_in0);
         exp_tile_init<EXP_APPROX>();
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                copy_tile(cb_in0, index, w);
+                copy_tile(dfb_in0, index, w);
             }
-            cb_exps_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            dfb_exps_obj.reserve_back(subblock_w);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 exp_tile<EXP_APPROX>(w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_exps);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile(w, dfb_exps);
             }
             tile_regs_release();
-            cb_exps_obj.push_back(subblock_w);
+            dfb_exps_obj.push_back(subblock_w);
             index_subblock_w_offset += subblock_w;
         }
-        cb_in0_obj.pop_front(block_w);
+        dfb_in0_obj.pop_front(block_w);
 #endif
 #endif  // FUSED_SCALE_MASK
 
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        cb_exps_obj.wait_front(block_w);
+        dfb_exps_obj.wait_front(block_w);
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_exps,
+            dfb_sum_scaler,
+            dfb_recipsumexps,
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             compute_kernel_lib::ReduceInputBlockShape::row(block_w),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
-            [](uint32_t) {
+            [](std::uint32_t) {
                 recip_tile_init();
                 recip_tile(0);
             });
 
         // exp(x) / (sum(exp(x)))
-        reconfig_data_format(cb_exps, cb_recipsumexps);
-        pack_reconfig_data_format(cb_out0);
-        cb_recipsumexps_obj.wait_front(1);
-        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
+        reconfig_data_format(dfb_exps, dfb_recipsumexps);
+        pack_reconfig_data_format(dfb_out0);
+        dfb_recipsumexps_obj.wait_front(1);
+        mul_bcast_cols_init(dfb_exps, dfb_recipsumexps);
         index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
-            cb_out0_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
+            dfb_out0_obj.reserve_back(subblock_w);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, index, 0, w);
+                mul_tiles_bcast<BroadcastType::COL>(dfb_exps, dfb_recipsumexps, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_out0);
+            for (std::uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile(w, dfb_out0);
             }
             tile_regs_release();
-            cb_out0_obj.push_back(subblock_w);
+            dfb_out0_obj.push_back(subblock_w);
             index_subblock_w_offset += subblock_w;
         }
-        cb_recipsumexps_obj.pop_front(1);
-        cb_exps_obj.pop_front(block_w);
+        dfb_recipsumexps_obj.pop_front(1);
+        dfb_exps_obj.pop_front(block_w);
     }
 }

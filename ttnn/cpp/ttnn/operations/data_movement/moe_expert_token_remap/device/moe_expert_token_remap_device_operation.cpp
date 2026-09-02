@@ -80,11 +80,11 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
     const ttnn::Shape output_reduced_shape{1, 1, std::ceil(batch_seq / reduction_size), num_local_experts};
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(MemoryConfig());
-    TensorSpec output_mapping_spec(
+    tt::tt_metal::TensorSpec output_mapping_spec(
         Shape(output_mapping_shape),
         TensorLayout(tensor_args.topk_tensor.dtype(), PageConfig(tensor_args.topk_tensor.layout()), mem_config));
 
-    TensorSpec output_reduced_spec(
+    tt::tt_metal::TensorSpec output_reduced_spec(
         Shape(output_reduced_shape),
         TensorLayout(tt::tt_metal::DataType::UINT16, PageConfig(tensor_args.topk_tensor.layout()), mem_config));
 

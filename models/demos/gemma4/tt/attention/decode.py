@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
     apply_allreduce,
@@ -113,6 +114,7 @@ def decode_forward(
     else:
         tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
         tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
@@ -310,11 +312,13 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
-            num_kv_heads=sdpa_num_local_kv_heads,
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
+                block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+                num_kv_heads=sdpa_num_local_kv_heads,
+            ),
             **paged_modulo_kwargs,
         )
     else:
@@ -445,9 +449,9 @@ def _packed_verify_sdpa(
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2),
             math_approx_mode=True,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
         if _num_dev == 1
@@ -468,8 +472,10 @@ def _packed_verify_sdpa(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=pc,
                 compute_kernel_config=compute_kernel_config,
-                block_size=block_size,
-                num_kv_heads=num_kv_heads,
+                paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
+                    block_size=block_size,
+                    num_kv_heads=num_kv_heads,
+                ),
             )
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,

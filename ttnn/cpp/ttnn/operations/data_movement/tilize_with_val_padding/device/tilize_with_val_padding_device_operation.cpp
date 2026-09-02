@@ -101,6 +101,16 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+        // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the output block is a single
+        // column tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
+        // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).
+        TT_FATAL(
+            operation_attributes.output_padded_shape[-1] / TILE_WIDTH > 1,
+            "FP8_E4M3 tilize_with_val_padding requires more than one tile per row (padded width {} must exceed "
+            "one tile of {}); the single-tile-per-row 8-bit unpack-tilize path is currently broken on this "
+            "architecture",
+            operation_attributes.output_padded_shape[-1],
+            TILE_WIDTH);
     }
 
     if (input_shape.rank() == 1) {
@@ -165,7 +175,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
@@ -184,7 +194,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec);  // If the input is using the legacy sharded optimized program
                           // factory, the output has the same shard spec as the input.
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
@@ -194,7 +204,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
                 operation_attributes.output_padded_shape));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_shape,
         TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
@@ -224,7 +234,11 @@ Tensor tilize_with_val_padding(
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
+            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
+            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+            .output_dtype = output_dtype.value_or(
+                input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,

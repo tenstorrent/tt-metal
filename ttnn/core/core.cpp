@@ -22,9 +22,9 @@ std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) 
 }
 
 void set_printoptions(TensorPrintProfile print_profile, SciMode sci_mode, int precision) {
-    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.profile = print_profile;
-    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.sci_mode = sci_mode;
-    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.precision = precision;
+    ttnn::tensor_impl::TTNN_PRINT_OPTIONS.profile = print_profile;
+    ttnn::tensor_impl::TTNN_PRINT_OPTIONS.sci_mode = sci_mode;
+    ttnn::tensor_impl::TTNN_PRINT_OPTIONS.precision = precision;
 }
 
 void segfault_handler(int /*sig*/) {
