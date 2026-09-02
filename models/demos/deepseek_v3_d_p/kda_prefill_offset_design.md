@@ -73,9 +73,10 @@ split into the first and last causal segments.
 - Supporting non-tile-aligned offsets. MLA already requires 32-token alignment
   ([`tt/mla/mla.py`](tt/mla/mla.py#L887-L896)), and KDA recurrence chunks are
   one TT tile ([`tt/kda/config.py`](tt/kda/config.py#L12-L19)).
-- Defining arbitrary partial final-prefill behavior in the first change. This
-  design's required interval contains 5120 real tokens; padding semantics need
-  a separate extension.
+- Supporting fewer than 5120 real tokens or zero-padded partial prefills. Those
+  are a separate follow-up feature. That feature must preserve KDA's 32-token
+  compute unit per device, but its padding and empty-segment semantics are not
+  part of this offset-only design.
 - Changing TP sharding, model mathematics, weights, or decode behavior.
 
 ## Current system
@@ -92,8 +93,10 @@ head length   h = C - o
 tail length   t = o
 ```
 
-If `o=0`, there is no split and chronological SP order is
-`b, b+1, ..., P-1, 0, ..., b-1`. If `o>0`, there are `P+1` logical segments:
+If `o=0`, the offset lands exactly between devices: `h=C`, `t=0`, there is no
+tail segment, and chronological SP order is
+`b, b+1, ..., P-1, 0, ..., b-1`. There are exactly `P` full-device segments.
+If `o>0`, there are `P+1` logical segments:
 
 ```text
 (b, rows 0:h), (b+1, all rows), ..., (b-1, all rows), (b, rows h:C)
@@ -104,6 +107,13 @@ Ranks are interpreted modulo `P`. For `S=960`, `P=8`, and `C=640`, this gives
 implemented by MLA's Python position oracle and cache writer
 ([`tt/mla/utils.py`](tt/mla/utils.py#L83-L111),
 [`writer_update_padded_kv_cache.cpp`](../../../ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/writer_update_padded_kv_cache.cpp#L100-L122)).
+
+For the between-device example `S=1280`, the result is `b=2`, `o=0`,
+`h=640`, and `t=0`. The eight full segments are ordered
+`SP2 -> SP3 -> SP4 -> SP5 -> SP6 -> SP7 -> SP0 -> SP1`; the boundary rank SP2
+appears only once. This case still requires rotated causal carry ordering even
+though it requires no head/tail split. The global interval remains exactly
+5120 real tokens.
 
 ### KDA execution and state
 
@@ -301,7 +311,8 @@ Failure semantics:
 4. Each real token updates convolution and recurrence exactly once.
 5. Returned state represents the chronological end of the interval and is
    suitable for the next prefill call.
-6. Offset zero preserves current behavior and numerical results.
+6. A device-boundary offset (`o=0`) creates no tail work and no zero-length
+   segment; offset zero also preserves current behavior and numerical results.
 
 ### Required correctness tests
 
@@ -309,9 +320,11 @@ Failure semantics:
   asserts coverage, uniqueness, row ranges, boundary ownership, and logical
   order for all eight possible boundary ranks.
 - Distributed device tests compare inverse-rotated output, recurrent state,
-  and convolution state with the natural-order PyTorch reference for:
-  `o=0`; smallest split (`o=32`); midpoint (`o=320`); largest split
-  (`o=608`); and at least one split on every SP rank.
+  and convolution state with the natural-order PyTorch reference for every
+  between-device offset (`actual_start mod 5120` in
+  `{0,640,1280,1920,2560,3200,3840,4480}`); the smallest split (`o=32`);
+  midpoint (`o=320`); largest split (`o=608`); and at least one nonzero split
+  on every SP rank.
 - The production Galaxy SP8 x TP4, `T=5120`, `actual_start=960` case matches
   the real-weight reference with PCC at least `0.9995`, the existing production
   threshold ([`tests/kda/perf/test_layer_perf.py`](tests/kda/perf/test_layer_perf.py#L44-L48)).
@@ -321,8 +334,9 @@ Failure semantics:
   ([`tests/kda/layer/test_distributed.py`](tests/kda/layer/test_distributed.py#L144-L253)).
 - Tests verify convolution carry and recurrent state independently, not only
   final projected output.
-- Trace replay covers at least two different boundary ranks and two different
-  split rows without stale offset capture or program-cache corruption.
+- Trace replay covers at least two different boundary ranks, including one
+  zero-tail case, and two different nonzero split rows without stale offset
+  capture or program-cache corruption.
 
 ### Required performance evidence
 
@@ -402,7 +416,6 @@ production.
 | Causal model | One ordered list of `P` or `P+1` logical segments | Special-case sequential second pass |
 | Tail scheduling | Derive tail entry from affine prefix; do not wait for all local scans | Simpler serialized tail baseline |
 | API input | Add absolute global `actual_start` at KDA prefill boundary | Pass precomputed boundary/split metadata |
-| Initial scope | Full 5120 real-token intervals, tile-aligned starts | Include partial/padded final chunks now |
 | Performance gate | Measure first, then approve a budget | Choose a speculative regression threshold |
 
 ## Blast radius
@@ -444,9 +457,9 @@ Expected unchanged areas:
 - **Unknown:** Whether offset should be a runtime tensor/scalar or a trace-fixed
   argument. Absolute position must not create an unbounded program-cache key;
   only `actual_start mod 5120` affects topology.
-- **Unknown:** The required behavior for partial/padded final chunks. Adding it
-  may introduce empty segments and per-rank real-token counts and should be
-  specified before extending this contract.
+- **Assumed:** Partial or zero-padded chunks are outside this offset-only
+  design. They require a follow-up design whose per-device work respects the
+  32-token compute unit.
 
 ## Evidence summary
 
