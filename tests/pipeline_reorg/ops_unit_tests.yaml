@@ -100,6 +100,21 @@
   team: ttnn
   category: experimental
 
+- name: ttnn mhc_split_sinkhorn unit tests
+  # The test file sits in a directory no group suite globs, so this row is the only thing that
+  # runs it. That is deliberate: the op is brought up and measured on Blackhole P150b alone, and
+  # every group suite that would otherwise collect it runs -x on SKUs it has never executed on,
+  # where a failure would abort tests belonging to someone else.
+  # The per-test timeout sits below the step timeout so a hang is reported as a pytest stack
+  # dump rather than an opaque step kill, with room left over for the report to be written.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_mhc_split_sinkhorn.py -xv --timeout=120'
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+  category: experimental
+
 - name: ttnn nightly experimental tests (blackhole - viommu)
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py -xv --timeout=600'
   skus:
