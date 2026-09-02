@@ -35,7 +35,7 @@ from .weights import AttentionWeights
 TILE_HEIGHT = 32
 
 
-def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device):
+def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device, force_inline=False):
     """Resolve the per-request fill length as a device tensor for
     ``paged_fill_cache``'s kernel-side bounded-fill cap, or None to fall back
     to the host-side slice.
@@ -56,7 +56,7 @@ def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_de
     dev = getattr(config, "prefill_valid_len_dev", None)
     if dev is not None and valid_seq_len is None:
         return dev
-    if os.environ.get("GEMMA4_KERNEL_FILL_CAP", "0").lower() not in ("1", "true", "yes"):
+    if not force_inline and os.environ.get("GEMMA4_KERNEL_FILL_CAP", "0").lower() not in ("1", "true", "yes"):
         return None
     if valid_seq_len is None:
         return None
@@ -248,6 +248,34 @@ def flush_deferred_bounded_fills(layers):
         cfg = getattr(getattr(layer, "self_attn", None), "config", None)
         if cfg is None:
             continue
+        # Batched bounded fills deferred per slot (same after-lm_head contract).
+        batched_pending = getattr(cfg, "_deferred_bounded_fill_batched", None)
+        if batched_pending:
+            cfg._deferred_bounded_fill_batched = None
+            for p in batched_pending:
+                try:
+                    ttnn.experimental.paged_fill_cache(
+                        p["k_cache"],
+                        p["k_fill"],
+                        p["page_table"],
+                        batch_idx=p["user_id"],
+                        block_size=p["block_size"],
+                        **p["paged_modulo_kwargs"],
+                    )
+                    ttnn.experimental.paged_fill_cache(
+                        p["v_cache"],
+                        p["v_fill"],
+                        p["page_table"],
+                        batch_idx=p["user_id"],
+                        block_size=p["block_size"],
+                        **p["paged_modulo_kwargs"],
+                    )
+                finally:
+                    for t in (p["k_fill"], p["v_fill"]):
+                        try:
+                            t.deallocate(True)
+                        except Exception:
+                            pass
         pending = getattr(cfg, "_deferred_bounded_fill", None)
         if not pending:
             continue
@@ -918,12 +946,29 @@ def prefill_forward(
                         fill_len = min(fill_len, max(0, int(valid_seq_len[int(slot_idx)])))
                 elif valid_seq_len is not None:
                     fill_len = min(fill_len, max(0, int(valid_seq_len)))
-                fill_len = min(fill_len, page_len)
+                # Bounded ring (cache_position_modulo set): the writer WRAPS rows
+                # (row r -> slot r % modulo), so the fill must cover the FULL real
+                # length and let the last writer win — that is how the ring ends
+                # holding the newest window, exactly like the B=1 bounded path.
+                # Capping at page_len (= ring capacity) writes only tokens
+                # [0, page_len) and leaves the ring holding the OLDEST window —
+                # the root cause of batched-prefill degeneration under bounded
+                # sliding (every batched user decodes against its first 1024
+                # tokens instead of its last).
+                if not paged_modulo_kwargs:
+                    fill_len = min(fill_len, page_len)
                 # Tile-ceil so the writer sees a legal RM height (match B=1 path).
                 # Zero-length slots must skip fill — tile_end==0 used to fall into
                 # the else branch and write the full pad into KV.
                 tile_end = ((fill_len + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
-                tile_end = min(tile_end, seq_len_per_user, page_len) if fill_len > 0 else 0
+                if fill_len > 0:
+                    tile_end = (
+                        min(tile_end, seq_len_per_user)
+                        if paged_modulo_kwargs
+                        else min(tile_end, seq_len_per_user, page_len)
+                    )
+                else:
+                    tile_end = 0
                 if tile_end <= 0:
                     continue
                 if tile_end < seq_len_per_user:
@@ -937,12 +982,63 @@ def prefill_forward(
                         [0, 0, 0, 0],
                         [1, v_user.shape[1], tile_end, v_user.shape[3]],
                     )
+                elif paged_modulo_kwargs:
+                    # Bounded ring: the writer wraps rows, so it must see the FULL
+                    # real length (capping at page_len = ring capacity would fill
+                    # the ring with the OLDEST window — tokens [0, page_len) —
+                    # value-verified as the exact wrap-regime corruption).
+                    k_user_sliced = k_user
+                    v_user_sliced = v_user
                 else:
                     k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
                     v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+                # Bounded (cache_position_modulo set): tile-ceil pad rows past the
+                # real length WRAP around the ring (row r writes slot r % modulo)
+                # and clobber the newest real K/V slots — the mechanism behind
+                # batched-prefill degeneration under bounded sliding (fingerprint-
+                # proven: block/ring placement is correct; tile-ALIGNED lengths
+                # decode clean). Fix the wrap boundary per slot exactly as the B=1
+                # bounded path does before its fill.
+                _k_merged, _v_merged = k_user_sliced, v_user_sliced
+                if paged_modulo_kwargs and fill_len < tile_end:
+                    _mod = int(config.cache_position_modulo)
+                    _k_merged = _merge_bounded_boundary_fill(k_user_sliced, fill_len, _mod)
+                    _v_merged = _merge_bounded_boundary_fill(v_user_sliced, fill_len, _mod)
+                if paged_modulo_kwargs:
+                    # Bounded: a mid-forward paged_fill_cache with
+                    # cache_position_modulo corrupts the live activations on TP —
+                    # the exact hazard the B=1 bounded path avoids by DEFERRING
+                    # its ring fills to after lm_head (see
+                    # flush_deferred_bounded_fills: "must run after lm_head").
+                    # Measured here: batched bounded prefill returned garbage
+                    # first-token logits for batch rows; with the fills removed
+                    # the logits are correct. Defer per-slot fills the same way.
+                    # Clone so the stash outlives the forward's activations.
+                    _k_stash = ttnn.clone(_k_merged, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    _v_stash = ttnn.clone(_v_merged, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    pending = getattr(config, "_deferred_bounded_fill_batched", None)
+                    if pending is None:
+                        pending = []
+                        config._deferred_bounded_fill_batched = pending
+                    pending.append(
+                        {
+                            "k_cache": k_cache,
+                            "v_cache": v_cache,
+                            "k_fill": _k_stash,
+                            "v_fill": _v_stash,
+                            "page_table": page_table,
+                            "user_id": slot_idx,
+                            "block_size": eff_bs,
+                            "paged_modulo_kwargs": paged_modulo_kwargs,
+                        }
+                    )
+                    for _t, _orig in ((_k_merged, k_user_sliced), (_v_merged, v_user_sliced)):
+                        if _t is not _orig:
+                            _t.deallocate(True)
+                    continue
                 ttnn.experimental.paged_fill_cache(
                     k_cache,
-                    k_user_sliced,
+                    _k_merged,
                     page_table,
                     batch_idx=slot_idx,
                     block_size=eff_bs,
@@ -950,12 +1046,15 @@ def prefill_forward(
                 )
                 ttnn.experimental.paged_fill_cache(
                     v_cache,
-                    v_user_sliced,
+                    _v_merged,
                     page_table,
                     batch_idx=slot_idx,
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
+                for _t, _orig in ((_k_merged, k_user_sliced), (_v_merged, v_user_sliced)):
+                    if _t is not _orig:
+                        _t.deallocate(True)
         else:
             valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
             for slot_idx in valid_slots:

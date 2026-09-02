@@ -1225,12 +1225,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # fixing the batched deferred-lm-head logits extraction behind the
             # identity gate. Escape hatch for that work: G4_FORCE_BATCH_PREFILL=1.
             and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
-            # The bounded-sliding exclusion predates the all-modes gate and must
-            # survive the hatch: under bounded rings the per-slot decode state
-            # does not follow batched-prefill KV (measured 2026-09-01 on QB2/12B
-            # bounded: hatch conc4 distinct -> 3/4 degenerate even on the eager
-            # capture-free path, while unbounded LB is byte-clean).
-            and not self._bounded_sliding_kv_cache
+            # Bounded sliding is allowed here since 2026-09-02: the historic
+            # exclusion's three root causes are fixed in attention/prefill.py —
+            # mid-forward bounded fills corrupted activations on TP (now
+            # deferred after lm_head like B=1), the fill input was capped at
+            # ring capacity (ring held the OLDEST window; now full-length under
+            # modulo), and misaligned tails lacked the wrap-boundary merge.
+            # Verified byte-equal vs the B=1-filled ring and via the identity
+            # battery at sub-window and wrap lengths.
         )
         use_sequential = batch_size > 1 and not will_batch
 
@@ -1307,20 +1309,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         prev_disable = getattr(args0, "disable_batched_prefill", False)
         if use_sequential:
             args0.disable_batched_prefill = True
-        # Arm the gemma4-owned batched-consumption hygiene (per-slot slice
-        # dealloc + RM return + retire list in process_logits_after_prefill_trace)
-        # only when this call truly batches; the single-user path must keep the
-        # original contract (persistent trace output input, TILE return).
-        for m in self.model:
-            m._g4_batched_prefill_consumption = will_batch
         try:
             with self._route_per_layer_page_tables(per_submesh):
                 out = super().prefill_forward_text(**kwargs)
         finally:
             if use_sequential:
                 args0.disable_batched_prefill = prev_disable
-            for m in self.model:
-                m._g4_batched_prefill_consumption = False
             self._clear_sequential_batch_page_tables()
 
         # Device work is synchronous after the TT forward returns — same
