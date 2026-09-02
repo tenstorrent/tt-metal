@@ -39,13 +39,9 @@
   ai_summary:
     authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 50
     wh_n300_civ2:
       timeout: 50
     bh_p100:
-      timeout: 50
-    bh_p150b_civ2:
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -54,13 +50,9 @@
 - name: ttnn nightly fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 65
     wh_n300_civ2:
       timeout: 65
     bh_p100:
-      timeout: 65
-    bh_p150b_civ2:
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -71,13 +63,9 @@
   ai_summary:
     authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -234,13 +222,9 @@
 - name: ttnn nightly moreh tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
