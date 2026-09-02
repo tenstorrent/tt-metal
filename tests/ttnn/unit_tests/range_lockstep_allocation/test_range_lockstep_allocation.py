@@ -140,7 +140,21 @@ def test_range_lockstep_ignores_per_core_ranges_on_other_cores(hogged_mesh):
     """FREE_CORE holds nothing, so a range lockstep buffer of the same size must fit there."""
     mesh, num_bytes = hogged_mesh
     tensor = _allocate(mesh, FREE_CORE, num_bytes, range_lockstep=True)
-    assert tensor is not None
+    assert tensor.is_range_lockstep_allocated()
+
+
+@requires_hybrid_allocator
+def test_flag_reaches_the_allocated_tensor(hybrid_mesh_device):
+    """The chain reports what it did, not only that the placement succeeded.
+
+    is_range_lockstep_allocated() reads the args the buffer was built with, so a link that drops
+    the flag shows up here even when the allocation would have fit either way.
+    """
+    scoped = _allocate(hybrid_mesh_device, HOGGED_CORE, 2048, range_lockstep=True)
+    assert scoped.is_range_lockstep_allocated()
+
+    default = _allocate(hybrid_mesh_device, FREE_CORE, 2048)
+    assert not default.is_range_lockstep_allocated()
 
 
 @requires_hybrid_allocator
