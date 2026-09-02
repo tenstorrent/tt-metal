@@ -2120,6 +2120,26 @@ uint32_t fabric_sync_samples() {
     return v;
 }
 
+// How often composed corrections are REPUBLISHED downstream, ms. Distinct from the round rate:
+// rounds MEASURE, this DELIVERS. It was a hardcoded 40 ms, which at high round rates silently
+// discarded most solved rounds before anything downstream could see them (at 500 Hz, 19 of every
+// 20) -- so it, not the round rate, can be what caps delivered accuracy. Knob exists to measure
+// which one binds.
+uint32_t fabric_sync_publish_ms() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_PUBLISH_MS");
+        long n = (s != nullptr && *s != '\0') ? std::strtol(s, nullptr, 10) : 40;
+        if (n < 1) {
+            n = 1;
+        }
+        if (n > 10000) {
+            n = 10000;
+        }
+        return static_cast<uint32_t>(n);
+    }();
+    return v;
+}
+
 double fabric_sync_hz() {
     static const double v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
@@ -2654,7 +2674,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                 }
             }
             // compose + publish corrections
-            if (now_tp - last_pub > std::chrono::milliseconds(40)) {
+            if (now_tp - last_pub > std::chrono::milliseconds(fabric_sync_publish_ms())) {
                 last_pub = now_tp;
                 publish_fabric_sync_corrections();
             }

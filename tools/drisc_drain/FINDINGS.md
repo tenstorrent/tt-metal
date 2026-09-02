@@ -6806,3 +6806,82 @@ round: ~212 us worst (old) -> ~3 us typical.
 - FSYNC_RTT rendering now draws <= 2 zones/round (only what the round carries).
 - n=1 is refused everywhere (host clamp + solver): a lone trip is the doorbell itself, and its
   wait is one-sided — anchoring on it would inject exactly the bias this design removes.
+
+---
+
+## Rate sweep, REDONE on the new design: rate no longer buys accuracy, and neither does republish
+
+The old "ship 100 Hz" answer is OBSOLETE -- it was measured when a round blocked the router ~212 us
+worst and the cost was dominated by the phase lottery. A round now blocks ~3 us. Re-derived from
+scratch: 6 arms x 2 reps, INTERLEAVED (rep1 all arms, then rep2) so drift cannot alias into the
+comparison, `tt-smi -r` per run, control is `SYNC_HZ=0` (not the lowest rate -- 20 Hz already
+carries hook cost). New knob added for this: `TT_METAL_PERF_DEBUG_FABRIC_SYNC_PUBLISH_MS`
+(default 40), because `publish_fabric_sync_corrections()` was still on a hardcoded 40 ms timer.
+
+| arm              | rounds/link | p/d/s | closure (ns) | geomean | worst 4-link |
+|------------------|-------------|-------|--------------|---------|--------------|
+| ctrl SYNC_HZ=0   | --          | --    | --           | 1.0152  | -0.71%       |
+| 100 Hz / pub 40  | 374, 370    | 0/0/0 | 89.8         | 1.0119  | -0.70%       |
+| 100 Hz / pub 5   | 371, 377    | 0/0/0 | 97.8         | 1.0119  | -0.70%       |
+| 500 Hz / pub 40  | 1857, 1837  | 0/0/0 | 95.1         | 1.0117  | -0.70%       |
+| 1000 Hz / pub 40 | 3664 (n=1)  | 0/0/0 | 94.1         | 1.0113  | -0.76%       |
+| 1000 Hz / pub 5  | 3631, 3680  | 0/0/0 | 94.0         | 1.0112  | -0.75%       |
+
+### Three results, in order of importance
+
+1. **RATE BUYS NOTHING.** Closure is 89.8 -> 94.0 ns across a **10x** rate range. Within-arm spread
+   (89.6 vs 89.9; 93.2 vs 96.9; 101.1 vs 94.4) is 1-7 ns, the same size as the between-arm spread.
+   Flat. The old sweep's 83 -> 44 -> 38 ns improvement is gone because what it was buying -- escape
+   from the phase lottery's stale sample-0 -- no longer exists.
+2. **REPUBLISH CADENCE DOES NOT BIND.** The hypothesis was that the fixed 40 ms republish discarded
+   most solved rounds. Measured: `pub 5` vs `pub 40` is identical at BOTH 100 Hz (89.8 vs 97.8) and
+   1000 Hz (94.1 vs 94.0) -- differences inside the within-arm spread, in both directions.
+   Refuted. The knob stays (it is the right thing to own) but 40 ms is not the constraint.
+3. **THE links=4 CLIFF IS GONE.** Worst 4-link row is -0.69 to -0.76% on EVERY arm including the
+   control's -0.71%. The old design put 500 Hz at **-19.64%** and failed the golden check. Sync now
+   costs 0.33 pts of geomean at 100 Hz and 0.40 pts at 1000 Hz -- 10x the rate for 0.07 pts, inside
+   the ~0.5 pt geomean noise. 0 golden failures in all 11 valid runs.
+
+### What actually limits delivered accuracy: NONE of the three candidates
+Per-device `ANCHOR STALENESS` over an 84 s session, best-case arm (1000 Hz / pub 5):
+
+    device 0 (root):  -8.3 us     live correction +0 cy
+    device 1:      -1790.0 us     live correction +9266 cy  (+6.9 us)
+    device 2:      -3595.5 us     live correction +12508 cy (+9.3 us)
+    device 3:      -5132.7 us     live correction +15785 cy (+11.7 us)
+
+The root, which owns the host fit, holds to **8 us**. Non-root devices -- composed off root and
+rendered at ROOT'S FREQUENCY ("shared SLOPE, own ORIGIN") -- diverge at **21 / 43 / 61 ppm**,
+integrating to milliseconds. The corrections being delivered are ~7-12 us against a 1.8-5.1 ms
+error: three orders of magnitude short. And this barely moves with either knob (100 Hz/pub40 gives
+-2121/-4194/-6338 us; 1000 Hz/pub5 gives -1783/-3586/-5121).
+
+So the accuracy frontier is **not** round rate, **not** republish cadence, and **not** the ~90 ns
+closure bias. It is the **shared-slope assumption**, whose error term is ~1000x larger than
+everything else measured here. Note the code's own comment records that with per-chip rate applied
+the pair drifted only **-6065 ns over 84 s (~72 ppb)** -- i.e. the alternative measured ~1000x
+BETTER on that test. The shared-slope choice was justified by "a common rate error is common-mode
+and invisible"; that holds only if the rates are nearly equal, and here they differ by up to 61 ppm.
+**Worth revisiting with a direct experiment. NOT asserted as a bug.**
+
+Measurement caveats, stated: the staleness figure is drift vs HOST, not end-of-session cross-device
+skew (which is the quantity a multi-device timeline actually cares about, and which the shared-slope
+design deliberately optimizes) -- the differential term between devices is what would matter and it
+was not measured directly here. The control's staleness (-10.6 us) is NOT comparable to the sync
+arms': with sync off only the root is anchored at all, so it is a 1-device number against 4.
+
+### Recommendation
+**Keep 100 Hz.** Not because rate helps -- it does not -- but because nothing above it buys anything
+measurable, and the cheapest adequate rate is the right default. 1000 Hz is now genuinely
+affordable (0.40 vs 0.33 pts, lossless at 3680 rounds/link, no golden failures) and is a fine
+diagnostic arm; it is not worth defaulting to. Publish stays at 40 ms.
+
+### Incidents
+- **1 of 12 runs died**: 1000 Hz / pub 40 rep1, `UmdException<DeviceTimeoutError>` -- a UMD device
+  timeout, NOT a golden failure. Its rep2 ran clean (3664 rounds/link, 0/0/0). n=1, on a box whose
+  MMIO is degraded (1.7-1.9 us/read), so it cannot be attributed to the rate. Flagged, not
+  explained.
+- **Box caveat on absolute numbers**: MMIO still degraded (survived the warm reboot; needs a cold
+  power cycle). It should load all arms equally, but absolute closure/geomean here are not
+  comparable to a healthy box. Closure bias also moved boot-to-boot (-47 ns before the reboot,
+  ~-90 ns now), so compare within a boot only.
