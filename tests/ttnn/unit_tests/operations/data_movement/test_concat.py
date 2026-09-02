@@ -660,6 +660,12 @@ def _run_sharded_concat(
         ttnn_inputs.append(ttnn.to_memory_config(tt, input_mem))
 
     ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+    # Catches the fallbacks in concat_impl that unshard the inputs or run an interleaved concat
+    # and convert afterwards -- those renegotiate the shard spec, so the values can still come
+    # back correct while the output is not laid out as asked.
+    assert (
+        ttnn_out.memory_config() == output_mem
+    ), f"output memory config is {ttnn_out.memory_config()}, expected {output_mem}"
     # Spell out the config: the two callers below hardcode shard_shape/output_shard/num_cores,
     # so those do not show up in the pytest node id.
     assert tuple(ttnn_out.shape) == tuple(torch_out.shape), (
