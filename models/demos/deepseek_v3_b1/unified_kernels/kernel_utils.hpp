@@ -12,6 +12,10 @@
 #include "api/compute/experimental/deepseek_compute_kernel_hw_startup.h"
 #endif
 
+// Firmware-set logical coordinates (defined in brisc.cc, ncrisc.cc, trisc.cc)
+extern uint8_t my_logical_x_;
+extern uint8_t my_logical_y_;
+
 namespace unified_kernels {
 
 // ============================================================================
@@ -23,8 +27,8 @@ namespace unified_kernels {
 // RowMajor=false: index = rel_x * grid_height + rel_y (iterate y first, then x)
 template <bool RowMajor>
 uint32_t linear_id_in_grid(uint32_t grid_start_x, uint32_t grid_start_y, uint32_t grid_end_x, uint32_t grid_end_y) {
-    uint32_t rel_x = get_absolute_logical_x() - grid_start_x;
-    uint32_t rel_y = get_absolute_logical_y() - grid_start_y;
+    uint32_t rel_x = my_logical_x_ - grid_start_x;
+    uint32_t rel_y = my_logical_y_ - grid_start_y;
     if constexpr (RowMajor) {
         uint32_t grid_width = grid_end_x - grid_start_x + 1;
         return rel_y * grid_width + rel_x;
