@@ -29,6 +29,9 @@ Run it (ttnn venv)::
     DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
     DEEPSEEK_V4_MAX_NEW_TOKENS=16 pytest -s \\
       models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
+
+Set ``DEEPSEEK_V4_START_POS`` to begin prefill at a non-zero absolute position,
+for example ``DEEPSEEK_V4_START_POS=1024``.
 """
 
 from __future__ import annotations
@@ -136,6 +139,9 @@ def _build_and_prefill(
 
     max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024"))
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else config.eos_token_id
+    start_pos = int(os.environ.get("DEEPSEEK_V4_START_POS", "0"))
+    if start_pos < 0:
+        raise ValueError(f"DEEPSEEK_V4_START_POS must be nonnegative, got {start_pos}")
 
     # Wrap the user input in the V4 chat template, tokenize, and build the RoPE
     # tables for the longest sequence we might decode (prompt + new tokens).
@@ -147,7 +153,7 @@ def _build_and_prefill(
     # ``encode_messages`` includes DeepSeek's required BOS token explicitly.
     prompt_ids: list[int] = list(tokenizer(prompt, add_special_tokens=False)["input_ids"])
     real_len = len(prompt_ids)
-    max_seq = _pad_to_tile(real_len + max_new_tokens)
+    max_seq = _pad_to_tile(start_pos + real_len + max_new_tokens)
     # ``DEEPSEEK_V4_MAX_SEQ`` widens the fixed buffers beyond what this run needs, so a
     # max_seq sweep can hold the amount of decode work constant.
     max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
@@ -205,16 +211,17 @@ def _build_and_prefill(
         model.reset_caches(max_seq)
 
     next_id = pad_id
-    for pos in range(real_len):
+    for prompt_idx in range(real_len):
+        pos = start_pos + prompt_idx
         if traced:
             # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
-            logits = model.decode_traced(prompt_ids[pos], pos).reshape(1, -1).float()
+            logits = model.decode_traced(prompt_ids[prompt_idx], pos).reshape(1, -1).float()
         else:
-            hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
+            hidden = model.decode(prompt_ids[prompt_idx], pos, rope)  # [1, 1, D]
             with _region("LM_HEAD"):
                 logits = _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
-    logger.info(f"prefill ({real_len} tokens) -> token id {next_id} {tokenizer.decode([next_id])!r}")
+    logger.info(f"prefill ({real_len} tokens at pos {start_pos}) -> token id {next_id} {tokenizer.decode([next_id])!r}")
 
     return {
         "model": model,
@@ -224,6 +231,7 @@ def _build_and_prefill(
         "rope": rope,
         "prompt_ids": prompt_ids,
         "real_len": real_len,
+        "start_pos": start_pos,
         "max_seq": max_seq,
         "max_new_tokens": max_new_tokens,
         "eos_id": config.eos_token_id,
@@ -260,6 +268,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         state = _build_and_prefill(mesh_device, text, prefetcher, tp_size=tp_size)
         model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
         rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
+        start_pos = state["start_pos"]
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
         traced, next_id = state["traced"], state["next_id"]
         generated: list[int] = [next_id]
@@ -293,7 +302,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
             if next_id == eos_id:
                 logger.info("hit EOS; stopping")
                 break
-            pos = real_len + step - 1  # absolute position of the token being fed back
+            pos = start_pos + real_len + step - 1  # absolute position of the token being fed back
             if pos >= max_seq:  # ran past the precomputed RoPE span
                 logger.warning(f"hit max RoPE length {max_seq}; stopping at {len(generated)} tokens")
                 break
