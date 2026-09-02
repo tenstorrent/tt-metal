@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/hal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
@@ -35,7 +36,6 @@
 namespace tt::tt_metal::experimental {
 
 NodeRangeSet to_node_range_set(const Nodes& nodes);
-bool is_gen2_arch();
 
 namespace sem_solver {
 
@@ -82,6 +82,8 @@ inline bool cached_geometry_ok(const SemaphoreSpec& sem, const SemaphoreBinderIn
 }
 
 // Check if the cached tier is available on this target device.
+inline bool is_gen2_target() { return tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR; }
+
 inline bool cached_tier_available() {
     return MetalContext::instance().rtoptions().get_target_device() != tt::TargetDevice::Emule;
 }
@@ -90,7 +92,7 @@ inline bool cached_tier_available() {
 // binder is treated as a possible reader and writer.
 inline SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreBinderInfo& binders) {
     // Gen1 (Wormhole/Blackhole)
-    if (!is_gen2_arch()) {
+    if (!is_gen2_target()) {
         return SemScope::LOCAL_NONATOMIC;
     }
 
