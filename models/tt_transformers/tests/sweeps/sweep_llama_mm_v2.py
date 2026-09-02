@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """
 Llama-3.1-8B decode matmul sweep v2 (Blackhole P150) — robust edition.

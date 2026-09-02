@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """
 nlp_create_qkv_heads_decode program-config sweep — generalized CLI tool.
