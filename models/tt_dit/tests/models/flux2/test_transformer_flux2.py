@@ -23,10 +23,19 @@ from ....utils.padding import PaddingConfig
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
 _TRACE_REGION_SIZE = 31_000_000
+# require_exact_physical_num_devices makes every row self-skip unless the mesh it asks for is
+# exactly what the machine has. Without it a (2,2) row opens a 2x2 submesh of a 32-chip galaxy
+# and really runs, so CI legs would have to pin mesh ids by hand per SKU. With it, the same
+# command run anywhere selects the one row that machine can serve: 2x2 on a 4-chip QuietBox,
+# 4x8 on a galaxy, and nothing on hardware that matches neither.
+_REQ_EXACT = {"require_exact_physical_num_devices": True}
 # Trace capture + Flux2 VAE-style L1_SMALL; align fabric with topology per case.
-line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+line_params_flux2_transformer = {**line_params_flux2, "trace_region_size": _TRACE_REGION_SIZE, **_REQ_EXACT}
 line_params_8k_flux2_transformer = {**line_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
 ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size": _TRACE_REGION_SIZE}
+# Ring 4x8 keeps its existing params -- deliberately no trace_region_size, unlike the line rows --
+# and only gains the self-skip.
+ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **_REQ_EXACT}
 
 
 class ModelLocationGenerator(Protocol):
@@ -54,7 +63,7 @@ class ModelLocationGenerator(Protocol):
         [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, line_params_flux2_transformer],
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2_req_exact],
     ],
     ids=[
         "bh_2x2_linear",

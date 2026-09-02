@@ -1,0 +1,23 @@
+# Single-rank single-galaxy mesh for the FLUX.2 multihost CI (bh_sc1) leg.
+# The transformer's bh_4x8_ring config uses FabricConfig FABRIC_1D_RING, which requires the MGD to
+# provide TORUS_XY connectivity (BOTH dims wrap). A FabricConfig can only *restrict* topology
+# (torus->mesh), not add links, so a single-axis ring (TORUS_X, i.e. dim_types [LINE, RING]) fails
+# at mesh_graph init with "requires more connectivity than MGD provides". Both dims are therefore
+# RING -- byte-identical to the LTX-2.3 and Wan2.2 single_galaxy descriptors, which are proven on
+# bh_sc1. The 4x8 orientation matches the flux2 (4, 8) parametrizations; the repo-level
+# tt_metal/fabric single_bh_galaxy_torus_xy descriptor is [8,4], the wrong orientation here.
+# channels count 2 matches BHGLX's 2 ethernet links per neighbour pair (get_num_links in
+# models/common/modules/tt_ccl.py), which is what bh_4x8_ring asks for. One rank owns the whole
+# 32-device galaxy (confirmed on bh_sc1: a single rank sees all 32 chips).
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -112,7 +112,17 @@ def prep_data(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}],
+    # require_exact_physical_num_devices: each mesh row self-skips unless it matches the machine
+    # exactly, so the same command picks 2x2 on a 4-chip QuietBox and 4x8 on a galaxy. It also
+    # keeps the 1x1 row off multi-chip hosts, where opening a single-device submesh under
+    # FABRIC_1D has no ethernet partner and times out in fabric router sync (#53331).
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 65536,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(

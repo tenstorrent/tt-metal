@@ -1082,18 +1082,11 @@
     # flaky 1x1 mesh open suppressed all three tests after it. Aggregating is what keeps one
     # expected red from hiding the state of everything else.
     status=0
-    # -rs everywhere: bh_quietbox_2 is 4 chips, so the 1x8 / 2x4 / 4x8 rows in these files
-    # skip on device count. The skip report is what shows the 2x2 rows actually ran rather
-    # than the job passing because it executed nothing.
-    #
-    # 1x1 is deselected, not skipped: opening a single-device submesh with FABRIC_1D on a
-    # 4-chip box has no ethernet partner to hand-shake with, and it dies in
-    # fabric_firmware_initializer.cpp:271 with a Fabric Router Sync timeout. That is #53331
-    # -- same file:line, same SKU, logged there as non-deterministic -- and it took the whole
-    # leg down with it under `bash -e` on run 33655962297. utils/test.py already carries a
-    # TODO about these 1x1 parametrizations. Deselecting here rather than adding
-    # require_exact_physical_num_devices to the test keeps 1x1 and 1x8 runnable locally.
-    pytest --timeout 1200 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py -k "not 1x1" || status=1
+    # -rs everywhere: the flux2 device_params carry require_exact_physical_num_devices, so on
+    # this 4-chip SKU every row except 2x2 self-skips (including 1x1, which otherwise times out
+    # in fabric router sync -- #53331). The skip report is what shows the 2x2 rows actually ran
+    # rather than the job passing because it executed nothing.
+    pytest --timeout 1200 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode || status=1
@@ -1118,6 +1111,49 @@
       # has never been built. Recalibrate to the measured warm time before merge, and walk the
       # budget back down with it. Keep this above the sum of the pytest --timeouts above
       # (160 min) so a hang fails cleanly rather than being killed by the job timeout.
+      timeout: 180
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
+# No mesh -k filters: require_exact_physical_num_devices means each row self-skips unless it
+# matches the machine, so this command and the QuietBox one are identical apart from the
+# multihost launcher and the env below.
+- name: TT-DiT Flux.2-dev multihost unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    # FLUX.2-dev is staged on the yyz4 mount the QuietBox uses, not on this one, so the first
+    # runs here still need the hub. Switch to HF_HUB_OFFLINE=1 (as the LTX legs do) once the
+    # checkpoint is present under /mnt/models/huggingface.
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    # $HOME is /home/user on the exabox runner and persists, unlike the containerised
+    # bh_quietbox_2 legs where it is wiped between jobs. Matches the LTX-2.3 bh_sc1 leg.
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Every leg runs and the job fails if any of them did -- same reason as the QuietBox entry,
+    # and the same shape the LTX-2.3 bh_sc1 leg uses.
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1; }
+    # Cheapest first. The two transformer parametrizations get a process each: both in one is an
+    # OOM kill on 4 chips (run 33667518970) and each loads the full 32B torch reference.
+    run --timeout 1200 models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    run --timeout 2400 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    # Unlike 2x2, the 4x8 row runs Ring topology, which is the path the ColParallelLinear
+    # addcmul bug does NOT affect -- so unlike the QuietBox leg these may well pass today.
+    run --timeout 3300 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
+    run --timeout 3300 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    exit $rc
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      # First-run allowance: FLUX.2-dev is not staged on this mount, so expect a cold
+      # download plus weight conversion. Recalibrate with the bh_quietbox_2 leg.
       timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee

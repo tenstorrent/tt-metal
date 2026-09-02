@@ -23,7 +23,13 @@ from ....utils.check import assert_quality
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# require_exact_physical_num_devices: the mesh rows self-skip unless they match the machine
+# exactly -- 2x2 on a 4-chip QuietBox, 4x8 on a galaxy.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    indirect=True,
+)
 def test_encode(mesh_device: ttnn.MeshDevice) -> None:
     tp_axis = 1
     sequence_length = 64
@@ -73,7 +79,13 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# require_exact_physical_num_devices: the mesh rows self-skip unless they match the machine
+# exactly -- 2x2 on a 4-chip QuietBox, 4x8 on a galaxy.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    indirect=True,
+)
 def test_upsample(mesh_device: ttnn.MeshDevice) -> None:
     tp_axis = 1
     checkpoint_name = "black-forest-labs/FLUX.2-dev"
