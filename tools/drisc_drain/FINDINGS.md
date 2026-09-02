@@ -6885,3 +6885,58 @@ diagnostic arm; it is not worth defaulting to. Publish stays at 40 ms.
   power cycle). It should load all arms equally, but absolute closure/geomean here are not
   comparable to a healthy box. Closure bias also moved boot-to-boot (-47 ns before the reboot,
   ~-90 ns now), so compare within a boot only.
+
+---
+
+## RETRACTION: closure did not get worse, and it is not boot-local. It is TOPOLOGY-dependent.
+
+Claimed earlier today (twice): "closure bias moved boot-to-boot -- -47 ns pre-reboot, -86..-119 ns
+now -- consistent with real link asymmetry that re-trains per boot." **Wrong.** The shift is not
+the reboot and not n=2; it is the ROLE REBALANCING, which flipped edge `0->3` into `3->0`.
+
+Mean |closure| against the edge set actually used:
+
+| run        | edges                  | mean closure | when |
+|------------|------------------------|--------------|------|
+| hz_20      | 0->1 0->3 1->2 2->3    | 52.6 ns      | pre-balance |
+| hz_100     | 0->1 0->3 1->2 2->3    | 43.9 ns      | pre-balance |
+| ab_slow_1  | 0->1 0->3 1->2 2->3    | 51.1 ns      | pre-balance |
+| ab_fast_1  | 0->1 0->3 1->2 2->3    | 48.8 ns      | pre-balance |
+| **gap**    | 0->1 1->2 2->3 3->0    | **92.9 ns**  | post-balance, **PRE-REBOOT** |
+| **mask15** | 0->1 1->2 2->3 3->0    | **99.8 ns**  | post-balance, **PRE-REBOOT** |
+| reboot     | 0->1 1->2 2->3 3->0    | 95.4 ns      | post-reboot |
+| n2b        | 0->1 1->2 2->3 3->0    | 96.7 ns      | post-reboot, n=2 |
+
+`gap` and `mask15` are pre-reboot and already ~93-100 ns. The reboot is exonerated; so is n=2.
+
+### Mechanism: one flipped edge turns partial cancellation into full accumulation
+The closure edge is `2->3` in BOTH eras (verified) -- what changed is the SPANNING TREE. Writing
+each link's forward/return asymmetry as eps (the error term negates when a link is traversed the
+other way, since Cristian's bias follows the slower direction):
+
+    OLD tree {0->1, 0->3, 1->2}: composing 2->3 runs 0->3 FORWARD and the other two BACKWARD
+        closure = +eps03 - eps01 - eps12 - eps23  = -2 eps   (one term cancels)
+    NEW tree {0->1, 1->2, 3->0}: every term enters with the same sign
+        closure = -eps30 - eps01 - eps12 - eps23  = -4 eps
+
+Exactly a factor of two, and the arithmetic closes: eps ~= 24 ns gives -48 ns then and -96 ns now,
+matching 43.9-52.6 and 92.9-99.8. The model also predicts NEGATIVE closure in both eras, which is
+what every measured value is.
+
+### What this means
+- **The sync did not get less accurate.** Per-link asymmetry is ~24 ns and has NOT moved across the
+  whole session: before/after role balancing, before/after the reboot, at n=16 and n=2, at 100 Hz
+  and 1000 Hz. Only the metric's summation changed.
+- **Closure is topology-dependent and must NOT be compared across ring orientations.** Quoting a
+  closure number now requires quoting the edge set with it. This retroactively explains the whole
+  "-47 ns -> -90 ns" puzzle and removes the phantom regression.
+- The rate sweep's conclusions are unaffected: every arm there shared one edge set, so the
+  flat 89.8-97.8 ns comparison is internally valid.
+- The real per-link accuracy frontier is therefore **eps ~= 24 ns**, not the ~90 ns the ring metric
+  prints -- still forward/return asymmetry, still unfixable by sampling faster, and still an order
+  of magnitude below the shared-slope term that actually dominates delivered accuracy.
+
+### Method note
+Two runs (`gap`, `mask15`) sat between the role change and the reboot and were the only thing that
+could separate the two candidate causes. Neither was collected for this purpose. Keeping full logs
+from every arm is what made the retraction possible in one query instead of a re-run per hypothesis.
