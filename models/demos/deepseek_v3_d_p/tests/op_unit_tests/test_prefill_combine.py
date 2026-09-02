@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     log_combine_mismatch_details,
@@ -65,6 +65,7 @@ def run_combine(
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
+    cmb_version=1,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -225,26 +226,56 @@ def run_combine(
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
     # Run ttnn combine
-    tt_combine = TtCombineModule(
-        mesh_device=mesh_device,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
-        experts_per_chip=experts_per_chip,
-        num_experts_per_tok=num_experts_per_tok,
-        seq_len_per_chip=seq_len_per_chip,
-        cluster_axis=sp_axis,
-        num_links=num_links,
-        topology=topology,
-        init_zeros=False,
-        fp8_output=use_fp8_output,
-    )
+    if cmb_version == 1:
+        tt_combine = TtCombineModule(
+            mesh_device=mesh_device,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+            init_zeros=False,
+            fp8_output=use_fp8_output,
+        )
 
-    tt_output = tt_combine(
-        tt_dispatched_buffer,
-        tt_dispatched_metadata,
-        tt_expert_token_counts,
-        tt_expert_region_offsets,
-    )
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+        )
+    else:
+        tt_expert_offsets = ttnn.from_torch(
+            expert_offsets,
+            # expert_offsets has to be replicated along the ring axis: every chip needs every origin
+            # chip's run boundaries for the experts it hosts, which is what lets each kernel walk the
+            # token sequence locally instead of exchanging addresses.
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+
+        tt_combine = TtCombine2dModule(
+            mesh_device=mesh_device,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+        )
+
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            tt_expert_offsets,
+        )
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -608,4 +639,72 @@ def test_externally_owned_cases(
         dispatched_buffer_layout=ttnn.TILE_LAYOUT,
         use_fp8_output=False,
         num_links=num_links,
+    )
+
+
+def _cmb_fabric2d_dimensions():
+    """The (mesh, device_params, ...) tuples the fabric2d case runs on.
+
+    Same two scenarios the direct op carries: a small pcc run that checks the op computes the
+    right thing, and the seq-640 perf run this op's development has been measured against.
+    """
+    mesh = SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh
+    fabric_cfg = SINGLE_GLX_AND_PROXY_MESHES.target_meshes[mesh]
+    marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
+
+    params = []
+    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
+        ("pcc", 128, 4, True),
+        ("perf_no_pcc", 640, 8, False),
+    ):
+        model_config = _model_scaledown(
+            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
+        )
+        params.append(
+            pytest.param(
+                mesh,
+                fabric_to_device_params(fabric_cfg),
+                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
+                seq_len_per_chip,
+                model_config.EMB_SIZE,
+                model_config.NUM_ROUTED_EXPERTS,
+                model_config.NUM_EXPERTS_PER_TOKEN,
+                dispatch_buffer_capacity_factor,
+                run_pcc,
+                marks=marks,
+                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
+            )
+        )
+    return params
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    _cmb_fabric2d_dimensions(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_combine_fabric2d(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    topology,
+    run_pcc_check,
+):
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links=2,
+        topology=topology,
+        use_predictable_data=False,
+        run_pcc_check=run_pcc_check,
+        dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
+        use_fp8_output=False,
+        cmb_version=2,
     )

@@ -54,7 +54,7 @@ inline TensorLayout legacy_tensor_layout_from_padded_shape(
 }  // namespace detail
 
 template <typename T, bool IS_UPPER>
-static Tensor index_trilu(
+Tensor index_trilu(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const int32_t diag,
@@ -97,7 +97,7 @@ static Tensor index_trilu(
 }
 
 template <typename T>
-static Tensor index_width(
+Tensor index_width(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -138,7 +138,7 @@ static Tensor index_width(
 }
 
 template <typename T>
-static Tensor index_height(
+Tensor index_height(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -179,7 +179,7 @@ static Tensor index_height(
 }
 
 template <typename T>
-static Tensor index_all(
+Tensor index_all(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -219,7 +219,7 @@ static Tensor index_all(
 }
 
 template <typename T>
-static Tensor mask_padded_input(
+Tensor mask_padded_input(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -255,7 +255,7 @@ static Tensor mask_padded_input(
 }
 
 template <typename T>
-static Tensor fill_first_val_into_tensor(
+Tensor fill_first_val_into_tensor(
     const Tensor& input_tensor,
     DataType data_type,
     const Layout layout,
@@ -287,7 +287,7 @@ static Tensor fill_first_val_into_tensor(
 }
 
 template <typename T>
-static Tensor prod_result_computation_WH_B0(
+Tensor prod_result_computation_WH_B0(
     const Tensor& input_tensor,
     DataType data_type,
     const Layout layout,
@@ -323,7 +323,7 @@ static Tensor prod_result_computation_WH_B0(
 }
 
 template <typename T>
-static Tensor index_channel(
+Tensor index_channel(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -364,7 +364,7 @@ static Tensor index_channel(
 }
 
 template <typename T>
-static Tensor index_batch(
+Tensor index_batch(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType data_type,
@@ -404,7 +404,7 @@ static Tensor index_batch(
 }
 
 template <typename T>
-static Tensor manual_insertion(
+Tensor manual_insertion(
     const Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
@@ -431,7 +431,7 @@ static Tensor manual_insertion(
 }
 
 template <typename T>
-static Tensor index_tril(
+Tensor index_tril(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const int32_t diag,
@@ -443,7 +443,7 @@ static Tensor index_tril(
 }
 
 template <typename T>
-static Tensor index_triu(
+Tensor index_triu(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const int32_t diag,
@@ -522,13 +522,13 @@ inline bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
 }
 
 template <typename... Args>
-static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
+bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
     return nearly_equal(static_cast<float>(a), static_cast<float>(b), args...);
 }
 }  // namespace detail
 
 template <typename DataType, typename... Args>
-static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
+bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
     if (tensor_a.padded_shape() != tensor_b.padded_shape()) {
         return false;
     }
