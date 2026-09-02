@@ -11,17 +11,24 @@ name: "Cleanup prebuilt tests images"
 # retention is lower than the number says.
 #
 # The action deletes at most 100 versions per run, which is why the schedule is
-# every 30 minutes rather than daily. PR Gate builds two images per run and
-# Merge Gate four, at roughly 600 runs/day each, so ~3,600 versions/day or
-# ~150/hour against 48 x 100 deletions.
+# every 15 minutes rather than daily. Both gates build four images per run at
+# roughly 600 runs/day each, so ~4,800 versions/day or ~200/hour against
+# 96 x 100 deletions. Every 30 minutes would be exactly break-even.
 #
 # min-versions-to-keep is sized from that RATE, not picked round: retention in
-# hours is roughly N divided by the hourly push rate. An image must outlive the
-# gap between its build and the last consumer pulling it, and a hardware leg can
-# sit queued for hours, so N = 3600 buys about a day at ~150/hour. Too small a
-# value deletes an image out from under a queued leg, which fails at container
-# startup with no fallback, because container.image is resolved before any step
-# runs.
+# hours is roughly N divided by the hourly push rate, so N = 4800 buys about a
+# day at ~200/hour.
+#
+# A day is chosen deliberately, and it defines a SUPPORTED RE-RUN WINDOW of
+# about a day. GitHub allows re-running a job for 30 days, but retaining that
+# long would mean ~144,000 versions, so we do not. Re-running an individual leg
+# after roughly a day fails at container startup, because container.image is
+# resolved before any step runs and there is no fallback at that point. Re-run
+# the whole workflow instead: that rebuilds the image and works at any age.
+#
+# A day is far more than the in-run need. Measured, the gap between an image
+# being pushed and the last consumer pulling it is 9 min in PR Gate and 28 min
+# in Merge Gate, which ~100 versions would cover.
 #
 # Recompute N if the push rate changes: wiring more consumers raises it, and
 # building one image per run instead of two would halve it.
@@ -34,14 +41,14 @@ permissions:
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       min-versions-to-keep:
         description: "Newest versions to keep. Set very high for a safe no-op run."
         required: false
         type: string
-        default: "3600"
+        default: "4800"
 
 jobs:
   cleanup:
@@ -56,13 +63,13 @@ jobs:
           owner: tenstorrent
           package-name: tt-metal/prebuilt-tests-image
           package-type: container
-          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '3600' }}
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '4800' }}
 
       # A GC that silently falls behind looks exactly like one that is working.
       - name: Report what is left
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP: ${{ inputs.min-versions-to-keep || '3600' }}
+          KEEP: ${{ inputs.min-versions-to-keep || '4800' }}
         run: |
           set -euo pipefail
           COUNT=$(gh api "/orgs/tenstorrent/packages/container/tt-metal%2Fprebuilt-tests-image" --jq '.version_count')
