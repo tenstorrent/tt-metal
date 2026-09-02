@@ -27,9 +27,12 @@ namespace ckernel::sfpu {
 // Equal infinities need their own branch. |a - b| is the right difference everywhere
 // except a == b == +/-inf, where inf - inf is NaN and the NaN then swallows the whole
 // result; the composed form this replaces returns +/-inf there, so without the branch
-// the fix would be a regression on those two points. Comparing first and substituting a
-// zero difference keeps it correct: max(inf, inf) + ln 2 = inf. A NaN input still
-// propagates, because a NaN compares unequal to itself and takes the other branch.
+// the fix would be a regression on those two points. SFPU float equality does not
+// reliably match either infinity sign on device, so classify infinity from its
+// exponent/mantissa fields and require identical signed bit patterns.
+// Substituting a zero difference then keeps both signs correct:
+// max(+/-inf, +/-inf) + ln 2 = +/-inf. The added clause excludes NaNs, so they do
+// not take this equal-infinity fix-up.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -38,7 +41,9 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = sfpi::max(a, b);
-        v_if(a == b) { a = 0.0f; }
+        v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) == 0 && sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) {
+            a = 0.0f;
+        }
         v_else { a = sfpi::abs(a - b); }
         v_endif;
         // The accurate exponential is required, not a preference: the approximate body

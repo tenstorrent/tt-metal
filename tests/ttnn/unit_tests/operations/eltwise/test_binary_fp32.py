@@ -510,39 +510,29 @@ def test_logaddexp_beyond_exp_range_bf16(device, a, b):
 @pytest.mark.parametrize(
     "a, b",
     [
-        pytest.param(
-            float("inf"),
-            float("inf"),
-            marks=pytest.mark.xfail(
-                reason="the a == b guard does not hold for +inf on device: still returns NaN. "
-                "(-inf, -inf) takes the same branch and passes, so the comparison itself is the "
-                "suspect, not the arithmetic after it. Other kernels in the tree detect infinity "
-                "by its bits -- see ckernel_sfpu_digamma.h, exexp(x) == 128 && exman(x) == 0 -- "
-                "rather than by comparing floats, which points at the fix.",
-                strict=True,
-            ),
-        ),
+        (float("inf"), float("inf")),
         (float("-inf"), float("-inf")),
         (float("inf"), float("-inf")),  # different signs: the difference is well defined
         (float("inf"), 0.0),  # one infinite operand, as a control
         (float("-inf"), 0.0),
     ],
 )
-def test_logaddexp_equal_infinities_fp32(device, a, b):
-    # max(a, b) + log1p(exp(-|a - b|)) needs a == b handled separately at the
-    # infinities: inf - inf is NaN, and the NaN then swallows the result. The
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_logaddexp_infinities(device, a, b, torch_dtype, ttnn_dtype):
+    # max(a, b) + log1p(exp(-|a - b|)) needs matching infinities handled
+    # separately: inf - inf is NaN, and the NaN then swallows the result. The
     # composed form it replaces returns +/-inf on these two points, so leaving them
     # out would trade an overflow bug for a NaN one.
     #
     # torch.logaddexp is the reference here: logaddexp(inf, inf) is inf and
     # logaddexp(-inf, -inf) is -inf.
-    x_torch = torch.tensor([[a]], dtype=torch.float32)
-    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    x_torch = torch.tensor([[a]], dtype=torch_dtype)
+    y_torch = torch.tensor([[b]], dtype=torch_dtype)
     golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
     z_torch = golden_fn(x_torch, y_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
 
     # Compared as scalars on purpose: torch.equal also compares shape, and would report
