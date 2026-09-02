@@ -210,6 +210,41 @@ N300 (medians of 3 captures):
 
 ### 3.4 ECAPA SpeakerEncoder
 
+> ## READ THIS FIRST — the host fusion is default OFF because it breaks generation
+>
+> `QWEN3_TTS_SE_HOST_FUSE=1` shifts the speaker embedding by only **0.74 % relRMS**, and
+> yet on the English demo text it never emits EOS and runs to the 256-frame cap —
+> **20.5 s of garbled audio**, at seed 42 *and* seed 7, where the unfused path stops at
+> 86 frames / 6.9 s. Systematic, not sampling luck.
+>
+> **Root cause of the miss: the accuracy tests used synthetic random weights.** Against
+> `_synthetic_sd()` the fusion measured a 1e-6 PCC delta and looked numerically free.
+> With the real 1.7B weights it is 7,400x that. Never gate an ECAPA numerics change on
+> synthetic weights, and never gate one on PCC alone — gate it on generated frame count
+> for at least two texts and two seeds.
+>
+> Real 1.7B weights, jim_reference.wav, embedding vs the fp32 reference:
+>
+> | fuse | asp | conv | PCC vs ref | relRMS vs ref | relRMS vs baseline | generation |
+> |---|---|---|---|---|---|---|
+> | 0 | 0 | 0 | 0.999634 | 2.72 % | — baseline | 86 frames, 6.9 s |
+> | 0 | 1 | 0 | 0.999628 | 2.74 % | 0.77 % | 83 frames, 6.6 s |
+> | 1 | 0 | 0 | 0.999610 | 2.81 % | 0.74 % | **256 = cap, 20.5 s** |
+> | 1 | 1 | 0 | 0.999611 | 2.80 % | 0.83 % | **256 = cap, 20.5 s** |
+> | 1 | 1 | 1 | 0.998370 | 5.72 % | 3.74 % | untested — assume broken |
+>
+> Note the baseline is itself **2.72 %** off the fp32 reference, and that `asp=1` perturbs
+> the embedding by 0.77 % — indistinguishable from `fuse=1`'s 0.74 % — yet generates
+> correctly. So perturbation *magnitude* does not predict the failure. The model's EOS
+> behaviour on this input is hypersensitive to sub-1 % embedding changes, and which side
+> of the cliff a config lands on is not something PCC can tell you.
+>
+> Consequences for the numbers below: they are **wall-clock and op-count results only**.
+> The `fuse` and `+asp` rows are still accurate as performance measurements. `+asp` alone
+> is the only change currently on by default, and it has been generation-checked on one
+> English text at one seed plus one Japanese text — which is thinner validation than it
+> deserves. The `fuse`, `+conv` and traced rows are behind flags that default off.
+
 Runs **once per request** off the reference audio, so this is time-to-first-audio, not RTF.
 
 `SpeakerEncoder.forward`, warm, N300, mel T=384 — interleaved A/B over 24 samples each so
