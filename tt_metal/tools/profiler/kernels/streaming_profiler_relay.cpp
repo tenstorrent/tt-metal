@@ -52,7 +52,7 @@ inline void push_fifo(const SocketSenderInterface& sender, uint32_t src, uint32_
 
 // Blackhole stores can reach SRAM out of order, and the NIU and the DMA engine read the words the scalar core
 // staged.
-__attribute__((always_inline)) inline void staged_store_fence() { asm volatile("fence" ::: "memory"); }
+FORCE_INLINE void staged_store_fence() { asm volatile("fence" ::: "memory"); }
 
 // Not socket_notify_receiver: it re-inits write_cmd_buf onto another VC, and the bytes_sent word can then
 // overtake the data it announces.
@@ -229,7 +229,7 @@ struct SpoolPump {
     }
 
     // Call wherever wr or rd advance.
-    __attribute__((always_inline)) void rebalance() {
+    FORCE_INLINE void rebalance() {
         const uint32_t occ = occupancy();
         level = occ >= kBandInline       ? kLevelInline
                 : occ >= kBandEverySweep ? kLevelEverySweep
@@ -237,7 +237,7 @@ struct SpoolPump {
                                          : kLevelIdle;
     }
 
-    __attribute__((always_inline)) void append(uint32_t src, uint32_t len) {
+    FORCE_INLINE void append(uint32_t src, uint32_t len) {
         while (len != 0) {
             const uint32_t piece = len > kSpoolBytes - wr_off ? kSpoolBytes - wr_off : len;
             experimental::dma_async_write<false>(kDmaShip, src, kSpoolBase + wr_off, piece);
@@ -254,7 +254,7 @@ struct SpoolPump {
 
     // SHIPPING -> EMPTY on write-ack, not on sent: the bounce's next writer is the DMA engine, which a
     // sent-only gate does not fence.
-    __attribute__((always_inline)) void reclaim_shipped(bool& did) {
+    FORCE_INLINE void reclaim_shipped(bool& did) {
         if (b[0].state == kShipping || b[1].state == kShipping) {
             const uint32_t acked = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_WR_ACK_RECEIVED);
             for (uint32_t i = 0; i < 2; i++) {
@@ -267,7 +267,7 @@ struct SpoolPump {
     }
 
     // Stream completion is FIFO, so one outstanding count gives each bounce its own line.
-    __attribute__((always_inline)) void retire_reads(bool& did) {
+    FORCE_INLINE void retire_reads(bool& did) {
         if (b[0].state == kReading || b[1].state == kReading) {
             const uint32_t rd_out = experimental::dma_get_reads_outstanding(kDmaDrain);
             for (uint32_t i = 0; i < 2; i++) {
@@ -284,7 +284,7 @@ struct SpoolPump {
 
     // Refill before shipping so the read runs under the ship's NoC issue; a second concurrent refill only at
     // full pressure, where the deeper bank queue pays for itself.
-    __attribute__((always_inline)) void refill(bool& did) {
+    FORCE_INLINE void refill(bool& did) {
         const uint32_t emp = first_empty();
         const bool want_refill = emp != kNone && (level >= kLevelInline || b[emp ^ 1u].state != kReading);
         // Only ship-completed bytes are readable: nothing short of a write's completion orders a read of the same
@@ -318,7 +318,7 @@ struct SpoolPump {
         }
     }
 
-    __attribute__((always_inline)) void ship(bool& did) {
+    FORCE_INLINE void ship(bool& did) {
         const uint32_t rdy = oldest_ready();
         if (rdy != kNone) {
             invalidate_l1_cache();
@@ -343,7 +343,7 @@ struct SpoolPump {
         }
     }
 
-    __attribute__((always_inline)) void pass() {
+    FORCE_INLINE void pass() {
         if (wr == rd && both_empty()) {
             return;
         }
@@ -361,7 +361,7 @@ struct SpoolPump {
     __attribute__((noinline)) void pass_cold() { pass(); }
 
     // Once per sweep, not per chunk.
-    __attribute__((always_inline)) void notify() {
+    FORCE_INLINE void notify() {
         if (notify_pending) {
             notify_bytes_sent(sender_);
             notify_pending = false;
@@ -370,7 +370,7 @@ struct SpoolPump {
 
     // The wall clock is read every 64th call: one read per sweep stalls producers at saturation, and ~1 ms of
     // stride is noise against the 50 ms bound.
-    __attribute__((always_inline)) void freshness_tick(uint64_t deadline_cycles) {
+    FORCE_INLINE void freshness_tick(uint64_t deadline_cycles) {
         if (++fresh_tick < kFreshTickStride) {
             return;
         }
@@ -395,13 +395,12 @@ struct SpoolPump {
 constexpr uint32_t kCvCmdBuf = write_at_cmd_buf;
 constexpr uint32_t kHeadCmdBuf = write_cmd_buf;
 
-__attribute__((always_inline)) inline bool host_released(volatile tt_l1_ptr uint32_t* stop) {
+FORCE_INLINE bool host_released(volatile tt_l1_ptr uint32_t* stop) {
     invalidate_l1_cache();
     return *stop == kernel_profiler::kRelayStopRelease;
 }
 
-
-__attribute__((always_inline)) inline uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
+FORCE_INLINE uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
 
 // Computed once: get_noc_addr's coordinate arithmetic would otherwise run at every issue of an
 // instruction-bound sweep.
@@ -416,22 +415,21 @@ struct GatherRegs {
     volatile uint32_t* base;
     uint32_t send;
 };
-__attribute__((always_inline)) inline GatherRegs gather_regs() {
+FORCE_INLINE GatherRegs gather_regs() {
     volatile uint32_t* base = reinterpret_cast<volatile uint32_t*>(
         NOC_REGS_START_ADDR + NOC_CMD_BUF_INSTANCE_OFFSET(kReadNoc, read_cmd_buf));
     uint32_t send = NOC_CTRL_SEND_REQ;
     asm("" : "+r"(base), "+r"(send));
     return {base, send};
 }
-__attribute__((always_inline)) inline void gather_reg(const GatherRegs& g, uint32_t reg, uint32_t val) {
+FORCE_INLINE void gather_reg(const GatherRegs& g, uint32_t reg, uint32_t val) {
     g.base[(reg - NOC_REGS_START_ADDR) / 4u] = val;
 }
-__attribute__((always_inline)) inline bool gather_ready(const GatherRegs& g) {
+FORCE_INLINE bool gather_ready(const GatherRegs& g) {
     return g.base[(NOC_CMD_CTRL - NOC_REGS_START_ADDR) / 4u] == NOC_CTRL_STATUS_READY;
 }
 
-__attribute__((always_inline)) inline void gather_read(
-    const GatherRegs& g, bool poll, uint32_t src, uint32_t dst, uint32_t len_bytes) {
+FORCE_INLINE void gather_read(const GatherRegs& g, bool poll, uint32_t src, uint32_t dst, uint32_t len_bytes) {
     if (poll) {
         while (!gather_ready(g)) {
         }
@@ -441,11 +439,11 @@ __attribute__((always_inline)) inline void gather_read(
     gather_reg(g, NOC_AT_LEN_BE, len_bytes);
     gather_reg(g, NOC_CMD_CTRL, g.send);
 }
-__attribute__((always_inline)) inline uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
+FORCE_INLINE uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
 
 // Counted, not barriered: in-flight gather responses also bump the counter, which can only hand the scan
 // stale-but-valid tails (tails are monotonic).
-__attribute__((always_inline)) inline void cv_issue(uint32_t c) {
+FORCE_INLINE void cv_issue(uint32_t c) {
     while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
     }
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
@@ -453,13 +451,13 @@ __attribute__((always_inline)) inline void cv_issue(uint32_t c) {
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
-__attribute__((always_inline)) inline void cv_issue(uint32_t lo, uint32_t hi) {
+FORCE_INLINE void cv_issue(uint32_t lo, uint32_t hi) {
     for (uint32_t i = lo; i < hi; i++) {
         cv_issue(i);
     }
 }
 
-__attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect) {
+FORCE_INLINE void cv_wait(uint32_t rd0, uint32_t expect) {
     while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED) - rd0 < expect) {
     }
     invalidate_l1_cache();
@@ -467,19 +465,17 @@ __attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect
 
 // Posted (the barriers protect staging, which a head write never touches) and on the read NoC, where it does
 // not queue behind frame data and the PCIe tile's acceptance jitter.
-__attribute__((always_inline)) inline void post_heads(uint32_t c) {
+FORCE_INLINE void post_heads(uint32_t c) {
     noc_wwrite_with_state<DM_DEDICATED_NOC, kHeadCmdBuf, CQ_NOC_SNdl, CQ_NOC_SEND, CQ_NOC_WAIT, true, true>(
         kReadNoc, heads(c), core_coord[c], 0);
 }
 
 // A frame occupies whole socket pages on the wire.
-__attribute__((always_inline)) inline uint32_t page_round(uint32_t bytes) {
-    return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u);
-}
+FORCE_INLINE uint32_t page_round(uint32_t bytes) { return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u); }
 
 // Prefix word 1 is the payload length in words.
 constexpr uint32_t kLenWord = 1;
-__attribute__((always_inline)) inline uint32_t frame_bytes(uint32_t slot) {
+FORCE_INLINE uint32_t frame_bytes(uint32_t slot) {
     return (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[kLenWord] + kPrefix) * 4u;
 }
 
@@ -574,7 +570,7 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
     return min_peak;
 }
 
-__attribute__((always_inline)) static inline void program_command_buffers(uint32_t cv_src) {
+static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
     // Both read buffers use transaction id 0: the NIU's outstanding count for that id is the batch barrier.
     while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
     }
@@ -605,7 +601,7 @@ __attribute__((always_inline)) static inline void program_command_buffers(uint32
 }
 
 // Only heads, tails and the core identity are staged per frame; the rest must read zero on the wire.
-__attribute__((always_inline)) static inline void zero_stage_prefixes() {
+static FORCE_INLINE void zero_stage_prefixes() {
     for (uint32_t sl = 0; sl < kNStage; sl++) {
         volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + sl * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
@@ -617,8 +613,7 @@ __attribute__((always_inline)) static inline void zero_stage_prefixes() {
 
 // Heads seed from the current tails: everything published before this launch predates the capture. The
 // scratch is the only copy of the heads.
-__attribute__((always_inline)) static inline void seed_heads(
-    uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
+static FORCE_INLINE void seed_heads(uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
     const uint32_t rd_seed = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
     cv_issue(0, num_cores);
     cv_wait(rd_seed, num_cores);
@@ -635,7 +630,7 @@ __attribute__((always_inline)) static inline void seed_heads(
 }
 
 // Drain the spool, barrier the socket, publish done, then hand the NIU back on the host's word.
-__attribute__((always_inline)) static inline void finish(
+static FORCE_INLINE void finish(
     SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop, bool killed) {
     // Bounded: a consumer that stopped acking strands bytes instead of wedging teardown.
     if constexpr (kSpool) {
@@ -684,7 +679,7 @@ __attribute__((always_inline)) static inline void finish(
 
 // A staged slot is its frame's wire image, so a frame is one write or one DMA; the trailing page fill is
 // never written, the host reads past it. Returns true when the kill switch broke a wait.
-__attribute__((always_inline)) static inline bool emit_slots(
+static FORCE_INLINE bool emit_slots(
     SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop, uint32_t base, uint32_t count) {
     // Frames occupy whole pages on the wire, so the FIFO write pointer and the spool offset advance in lockstep.
     const uint32_t raw0 = frame_bytes(base);
