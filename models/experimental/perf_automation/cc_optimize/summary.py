@@ -1098,6 +1098,23 @@ def _prompt_tokens() -> int:
         return 0
 
 
+def _retires_one_per_user(rf, batch: int) -> bool:
+    """Does one call of this stage retire exactly one item per user?
+
+    THE HEADING AND THE UNIT ASK THIS SAME QUESTION, and used to answer it with two different tests:
+    the unit compared the stage's item count against the BATCH, the heading against the literal 1. At
+    batch 1 the two agree, and until per-stage item counts existed every stage fell back to a single
+    item -- so both held and the disagreement could not appear. Once real counts arrived, a batch-8
+    recurring stage retiring 8 rows per call satisfied the unit (printing tok/s/u) and failed the
+    heading (printing "per request"), and the report contradicted itself in adjacent lines.
+
+    One predicate, so the two cannot drift apart again. Nothing is assumed about what the stage is
+    called or what its item is: `batch` is what the run served and `tokens` is what the stage's own
+    ops retired, both discovered.
+    """
+    return int((rf or {}).get("tokens") or 0) == int(batch)
+
+
 def _request_batch() -> int:
     """How many requests the prefill stage processed at once. 1 when nothing says otherwise.
 
@@ -2240,9 +2257,7 @@ def _roofline_tables(
     # a request-rate stage; it is still one token per user. Encode, retiring 1500 frames for a batch
     # it does not have, correctly stops claiming to emit tokens.
     _su_batch = max(1, _request_batch())
-    _STAGE_UNIT = {
-        st: (unit if int((rf or {}).get("tokens") or 0) == _su_batch else "req/s") for st, rf in _roofs.items()
-    }
+    _STAGE_UNIT = {st: (unit if _retires_one_per_user(rf, _su_batch) else "req/s") for st, rf in _roofs.items()}
     # A DECLARED STAGE GETS A UNIT TOO. Only prefill and decode were named here, so a third stage --
     # voxtral's audio encoder, measured at 12.79 ms -- had no unit, no title, and no row. Its unit is
     # one pass of that tower, which is what "per pass" says without pretending it emits tokens.
@@ -2253,7 +2268,7 @@ def _roofline_tables(
     _STAGE_TITLE = {
         st: (
             "%s \u2014 per %s" % (str(st).upper(), _step)
-            if int((rf or {}).get("tokens") or 0) == 1
+            if _retires_one_per_user(rf, _su_batch)
             else "%s \u2014 per request" % str(st).upper()
         )
         for st, rf in _roofs.items()
