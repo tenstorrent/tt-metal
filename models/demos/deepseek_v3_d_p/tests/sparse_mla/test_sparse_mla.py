@@ -8,6 +8,7 @@ path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -27,10 +28,11 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
     make_hidden,
     run_cpu_reference,
     run_cpu_reference_chunked,
+    run_cpu_reference_ragged,
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -203,7 +205,8 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 
-    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). The device
+    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). Undo the
+    indexer's orthonormal Hadamard transform before comparing with the untransformed CPU reference. The device
     stores the RoPE half INTERLEAVED for both variants (the indexed RoPE op is interleaved-only; the DS
     path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
     (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
@@ -216,6 +219,11 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
+    # The Sylvester Hadamard matrix is symmetric and self-inverse, so applying it again restores the
+    # pre-transform key. Do this before the DS RoPE-frame permutation because the transform was applied
+    # while the key was still in the device's interleaved frame.
+    hadamard = normalized_hadamard_matrix(nat.shape[-1])
+    nat = (nat.float() @ hadamard.float()).to(torch.bfloat16)
     if not getattr(config, "index_rope_interleave", False):  # DS: device interleaved -> reference half-split
         rope_dim = config.qk_rope_head_dim
         perm = interleaved_to_halfsplit_perm(rope_dim)
@@ -495,6 +503,174 @@ def run_sparse_mla_chunked_case(
     logger.info(f"[{variant.name}] sparse MLA chunked complete")
 
 
+def pad_overflow_schedule(chunk, cache_len):
+    """[(actual_start, actual_end)] whose LAST padded window overruns ``cache_len`` while its real tokens fit.
+
+    A serving stream is ragged: chunks are a fixed width but carry fewer real tokens, so actual_start
+    drifts off the chunk grid (one tile per chunk here) until a padded window ends past the cache while
+    ceil32(actual_end) still fits. That drift is the only way to overrun -- a chunk-aligned start never can.
+    """
+    short = chunk - ttnn.TILE_SIZE
+    bounds, s = [], 0
+    for _ in range(cache_len // chunk):
+        bounds.append((s, s + short))
+        s += short
+    bounds.append((s, s + ttnn.TILE_SIZE))  # tail: one tile of real tokens, chunk - 32 of pad
+    return bounds
+
+
+def run_sparse_mla_pad_overflow_case(
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+):
+    """Chunked sparse prefill whose LAST chunk pads past the end of the cache.
+
+    This is the case the fixed chunk size forces on a server and the one update_padded_kv_cache's
+    valid_global clamp exists for: the tail chunk's padded window runs past the cache, only its real
+    tokens are written, and the indexer/top-k/gather are bounded by that written prefix instead of by
+    the window. Asserted three ways -- the output over the real rows, both caches over the real rows,
+    and the cache tail past the last real token still being untouched.
+    """
+    seed = 42
+    bounds = pad_overflow_schedule(chunk, seq_len)
+    total_real = bounds[-1][1]
+    tail_start, tail_end = bounds[-1]
+    write_end = -(-total_real // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    assert tail_start + chunk > seq_len, "tail window must overrun the cache or this test proves nothing"
+    assert write_end <= seq_len, "the tail's REAL tokens must still fit the cache"
+    logger.info(
+        f"[{variant.name}] pad-overflow: {len(bounds)} chunks of width {chunk}, {total_real} real tokens, "
+        f"cache {seq_len}; tail [{tail_start}, {tail_end}) pads to {tail_start + chunk} "
+        f"({tail_start + chunk - seq_len} past the cache)"
+    )
+
+    weights, src_tag = build_weights(
+        variant, config, seed=seed, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo
+    )
+    config.max_seq_len = seq_len
+
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    num_users, cache_user_id = 2, 1
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=num_users,
+    )
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users)
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        active_seq_len=chunk,
+        slot_num=num_users,
+        layer_num=1,
+        sparse_kv_cache_format=cache_format,
+    )
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    # tail_slack: the tail chunk ropes its whole padded slab, so the table needs one chunk of headroom.
+    rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk, tail_slack=True)
+
+    hidden = make_hidden(seq_len, config.hidden_size, seed, ds_input)
+    if ds_input:
+        src_tag = f"{src_tag}_in{abs(hash(ds_input)) % 10**8}"
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    # ROTATED input order. A mid-slab actual_start rotates which chip owns which block, so chunk row j is
+    # NOT global position actual_start + j -- feeding natural order only happens to work when every start
+    # is slab-aligned (what test_sparse_mla_chunked does). Every start here is drifted, so gather the
+    # chunk in rotated chip-major order and scatter the output back by the same map, exactly as
+    # test_sparse_mla_rotated does.
+    sp = mesh_device.shape[0]
+    chunk_local = chunk // sp
+    hid = hidden[0]  # [seq, hidden]
+    out_accum = None
+    for chunk_idx, (a, b) in enumerate(bounds):
+        positions = rotated_chip_positions(a, sp, chunk_local)
+        flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
+        gather_idx = torch.tensor([min(gp, hid.shape[0] - 1) for gp in flat], dtype=torch.long)
+        chunk_in = hid[gather_idx].clone()
+        is_pad = torch.tensor([gp >= b for gp in flat])
+        chunk_in[is_pad] = 0.0  # pad rows: scored and attended on device, KV not written, output dropped
+        logger.info(
+            f"[{variant.name}] pad-overflow TT chunk {chunk_idx + 1}/{len(bounds)}: "
+            f"actual_start={a} actual_end={b} ({b - a} real, {int(is_pad.sum())} pad)"
+        )
+        tt_x = ttnn.from_torch(
+            chunk_in.reshape(1, 1, chunk, config.hidden_size),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        out = mla_tt.forward(
+            tt_x,
+            rope_tensors,
+            tt_kvpe_cache,
+            actual_start=a,
+            actual_end=b,
+            cache_user_id=cache_user_id,
+            index_kv_cache=tt_index_kv_cache,
+        )
+        out_flat = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)[0, 0]
+        if out_accum is None:
+            out_accum = torch.zeros(total_real, out_flat.shape[-1], dtype=torch.bfloat16)
+        valid = [(row, gp) for row, gp in enumerate(flat) if gp < b]
+        out_accum[torch.tensor([gp for _, gp in valid])] = out_flat[torch.tensor([row for row, _ in valid])]
+    tt_output = out_accum.reshape(1, 1, total_real, out_accum.shape[-1])
+
+    cache_dir = cpu_ref_cache_dir(variant)
+    # seq_len (the CACHE length), not total_real: the reference's rope table is sized by max_seq_len and
+    # the YaRN gate keys off it, so a reference built at a different length ropes different frequencies
+    # than the device. Its caches are still returned sliced to what was actually filled (total_real).
+    ref_output, ref_kvpe, ref_index = run_cpu_reference_ragged(
+        config, weights, hidden, seq_len, bounds, cache_dir, cache_tag=f"{src_tag}_funcidx"
+    )
+
+    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)
+    assert torch.count_nonzero(cache_all[0:1]) == 0, "sparse MLA wrote KVPE into unselected user slot 0"
+    cache_sr = cache_all[cache_user_id : cache_user_id + 1, :1]
+    p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
+    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    nat[p] = cache_sr[0, 0]
+    _, m = comp_pcc(ref_kvpe, nat[:total_real].unsqueeze(0), 0)
+    logger.info(f"[{variant.name}] pad-overflow kvpe prefix: {m}")
+    # The clamp's whole job: nothing was written past the last real token's 32-row block. The cache is
+    # zero-filled at allocation, so an unwritten tail is still exactly zero.
+    assert (
+        torch.count_nonzero(nat[write_end:]) == 0
+    ), f"clamped write spilled past the real tokens: KVPE rows [{write_end}, {nat.shape[0]}) are nonzero"
+
+    index_cache_layers = num_full_indexer_layers(config) or 1
+    index_cache_batch_idx = cache_user_id * index_cache_layers
+    idx_nat = _collect_index_cache_natural(
+        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx
+    )
+    _, idx_pcc = assert_with_pcc(ref_index[0, :total_real], idx_nat[:total_real], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] pad-overflow indexer cache PCC: {idx_pcc}")
+    assert (
+        torch.count_nonzero(idx_nat[write_end:]) == 0
+    ), f"clamped write spilled past the real tokens: index rows [{write_end}, {idx_nat.shape[0]}) are nonzero"
+
+    _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, SPARSE_OUTPUT_PCC)
+    logger.info(f"[{variant.name}] pad-overflow output PCC: {pcc_message}")
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[{variant.name}] sparse MLA pad-overflow complete")
+
+
 def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo):
     """Last-layer chunked fast path must populate packed KVPE and tiled index caches without an output."""
     seed = 42
@@ -721,8 +897,35 @@ def test_sparse_mla_rotated(
     run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
 
 
+# None of these tests cover the chunked+non_balanced case, which is the only path production
+# runs — so they are all CI-skipped (still runnable locally).
+def _ci_unsupported_param_combos_sparse_mla_accuracy(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_indexer_reuse(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
 # both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_accuracy)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params, cache_format",
     SPARSE_ACCURACY_CASES,
@@ -767,6 +970,7 @@ def test_sparse_mla_accuracy(
 SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_indexer_reuse)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_REUSE_CASES,
@@ -825,6 +1029,7 @@ def test_sparse_mla_indexer_reuse(
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_determinism)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_ANCHOR_CASES,
@@ -870,6 +1075,44 @@ def test_sparse_mla_chunked(
     ds_input,
 ):
     run_sparse_mla_chunked_case(
+        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    )
+
+
+# glm_5_2 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_2 is the
+# production-closest of the two (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
+# it changes the page layout the clamp addresses.
+SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    SPARSE_PAD_OVERFLOW_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.parametrize(
+    "cache_format",
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_pad_overflow(
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+):
+    """Ragged chunk stream whose tail chunk pads past the end of the cache (see pad_overflow_schedule)."""
+    run_sparse_mla_pad_overflow_case(
         variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
     )
 

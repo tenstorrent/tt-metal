@@ -4,25 +4,29 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include <utility>
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 /**
  * @brief Distributes work across cores for argmax reduction operations
  *
  * If a sub_core_grids is provided, it will be used to distribute the work evenly across the cores.
  * Otherwise, we distribute to maximum of two core groups, with each core group getting a minimum of
- * `min_red_dim_units_per_core` elements to process, except the last core.
+ * `min_red_dim_units_per_core` elements to process, except where the reduction dim runs out.
  * @param device Pointer to the device
  * @param red_dim_units Total units in the reduction dimension
  * @param min_red_dim_units_per_core Minimum units per core (for alignment)
@@ -31,8 +35,9 @@ using namespace tt::tt_metal;
  *         - all_cores: CoreRangeSet of all cores
  *         - cores0: First group of cores
  *         - cores1: Second group of cores (if any)
- *         - red_dim_units0: Units assigned to first group per core
- *         - red_dim_units1: Units assigned to second group per core
+ *         - red_dim_units0: Nominal per-core units for the first group: the offset stride and CB page size.
+ *           The units a core actually processes are clamped against what is left (see units_for_core).
+ *         - red_dim_units1: Same, for the second group
  */
 static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> distribute_work_to_cores(
     const tt::tt_metal::IDevice* device,
@@ -89,20 +94,20 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  * The argmax operation is split across multiple cores to handle large tensors efficiently.
  * Each core processes a portion of the reduction dimension, finding local maxima and their indices.
  *
- * Circular Buffers (CBs):
- * 1. Input CB:
+ * Dataflow Buffers (DFBs):
+ * 1. Input DFB:
  *    - Size depends on input tensor shape and number of cores
  *    - Used for reading input tensor data
  *
- * 2. Worker Output CB (indices):
+ * 2. Worker Output DFB (indices):
  *    - Size depends on final output shape and number of worker cores
  *    - Used by worker cores to store local maxima indices
  *
- * 3. Worker Output CB (values):
+ * 3. Worker Output DFB (values):
  *    - Size depends on final output shape and number of worker cores
  *    - Used by worker cores to store local maxima values
  *
- * 4. Final Output CB:
+ * 4. Final Output DFB:
  *    - Size depends on final output tensor shape
  *    - Used only by reduce core to write final global argmax results
  *
@@ -110,7 +115,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  * 1. Worker Cores:
  *    - Process assigned portion of reduction dimension
  *    - Find local maxima and their indices
- *    - Write results to output CB
+ *    - Write results to output DFB
  *
  * 2. Reduce Core:
  *    - Collects results from all worker cores
@@ -118,12 +123,12 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *    - Writes final results to DRAM
  *
  * Semaphore Usage:
- * 1. Semaphore 1:
+ * 1. Semaphore 1 (start):
  *    - Controls output buffer availability for writing results
  *    - Worker cores wait before writing results
  *    - Set by reduce core (multicast)
  *
- * 2. Semaphore 2:
+ * 2. Semaphore 2 (done):
  *    - Controls output buffer availability for reading results
  *    - Worker cores signal completion (increment)
  *    - Reduce core waits for all workers
@@ -135,7 +140,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *    - Each group handles a different portion of the reduction dimension
  *    - cores0 handles red_dim_units0 elements
  *    - cores1 handles red_dim_units1 elements
- *    - Each core gets a minimum of `min_red_dim_units_per_core` elements to process, except the last core
+ *    - Each core gets a minimum of `min_red_dim_units_per_core` elements, except where the reduction dim runs out
  *
  * 2. Core Layout:
  *    - Cores are arranged in a grid pattern
@@ -156,7 +161,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *
  *    Refer to the kernel code for info on compile time args and runtime args
  */
-ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_program_artifacts(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
@@ -164,11 +169,23 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const bool keepdim = operation_attributes.keepdim;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    ProgramDescriptor desc;
+    // Resource names. Declared function-locally: both argmax factories share a unity-build
+    // translation unit, and namespace-scope `const` objects would collide by name there.
+    const KernelSpecName READER0{"reader0"};
+    const KernelSpecName READER1{"reader1"};
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const DFBSpecName DST{"dst"};
+    const DFBSpecName RED_IDXS{"red_idxs"};
+    const DFBSpecName RED_VALS{"red_vals"};
+    const SemaphoreSpecName START{"start"};
+    const SemaphoreSpecName DONE{"done"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto input_unit_size = input.element_size();
-    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto output_unit_size = output.element_size();
 
     const auto& input_shape = input.padded_shape();
@@ -212,69 +229,56 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
     const auto dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
 
-    // Create input CB to read reduction dim worth of data at once (split across all cores)
-    const uint32_t src_cb_idx = tt::CBIndex::c_0;
-    const auto src_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = src_cb_page_size0,
-        .core_ranges = cores0,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src_cb_idx),
-            .data_format = input_cb_data_format,
-            .page_size = src_cb_page_size0,
-        }}},
+    // DFBs are declared in the order the pre-Metal-2.0 factory declared its circular buffers. The
+    // allocator walks this list in order and gives each DFB one L1 address across every node it
+    // spans, so preserving the order preserves the resulting addresses.
+    Group<DataflowBufferSpec> dataflow_buffers;
+
+    // Input DFB to read reduction dim worth of data at once (split across all cores). The two core
+    // groups get different per-core block counts, so group 1 needs its own (differently sized) DFB.
+    const auto src_dfb_entry_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SRC0,
+        .entry_size = src_dfb_entry_size0,
+        .num_entries = 1,
+        .data_format_metadata = input_dfb_data_format,
     });
 
-    // We only create the second CB if there are some cores assigned to the second group
+    // We only create the second input DFB if there are some cores assigned to the second group
     if (num_cores1 > 0) {
-        const auto src_cb_page_size1 = round_up_to_mul32(red_dim_units1 * input_unit_size);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = src_cb_page_size1,
-            .core_ranges = cores1,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(src_cb_idx),
-                .data_format = input_cb_data_format,
-                .page_size = src_cb_page_size1,
-            }}},
+        const auto src_dfb_entry_size1 = round_up_to_mul32(red_dim_units1 * input_unit_size);
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = SRC1,
+            .entry_size = src_dfb_entry_size1,
+            .num_entries = 1,
+            .data_format_metadata = input_dfb_data_format,
         });
     }
 
-    // Create output CB based on the output shape's last dimension
-    const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = dst_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(dst_cb_idx),
-            .data_format = output_cb_data_format,
-            .page_size = dst_page_size,
-        }}},
+    // Create output DFB based on the output shape's last dimension
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = DST,
+        .entry_size = dst_page_size,
+        .num_entries = 1,
+        .data_format_metadata = output_dfb_data_format,
     });
 
-    // Create intermediate CB for indices based on number of cores and output shape's last dimension
-    const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
+    // Create intermediate DFB for indices based on number of cores and output shape's last dimension
     const auto red_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = red_idxs_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(red_idxs_cb_idx),
-            .data_format = output_cb_data_format,
-            .page_size = red_idxs_page_size,
-        }}},
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = RED_IDXS,
+        .entry_size = red_idxs_page_size,
+        .num_entries = 1,
+        .data_format_metadata = output_dfb_data_format,
     });
 
-    // Create intermediate CB for values based on number of cores and output shape's last dimension
-    const uint32_t red_vals_cb_idx = tt::CBIndex::c_3;
+    // Create intermediate DFB for values based on number of cores and output shape's last dimension
     const auto red_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = red_vals_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(red_vals_cb_idx),
-            .data_format = input_cb_data_format,
-            .page_size = red_vals_page_size,
-        }}},
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = RED_VALS,
+        .entry_size = red_vals_page_size,
+        .num_entries = 1,
+        .data_format_metadata = input_dfb_data_format,
     });
 
     const auto inner_dim_units = output_last_dim;
@@ -297,145 +301,200 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto num_cores_range0 = group0.size();
     const auto num_cores_range1 = all_cores.size() > 1 ? group1.size() : 0;
 
-    // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
-    const uint32_t start_sem_idx = 0;
-    const uint32_t done_sem_idx = 1;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = start_sem_idx,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_cores,
-        .initial_value = 0,
-    });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = done_sem_idx,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_cores,
-        .initial_value = 0,
-    });
+    // Two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores).
+    // Semaphores are zero-initialized, which is the initial value the kernel handshake assumes.
+    SemaphoreSpec start_sem{.unique_id = START, .target_nodes = all_cores};
+    SemaphoreSpec done_sem{.unique_id = DONE, .target_nodes = all_cores};
 
-    // Byte size of the data to read from the input CB for each core
-    const auto src_read_size0 = red_dim_units0 * input_unit_size;
-    const auto src_read_size1 = red_dim_units1 * input_unit_size;
-
-    // If red_dim_units is not a multiple of min_red_dim_units_per_core, then the last core will read a smaller amount
-    // of data We calculate that number here
-    const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
-
-    uint32_t red_dim_units_last0 = 0, red_dim_units_last1 = 0;
-    if (num_cores1 > 0) {
-        red_dim_units_last0 = red_dim_units0;
-        red_dim_units_last1 = ideal_red_dim_units == red_dim_units
-                                  ? red_dim_units1
-                                  : red_dim_units1 - (ideal_red_dim_units - red_dim_units);
-    } else {
-        red_dim_units_last0 = ideal_red_dim_units == red_dim_units
-                                  ? red_dim_units0
-                                  : red_dim_units0 - (ideal_red_dim_units - red_dim_units);
-        red_dim_units_last1 = 0;
-    }
-
-    const auto src_read_size_last0 = red_dim_units_last0 * input_unit_size;
-    const auto src_read_size_last1 = red_dim_units_last1 * input_unit_size;
-
-    // Common compile time args for all cores
-    // Refer to the kernel code for explanation of the args
-    std::vector<uint32_t> reader_compile_args = {
-        src_cb_idx,
-        dst_cb_idx,
-        red_idxs_cb_idx,
-        red_vals_cb_idx,
-        src_page_size,
-        dst_page_size,
-        red_idxs_page_size / num_total_cores,
-        red_vals_page_size / num_total_cores,
-        outer_dim_units,
-        inner_dim_units,
-        red_dim_units,
-        static_cast<uint32_t>(reduce_all),
-        num_total_cores,
-        reduce_core_id,
-        static_cast<uint32_t>(reduce_core.x),
-        static_cast<uint32_t>(reduce_core.y),
-        // end comes before start for NOC1
-        static_cast<uint32_t>(end_core0.x),
-        static_cast<uint32_t>(end_core0.y),
-        static_cast<uint32_t>(start_core0.x),
-        static_cast<uint32_t>(start_core0.y),
-        static_cast<uint32_t>(end_core1.x),
-        static_cast<uint32_t>(end_core1.y),
-        static_cast<uint32_t>(start_core1.x),
-        static_cast<uint32_t>(start_core1.y),
-        static_cast<uint32_t>(num_cores_range0),
-        static_cast<uint32_t>(num_cores_range1),
-        start_sem_idx,
-        done_sem_idx,
+    // Clamp each slice to the units left
+    const auto units_for_core = [red_dim_units](const uint32_t red_dim_offset, const uint32_t units_per_core) {
+        return red_dim_offset >= red_dim_units ? 0u : std::min(units_per_core, red_dim_units - red_dim_offset);
     };
-    tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output).append_to(reader_compile_args);
 
-    KernelDescriptor reader_desc0;
-    reader_desc0.kernel_source =
+    // Common compile time args for all cores.
+    // Names are the reader kernel's own variable names; refer to the kernel code for what each means.
+    //
+    // start_core_*/end_core_* carry the NOC1 multicast convention: a NOC1 multicast rectangle is
+    // addressed end-corner first, so the kernel's "start" arguments receive the group's *end*
+    // coordinate and its "end" arguments receive the *start* one. The swap is deliberate; the
+    // kernel feeds these straight to set_multicast().
+    const KernelSpec::CompileTimeArgs reader_compile_args = {
+        // The reader sizes its transfers from the src_read_size runtime argument, so it never reads
+        // src_page_size. Emitted anyway, unchanged from the pre-Metal-2.0 argument list.
+        {"src_page_size", src_page_size},
+        {"dst_page_size", dst_page_size},
+        {"red_idx_size_per_core", red_idxs_page_size / num_total_cores},
+        {"red_val_size_per_core", red_vals_page_size / num_total_cores},
+        {"outer_dim_units", outer_dim_units},
+        {"inner_dim_units", inner_dim_units},
+        {"red_dim_units", red_dim_units},
+        {"reduce_all", static_cast<uint32_t>(reduce_all)},
+        {"num_cores", num_total_cores},
+        {"reduce_core_id", reduce_core_id},
+        {"reduce_core_x", static_cast<uint32_t>(reduce_core.x)},
+        {"reduce_core_y", static_cast<uint32_t>(reduce_core.y)},
+        {"start_core_x0", static_cast<uint32_t>(end_core0.x)},
+        {"start_core_y0", static_cast<uint32_t>(end_core0.y)},
+        {"end_core_x0", static_cast<uint32_t>(start_core0.x)},
+        {"end_core_y0", static_cast<uint32_t>(start_core0.y)},
+        {"start_core_x1", static_cast<uint32_t>(end_core1.x)},
+        {"start_core_y1", static_cast<uint32_t>(end_core1.y)},
+        {"end_core_x1", static_cast<uint32_t>(start_core1.x)},
+        {"end_core_y1", static_cast<uint32_t>(start_core1.y)},
+        {"num_cores0", static_cast<uint32_t>(num_cores_range0)},
+        {"num_cores1", static_cast<uint32_t>(num_cores_range1)},
+    };
+
+    const std::filesystem::path reader_source =
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
-    reader_desc0.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc0.core_ranges = cores0;
-    reader_desc0.compile_time_args = reader_compile_args;
-    reader_desc0.config = DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::NOC::RISCV_1_default,
+
+    // Every DFB this reader binds is touched by the reader alone, through a raw write pointer, with
+    // no FIFO operation anywhere in the kernel — so each is bound self-loop (the one toucher is both
+    // producer and consumer). The two readers cover disjoint node sets, so a DFB they both bind
+    // still sees exactly one instance of each endpoint per node.
+    //
+    // The cross-core writes into the reducer's L1 do not add an endpoint: their destination is a
+    // bare NoC address, not a binding.
+    auto make_reader = [&](const KernelSpecName& unique_id, const DFBSpecName& src_dfb) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = reader_source,
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = src_dfb, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = src_dfb, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = RED_IDXS,
+                        .accessor_name = "red_idxs",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = RED_IDXS,
+                        .accessor_name = "red_idxs",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = RED_VALS,
+                        .accessor_name = "red_vals",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = RED_VALS,
+                        .accessor_name = "red_vals",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                },
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = START, .accessor_name = "start"},
+                    SemaphoreBinding{.semaphore_spec_name = DONE, .accessor_name = "done"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+                    TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+                },
+            .compile_time_args = reader_compile_args,
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names =
+                        {"core_id", "src_offset", "red_dim_offset", "src_read_size", "red_dim_units_this_core"},
+                },
+            // Not the reader default placement (that is NOC_0): this kernel is pinned to RISCV_1 on
+            // NOC_1, reproduced field-by-field from the pre-Metal-2.0 config.
+            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::NOC_1,
+                .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            }},
+        };
     };
+
+    Group<KernelSpec> kernels;
+    Group<WorkUnitSpec> work_units;
+    Group<KernelRunArgs> kernel_run_args;
+
+    kernels.push_back(make_reader(READER0, SRC0));
+    work_units.push_back(WorkUnitSpec{.name = "group0", .kernels = {READER0}, .target_nodes = cores0});
 
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 
     // Set runtime args for cores0 and cores1, only offsets (src and red_dim_units) are different
     // Refer to the kernel code for explanation of the args
+    KernelRunArgs reader_run_args0{.kernel = READER0};
+    uint32_t assigned_red_dim_units = 0;
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
-        reader_desc0.emplace_runtime_args(
+        const uint32_t red_dim_offset = i * red_dim_units0;
+        const uint32_t red_dim_units_this_core = units_for_core(red_dim_offset, red_dim_units0);
+        AddRuntimeArgsForNode(
+            reader_run_args0.runtime_arg_values,
             core,
-            {input,
-             output,
-             i,
-             static_cast<uint32_t>(i * src_read_size0),
-             i * red_dim_units0,
-             static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0),
-             (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+            {{"core_id", i},
+             {"src_offset", static_cast<uint32_t>(std::min(red_dim_offset, red_dim_units) * input_unit_size)},
+             {"red_dim_offset", red_dim_offset},
+             {"src_read_size", static_cast<uint32_t>(red_dim_units_this_core * input_unit_size)},
+             {"red_dim_units_this_core", red_dim_units_this_core}});
+        assigned_red_dim_units += red_dim_units_this_core;
     }
-
-    desc.kernels.push_back(std::move(reader_desc0));
+    kernel_run_args.push_back(std::move(reader_run_args0));
 
     if (num_cores1 > 0) {
-        KernelDescriptor reader_desc1;
-        reader_desc1.kernel_source =
-            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
-        reader_desc1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc1.core_ranges = cores1;
-        reader_desc1.compile_time_args = std::move(reader_compile_args);
-        reader_desc1.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-        };
+        kernels.push_back(make_reader(READER1, SRC1));
+        work_units.push_back(WorkUnitSpec{.name = "group1", .kernels = {READER1}, .target_nodes = cores1});
 
-        const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
         const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
 
+        KernelRunArgs reader_run_args1{.kernel = READER1};
         for (uint32_t i = 0; i < num_cores1; ++i) {
             const CoreCoord& core = cores_coords1.at(i);
-            reader_desc1.emplace_runtime_args(
+            const uint32_t red_dim_offset = red_dim_offset1 + (i * red_dim_units1);
+            const uint32_t red_dim_units_this_core = units_for_core(red_dim_offset, red_dim_units1);
+            AddRuntimeArgsForNode(
+                reader_run_args1.runtime_arg_values,
                 core,
-                {input,
-                 output,
-                 static_cast<uint32_t>(num_cores0 + i),
-                 static_cast<uint32_t>(src_offset1 + (i * src_read_size1)),
-                 red_dim_offset1 + (i * red_dim_units1),
-                 static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1),
-                 (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+                {{"core_id", static_cast<uint32_t>(num_cores0 + i)},
+                 {"src_offset", static_cast<uint32_t>(std::min(red_dim_offset, red_dim_units) * input_unit_size)},
+                 {"red_dim_offset", red_dim_offset},
+                 {"src_read_size", static_cast<uint32_t>(red_dim_units_this_core * input_unit_size)},
+                 {"red_dim_units_this_core", red_dim_units_this_core}});
+            assigned_red_dim_units += red_dim_units_this_core;
         }
-
-        desc.kernels.push_back(std::move(reader_desc1));
+        kernel_run_args.push_back(std::move(reader_run_args1));
     }
 
-    return desc;
+    // The per-core slices must tile the reduction dim exactly: no gaps (dropped elements) and no
+    // overlap (double-counted elements).
+    TT_FATAL(
+        assigned_red_dim_units == red_dim_units,
+        "Argmax work split covers {} of {} reduction units",
+        assigned_red_dim_units,
+        red_dim_units);
+
+    ProgramSpec spec{
+        .name = "argmax_multi_core",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = {std::move(start_sem), std::move(done_sem)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = std::move(kernel_run_args);
+    run_args.tensor_args = {
+        {INPUT, input},
+        {OUTPUT, output},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

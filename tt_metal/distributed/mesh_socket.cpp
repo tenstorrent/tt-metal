@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -257,6 +258,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         data_buffer_ = create_socket_data_buffer(device, config_);
     }
     this->connect_with_peer(context);
+    Inspector::mesh_socket_created(this);
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
@@ -356,6 +358,9 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
+
+    Inspector::mesh_socket_created(&sender_socket);
+    Inspector::mesh_socket_created(&receiver_socket);
 
     return {sender_socket, receiver_socket};
 }

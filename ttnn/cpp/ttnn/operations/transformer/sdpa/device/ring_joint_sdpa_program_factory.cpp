@@ -9,6 +9,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -109,10 +110,35 @@ struct RingJointRuntimeArgLayout {
 };
 
 struct RingWritePlan {
-    uint32_t device_index = 0;
+    uint32_t transport_rank = 0;
+    uint32_t tensor_rank = 0;
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
+    std::optional<ttnn::MeshCoordinate> forward_coord;
+    std::optional<ttnn::MeshCoordinate> backward_coord;
 };
+
+uint32_t tensor_rank_from_transport_rank(const ttnn::prim::RingJointSDPAParams& args, uint32_t transport_rank) {
+    const auto& ag = args.all_gather_operation_attributes;
+    return ag.full_mesh ? ttnn::ccl::snake_ring::row_major_index(
+                              transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation)
+                        : transport_rank;
+}
+
+ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& ag) {
+    return {
+        .cluster_axis = ag.cluster_axis,
+        .full_mesh = ag.full_mesh,
+        .orientation = ag.snake_orientation,
+        .mesh_rows = ag.mesh_rows,
+        .mesh_cols = ag.mesh_cols,
+        .ring_size = ag.ring_size,
+        .num_links = ag.num_links,
+        .topology = ag.topology,
+        .route_plan_hash = ag.route_plan_hash,
+    };
+}
 
 struct RingJointInputParams {
     bool has_joint_tensors = false;
@@ -237,10 +263,13 @@ uint32_t kv_global_tile_for_host_ring_plan(
 // ring-id order, marks ring_iter entries that have non-padded spatial or joint KV work, and applies
 // the same causal unbalanced skip rule used by compute.
 RingWorkPlan build_ring_work_plan(
-    const RingWritePlan& ring_write_plan, const RingJointRuntimeDerivation& derivation, bool is_balanced) {
+    const ttnn::prim::RingJointSDPAParams& args,
+    const RingWritePlan& ring_write_plan,
+    const RingJointRuntimeDerivation& derivation,
+    bool is_balanced) {
     RingWorkPlan plan;
     RingIdSequencer seq(
-        ring_write_plan.device_index,
+        ring_write_plan.transport_rank,
         derivation.ring_size,
         ring_write_plan.backward_writes_expected,
         ring_write_plan.forward_writes_expected);
@@ -249,7 +278,7 @@ RingWorkPlan build_ring_work_plan(
     auto noop_sync = [](uint32_t, uint32_t) {};
 
     for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
-        const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
+        const uint32_t ring_id = tensor_rank_from_transport_rank(args, seq.get_next_ring_id(noop_sync));
         // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
         // joint K/V on every ring iteration (no need to wait for the full gather to complete).
         // Replicated joint: process joint when ring_id == ring_size-1
@@ -301,7 +330,7 @@ RingWorkPlan build_ring_work_plan(
             (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) &&
-            !(derivation.kernel_is_causal && ring_write_plan.device_index < ring_id && !is_balanced);
+            !(derivation.kernel_is_causal && ring_write_plan.tensor_rank < ring_id && !is_balanced);
         if (ring_iter_does_work) {
             plan.masks.active_ring_iter_mask |= (1u << ring_iter);
             plan.last_active_ring_iter = ring_iter;
@@ -369,8 +398,23 @@ RingWritePlan build_ring_write_plan(
     const ttnn::prim::RingJointSDPAInputs& tensor_args,
     const ttnn::MeshCoordinate& coord) {
     RingWritePlan plan;
-    plan.device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-        tensor_args.input_q, coord, args.all_gather_operation_attributes.cluster_axis);
+    const auto& ag = args.all_gather_operation_attributes;
+    if (ag.full_mesh) {
+        const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(
+            tensor_args.input_q, coord, mesh_ring_plan_from_attributes(ag));
+        plan.transport_rank = position.transport_rank;
+        plan.tensor_rank = position.tensor_rank;
+        plan.forward_coord = position.forward_coord;
+        plan.backward_coord = position.backward_coord;
+    } else {
+        plan.transport_rank =
+            ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.input_q, coord, ag.cluster_axis);
+        plan.tensor_rank = plan.transport_rank;
+        plan.forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_q, coord, 1, ag.topology, ag.cluster_axis);
+        plan.backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_q, coord, -1, ag.topology, ag.cluster_axis);
+    }
 
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
@@ -383,10 +427,10 @@ RingWritePlan build_ring_write_plan(
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ttnn::ccl::get_forward_backward_configuration(
         args.all_gather_operation_attributes.ring_size,
-        plan.device_index,
+        plan.transport_rank,
         args.all_gather_operation_attributes.topology);
     (void)dynamic_alternate;
-    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && plan.device_index % 2 == 0) {
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && plan.transport_rank % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
 
@@ -460,14 +504,14 @@ RingJointRuntimePlan build_runtime_plan(
             derivation.logical_nt,
             derivation.ring_size,
             derivation.q_local_padded_Nt,
-            ring_write_plan.device_index);
+            ring_write_plan.tensor_rank);
     }
 
     if (args.has_sliding_window()) {
         // Sliding folds its local and predecessor ranges into one synthetic ring iteration.
         plan.ring_work_plan.masks.active_ring_iter_mask = 1;
     } else {
-        plan.ring_work_plan = build_ring_work_plan(ring_write_plan, derivation, args.is_balanced);
+        plan.ring_work_plan = build_ring_work_plan(args, ring_write_plan, derivation, args.is_balanced);
     }
     plan.kernel_chunked = derivation.kernel_chunked;
     plan.kernel_is_causal = derivation.kernel_is_causal;
@@ -679,7 +723,7 @@ void apply_ring_joint_scalar_runtime_args(
         // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
         // Relocate every per-link reader/writer slice from the descriptor's previous group to the current group.
         const uint32_t runtime_tail_start_Ht =
-            runtime_chunked_sliding_layout.send_tail_start_tile(ring_write_plan.device_index);
+            runtime_chunked_sliding_layout.send_tail_start_tile(ring_write_plan.transport_rank);
         auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex);
         auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex);
         TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
@@ -910,25 +954,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     auto* mesh_device = input_tensor_q.device();
     const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
-    const uint32_t device_index = ring_write_plan.device_index;
+    const uint32_t transport_rank = ring_write_plan.transport_rank;
+    const uint32_t tensor_rank = ring_write_plan.tensor_rank;
     const uint32_t forward_writes_expected = ring_write_plan.forward_writes_expected;
     const uint32_t backward_writes_expected = ring_write_plan.backward_writes_expected;
+    const auto& forward_coord = ring_write_plan.forward_coord;
+    const auto& backward_coord = ring_write_plan.backward_coord;
 
-    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor_q,
-        coord,
-        1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
-
-    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor_q,
-        coord,
-        -1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
-
-    log_debug(tt::LogOp, "device index: {}", device_index);
+    log_debug(tt::LogOp, "transport rank: {}, tensor rank: {}", transport_rank, tensor_rank);
     log_debug(tt::LogOp, "is_causal: {}", args.is_causal);
     log_debug(tt::LogOp, "is_balanced: {}", args.is_balanced);
 
@@ -942,7 +975,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
         args.all_gather_operation_attributes.ring_size,
-        device_index,
+        transport_rank,
         forward_writes_expected,
         backward_writes_expected);
 
@@ -1182,6 +1215,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->initialized_fused_op = true;
     }
 
+    // Single host-derived split-forwarding decision, shared with the all-gather (passed to the
+    // helper below), so producer and consumer cannot disagree. Latent-V stays on the established
+    // unsplit protocol (its cache-replay consumption would deadlock waiting for a second half);
+    // sliding-window consumes shards via get_next_ring_id_and_consume_one_signal, which has no
+    // split second-half wait.
+    sdpa_fused_op_signaler->split_forwarding_enabled =
+        (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) &&
+        (args.all_gather_operation_attributes.ring_size % 2 == 0) &&
+        (args.all_gather_operation_attributes.ring_size > 2) && !tensor_args.has_latent_v() &&
+        !args.has_sliding_window();
+
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
         tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
@@ -1386,6 +1430,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t compile_time_last_active_ring_iter = kv_pad_rotation_enabled ? 0 : last_active_ring_iter;
     const uint32_t compile_time_single_valid_kv_chunk_mask = kv_pad_rotation_enabled ? 0 : single_valid_kv_chunk_mask;
     const KVPadQMapping compile_time_kv_pad_q_mapping = kv_pad_rotation_enabled ? KVPadQMapping{} : kv_pad_q_mapping;
+    const auto& ag_attributes = args.all_gather_operation_attributes;
+    const RingAttentionRankMapping rank_mapping{
+        .full_mesh = ag_attributes.full_mesh,
+        .orientation = ag_attributes.snake_orientation,
+        .mesh_rows = ag_attributes.mesh_rows,
+        .mesh_cols = ag_attributes.mesh_cols};
 
     const uint32_t q_heads_per_kv = NH / NHK;
 
@@ -1439,8 +1489,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Tensor accessors start at slot 40.
+        // Slots 40-43: transport-to-tensor rank mapping. Tensor accessors start at slot 44.
         logical_lt,
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1601,8 +1655,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 36: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Combined with
-        // joint_l_partial_col it drives the joint mask-generation gate. Output accessors start at slot 38.
+        // joint_l_partial_col it drives the joint mask-generation gate.
         logical_lt,
+        // Slots 38-41: transport-to-tensor rank mapping. Output accessors start at slot 42.
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -1671,8 +1730,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 52: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
-        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip. CB block starts at 54.
-        logical_lt};
+        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
+        logical_lt,
+        // Slots 54-57: transport-to-tensor rank mapping. CB block starts at 58.
+        static_cast<uint32_t>(rank_mapping.full_mesh),
+        static_cast<uint32_t>(rank_mapping.orientation),
+        rank_mapping.mesh_rows,
+        rank_mapping.mesh_cols};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -2706,7 +2770,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_args.push_back(global_q_start);
         compute_args.push_back(global_q_end);
         compute_args.push_back(ring_size);
-        compute_args.push_back(device_index);
+        compute_args.push_back(transport_rank);
         compute_args.push_back(forward_writes_expected);
         compute_args.push_back(backward_writes_expected);
         compute_args.push_checked(runtime_arg_layout.compute_logical_nt, logical_nt, "compute.logical_nt");
@@ -2768,7 +2832,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     if (has_sliding_window) {
         const bool linear_wrap_halo = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear &&
-                                      device_index + 1 == ring_size;
+                                      transport_rank + 1 == ring_size;
         std::optional<MeshCoordinate> halo_transport_coord = forward_coord;
         std::optional<MeshCoordinate> halo_destination_coord = forward_coord;
         if (linear_wrap_halo) {
@@ -2787,7 +2851,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
         const RingAttentionNeighborHaloConfig neighbor_halo{
-            .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(device_index),
+            .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
@@ -2795,8 +2859,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_debug(
             tt::LogOp,
             "Chunked sliding K/V halo: device={}, predecessor={}, tail=[{}, {}), payload_rows={}",
-            device_index,
-            (device_index + ring_size - 1) % ring_size,
+            transport_rank,
+            (transport_rank + ring_size - 1) % ring_size,
             neighbor_halo.send_to_next_start_Ht,
             neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
             neighbor_halo.send_to_next_count_Ht);
@@ -2809,7 +2873,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             all_gather_output_tensors,
             args.all_gather_operation_attributes.num_links,
             args.all_gather_operation_attributes.ring_size,
-            device_index,
+            transport_rank,
             args.all_gather_operation_attributes.topology,
             args.all_gather_operation_attributes.semaphore,
             args.all_gather_operation_attributes.sub_device_id,
@@ -2839,7 +2903,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             args.all_gather_operation_attributes.dim,
             args.all_gather_operation_attributes.num_links,
             args.all_gather_operation_attributes.ring_size,
-            device_index,
+            transport_rank,
             args.all_gather_operation_attributes.topology,
             args.all_gather_operation_attributes.semaphore,
             args.all_gather_operation_attributes.sub_device_id,
@@ -2858,7 +2922,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
-            args.kv_cache_layer_idx);
+            args.kv_cache_layer_idx,
+            // Share the split-forwarding decision derived above so the all-gather only splits when this
+            // consumer implements the second-half wait.
+            sdpa_fused_op_signaler->split_forwarding_enabled,
+            rank_mapping);
     }
 
     return desc;
@@ -2867,7 +2935,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 }  // namespace
 
 // Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
-// device_index / forward_coord / backward_coord (used by the all-gather portion) all
+// transport rank / forward_coord / backward_coord (used by the all-gather portion) all
 // depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
 // a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
 // its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /

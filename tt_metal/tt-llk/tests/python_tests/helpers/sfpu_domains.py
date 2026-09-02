@@ -1980,6 +1980,13 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     "where a -0 is actually delivered (unpack-to-dest); xfailed there.",
     MathOperation.Rsqrt: "IEEE: rsqrt(+inf) = +0, rsqrt(-inf) = NaN, rsqrt(NaN) = NaN, "
     "rsqrt(+/-0) = +/-inf. Same -0 divergence as Sqrt and the same unpack-to-dest scoping.",
+    MathOperation.SqrtCustom: "IEEE: sqrt(+inf) = +inf, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0. "
+    "Enrolled with the sqrt_custom(+inf) fix (tt-metal issue #52930): the op was absent from "
+    "this table, which is why +inf was never driven at it and the defect had to be found "
+    "through erfinv instead. sqrt(-inf) returns -inf where IEEE gives NaN -- "
+    "the guard passes non-finite input through rather than synthesising a NaN, which is a "
+    "deliberate limit of the minimal fix and is xfailed per combination rather than hidden "
+    "in the golden.",
 }
 
 # The third tranche, enrolled in bulk: all 84 unenrolled ops with a golden, driven over the full
@@ -2102,12 +2109,12 @@ SPECIALS_READY_OPS.update(
         MathOperation.UnaryGe: "As UnaryGt.",
         MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
         "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
-        MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
-        "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
-        "first and lands on max.",
-        MathOperation.Hardtanh: "clamp(x, -1, 1), but via `_calculate_hardtanh_` rather than "
-        "Clamp's `_calculate_clamp_` -- a different kernel with differently formatted constants "
-        "that happens to agree at every special here. The agreement is pinned host-side.",
+        MathOperation.Clamp: "clamp(x, -1, 1) applied as metal `calculate_clamp` applies it: "
+        "max(x, min) then min(x, max), both SFPSWAP total-order folds, so a +NaN outranks "
+        "everything, survives the max, and lands on max via the min.",
+        MathOperation.Hardtanh: "clamp(x, -1, 1) via metal `calculate_hardtanh`, i.e. "
+        "`sfpi::clamp` -- the same SFPSWAP max-then-min composition as Clamp's kernel, so the "
+        "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "

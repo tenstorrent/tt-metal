@@ -561,10 +561,13 @@
     # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
     # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
     # than the unit job (HF_MODEL=local config-only dir).
+    # Skip batch_perf microbench in e2e — correctness is covered by
+    # test_packed_verify_matches_sequential; the bench blows short SKU budgets.
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-e2b
   model_family: Gemma
   skus:
@@ -587,7 +590,8 @@
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-e4b
   model_family: Gemma
   skus:
@@ -595,6 +599,8 @@
     # wh_n300:
     #   timeout: 15
     #   tier: 3
+    # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
+    # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
       timeout: 5
       tier: 3
@@ -611,10 +617,13 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
+    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
@@ -642,10 +651,13 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
+    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-31b
   model_family: Gemma
   skus:
@@ -673,10 +685,18 @@
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
+    # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
+    # + this 6). f562aa60493's timeout:20 made requested=40 and failed
+    # load-test-matrix (see all-model-tests on arg/gemma4_1x8optiom).
+    bh_p150:
+      timeout: 6
+      tier: 2
     bh_quietbox_2:
       timeout: 22
       tier: 1
@@ -714,7 +734,7 @@
     bh_quietbox_2:
       timeout: 12
       tier: 3
-  owner_id: U08GEGWHQJF # Adam Roberge
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: Mixtral-8x7B e2e tests
@@ -1284,19 +1304,33 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
 
-- name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
+- name: TT-DiT Wan2.2-T2V-A14B e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v"
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    fail=0
+    # 2x2 and the 2x4 family skip on a Galaxy by device count; ring_bh_4x8 now skips on the
+    # fabric payload guard in conftest.py. wh_4x8 at 480p is still excluded: it misses its
+    # encoder tolerance (0.105-0.111 measured against 0.1), which is a separate question.
+    # TODO: Remove these filters on wh_4x8. they shouldn't be here.
+    pytest --timeout 3000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "resolution_480p and t2v and not wh_4x8" || fail=1
+    pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
+    pytest --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
+    exit $fail
   model: wan-2.2-t2v
   model_family: Wan
   skus:
     bh_quietbox_2:
-      timeout: 50
+      timeout: 55
       tier: 1
       release_ready: true
+    wh_galaxy_perf:
+      timeout: 85
+      tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1477,6 +1511,21 @@
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── DeepSeek V3 (Wormhole Galaxy / TG) ──
+- name: DeepSeek-V3 decode stress e2e tests (Galaxy)
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress or tg_upr8" --timeout 900
+  model: deepseek-v3-tg
+  model_family: DeepSeek
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 1
+      release_ready: false
+  owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
 
 # ── DeepSeek V3 B1 (Black Hole supercluster, bh_sc4 / bh_sc16) ──

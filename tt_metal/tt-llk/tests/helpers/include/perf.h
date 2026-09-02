@@ -13,8 +13,8 @@
 //
 // Stimuli generator buffers and the perf-counter region are kept in this header
 // so that the disjoint ranges are visible side-by-side and any future allocation
-// has to be reconciled against both. The perf-counter macros are only defined in
-// the WC build (counter machinery in counters.h is gated by the same flag).
+// has to be reconciled against both. The perf-counter macros are only defined when perf
+// counters are compiled (the counter machinery in counters.h is gated by the same flag).
 
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
@@ -23,8 +23,8 @@ constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
 constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
 
 #ifdef PERF_COUNTERS_COMPILED
-// Perf-counter shared config + per-zone data. Must stay below the profiler epoch word at 0x16AFF0
-// (asserted in counters.h) and must not overlap the stimuli buffers above.
+// Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
+// 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above.
 #define PERF_COUNTERS_BASE_ADDR         0x169000
 #define PERF_COUNTERS_CONFIG_WORDS      200
 #define PERF_COUNTERS_DATA_WORDS        200

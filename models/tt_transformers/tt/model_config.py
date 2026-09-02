@@ -109,6 +109,96 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Preserve Galaxy's 128K layout while accommodating larger vocabularies."""
+    return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
+
+
+def compute_galaxy_width_shard_cores(width: int, max_cores: int = 32) -> int:
+    """Use the largest core count that leaves a tile-aligned width shard."""
+    if width <= 0 or width % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"width must be a positive multiple of {ttnn.TILE_SIZE}, got {width}")
+    width_tiles = width // ttnn.TILE_SIZE
+    num_cores = min(max_cores, width_tiles)
+    while width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores
+
+
+# Silicon-validated Llama-70B 7x4 MLP reduce-scatter grid.
+_GALAXY_FF1_LEGACY_CORES = 28
+
+
+def create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim: int, mesh_rows: int, mesh_cols: int) -> ttnn.MemoryConfig:
+    """Create the Galaxy FF1 reduce-scatter *output* layout.
+
+    ``ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`` derives the
+    output shape itself as ``input_shape[dim] / ring_size``; this memory config only
+    supplies the layout for that shape, so it must describe the scattered width, not
+    the pre-scatter width.
+
+    w1/w3 are 2D-sharded ``dims=(-1, -2)`` (mlp.py), so ``hidden_dim`` splits across
+    ``mesh_rows`` and the per-device FF1 output is ``hidden_dim // mesh_rows``. The
+    collective then scatters that over ``cluster_axis=1``, i.e. ``mesh_cols`` devices.
+
+    The silicon-validated Galaxy demo agrees: its reduce-scatter input is 3840 wide
+    (``SHARDED_FF12_OUT_RING_MEMCFG`` / ``SHARDED_FF12_PRE_MUL_RING_REDUCE_MEMCFG``,
+    the 28672 // 8 = 3584 per-device width padded to a 30-core layout) and its output
+    ``REDUCE_SCATTER_OUT_MEMCFG`` is ``[32, 32]`` over 30 cores = 960 = 3840 // 4.
+
+    Keeps the legacy 7x4 grid wherever it tile-aligns the scattered width, which for
+    Llama-70B it does exactly: 28672 // 8 // 4 = 896 = 28 * 32.
+    """
+    per_device_width = hidden_dim // mesh_rows // mesh_cols
+    legacy_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))})
+    num_cores, core_grid = _GALAXY_FF1_LEGACY_CORES, legacy_grid
+
+    if per_device_width % (_GALAXY_FF1_LEGACY_CORES * ttnn.TILE_SIZE) != 0:
+        # The legacy 28-core grid cannot tile-align this width. Try a core count that
+        # can, but fall back to the legacy layout if no supported core grid exists --
+        # this config is only consumed on the Galaxy decode path (mlp.py, dim == 8192),
+        # so an unusable width here must stay harmless rather than raise during
+        # ModelArgs construction on every SKU.
+        if per_device_width % ttnn.TILE_SIZE == 0:
+            candidate_cores = compute_galaxy_width_shard_cores(per_device_width)
+            candidate_grid = num_to_coregrid(candidate_cores)
+            if candidate_grid is not None:
+                num_cores, core_grid = candidate_cores, candidate_grid
+        if core_grid is legacy_grid:
+            logger.warning(
+                f"Galaxy FF1 per-device width {per_device_width} is not tile-shardable across "
+                f"{_GALAXY_FF1_LEGACY_CORES} cores and has no supported alternative grid; keeping "
+                "the legacy layout. Only consumed on the Galaxy decode path."
+            )
+
+    # Round the shard up to a tile boundary. This is exact for every width a grid can
+    # cover evenly (Llama-70B 896 = 28 * 32, Qwen-72B 1024 = 32 * 32) and mirrors what
+    # the validated demo does otherwise -- its 30-core layout pads 896 up to 960.
+    shard_width = math.ceil(per_device_width / num_cores / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    # LAYOUT HISTORY -- start here if Galaxy decode perf or L1 usage regresses (PR #53838).
+    #
+    #   Llama-70B (hidden_dim 28672):  [32, 128] over 28 cores  ->  [32, 32] over 28 cores
+    #                                   3584 columns                 896 columns
+    #
+    # 3584 is the pre-scatter per-device width (28672 // 8); 896 is what
+    # reduce_scatter_minimal_async actually emits (28672 // 8 // 4). Same 7x4 grid,
+    # 4x less L1 for this buffer.
+    #
+    # The collective tolerates an over-provisioned output shard spec -- the old value
+    # was oversized, not wrong -- so a regression here would show up as perf or L1
+    # pressure, never as a failed assertion. If Galaxy decode slows down or starts
+    # hitting L1 limits, revert this shard width to `per_device_width // num_cores`
+    # with `per_device_width = hidden_dim // mesh_rows` and see if it recovers.
+    return ttnn.create_sharded_memory_config(
+        shape=(32, shard_width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
@@ -938,13 +1028,12 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
-            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
+            # Sized to the reduce-scatter output width, not the pre-scatter width. See the
+            # LAYOUT HISTORY note in create_galaxy_ff1_out_reduce_scatter_memcfg if Galaxy
+            # decode perf or L1 usage regresses -- Llama-70B went [32, 128] -> [32, 32].
+            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = create_galaxy_ff1_out_reduce_scatter_memcfg(
+                self.hidden_dim, self.cluster_shape[0], self.cluster_shape[1]
+            )
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32 * 4, self.hidden_dim // 8 // 8),
@@ -2770,7 +2859,7 @@ class ModelArgs:
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
         if self.is_galaxy:
-            self.padded_vocab_size = 128 * 1024
+            self.padded_vocab_size = compute_galaxy_padded_vocab_size(self.vocab_size, self.num_devices)
         elif self.num_devices == 0:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
@@ -4334,16 +4423,33 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            # Prefer a tile-aligned width shard, but never hand num_to_coregrid a core
+            # count it cannot map -- it returns None, which create_sharded_memory_config
+            # rejects with "Invalid core_grid type". Fall back to the legacy expression
+            # in that case so dims that built a config before still build one.
+            self_out_width = self.dim // 4
+            self_out_cores = compute_galaxy_width_shard_cores(self_out_width)
+            if num_to_coregrid(self_out_cores) is None:
+                self_out_cores = min(32, self_out_width // ttnn.TILE_SIZE)
+            self_out_grid = num_to_coregrid(self_out_cores)
+
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, self_out_width // self_out_cores),
+                core_grid=self_out_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            # The gathered attention output is n_local_heads * head_dim wide, which is
+            # only equal to dim // cluster_shape[0] when n_heads * head_dim == dim.
+            # Qwen3-32B (dim 5120, 64 heads, 8 KV heads, head_dim 128) gathers 1024
+            # columns, while Qwen2.5-32B / QwQ-32B (40 heads) gather 640 -- so keying
+            # this off dim would break the latter. Derive it from the head geometry.
+            gather_users_cores = min(32, (self.n_heads // self.n_kv_heads) * self.head_dim // ttnn.TILE_SIZE)
             self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
                 shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                core_grid=num_to_coregrid(gather_users_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

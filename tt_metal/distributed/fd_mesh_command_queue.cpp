@@ -94,6 +94,7 @@ void record_program_sub_device_for_range(
         mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
         tt::RecordProgramSubDevice(
+            extract_context_id(mesh_device),
             mesh_device->impl().get_device(coord)->id(),
             active_manager_id,
             runtime_id,
@@ -1267,7 +1268,7 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
+    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,
@@ -1337,7 +1338,8 @@ static VecIt remove_by_index(VecIt begin, VecIt end, IndexIt index_begin, IndexI
 }
 
 void FDMeshCommandQueue::record_end() {
-    const auto& hal = MetalContext::instance().hal();
+    MetalContext& metal_ctx = MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& hal = metal_ctx.hal();
 
     // At the beginning of the trace, expected_num_workers_completed is 0 on all devices on for each sub-device in the
     // trace. launch_msg_rd_ptr will also be 0 for all core-types used on each subdevice in the trace. At the end of the
@@ -1394,7 +1396,7 @@ void FDMeshCommandQueue::record_end() {
     }
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(metal_ctx, metal_ctx.hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));

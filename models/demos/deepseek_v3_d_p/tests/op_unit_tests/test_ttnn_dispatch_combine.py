@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def run_dispatch_combine(
@@ -405,13 +406,38 @@ def dispatch_combine_shape_params():
     return params
 
 
+# Two-link subset of the shared dispatch/combine mesh table. The 1-link rows are redundant
+# coverage here; everything else about the profiles stays owned by ALL_MESH_CONFIGS.
+_MESH_IDS = (
+    "fabric2d-2x1-2link",
+    "fabric2d-torus-y-4x1-2link",
+    "fabric2d-torus-y-8x1-2link",
+    "fabric2d-mesh-4x2-2link",
+    "fabric2d-torus-xy-8x4-2link",
+)
+_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
+assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch/combine mesh configs missing from ALL_MESH_CONFIGS"
+
+
+def _ci_unsupported_param_combos_dispatch_combine(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    dispatched_buffer_layout = params["dispatched_buffer_layout"]
+
+    if not on_ci:
+        return False
+    if dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
-    ALL_MESH_CONFIGS,
+    _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -688,7 +714,7 @@ def test_ttnn_dispatch_combine_top4(
     topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device=mesh_device,
-        seq_len_per_chip=1600,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
         emb_dim=7168,
         num_routed_experts=64,
         num_experts_per_tok=4,

@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import csv
 import gc
 import logging
 import os
@@ -21,7 +20,15 @@ from loguru import logger
 
 logger.remove()
 logger.add(sys.stderr, level="ERROR")
-logging.getLogger().setLevel(logging.ERROR)
+
+# ttnn / tt-transformers noise arrives through loguru (pinned to ERROR above).
+# stdlib logging stays at INFO because the trainer's built-in GRPOMonitor emits
+# the per-step line through it.
+logging.basicConfig(
+    level=os.environ.get("GRPO_LOGLEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -79,14 +86,14 @@ WEIGHT_SYNC_EVERY = 1
 REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
-def _boolq_reward(completions, answer, **kwargs):
-    rewards = []
-    for text, ground_truth in zip(completions, answer):
-        clean = text.strip().lower()
-        accuracy = 2.0 if clean.startswith(ground_truth.lower()) else -1.0
-        brevity = -0.1 * (len(text) / 20) ** 2
-        rewards.append(accuracy + brevity)
-    return rewards
+def accuracy_reward(completions, answer, **kwargs):
+    """+2 if the completion begins with the correct Yes/No token, -1 otherwise."""
+    return [2.0 if text.strip().lower().startswith(gt.lower()) else -1.0 for text, gt in zip(completions, answer)]
+
+
+def brevity_reward(completions, **kwargs):
+    """Quadratic length penalty in characters, discouraging runaway completions."""
+    return [-0.1 * (len(text) / 20) ** 2 for text in completions]
 
 
 def _run_output_dir() -> str:
@@ -95,49 +102,6 @@ def _run_output_dir() -> str:
         "generated/tt-train/grpo_run",
         datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
     )
-
-
-class GRPOMonitor:
-    """on_step_end CSV/stdout monitor."""
-
-    def __init__(self, output_dir: str) -> None:
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                ["step", "reward", "avg_length", "step_time_s", "step_time_with_weight_updates_s", "generation_time_s"]
-            )
-
-    def on_train_begin(self, trainer: Any) -> None:
-        pass
-
-    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        min_length = kwargs["min_completion_len"]
-        max_length = kwargs["max_completion_len"]
-        step_time_s = kwargs.get("step_time_s", float("nan"))
-        step_time_and_previous_callbacks_s = kwargs.get("step_time_and_previous_callbacks_s", float("nan"))
-        generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(
-            f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
-            f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
-            f"| Step: {step_time_s:.2f}s (with updates: {step_time_and_previous_callbacks_s:.2f}s) | Gen: {generation_time_s:.2f}s"
-        )
-        with open(self.file_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([step, reward, length, step_time_s, step_time_and_previous_callbacks_s, generation_time_s])
-
-    def on_before_optimizer_step(self, trainer: Any) -> None:
-        pass
-
-    def on_save(self, trainer: Any, step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: Any) -> None:
-        print("Training complete.")
 
 
 def _load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
@@ -229,16 +193,17 @@ def _ttml_main() -> None:
         # before training starts.
         completer.push_weights()
 
+        # The trainer auto-appends its built-in GRPOMonitor, which writes
+        # ``<output_dir>/grpo_metrics.csv`` (including a
+        # ``WeightSyncCallback_time_s`` column for the per-step weight push)
+        # and logs the per-step line.
         trainer = GRPOTrainer(
             completer=completer,
             dataset=dataset,
             config=grpo_config,
-            reward_func=_boolq_reward,
+            reward_funcs=[accuracy_reward, brevity_reward],
             optimizer_dict=optimizer_dict,
-            callbacks=[
-                WeightSyncCallback(completer, every=WEIGHT_SYNC_EVERY),
-                GRPOMonitor(output_dir),
-            ],
+            callbacks=[WeightSyncCallback(completer, every=WEIGHT_SYNC_EVERY)],
             model_source=MODEL_ID,
         )
         trainer.train()

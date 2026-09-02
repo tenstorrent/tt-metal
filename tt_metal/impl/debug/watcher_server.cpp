@@ -299,7 +299,7 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "Legend:\n");
 
     // Get processor info from shared helper
-    auto tensix_info = get_enable_symbols_info(HalProgrammableCoreType::TENSIX);
+    auto tensix_info = get_enable_symbols_info(env_.get_hal(), HalProgrammableCoreType::TENSIX);
 
     fprintf(
         f,

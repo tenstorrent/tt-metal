@@ -33,7 +33,8 @@ void kernel_main() {
 
     // Configure the compute pipeline against this kernel's input/output DFBs.
     // Matches production pattern (eltwise_sfpu.cpp / eltwise_binary.cpp).
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
+    copy_init(dfb_in.get_id());
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();

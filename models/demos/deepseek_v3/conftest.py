@@ -173,20 +173,21 @@ def state_dict(model_path):
     yield load_state_dict(model_path, "")
 
 
+def _clear_requested_state_dict_cache(request):
+    if "state_dict" in request.fixturenames:
+        request.getfixturevalue("state_dict").clear_cache()
+
+
 @pytest.fixture(scope="function", autouse=True)
 def clear_state_dict_cache(request):
     """
     Clear the LazyStateDict cache after each test to prevent memory accumulation.
     This preserves file handles (mmap benefits) while freeing tensor memory.
     """
-    # Check if state_dict is requested by this test
-    if "state_dict" not in request.fixturenames:
-        yield
-        return
-
-    state_dict = request.getfixturevalue("state_dict")
     yield
-    state_dict.clear_cache()
+
+    # Check after the test because it may request state_dict dynamically.
+    _clear_requested_state_dict_cache(request)
 
 
 @pytest.fixture(scope="session")

@@ -109,7 +109,7 @@ protected:
 // verify that destructors run the correct number of times when the vector
 // goes out of scope.
 
-TEST_F(SmallVectorIntTest, DefaultConstructionIsEmpty) {
+TEST_F(SmallVectorIntTest, CPU_DefaultConstructionIsEmpty) {
     // A default constructed vector should have zero size and be empty.  The
     // capacity should be at least the statically defined N (kInlineCapacity in this case).
     Vec vec;
@@ -118,7 +118,7 @@ TEST_F(SmallVectorIntTest, DefaultConstructionIsEmpty) {
     EXPECT_GE(vec.capacity(), kInlineCapacity);
 }
 
-TEST_F(SmallVectorIntTest, ConstructionFromIteratorRange) {
+TEST_F(SmallVectorIntTest, CPU_ConstructionFromIteratorRange) {
     // Constructing from a pair of iterators should populate the vector with
     // the values in that range.
     int arr[] = {1, 2, 3, 4};
@@ -129,7 +129,7 @@ TEST_F(SmallVectorIntTest, ConstructionFromIteratorRange) {
     }
 }
 
-TEST_F(SmallVectorIntTest, InitializerListConstruction) {
+TEST_F(SmallVectorIntTest, CPU_InitializerListConstruction) {
     // An initializer list constructor should take the list of values and store
     // them in order.
     Vec vec{5, 6, 7};
@@ -139,7 +139,7 @@ TEST_F(SmallVectorIntTest, InitializerListConstruction) {
     EXPECT_EQ(vec[2], 7);
 }
 
-TEST_F(SmallVectorTrackedTest, CopyConstructorSmallAndLarge) {
+TEST_F(SmallVectorTrackedTest, CPU_CopyConstructorSmallAndLarge) {
     // Copying a vector that fits in the small buffer should result in another
     // vector using its own small buffer and containing the same elements.
     Vec small;
@@ -172,7 +172,7 @@ TEST_F(SmallVectorTrackedTest, CopyConstructorSmallAndLarge) {
     EXPECT_GE(copyLarge.capacity(), large.size());
 }
 
-TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
+TEST_F(SmallVectorTrackedTest, CPU_MoveConstructorSmallAndLarge) {
     // Moving a vector should transfer its contents.  After the move the
     // destination should contain the original elements and the source should
     // be in a valid but unspecified state (size zero is acceptable).  For
@@ -212,7 +212,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
     }
 }
 
-TEST_F(SmallVectorTrackedTest, DestructorCalls) {
+TEST_F(SmallVectorTrackedTest, CPU_DestructorCalls) {
     {
         Vec vec;
         for (int i = 0; i < kInlineCapacity; ++i) {
@@ -231,7 +231,7 @@ TEST_F(SmallVectorTrackedTest, DestructorCalls) {
 // The following tests verify that the vector uses the inlined buffer for up
 // to `N` elements and correctly transitions to heap storage when necessary.
 
-TEST_F(SmallVectorIntTest, PushWithinSmallBufferKeepsInplaceStorage) {
+TEST_F(SmallVectorIntTest, CPU_PushWithinSmallBufferKeepsInplaceStorage) {
     Vec vec;
     // Push elements one at a time; after the first push record the pointer
     // returned by data().  Subsequent pushes up to the inline capacity
@@ -247,7 +247,7 @@ TEST_F(SmallVectorIntTest, PushWithinSmallBufferKeepsInplaceStorage) {
     EXPECT_EQ(vec.size(), kInlineCapacity);
 }
 
-TEST_F(SmallVectorIntTest, PushBeyondSmallBufferTriggersHeapAllocation) {
+TEST_F(SmallVectorIntTest, CPU_PushBeyondSmallBufferTriggersHeapAllocation) {
     Vec vec;
     for (int i = 0; i < kInlineCapacity; ++i) {
         vec.push_back(i);
@@ -265,7 +265,7 @@ TEST_F(SmallVectorIntTest, PushBeyondSmallBufferTriggersHeapAllocation) {
 // Element Access & Iterators
 //
 
-TEST_F(SmallVectorIntTest, FrontAndBackAccessors) {
+TEST_F(SmallVectorIntTest, CPU_FrontAndBackAccessors) {
     Vec vec{1, 2, 3};
     EXPECT_EQ(vec.front(), 1);
     EXPECT_EQ(vec.back(), 3);
@@ -275,7 +275,7 @@ TEST_F(SmallVectorIntTest, FrontAndBackAccessors) {
     EXPECT_EQ(vec[2], 5);
 }
 
-TEST_F(SmallVectorIntTest, ForwardAndReverseIterators) {
+TEST_F(SmallVectorIntTest, CPU_ForwardAndReverseIterators) {
     Vec vec{1, 2, 3, 4};
     // Sum elements via forward iterators.
     int sum = 0;
@@ -301,7 +301,7 @@ TEST_F(SmallVectorIntTest, ForwardAndReverseIterators) {
     EXPECT_EQ(crev, reversed);
 }
 
-TEST_F(SmallVectorIntTest, ConstVsNonConstIteratorTypes) {
+TEST_F(SmallVectorIntTest, CPU_ConstVsNonConstIteratorTypes) {
     Vec vec{1, 2, 3};
     // The type of *cbegin should be const int& and not modifiable.
     using ConstRef = decltype(*vec.cbegin());
@@ -325,7 +325,7 @@ TEST_F(SmallVectorIntTest, ConstVsNonConstIteratorTypes) {
 // swap, resize, reserve and shrink_to_fit.  Each operation is checked for
 // correctness of the resulting contents, size/capacity and element lifetime.
 
-TEST_F(SmallVectorIntTest, emplaceBackWithArray) {
+TEST_F(SmallVectorIntTest, CPU_emplaceBackWithArray) {
     // Original implementation didn't support emplace_back for std::array, which led to compilation error.
     // This test verifies that it works now.
     SmallVector<std::array<int, 3>, kInlineCapacity> vec;
@@ -333,7 +333,7 @@ TEST_F(SmallVectorIntTest, emplaceBackWithArray) {
     ASSERT_EQ(vec.size(), 1u);
 }
 
-TEST_F(SmallVectorTrackedTest, PushPopEmplaceBack) {
+TEST_F(SmallVectorTrackedTest, CPU_PushPopEmplaceBack) {
     Vec vec;
     // Emplace constructs in place; constructor count will increase.
     vec.emplace_back(1);
@@ -352,7 +352,7 @@ TEST_F(SmallVectorTrackedTest, PushPopEmplaceBack) {
     EXPECT_EQ(Tracked::copyCtorCount, 1);
 }
 
-TEST_F(SmallVectorIntTest, InsertAtVariousPositions) {
+TEST_F(SmallVectorIntTest, CPU_InsertAtVariousPositions) {
     Vec vec{1, 4};
     // Insert a single element in the middle.
     auto* it = vec.insert(vec.begin() + 1, 2);
@@ -374,7 +374,7 @@ TEST_F(SmallVectorIntTest, InsertAtVariousPositions) {
     EXPECT_TRUE(std::equal(vec.begin(), vec.end(), expected.begin()));
 }
 
-TEST_F(SmallVectorIntTest, EraseSingleAndRange) {
+TEST_F(SmallVectorIntTest, CPU_EraseSingleAndRange) {
     Vec vec{0, 1, 2, 3, 4};
     // Erase a single element.
     auto* it = vec.erase(vec.begin() + 1);
@@ -390,7 +390,7 @@ TEST_F(SmallVectorIntTest, EraseSingleAndRange) {
     EXPECT_TRUE(std::equal(vec.begin(), vec.end(), expected2.begin()));
 }
 
-TEST_F(SmallVectorIntTest, SwapExchangesContentsAndStorage) {
+TEST_F(SmallVectorIntTest, CPU_SwapExchangesContentsAndStorage) {
     Vec small{1, 2, 3};
     Vec large;
     // Force large to allocate on the heap by pushing beyond inline capacity.
@@ -418,7 +418,7 @@ TEST_F(SmallVectorIntTest, SwapExchangesContentsAndStorage) {
     EXPECT_EQ(large[2], 3);
 }
 
-TEST_F(SmallVectorTrackedTest, ResizeAndReserve) {
+TEST_F(SmallVectorTrackedTest, CPU_ResizeAndReserve) {
     Vec vec;
     // Increase size; default constructed values have value 0.
     vec.resize(3);
@@ -447,7 +447,7 @@ TEST_F(SmallVectorTrackedTest, ResizeAndReserve) {
 // Simple checks of size(), capacity() and empty() in both small and large
 // configurations.
 
-TEST_F(SmallVectorIntTest, SizeCapacityAndEmpty) {
+TEST_F(SmallVectorIntTest, CPU_SizeCapacityAndEmpty) {
     Vec vec;
     EXPECT_TRUE(vec.empty());
     EXPECT_EQ(vec.size(), 0u);
@@ -474,7 +474,7 @@ TEST_F(SmallVectorIntTest, SizeCapacityAndEmpty) {
 // Tests for zero inline capacity, large element types and alignment
 // requirements.
 
-TEST(SmallVectorEdgeCaseTest, ZeroCapacityUsesHeapAlways) {
+TEST(SmallVectorEdgeCaseTest, CPU_ZeroCapacityUsesHeapAlways) {
     // When N == 0 there is no inline storage; the vector must allocate from
     // the heap for every element.
     SmallVector<int, 0> vec;
@@ -490,7 +490,7 @@ TEST(SmallVectorEdgeCaseTest, ZeroCapacityUsesHeapAlways) {
     EXPECT_GE(vec.capacity(), 2u);
 }
 
-TEST(SmallVectorEdgeCaseTest, LargeTypesWithNonTrivialDestructors) {
+TEST(SmallVectorEdgeCaseTest, CPU_LargeTypesWithNonTrivialDestructors) {
     // Use a large array type as the element to ensure the implementation can
     // handle large sizes.  The destructor should be called for each element.
 
@@ -504,7 +504,7 @@ TEST(SmallVectorEdgeCaseTest, LargeTypesWithNonTrivialDestructors) {
     EXPECT_EQ(Large::dtorCount, 5);
 }
 
-TEST(SmallVectorEdgeCaseTest, OverAlignedTypesAreProperlyAllocated) {
+TEST(SmallVectorEdgeCaseTest, CPU_OverAlignedTypesAreProperlyAllocated) {
     // Over‐aligned types should still have their alignment honoured in the
     // vector's storage.  We check the returned data pointer alignment.
     SmallVector<OverAligned, 2> vec;
