@@ -16,8 +16,7 @@
 // (unlock will be responsible for cache eviction). Zeroing a locked buffer
 // should be flagged by the NOC transaction debug tool -- see TODO below.
 
-
-#if defined(NOC_API_V2)
+#if !defined(NOC_API_V1)
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #endif
 #include "internal/tt-2xx/quasar/noc_nonblocking_api.h"
@@ -36,7 +35,7 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     const uint32_t local_addr = static_cast<uint32_t>(get_dst_ptr<AddressType::LOCAL_L1>(dst, args));
     DEBUG_SANITIZE_L1_ADDR(local_addr, size_bytes);
 
-#if defined(NOC_API_V2)
+#if !defined(NOC_API_V1)
     // Engage the Quasar iDMA zero device (Overlay Spec §4.12). The zero mode is
     // a HW overlay on top of the iDMA copy path: same MISC.idma_en + MISC.write_trans
     // setup as iDMA copy, but with AXI_OPT_1.src_protocol = 4 and decouple_aw = 1. The
@@ -109,7 +108,7 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
 }
 
 inline void Noc::write_zeros_l1_barrier() const {
-#if defined(NOC_API_V2)
+#if !defined(NOC_API_V1)
     // TODO: this barrier should record a NOC-debug event so the tool can flag a missing
     // write_zeros_l1_barrier (use-before-flush), the way read/write barriers do.
     while (!overlay::idma_acked_cmdbuf_0()) {
