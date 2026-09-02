@@ -366,6 +366,15 @@ class SpeculativeDecoder:
         )
         self._pv_ready = True
 
+    def _seq_kv_enabled(self):
+        """Serialized ``paged_update_cache`` instead of staging fill (default)."""
+        return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
     def _batch_sdpa_enabled(self):
         """Native decode-batch SDPA for packed verify (default). Set
         ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` for the packed-head + mask path."""
@@ -375,6 +384,12 @@ class SpeculativeDecoder:
             "no",
             "off",
         )
+
+    def _pv_page_table_batch(self, P):
+        """Batch-SDPA and sequential KV writes both need P replicated page-table rows."""
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+            return P
+        return 1
 
     def _pv_seed_staging(self, c):
         """Seed every layer's staging block-slot 0 with the committed content of
@@ -439,27 +454,23 @@ class SpeculativeDecoder:
         # block), the P new rows from new_seq (concat index S2+p), stale tail
         # identity. embed_idx bakes the per-head flattened row offset in
         # (new_seq is padded to 32 rows in packed_decode_forward).
-        m = torch.arange(S2, dtype=torch.int64)
-        if roll:
-            m[:off] += bs
-        m[off : off + P] = S2 + torch.arange(P)
-        p_pad = ((P + 31) // 32) * 32
-        src_seq = S2 + p_pad
-        embed = {}
-        for lt, nkv in self._pv_nkv.items():
-            off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
-            embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
-
-        # -1, not 0: ``hot_pt`` feeds ``paged_fill_cache`` with no ``valid_seq_len``
-        # cap (see attention/decode.py ``_packed_fill_kv_loopfree_embed``), so its
-        # contract is "-1 = skip". Metal reserves no null page, so a 0 here makes
-        # every idle slot write staging KV into physical page 0 and corrupts the
-        # committed cache. Chunked prefill can pad with 0 because valid_seq_len
-        # bounds that fill; this path has no such bound.
-        hot = torch.full((1, BLK), -1, dtype=torch.int32)
-        hot[0, 0] = int(self._pv_pages[a])
-        if off + P > bs:
-            hot[0, 1] = int(self._pv_pages[a + 1])
+        if self._seq_kv_enabled():
+            embed, hot = {}, None
+        else:
+            m = torch.arange(S2, dtype=torch.int64)
+            if roll:
+                m[:off] += bs
+            m[off : off + P] = S2 + torch.arange(P)
+            p_pad = ((P + 31) // 32) * 32
+            src_seq = S2 + p_pad
+            embed = {}
+            for lt, nkv in self._pv_nkv.items():
+                off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
+                embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
+            hot = torch.full((1, BLK), -1, dtype=torch.int32)
+            hot[0, 0] = int(self._pv_pages[a])
+            if off + P > bs:
+                hot[0, 1] = int(self._pv_pages[a + 1])
 
         return {"pos": pos, "mask_full": mask_full, "mask_slide": mask_slide, "embed": embed, "hot": hot, "S_k": S_k}
 
@@ -488,9 +499,9 @@ class SpeculativeDecoder:
                 else None
             ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
         }
-        if self._batch_sdpa_enabled():
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
             dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         return dev
 
@@ -524,7 +535,7 @@ class SpeculativeDecoder:
         """Host packed-verify tensors for the fused greedy graph at ``anchor_pos``."""
         c, P = self._fused_verify_c_p(anchor_pos)
         self._pv_setup()
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         return c, P, self._pv_host_inputs(c, P)
 
@@ -532,8 +543,9 @@ class SpeculativeDecoder:
         """Refresh persistent fused-trace packed inputs from host dict ``h``."""
         pairs = [
             (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["v_pos"]),
-            (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
         ]
+        if tr.get("hot") is not None and h["hot"] is not None:
+            pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
         if tr.get("mask_full") is not None and h["mask_full"] is not None:
             pairs.append(
                 (
@@ -562,7 +574,7 @@ class SpeculativeDecoder:
     def _fused_packed_verify(self, verify_x, c, P):
         """Eager packed verify of in-graph ``verify_x`` [1, P] at anchor ``c``."""
         self._pv_setup()
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         dev = {
@@ -579,10 +591,10 @@ class SpeculativeDecoder:
                 else None
             ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
-            "pt": self._page_table(P if self._batch_sdpa_enabled() else 1),
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+            "pt": self._page_table(self._pv_page_table_batch(P)),
         }
-        if self._batch_sdpa_enabled():
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
             dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
@@ -600,11 +612,11 @@ class SpeculativeDecoder:
         self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         dev = self._pv_device_inputs(tokens, h)
-        dev["pt"] = self._page_table(P if self._batch_sdpa_enabled() else 1)
+        dev["pt"] = self._page_table(self._pv_page_table_batch(P))
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
@@ -625,14 +637,14 @@ class SpeculativeDecoder:
         self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         key = (P, h["S_k"])
         tr = self._pv_traces.get(key)
         if tr is None:
             dev = self._pv_device_inputs(tokens, h)
-            dev["pt"] = self._page_table(1)
+            dev["pt"] = self._page_table(self._pv_page_table_batch(P))
             # Compile run (warm program cache), then capture. Both runs write
             # the SAME tokens to the SAME positions, so KV writes are idempotent.
             logits, hidden = self._pv_call(dev, P)
@@ -648,8 +660,11 @@ class SpeculativeDecoder:
             ttnn.copy_host_to_device_tensor(self._host_tokens(tokens), tr["x"])
             pairs = [
                 (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["pos"]),
-                (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
             ]
+            if tr.get("hot") is not None and h["hot"] is not None:
+                pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
+            if tr.get("pos_cache") is not None:
+                pairs.append((self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False), tr["pos_cache"]))
             if tr.get("mask_full") is not None and h["mask_full"] is not None:
                 pairs.extend(
                     (
@@ -1253,13 +1268,13 @@ class SpeculativeDecoder:
                 else None
             ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
-            "v_pt": self._page_table(P if self._batch_sdpa_enabled() else 1),
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+            "v_pt": self._page_table(self._pv_page_table_batch(P)),
             "S_k": h["S_k"],
             "P": P,
             "c": c,
         }
-        if self._batch_sdpa_enabled():
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
             tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         _lg.info("[spec-trace] capture fused: compile run")
         vx, vidx, vh, h_rows = self._fused_body(tr)

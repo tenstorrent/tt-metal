@@ -627,6 +627,69 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     ttnn.deallocate(merged)
 
 
+def _packed_seq_kv_enabled():
+    """Write P new KV rows with serialized ``paged_update_cache`` instead of
+    embedding-merge + ``paged_fill_cache`` of the whole hot block. Default on;
+    ``GEMMA4_PACKED_VERIFY_SEQ_KV=0`` restores staging fill."""
+    return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _write_packed_kv_sequential(tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P):
+    """Race-safe write of P consecutive positions that share one paged block.
+
+    Same serialization as decode ``sequential_kv_write``: one ``paged_update_cache``
+    per position so concurrent RMWs of the same block tile cannot drop writes.
+    ``tt_k``/``tt_v`` are prefill-split ``[1, nkv, n_seq, hd]`` (n_seq may be
+    tile-padded past P).
+    """
+    k_cache_w, v_cache_w = kv_cache
+    eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
+    tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_src, v_src = tt_k_bp, tt_v_bp
+    if tt_k_bp.shape[1] != P:
+        k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
+        v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
+    shard_shape = list(q_sharded_mem.shard_spec.shape)
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    single_user_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(one_core, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    nkv, hd = nkv_local, head_dim
+    for p in range(P):
+        kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
+        vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
+        kb = ttnn.to_memory_config(kb, single_user_mem)
+        vb = ttnn.to_memory_config(vb, single_user_mem)
+        pos_b = ttnn.slice(pos_cache, [p], [p + 1])
+        pt_b = ttnn.slice(page_table, [p, 0], [p + 1, page_table.shape[1]])
+        ttnn.experimental.paged_update_cache(
+            k_cache_w,
+            kb,
+            update_idxs_tensor=pos_b,
+            page_table=pt_b,
+            block_size=eff_bs,
+            num_kv_heads=nkv_local,
+        )
+        ttnn.experimental.paged_update_cache(
+            v_cache_w,
+            vb,
+            update_idxs_tensor=pos_b,
+            page_table=pt_b,
+            block_size=eff_bs,
+            num_kv_heads=nkv_local,
+        )
+        for t in (kb, vb, pos_b, pt_b):
+            t.deallocate(True)
+    if k_src is not tt_k_bp:
+        k_src.deallocate(True)
+        v_src.deallocate(True)
+    tt_k_bp.deallocate(True)
+    tt_v_bp.deallocate(True)
+
+
 def packed_decode_forward(
     hidden_states,
     cos_cache,
@@ -697,9 +760,16 @@ def packed_decode_forward(
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
     # ``paged_update_cache`` needs the layout ``nlp_create_qkv_heads_decode``
     # emits; the spec depends only on shape constants, so probe once and cache.
-    cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
+    cache_key = _q_sharded_mem_key(1, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
-    if q_sharded_mem is None and kv_staging is None and not is_kv_shared:
+    seq_kv = (
+        _packed_seq_kv_enabled()
+        and position_idx_cache is not None
+        and page_table is not None
+        and B == 1
+        and int(page_table.shape[0]) == P
+    )
+    if q_sharded_mem is None and not is_kv_shared and (kv_staging is None or seq_kv):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
             probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
@@ -746,9 +816,18 @@ def packed_decode_forward(
     # correctness/generation run.
     skip_kv_write = os.environ.get("GEMMA4_PACKED_VERIFY_SKIP_KV_WRITE", "0") == "1"
 
-    # ── ⑤ KV write — loop-free persistent staging (primary) ────────────────
+    # ── ⑤ KV write ─────────────────────────────────────────────────────────
     if not is_kv_shared and skip_kv_write:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_k)
+        ttnn.deallocate(tt_v)
+    elif not is_kv_shared and seq_kv:
+        # P serialized paged_update_cache ops (same race fix as decode verify)
+        # instead of embedding-merge + paged_fill of the whole hot block.
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        _write_packed_kv_sequential(
+            tt_k, tt_v, kv_cache, page_table, position_idx_cache, q_sharded_mem, head_dim, nkv_local, P
+        )
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
     elif not is_kv_shared and kv_staging is not None and embed_idx is not None:
