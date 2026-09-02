@@ -94,8 +94,6 @@ struct p_unpacr_nop
     constexpr static std::uint32_t UNP_NOP = 0b010;
 
     constexpr static std::uint32_t UNP_ZEROSRC = 0b001;
-    // Spans Src_ClrVal_Ctrl|Unpack_Pop; equals CLR_SRC_NEGINF|CLR_SRC.
-    constexpr static std::uint32_t UNP_NEGINFSRC = 0b101;
 
     constexpr static std::uint32_t SET_DVALID = 0x1;
 
