@@ -751,27 +751,29 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_2, runner, kv_cache]
-  test_group: module
-  skus:
-    bh_sc4:
-      # Measured test step 9 min: weight load from the warm 8x4 cache, then 50 chunks over 78 layers
-      # plus both-cache UMD readback. The extra 5 min over the Kimi entry is cold-cache weight-load
-      # insurance. Counts against the shield/demo budget together with the Kimi entry.
-      timeout: 20
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  sp_config: sc4
+# TEMPORARY (issue #55047 perf-margin study): the GLM-5.2 leg is commented out so that a
+# prefill_runner_kv_pcc dispatch runs the Kimi-K2.7 leg alone. Do not merge.
+#- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+#  cmd: |
+#    set -euo pipefail
+#    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+#      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+#    fi
+#    cd "${TT_METAL_HOME}"
+#    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
+#  test_type: prefill_runner_kv_pcc
+#  test_tags: [glm_5_2, runner, kv_cache]
+#  test_group: module
+#  skus:
+#    bh_sc4:
+#      # Measured test step 9 min: weight load from the warm 8x4 cache, then 50 chunks over 78 layers
+#      # plus both-cache UMD readback. The extra 5 min over the Kimi entry is cold-cache weight-load
+#      # insurance. Counts against the shield/demo budget together with the Kimi entry.
+#      timeout: 20
+#  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+#  team: shield
+#  sp_config: sc4
 
 
 # ===== Op-level, no model under test ===================================================================
