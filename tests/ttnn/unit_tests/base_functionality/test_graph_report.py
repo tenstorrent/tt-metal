@@ -2751,6 +2751,13 @@ class TestCaptureCorrelation:
         with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
             assert json.load(f)["session_id"] == "job-42"
 
+    @pytest.mark.parametrize("session_id", ["has space", "has,comma", "has;semicolon", "line\nbreak", "a" * 129])
+    def test_session_id_from_environment_must_be_safe_metadata(self, session_id, monkeypatch, expect_error):
+        monkeypatch.setenv(ttnn.graph.RUN_SESSION_ID_ENV, session_id)
+
+        with expect_error(ValueError, "TTNN_RUN_SESSION_ID must be 1-128 ASCII"):
+            ttnn.graph._run_session_id()
+
     def test_session_id_is_emitted_to_tracy_once(self, monkeypatch):
         messages = []
         monkeypatch.setattr(ttnn, "tracy_message", messages.append)
@@ -2761,9 +2768,7 @@ class TestCaptureCorrelation:
 
         assert messages == ["TTNN_SESSION_ID: job-42"]
 
-    def test_generated_session_id_is_the_same_for_every_capture_in_a_process(
-        self, device, tmp_report_dir, monkeypatch
-    ):
+    def test_generated_session_id_is_the_same_for_every_capture_in_a_process(self, device, tmp_report_dir, monkeypatch):
         """The generated id identifies the run, so successive captures must share it.
 
         ``capture_index`` distinguishes captures within the run; the session id is what

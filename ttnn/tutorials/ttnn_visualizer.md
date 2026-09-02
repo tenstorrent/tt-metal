@@ -222,6 +222,8 @@ This uses Tracy's existing message API and postprocessing, so Metal does not man
 export TTNN_RUN_SESSION_ID=$(uuidgen)
 ```
 
+Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in Tracy and CSV metadata.
+
 Match `SESSION_ID` in `profile_log_device.csv` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
 
 | Column | Meaning |

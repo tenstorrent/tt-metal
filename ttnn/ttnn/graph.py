@@ -5,6 +5,7 @@
 import contextlib
 import json
 import os
+import re
 import time
 import traceback
 import uuid
@@ -83,6 +84,7 @@ COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 CAPTURE_CORRELATION_SIDECAR_SUFFIX = ".capture_correlation.json"
 RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
 SESSION_ID_TRACY_MESSAGE_PREFIX = "TTNN_SESSION_ID"
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 _capture_index: int = 0
 # Session id generated for this process, created on first use when the environment does
@@ -96,6 +98,15 @@ _session_id_tracy_message_emitted: bool = False
 _capture_correlation: Union[dict, None] = None
 
 
+def _validate_session_id(session_id: str) -> str:
+    """Require a compact identifier safe in Tracy and CSV metadata."""
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(
+            f"{RUN_SESSION_ID_ENV} must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'; " f"got {session_id!r}"
+        )
+    return session_id
+
+
 def _run_session_id() -> str:
     """Session id for this run.  Never empty.
 
@@ -105,7 +116,7 @@ def _run_session_id() -> str:
     global _generated_session_id
     from_env = os.environ.get(RUN_SESSION_ID_ENV)
     if from_env:
-        return from_env
+        return _validate_session_id(from_env)
     if _generated_session_id is None:
         _generated_session_id = uuid.uuid4().hex
         # Publish it for Python-side reporting launched later from this process.

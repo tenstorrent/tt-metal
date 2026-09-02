@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from tracy import annotate_profile_log_from_tracy_messages, extract_ttnn_session_ids, process_ops_logs
+from tracy import (
+    annotate_profile_log_from_tracy_messages,
+    extract_ttnn_session_ids,
+    process_ops_logs,
+    validate_session_id,
+)
 from tracy.process_device_log import extract_device_info
 
 
@@ -251,6 +256,12 @@ def test_extract_ttnn_session_ids_from_tracy_message_export(tmp_path):
     messages.write_text("unrelated message;100\n" "TTNN_SESSION_ID: abc123;101\n" "TTNN_SESSION_ID: abc123;102\n")
 
     assert extract_ttnn_session_ids(messages) == {"abc123"}
+
+
+@pytest.mark.parametrize("session_id", ["has space", "has,comma", "has;semicolon", "line\nbreak", "a" * 129])
+def test_validate_session_id_rejects_unsafe_metadata(session_id, expect_error):
+    with expect_error(ValueError, "Session ID must be 1-128 ASCII"):
+        validate_session_id(session_id)
 
 
 def test_annotate_profile_log_from_unique_tracy_session_id(tmp_path):

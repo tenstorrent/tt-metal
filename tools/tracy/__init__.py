@@ -43,6 +43,14 @@ import tracy.tracy_state
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 TTNN_SESSION_ID_MESSAGE_PREFIX = "TTNN_SESSION_ID:"
 PROFILE_LOG_SESSION_ID_PATTERN = re.compile(r"(?:^|,\s*)SESSION_ID:\s*([^,\r\n]+)")
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def validate_session_id(session_id):
+    """Require a compact identifier safe in Tracy and CSV metadata."""
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(f"Session ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'; got {session_id!r}")
+    return session_id
 
 
 def extract_ttnn_session_ids(messages_file):
@@ -56,7 +64,7 @@ def extract_ttnn_session_ids(messages_file):
             if message.startswith(TTNN_SESSION_ID_MESSAGE_PREFIX):
                 session_id = message.removeprefix(TTNN_SESSION_ID_MESSAGE_PREFIX).strip()
                 if session_id:
-                    session_ids.add(session_id)
+                    session_ids.add(validate_session_id(session_id))
     return session_ids
 
 
@@ -67,12 +75,13 @@ def annotate_profile_log_session_id(profile_log, session_id):
     contained the requested ID. A different existing ID is an error: silently
     retaining it would pair this performance report with the wrong memory report.
     """
+    session_id = validate_session_id(session_id)
     profile_log = os.fspath(profile_log)
     with open(profile_log, "r", newline="") as source:
         preamble = source.readline()
         match = PROFILE_LOG_SESSION_ID_PATTERN.search(preamble)
         if match:
-            existing_session_id = match.group(1).strip()
+            existing_session_id = validate_session_id(match.group(1).strip())
             if existing_session_id != session_id:
                 raise ValueError(
                     f"{profile_log} already contains SESSION_ID: {existing_session_id}, "
