@@ -19,7 +19,7 @@ pytestmark = [
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 4_000_000}],
+        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
         indirect=True,
     ),
 ]

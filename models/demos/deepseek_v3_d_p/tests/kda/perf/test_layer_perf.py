@@ -361,9 +361,7 @@ def _trace_wall_samples_ms(
         # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
         pytest.param(
             {
-                "l1_small_size": 24576,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "trace_region_size": 256 * 1024 * 1024,
             },
             id="fabric_1d",
         ),
@@ -474,7 +472,7 @@ def test_kimi_k3_layer_1_perf(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=24576, trace_region_size=256 * 1024 * 1024),
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         )

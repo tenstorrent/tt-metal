@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 256 * 1024 * 1024}),
+    pytest.mark.use_module_device,
 ]
 
 
