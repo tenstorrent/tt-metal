@@ -1537,7 +1537,11 @@ def test_srcreg_waitlike_zerosrc_guards_a_following_set_dvalid():
         if f.kind == "dvalid:DUMMY_PUBLISH"
     ]
     assert out == [], out
-    # The same pair with a PLAIN ZEROSRC (wait on MatrixUnit's bank) still flags both.
+    # The same pair with a PLAIN ZEROSRC: the ZEROSRC itself is the serializing form,
+    # but the SET_DVALID after it is correctly NOT flagged. Per
+    # UNPACR_NOP_SETDVALID.md a bare SET_DVALID only needs to be sequenced after
+    # something that performed a wait, and a plain ZEROSRC does perform one (on
+    # MatrixUnit.Src?Bank, which is the STRONGER wait). So exactly one finding.
     unfixed = [
         fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
         macro(
@@ -1554,7 +1558,78 @@ def test_srcreg_waitlike_zerosrc_guards_a_following_set_dvalid():
         for f in SrcRegBank().run(FactBase("wormhole", unfixed))
         if f.kind == "dvalid:DUMMY_PUBLISH"
     ]
-    assert len(out2) == 2, out2
+    assert len(out2) == 1 and out2[0].hint == "DUMMY_PUBLISH_SERIALIZING", out2
+    assert out2[0].line == 110, out2
+
+
+@case
+def test_srcreg_bare_setdvalid_needs_a_predecessor():
+    """A bare SET_DVALID performs NO wait, so it must inherit one by sequencing.
+
+    UNPACR_NOP_SETDVALID.md: it "does not automatically wait at the Wait Gate to
+    ensure that AllowedClient == SrcClient::Unpackers". It also does not CLEAR the
+    bank -- it sets AllowedClient = MatrixUnit and flips Unpackers[i].SrcBank -- so
+    the pipelined/serializing distinction does not apply to it at all.
+    """
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    PUB = "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)"
+
+    # Nothing before it -> a real defect, and NOT reported as serializing.
+    alone = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", alone))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # An unpacker-PIPELINE stall is not a bank wait, so it still does not count.
+    pipe = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", pipe))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # The in-tree WH shape: an SRCA_CLR|SRCB_CLR stall, then two bare SET_DVALIDs.
+    guarded = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | "
+            "p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
 
 
 @case
