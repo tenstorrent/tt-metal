@@ -165,7 +165,7 @@ class DeepSeekV4Generator:
         rope = build_rope(config, max_seq)
         max_layers = num_layers or decode.resolve_num_layers(config.num_hidden_layers)
         max_layers = min(max_layers, config.num_hidden_layers)
-        weight_cache = WeightCache(os.path.join(str(cache_dir), "full_decode", "ttnn")) if cache_dir else None
+        weight_cache = WeightCache(os.path.join(str(cache_dir), os.path.basename(model_dir))) if cache_dir else None
 
         model = DeepSeekV4Model(
             config,
