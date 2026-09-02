@@ -24,6 +24,43 @@
 > one whole FRAME (`kPagesPerSlot` = 165): cap 176 gives knee 150 → 100, cap 165 and below stalls badly,
 > cap 0 is broken. Derive the default from `kPagesPerSlot`, not the magic 1024.
 >
+> ---
+>
+> **DEVICE↔DEVICE ETH CLOCK SYNC — CONSOLIDATED STATE (2026-09-02). This supersedes every sync claim
+> above it.** Only device↔device alignment matters; the host relationship for non-root devices is
+> deliberately not maintained and is not a metric.
+>
+> **Shipped design:** in-router hook; responder answers doorbells **every iteration, never on a timer**;
+> **n=2** samples/round (sample 0 = doorbell, discarded; sample 1 = the anchor); **two responder stamps**
+> (t1 rx + t1b tx, `which=3`) so the turnaround is SUBTRACTED per round; edge orientation by **chip id**
+> (cancelling), NOT role-balanced; **default 1 kHz** to match the ARC control loop; corrections republish
+> every 40 ms. Knobs: `TT_METAL_PERF_DEBUG_FABRIC_SYNC_{HZ,SAMPLES,TWO_STAMP,BALANCE_ROLES,PUBLISH_MS,
+> PRESCALER_MASK,ECHO_DELAY,SLOW_DOORBELL}`.
+>
+> **Accuracy:** per-link bias **ε ≈ 1 ns** (was 23.5); per-round scatter **3.6–4.4 ns RMS** (upper bound);
+> run-to-run closure repeatability ±0.6–1.0 ns. **Quote ε per link, NEVER a closure number** — closure is
+> **k·ε and k is TOPOLOGY-DEPENDENT** (k=2 cancelling, k=4 directed ring), so a closure figure is
+> meaningless without its edge set.
+>
+> **Overhead:** ~**0.3% on 2D fabric over 82 rows** (mcast+unicast, 2–4 KB and 7.6 KB, 1–4 links, single-
+> and multi-group); **100 Hz and 1 kHz are indistinguishable**; lossless everywhere. Measure it with
+> `bandwidth_summary_results_*.csv` **arm-to-arm** — the golden geomean silently reports 1.000000 for any
+> shape absent from the golden table.
+>
+> **Dead — do not resurrect:** "chip 3 is slow silicon" (it was a boot-deterministic PHASE lottery from
+> answering doorbells on a grid) · "the bias is eth forward/return WIRE asymmetry" (a wire bias is
+> antisymmetric ⇒ k=2 in BOTH topologies; the measured 2.03× requires a direction-independent term = our
+> own responder turnaround) · "closure regressed / is boot-local" (it tracked the EDGE SET) ·
+> "shared-slope dominates delivered accuracy" (that measured drift vs HOST) · "rate buys accuracy" ·
+> "republish cadence binds" · "2D free / 1D costs" (Ring is 1D and free) · "the per-iteration doorbell is
+> the cost" (the grid arm measured 1.1 pt WORSE).
+>
+> **Open:** one config — **Linear topology + `unidirectional_linear` pattern — costs ~2.5%,
+> rate-independent**, with round rate, doorbell granularity, fabric dimension, packet size and link count
+> all eliminated; mechanism unknown, do NOT generalize it. End-of-session cross-device skew is bounded
+> well below ms but never measured directly. Box MMIO is degraded (~1.7 µs/read) ⇒ absolutes are
+> boot-local; only arm-to-arm comparisons are trustworthy.
+>
 > **§N+37: the REAL knee is 1 drainer ~250, 2 drainers ~150 (~1.7x, not 5x).** "Knee 20" is
 > RETRACTED — it was measured on an MMIO-degraded card, where 2.3 us host WRITES stretch the serial
 > slow-dispatch launch ~13x and DESYNCHRONIZE the producers, collapsing peak concurrent rate. Forcing a

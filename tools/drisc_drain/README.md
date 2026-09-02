@@ -1,7 +1,21 @@
-# drisc_drain — DRISC PCIe hang investigation
+# drisc_drain — DRISC PCIe hang investigation, and the streaming profiler's device↔device clock sync
 
-`FINDINGS.md` is the running record. Read the newest section first; earlier conclusions are
-superseded in place and several are explicitly retracted.
+`FINDINGS.md` is the running record for BOTH threads. **Read its STATUS BANNER first** — it carries
+the consolidated current state and, just as importantly, the list of claims that are dead. Earlier
+conclusions are superseded in place and many are explicitly retracted; the reasoning that killed a
+claim is usually more useful than the claim was.
+
+Two investigations live in that file:
+
+| thread | entry point |
+|---|---|
+| DRISC PCIe hang / drain | banner top half; §N+21 consolidated, §N+24/25/38 override it |
+| device↔device eth clock sync | banner section "DEVICE↔DEVICE ETH CLOCK SYNC — CONSOLIDATED STATE" |
+
+The sync thread's one-line state: responder answers doorbells every iteration, 2 samples/round with
+two responder stamps so the turnaround cancels, chip-id edge orientation, 1 kHz default (matched to
+the ARC control loop). Per-link bias ≈1 ns; overhead ≈0.3% on 2D fabric. **Quote ε per link, never a
+closure number — closure is k·ε and k depends on the ring's edge orientation.**
 
 ## Harness
 
