@@ -17,9 +17,11 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -2673,6 +2675,32 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
+
+    // BLAZE profiling (opt-in): dump per-(program, programmable core type) L1 kernel-config size
+    // breakdown to a file. The profiler harness does not capture the child's runtime stdout, so we
+    // write to a file named by BLAZE_PROGRAM_SIZE_FILE. Layout is sequential rta -> sems -> cbs ->
+    // dfb -> kernel_text, so the RTA region size is sem_offset - rta_offset; total_B == state.offset.
+    if (const char* psf = std::getenv("BLAZE_PROGRAM_SIZE_FILE")) {
+        if (FILE* pf = std::fopen(psf, "a")) {
+            const auto& hal = MetalContext::instance().hal();
+            const auto core_type = hal.get_programmable_core_type(index);
+            fmt::print(
+                pf,
+                "[prog_size] program_id={} core_type={} core_type_index={} rta_B={} sem_B={} "
+                "cb_B={} local_cb_B={} dfb_B={} kernel_text_B={} total_B={}\n",
+                this->get_id(),
+                enchantum::to_string(core_type),
+                index,
+                state.sem_offset - state.rta_offset,
+                state.sem_size,
+                state.cb_size,
+                state.local_cb_size,
+                state.dfb_size,
+                state.kernel_text_size,
+                state.offset);
+            std::fclose(pf);
+        }
+    }
 }
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
