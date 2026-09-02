@@ -1352,6 +1352,29 @@ KNOBS = {
     # the row refuses by name (regrename-no-free-lreg 26 with the
     # temporal tier ALSO exhausted, regrename-cc-span 16, constraint 6).
     "rename-temporal": "-mtt-tensix-optimize-rename-temporal",
+    # KQ (cc-span RTL view; the laneKE file-header successor): the
+    # CC-region engine's post-RA RTL view (tt/rvtt-cc-region-rtl.cc)
+    # widens the rename service's blanket no-CC-event-in-span rule to
+    # two proven arms: CC activity confined to balanced in-span
+    # pushc/popc frames with narrowing-only vocabulary
+    # (tt/proofs/cc-narrowing-writers), or an all-lanes span entry
+    # proven by the kill-modeling backward walk with the end state
+    # restored word-exactly by the all-lanes SFPENCC.  MEASURED
+    # (laneKQ-evidence-20260901, ON+chains census): the 8,251
+    # regrename-cc-span refusals classify all-lanes-entry 1,380 +
+    # balanced-frames 106 (admitted, 18.0%) vs refuse-end-mask 2,505 /
+    # refuse-entry-unproven 1,790 / refuse-opaque 1,111 /
+    # refuse-outside-pop 815 / refuse-unbalanced 540 /
+    # refuse-replay-window 4; committed renames 2,446 -> 2,614 (+168;
+    # the rest re-queue on the register wall: no-free-lreg 22,559 ->
+    # 23,824, span-opaque 2,716 -> 3,843).  Fail-closed residue keeps
+    # the NEW name regrename-cc-span-region-unproven (5,638 = the
+    # refuse classes exactly); flag off keeps regrename-cc-span
+    # byte-identically plus the dump-only view-class census line.  A
+    # composition knob over the item-#7 chains engine (its consumers
+    # are the chains pass and the rename service's requesters), so a
+    # solo leg is inert.
+    "rename-cc-region": "-mtt-tensix-optimize-rename-cc-region",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1802,6 +1825,15 @@ KNOB_MODES = {
     # a booking knob; promotion requires the ON-delta adjudication
     # ceremony.
     "rename-temporal": "on-plus",
+    # KQ rename-cc-region: default-off Init(0) booking knob; register
+    # fields only (the item-#7 engine's belt asserts delivered word
+    # counts unchanged), the cc-span admission widened to the RTL
+    # view's proven arms.  A composition knob: its consumer is the
+    # chains engine (a solo leg is inert — the pass gates on the
+    # chains/alias flags), so the booking A/B is (booked-leg + chains
+    # + flag) vs (booked-leg + chains).  on-plus while a booking knob;
+    # promotion requires the ON-delta adjudication ceremony.
+    "rename-cc-region": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
