@@ -5,6 +5,7 @@
 #include "fused_hyperconnection.hpp"
 
 #include "device/fused_pre_post_device_operation.hpp"
+#include "device/fused_single_user_device_operation.hpp"
 #include "device/sinkhorn_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -30,6 +31,28 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
     const uint32_t s = static_cast<uint32_t>(shape[1]);
     const uint32_t hc = num_streams;
     const uint32_t d = static_cast<uint32_t>(shape[-1]);
+    const uint32_t num_tokens = b * s;
+
+    if (num_tokens == 1) {
+        // Single-user decode has a dedicated multi-core program: cores 0..7
+        // compute the width-sharded collapse, core 8 computes post, and core 9
+        // computes comb plus Sinkhorn.
+        Tensor comb_bias_mat = ttnn::reshape(comb_bias, ttnn::Shape({1, 1, hc, hc}));
+        auto [post, comb, collapsed] = ttnn::prim::fused_hyperconnection_single_user(
+            fused_w,
+            pre_bias,
+            post_bias,
+            comb_bias_mat,
+            hidden_streams,
+            hc,
+            sinkhorn_iters,
+            pre_scale,
+            post_scale,
+            comb_scale,
+            eps,
+            memory_config);
+        return {post, comb, collapsed};
+    }
 
     // Fused stage over all T = B*S tokens:
     //   post      = 2 * sigmoid(post_w * post_scale + post_bias)            [1,T,H,1]
