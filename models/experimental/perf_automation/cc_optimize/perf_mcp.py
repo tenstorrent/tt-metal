@@ -3842,10 +3842,11 @@ def _win_from_verdict(fp: dict, ms: float, ref) -> tuple:
     """(win, delta_ms, metric) for one full-pipeline verdict. THE win rule, stated once.
 
     The headline comes first: if it moved down, that is the result and the delta is stated in it.
-    Otherwise a stage may still have ratcheted -- the headline measures the DECODE stage, so prefill
-    levers cannot show up in it, and the delta then has to be stated in the stage that moved or the
-    report prints a win beside a `+0.05 ms`. `metric` names which one, so the two can never be read
-    as the same number.
+    Otherwise a stage may still have ratcheted -- the headline measures only the RECURRING stage, so
+    a lever on any other one cannot show up in it, and the delta then has to be stated in the stage
+    that moved or the report prints a win beside a `+0.05 ms`. `metric` names which one, so the two
+    can never be read as the same number. Each stage keeps its own minimum, so this is a real win
+    and not a consolation label.
 
     check_full_pipeline_latency sets stage_win only when a stage improved past the same tolerance
     the headline uses AND no stage regressed, so this cannot credit a lever that merely moved time
@@ -4571,12 +4572,17 @@ def check_full_pipeline_latency() -> dict:
     # bank-a-win signal -- so a 7%-slower lever could be committed and, repeated, ratcheted real
     # latency upward while the reported AFTER stayed at the old minimum. Slower is `regressed`.
     regressed = (not diverged) and ms > best
-    # THE HEADLINE IS ONE STAGE, NOT THE WHOLE PRODUCT. TRACE_PER_TOKEN_MS is the DECODE stage --
-    # that is what tok/s/u means -- so every prefill lever left it flat, read as no-gain, and was
-    # reverted: TTFT went 95.19 -> 54.81 ms on this model and the ratchet had no field to put it in.
-    # A stage that improved with none regressed is a real result and is stashed as a candidate, so a
-    # commit can promote it. The STATUS still follows the headline: a decode regression is a
-    # regression whatever prefill did, and only the headline may be compared against `best`.
+    # THE HEADLINE IS ONE STAGE, NOT THE WHOLE PRODUCT. It measures the RECURRING stage -- the one
+    # retiring a single item per user, which is what a per-item rate means -- discovered from the
+    # model, never named here. A lever that speeds up any OTHER stage therefore leaves the headline
+    # flat, and once read as no-gain and got reverted: one model's TTFT improved 95.19 -> 54.81 ms
+    # with no field to record it in.
+    #
+    # That is fixed, and this is where: a stage that improved with none regressed is stashed as a
+    # candidate, and _promote_fullpipe_pending keeps a SEPARATE minimum per stage, so any stage's
+    # win is banked on its own merit without having to beat the headline. Only the STATUS still
+    # follows the headline -- a slower recurring stage is a regression whatever else improved --
+    # because that is the number the product is sold on.
     _stages_now = _measured_stages()
     _sdelta = _stage_deltas(_stages_now, _bar_stages())
     stage_win = (
