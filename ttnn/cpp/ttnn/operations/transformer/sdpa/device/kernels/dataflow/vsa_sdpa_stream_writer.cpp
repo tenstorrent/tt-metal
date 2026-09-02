@@ -73,7 +73,7 @@ void kernel_main() {
         // trid barrier (already landed with the pipeline full) instead of a DRAM round trip.
         // kAckLag stays BELOW the reader's fetch lag: the reader waits for block N's ack after
         // sending kreqs N..N+3 only, so an ack gated on kreq N+4 would deadlock.
-        constexpr uint32_t kAckLag = 3;
+        constexpr uint32_t kAckLag = 2;  // the reader publishes PAIRS: it needs acks within lag 2 of its fetches
 #if defined(VSA_PROBE) && VSA_PROBE == 7
         return;  // probe 7: no K fetches, no acks (the reader skips its kack waits too)
 #endif
@@ -85,34 +85,43 @@ void kernel_main() {
             kack_cb.push_back(1);
             ++nacked;
         };
+        constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
+        const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {
+            experimental::set_read_trid(noc, (nfetch % 8) + 1);
+            const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
+            for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+                noc.async_read(
+                    k, k_cb, k_tile_bytes, {.page_id = k_tile0 + i},
+                    {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+            }
+            experimental::set_read_trid(noc, 0);
+            ++nfetch;
+            if (nfetch - nacked > kAckLag) {
+                ack_oldest();
+            }
+        };
         for (uint32_t pass = 0; pass < n_passes; ++pass) {
             while (true) {
                 kreq_cb.wait_front(1);
-                uint32_t block_id, slot;
+                uint32_t b0, s0, b1, s1;
                 {
                     volatile tt_l1_ptr uint32_t* rq =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
-                    block_id = rq[0];
-                    slot = rq[1];
+                    b0 = rq[0];
+                    s0 = rq[1];
+                    b1 = rq[2];
+                    s1 = rq[3];
                 }
                 kreq_cb.pop_front(1);
-                if (block_id == 0xFFFFFFFFu) {
+                if (b0 == 0xFFFFFFFFu) {
                     while (nacked < nfetch) {
                         ack_oldest();
                     }
                     break;
                 }
-                experimental::set_read_trid(noc, (nfetch % 8) + 1);
-                const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
-                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    noc.async_read(
-                        k, k_cb, k_tile_bytes, {.page_id = k_tile0 + i},
-                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
-                }
-                experimental::set_read_trid(noc, 0);
-                ++nfetch;
-                if (nfetch - nacked > kAckLag) {
-                    ack_oldest();
+                fetch_one(b0, s0);
+                if (b1 != kNoBlock) {
+                    fetch_one(b1, s1);
                 }
             }
         }

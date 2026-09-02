@@ -159,99 +159,129 @@ void kernel_main() {
         uint32_t log_n = 0;     // log entries emitted (arrivals + sentinels)
         // Fetches are pipelined kFetchLag blocks deep: every tile read of block N is tagged with
         // trid (N % 8) + 1, so publishing N costs one per-block trid barrier (long since landed
-        // with the pipeline full) instead of a full DRAM round trip. A shared per-tile trid ring
-        // would cap the pipeline at ONE block in flight (8 tiles), throttling fetch throughput to
-        // 16KB per DRAM latency.
+        // with the pipeline full) instead of a full DRAM round trip. Blocks are pumped in PAIRS:
+        // one worker gate check, one two-block kreq page, and one two-entry log multicast per
+        // pair -- the leader's serial per-arrival cost is the measured protocol floor.
         constexpr uint32_t kFetchLag = 4;  // blocks in flight (kFetchLag * 8 tiles <= 8 trids x reuse)
+        constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
         static_assert(kFetchLag * 2 <= stream_depth, "prefetch must not outrun slot recycling");
         // Workers zero their log rings then bump this (host-zeroed) semaphore; publishing before
         // every ring is zeroed would race the zeroing.
         arrivals_sem.wait_min(n_workers);
-        const auto publish = [&](uint32_t b, uint32_t slot) {
-            // One multicast write per strip. The entry's seq word (log_n + 1, nonzero, monotonic)
-            // is what workers spin on; the 16-byte entry rides one flit, so a visible seq implies
-            // the whole entry is visible. No barrier, no semaphore: posted writes from one source
-            // to one destination on one NoC stay ordered, and the V-pull that follows the seq is
-            // ordered behind the DRAM fetch by the lag-1 trid recycling.
-            const uint32_t entry_off = (log_n % log_depth) * log_entry_words * 4;
-            noc_async_writes_flushed(noc.get_noc_id());  // ring slot's previous mcast left the source
-            volatile tt_l1_ptr uint32_t* entry =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1 + entry_off);
-            entry[0] = b;
-            entry[1] = slot;
-            entry[2] = log_n + 1;
+        // Stage `k` entries (each 16B: {b, slot, seq, pad}) into the ring and multicast them in
+        // one write per strip (two per strip on a ring wrap). A worker's per-entry seq spin is
+        // safe: a NoC write's bytes land in ascending address order, so entry k's seq is visible
+        // only after entry k is complete and entry k-1 fully landed.
+        const auto publish_run = [&](const uint32_t* bs, const uint32_t* slots, uint32_t k) {
+            noc_async_writes_flushed(noc.get_noc_id());  // ring slots' previous mcasts left the source
+            const uint32_t e0 = log_n % log_depth;
+            for (uint32_t j = 0; j < k; ++j) {
+                volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    log_l1 + ((log_n + j) % log_depth) * log_entry_words * 4);
+                entry[0] = bs[j];
+                entry[1] = slots[j];
+                entry[2] = log_n + j + 1;
+            }
+            const uint32_t run1 = (e0 + k <= log_depth) ? k : (log_depth - e0);
             for (uint32_t st = 0; st < n_strips; ++st) {
                 noc_async_write_multicast(
-                    log_l1 + entry_off, strip_base[st] + log_l1 + entry_off, log_entry_words * 4, strip_n[st],
-                    false, noc.get_noc_id());
+                    log_l1 + e0 * log_entry_words * 4, strip_base[st] + log_l1 + e0 * log_entry_words * 4,
+                    run1 * log_entry_words * 4, strip_n[st], false, noc.get_noc_id());
+                if (run1 < k) {
+                    noc_async_write_multicast(
+                        log_l1, strip_base[st] + log_l1, (k - run1) * log_entry_words * 4, strip_n[st], false,
+                        noc.get_noc_id());
+                }
             }
-            ++log_n;
+            log_n += k;
         };
         uint32_t pend_b[kFetchLag], pend_slot[kFetchLag];
-        const auto issue_fetch = [&](uint32_t b) {
-            const uint32_t slot = fetched % stream_depth;
-            if (fetched >= stream_depth) {
-                // Every worker must have consumed the arrival that last used this slot.
-                wait_all_workers_at(fetched - stream_depth + 1);
+        // Publish up to a pair of pending fetched blocks (their V trid barriers + K acks first).
+        const auto publish_pending = [&](uint32_t k) {
+            uint32_t bs[2], slots[2];
+            for (uint32_t j = 0; j < k; ++j) {
+                experimental::async_read_barrier_with_trid(noc, ((arrival + j) % 8) + 1);  // V landed
+                kack_cb.wait_front(1);  // K landed (writer acks per block, same pipelining)
+                kack_cb.pop_front(1);
+                bs[j] = pend_b[(arrival + j) % kFetchLag];
+                slots[j] = pend_slot[(arrival + j) % kFetchLag];
             }
-            // K rides the leader writer (other NoC); V here, tagged with the block's trid.
-#if !(defined(VSA_PROBE) && VSA_PROBE == 7)
+            publish_run(bs, slots, k);
+            arrival += k;
+        };
+        // Fetch a pair (or single tail) of blocks: ONE gate check, ONE kreq page, per-block trids.
+        const auto issue_pair = [&](const uint32_t* bs, uint32_t k) {
+            if (fetched + k > stream_depth) {
+                // Every worker must have consumed the arrivals that last used these slots.
+                wait_all_workers_at(fetched + k - stream_depth);
+            }
             kreq_cb.reserve_back(1);
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
-                rq[0] = b;
-                rq[1] = slot;
+                rq[0] = bs[0];
+                rq[1] = fetched % stream_depth;
+                rq[2] = (k > 1) ? bs[1] : kNoBlock;
+                rq[3] = (fetched + 1) % stream_depth;
             }
             kreq_cb.push_back(1);
-            experimental::set_read_trid(noc, (fetched % 8) + 1);
-            const uint32_t v_tile0 = v_base + b * v_tiles_per_block;
-            for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-                noc.async_read(
-                    v, v_cb, v_tile_bytes, {.page_id = v_tile0 + i},
-                    {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
+            for (uint32_t j = 0; j < k; ++j) {
+                const uint32_t slot = fetched % stream_depth;
+                experimental::set_read_trid(noc, (fetched % 8) + 1);
+                const uint32_t v_tile0 = v_base + bs[j] * v_tiles_per_block;
+                for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                    noc.async_read(
+                        v, v_cb, v_tile_bytes, {.page_id = v_tile0 + i},
+                        {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
+                }
+                experimental::set_read_trid(noc, 0);
+                pend_b[fetched % kFetchLag] = bs[j];
+                pend_slot[fetched % kFetchLag] = slot;
+                ++fetched;
             }
-            experimental::set_read_trid(noc, 0);
-#endif
-            pend_b[fetched % kFetchLag] = b;
-            pend_slot[fetched % kFetchLag] = slot;
-            ++fetched;
-        };
-        const auto publish_oldest = [&]() {
-#if !(defined(VSA_PROBE) && VSA_PROBE == 7)
-            experimental::async_read_barrier_with_trid(noc, (arrival % 8) + 1);  // its V landed
-            kack_cb.wait_front(1);  // its K landed (writer acks per block, same pipelining)
-            kack_cb.pop_front(1);
-#endif
-            publish(pend_b[arrival % kFetchLag], pend_slot[arrival % kFetchLag]);
-            ++arrival;
         };
         for (uint32_t pass = 0; pass < n_passes; ++pass) {
+            uint32_t pair[2];
+            uint32_t np = 0;
             for (uint32_t b = 0; b < n_kv_blocks; ++b) {
                 if (counts_ptr[b] == 0) {
                     continue;  // pad block: never listed
                 }
-                if (fetched - arrival == kFetchLag) {
-                    publish_oldest();
+                pair[np++] = b;
+                if (np < 2) {
+                    continue;
                 }
-                issue_fetch(b);
+                if (fetched - arrival + 2 > kFetchLag) {
+                    publish_pending(fetched - arrival + 2 - kFetchLag);
+                }
+                issue_pair(pair, 2);
+                np = 0;
+            }
+            if (np == 1) {
+                if (fetched - arrival + 1 > kFetchLag) {
+                    publish_pending(fetched - arrival + 1 - kFetchLag);
+                }
+                issue_pair(pair, 1);
             }
             // Sentinel kreq FIRST (the writer acks its pending blocks on seeing it), then drain
             // the prefetch queue, then the sentinel log entry (no slot, no arrival).
-#if !(defined(VSA_PROBE) && VSA_PROBE == 7)
             kreq_cb.reserve_back(1);
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
                 rq[0] = sentinel;
                 rq[1] = 0;
+                rq[2] = kNoBlock;
+                rq[3] = 0;
             }
             kreq_cb.push_back(1);
-#endif
             while (arrival < fetched) {
-                publish_oldest();
+                publish_pending((fetched - arrival >= 2) ? 2 : 1);
             }
-            publish(sentinel, 0);
+            {
+                const uint32_t sb = sentinel, ss = 0;
+                publish_run(&sb, &ss, 1);
+            }
         }
         // Drain: every arrival consumed before the program ends (so no worker still reads our
         // L1), and no arrivals-sem atomic may still be in flight when the next program resets it.
