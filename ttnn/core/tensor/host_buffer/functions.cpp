@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>

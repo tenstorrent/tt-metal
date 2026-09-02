@@ -21,9 +21,10 @@
 #define IN0_SUB_CHUNKS 1
 #endif
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+// Named apart from the ckernel copy_block() compute API, whose signature this would otherwise be ambiguous with
+void copy_block_to_cb(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
     uint32_t fused_act_dst_id = 0;
@@ -61,7 +62,7 @@ void copy_block_split(
     uint32_t split_rows) {
     CircularBuffer cb_out_a(out_cb_a);
     CircularBuffer cb_out_b(out_cb_b);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb_a);
     uint32_t fused_act_dst_id = 0;
@@ -175,7 +176,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
-            copy_tile_to_dst_init_short(in_cb);
+            copy_init(in_cb);
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
@@ -299,7 +300,7 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
 #else
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
@@ -315,10 +316,10 @@ void add_bias_and_addcmul_block(
                 mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb);
+                copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -355,10 +356,10 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                copy_tile_to_dst_init_short(ternary_b_cb);
+                copy_init(ternary_b_cb);
                 copy_tile(ternary_b_cb, n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb);
+                copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -672,7 +673,7 @@ void kernel_main() {
             cb_out.reserve_back(out_block_num_tiles);
             cb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_block_to_cb(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
             cb_in2.wait_front(N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);

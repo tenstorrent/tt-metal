@@ -54,6 +54,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {

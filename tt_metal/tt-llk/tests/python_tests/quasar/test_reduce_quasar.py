@@ -24,11 +24,14 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.param_config import (
+    input_output_formats,
+    parametrize,
+    select_perf_tile_sizes,
+)
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -38,10 +41,10 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
@@ -87,6 +90,21 @@ def reduce_dest_acc_modes(*, is_perf=False):
     )
 
 
+def reduce_tile_dimensions(formats, *, is_perf=False):
+    functional_tile_sizes = [
+        td
+        for td in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, td
+        )
+    ]
+    return (
+        select_perf_tile_sizes(functional_tile_sizes)
+        if is_perf
+        else functional_tile_sizes
+    )
+
+
 def reduce_implied_math_formats(formats, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
@@ -95,7 +113,7 @@ def reduce_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def reduce_input_dimensions(*, is_perf=False):
+def reduce_input_dimensions():
     return [64, 64]
 
 
@@ -128,13 +146,7 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: [
-        td
-        for td in SUPPORTED_TILE_SIZES
-        if not is_mx_unsupported_tile_dims(
-            formats.input_format, formats.output_format, td
-        )
-    ],
+    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
@@ -185,7 +197,7 @@ def test_reduce_quasar(
         )
 
     input_dimensions = (
-        reduce_input_dimensions(is_perf=True)
+        reduce_input_dimensions()
         if is_perf
         else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
     )
@@ -257,6 +269,11 @@ def test_reduce_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -288,18 +305,15 @@ def test_reduce_quasar(
         ),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
@@ -374,7 +388,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     is_perf=False,
     perf_report=None,
 ):
-    input_dimensions = reduce_input_dimensions(is_perf=is_perf)
+    input_dimensions = reduce_input_dimensions()
     tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(
@@ -419,6 +433,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
@@ -445,18 +460,15 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "disable_format_inference": False,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

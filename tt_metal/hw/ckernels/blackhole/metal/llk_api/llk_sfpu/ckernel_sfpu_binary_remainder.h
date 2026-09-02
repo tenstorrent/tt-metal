@@ -226,7 +226,7 @@ inline void calculate_remainder_uint32(const uint dst_index_in0, const uint dst_
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_remainder(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -253,7 +253,7 @@ inline void remainder_uint32_init() {
     div_floor_init<APPROXIMATION_MODE>();
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 inline void remainder_binary_init() {
     sfpi::vConstFloatPrgm0 = 2.0f;
 }

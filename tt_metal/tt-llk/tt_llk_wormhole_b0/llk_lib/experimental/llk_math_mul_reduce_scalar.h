@@ -186,6 +186,7 @@ inline void _llk_math_mul_reduce_scalar_init_()
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -199,7 +200,7 @@ inline void _llk_math_mul_reduce_scalar_init_()
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
 template <MathFidelity math_fidelity>
-inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 

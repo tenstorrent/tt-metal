@@ -60,6 +60,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.cpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.cpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.cpp
+    send_recv_async/send_recv_utils.cpp
     send_recv_async/send_async/send_async.cpp
     send_recv_async/send_async/device/send_async_op_device_operation.cpp
     send_recv_async/send_async/device/send_async_op_program_factory.cpp
@@ -72,9 +73,21 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     send_recv_async/send_async_d2h/send_async_d2h.cpp
     send_recv_async/send_async_d2h/device/send_async_d2h_op_device_operation.cpp
     send_recv_async/send_async_d2h/device/send_async_d2h_op_program_factory.cpp
+    send_recv_async/send_direct_async/send_direct_async.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_device_operation.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_program_factory.cpp
+    send_recv_async/recv_direct_async/recv_direct_async.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_device_operation.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_program_factory.cpp
     neighbor_pad_async/neighbor_pad_async.cpp
     neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
     neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
+    neighbor_pad_halo/neighbor_pad_halo.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_device_operation.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_program_factory.cpp
+    neighbor_pad_halo/halo_scatter.cpp
+    neighbor_pad_halo/device/halo_scatter_device_operation.cpp
+    neighbor_pad_halo/device/halo_scatter_program_factory.cpp
     slice_reshard_async/slice_reshard_async.cpp
     slice_reshard_async/device/slice_reshard_async_device_operation.cpp
     slice_reshard_async/device/slice_reshard_async_program_factory.cpp
@@ -114,6 +127,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+    neighbor_pad_halo/neighbor_pad_halo.hpp
+    neighbor_pad_halo/halo_scatter.hpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.hpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation_types.hpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
@@ -135,6 +150,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     all_reduce_async/all_reduce_async_nanobind.cpp
     rms_allgather/rms_allgather_nanobind.cpp
     dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
+    dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm_nanobind.cpp
     llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
     llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
     all_to_all_async/all_to_all_async_nanobind.cpp
@@ -152,7 +168,10 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     send_recv_async/recv_async/recv_async_nanobind.cpp
     send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
     send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
+    send_recv_async/send_direct_async/send_direct_async_nanobind.cpp
+    send_recv_async/recv_direct_async/recv_direct_async_nanobind.cpp
     neighbor_pad_async/neighbor_pad_async_nanobind.cpp
+    neighbor_pad_halo/neighbor_pad_halo_nanobind.cpp
     slice_reshard_async/slice_reshard_async_nanobind.cpp
     deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
     all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp

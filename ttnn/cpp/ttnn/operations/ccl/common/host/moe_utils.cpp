@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -103,14 +105,7 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
 }
 
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
-    auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());
-    const auto& mesh_view = mesh_device.get_view();
-    auto mesh_shape = mesh_view.shape();
-    auto topology = tt::tt_fabric::get_fabric_topology();
-
-    constexpr std::array<std::array<tt::tt_fabric::RoutingDirection, 2>, 2> directions = {
-        {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
-         {tt::tt_fabric::RoutingDirection::W, tt::tt_fabric::RoutingDirection::E}}};
+    const auto mesh_shape = mesh_device.get_view().shape();
 
     ttsl::SmallVector<size_t> cluster_axes;
     if (cluster_axis.has_value()) {
@@ -119,48 +114,26 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         cluster_axes = {0, 1};
     }
 
-    auto positive_direction = [&](tt::tt_fabric::RoutingDirection direction) {
-        return direction == tt::tt_fabric::RoutingDirection::E || direction == tt::tt_fabric::RoutingDirection::S;
-    };
-
-    auto applicable_to_coord =
-        [&](const MeshCoordinate& coord, size_t cluster_axis, tt::tt_fabric::RoutingDirection direction) -> bool {
-        auto boundary_mode = detail::get_boundary_mode(topology);
-        int offset = positive_direction(direction) ? 1 : -1;
-        auto neighbor = coord.get_neighbor(mesh_shape, offset, cluster_axis, boundary_mode);
-        return neighbor.has_value();
-    };
-
-    size_t num_available_routing_planes = std::numeric_limits<size_t>::max();
-    for (const auto& coord : mesh_range) {
-        const auto fabric_node_id = mesh_device.get_fabric_node_id(coord);
-
-        for (const auto axis : cluster_axes) {
-            for (const auto direction : directions[axis]) {
-                if (applicable_to_coord(coord, axis, direction)) {
-                    auto planes_in_direction = tt::tt_fabric::get_num_usable_routing_planes(fabric_node_id, direction);
-                    log_debug(
-                        tt::LogOp,
-                        "fabric_node_id: {}, direction: {}, planes_in_direction: {}",
-                        fabric_node_id,
-                        direction,
-                        planes_in_direction);
-                    // Skip over planes_in_direction=0 to avoid collapsing the running min to 0.
-                    // This can happen when, for example, there's only 1 or 2 devices, a wrap-around can detect a
-                    // neighbor though there's no fabric link.
-                    if (planes_in_direction > 0) {
-                        num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
-                    }
-                }
+    std::optional<size_t> num_links;
+    for (const auto axis : cluster_axes) {
+        // The op runs on every row (or column) along the axis, and they can be wired differently.
+        // All of them must be able to open the link, so take the lowest count. Hops owned by
+        // another host report 0 and are skipped, so this counts what this host can see.
+        for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+            const size_t planes =
+                tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, axis, row_or_col);
+            if (planes > 0) {
+                num_links = num_links.has_value() ? std::min(*num_links, planes) : planes;
             }
         }
     }
-    log_debug(tt::LogOp, "num_available_routing_planes: {}", num_available_routing_planes);
-    if (num_available_routing_planes <= 0 || num_available_routing_planes == std::numeric_limits<size_t>::max()) {
+
+    if (!num_links.has_value()) {
         log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
-        num_available_routing_planes = 1;
+        return 1;
     }
-    return num_available_routing_planes;
+    log_debug(tt::LogOp, "num_links: {}", *num_links);
+    return *num_links;
 }
 
 }  // namespace ttnn::operations::ccl::common

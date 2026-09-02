@@ -38,7 +38,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
@@ -195,7 +195,21 @@ void JitBuildEnv::init(
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable "
         // And don't detect these issues
-        "-Wno-unused-variable -Wno-unused-function ";
+        "-Wno-unused-variable -Wno-unused-function "
+        // Firmware and kernels access mailboxes and MMIO through pointers
+        // formed from small literal addresses (e.g. MEM_MAILBOX_BASE is 16
+        // on Wormhole). On these bare-metal cores the bottom of the address
+        // space is ordinary L1 memory, but GCC assumes no object can live in
+        // the first page and -Warray-bounds diagnoses such accesses as
+        // "source object is likely at address zero", which -Werror makes
+        // fatal. (With -flto the literal address is not visible during
+        // per-TU compilation, so today this only fires if LTO is disabled;
+        // see issue #54692.) min-pagesize=0 tells GCC that constant
+        // addresses from zero up are valid objects, disabling exactly that
+        // heuristic while keeping -Warray-bounds active for genuine
+        // out-of-bounds accesses. It is a diagnostics-only parameter with no
+        // effect on generated code.
+        "--param=min-pagesize=0 ";
 
     // Defines
     this->defines_ = "";
@@ -203,6 +217,10 @@ void JitBuildEnv::init(
         this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
+    if (this->arch_ == tt::ARCH::QUASAR && rtoptions.get_simulator_enabled() &&
+        rtoptions.get_simulator_path().extension() == ".so") {
+        this->defines_ += "-DNOC_API_V1 ";
+    }
 
     if (rtoptions.get_profiler_enabled()) {
         uint32_t profiler_options = 1;
@@ -426,6 +444,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
+    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
+                             build_config.processor_id == 2;
+    // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
+    this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
     {
         auto it = std::back_inserter(this->includes_);
@@ -520,6 +543,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         }
         hasher.update(default_compile_opt_level_);
         hasher.update(default_linker_opt_level_);
+        // Not part of default recipes, but a change to the HAL's RVV flag string must still
+        // invalidate cached opted-in kernels.
+        hasher.update(rvv_cflags_);
         build_state_hash_ = hasher.digest();
     }
 }
@@ -628,13 +654,12 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific
-    // include paths and the named-compile-arg map) ONCE via export_target_recipe, then turn it
-    // into an argv with the shared builder and run it SHELL-FREE via exec_command — the same argv
-    // builder the JIT compile server and preprocess-and-ship use. Shell-free also means map-valued
-    // defines like
-    // -DKERNEL_COMPILE_TIME_ARG_MAP={"name",idx},... need no escaping — each define is one argv
-    // element, passed verbatim (the macro expansion lives in tt_metal/hw/inc/compile_time_args.h).
+    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific include
+    // paths and the -include for the named-compile-arg map header) ONCE via export_target_recipe,
+    // then turn it into an argv with the shared builder and run it SHELL-FREE via exec_command —
+    // the same argv builder the JIT compile server and preprocess-and-ship use. Shell-free also
+    // means defines carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", need no
+    // escaping — each define is one argv element, passed verbatim.
     const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
     std::string cflags = recipe.cflags;
@@ -935,6 +960,17 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
+    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
+    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+        TT_FATAL(
+            !this->rvv_cflags_.empty(),
+            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
+            "generation on the pack processor",
+            settings->get_full_kernel_name());
+        target.cflags += this->rvv_cflags_;
+    }
     target.lflags = lflags_;
     target.linker_script = linker_script_;
     target.extra_link_objs = extra_link_objs_;
@@ -967,22 +1003,24 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     if (settings) {
         // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
-        // path does no shell expansion), matching the KERNEL_COMPILE_TIME_ARG_MAP convention below.
+        // path does no shell expansion).
         defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
             }
         });
+        // KERNEL_COMPILE_TIME_ARG_MAP arrives as a force-included header (written by genfiles,
+        // see write_named_ct_arg_map_header) rather than a -D define, because one define is one
+        // argv element and the map alone can exceed the per-element MAX_ARG_STRLEN. Two argv
+        // elements, and the bare filename resolves via the "-I.." every compile carries -- so this
+        // recipe stays valid verbatim on the remote compile server, where a client-side absolute
+        // path would not resolve. See NAMED_CT_ARG_MAP_HEADER.
         settings->process_named_compile_time_args(
             [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
                 if (!named_args.empty()) {
-                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
-                    auto it = std::back_inserter(compile_time_arg_map);
-                    for (const auto& [name, value] : named_args) {
-                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
-                    }
-                    defines.push_back(std::move(compile_time_arg_map));
+                    defines.emplace_back("-include");
+                    defines.emplace_back(tt::jit_build::utils::NAMED_CT_ARG_MAP_HEADER);
                 }
             });
     }

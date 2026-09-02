@@ -1,0 +1,15 @@
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "28,29,24,25,0,4,5,1,31,26,27,30,6,7,2,3"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "18,22,23,19,14,15,10,11,20,16,17,21,9,8,13,12"}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto
+
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_NUM_LAYERS: "60"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
+  LOGURU_LEVEL: "INFO"

@@ -130,6 +130,9 @@ class Golden:
             for bx in range(0, operand.tile_count_x, operation.block_tiles_x):
                 block = tiles[:, bx : bx + operation.block_tiles_x]
                 block[:] = block[:, :1]
+        elif node.broadcast_tile is not None:
+            tiles = broadcast.view(operand.tile_count, -1)
+            tiles[:] = tiles[node.broadcast_tile].clone()
 
         return untilize_block(
             broadcast,
@@ -301,7 +304,8 @@ class Golden:
 
         if pool_type == ReducePool.Average:
             span = tile_dims[1] if reduce_dim == ReduceDimension.Row else tile_dims[0]
-            golden_tensor = (src_reduced * span + dest_reduced) / span
+            scaler = tensor_b.flatten()[0].item()
+            golden_tensor = (src_reduced * span + dest_reduced) * scaler
         else:
             golden_tensor = pool(torch.stack((src_reduced, dest_reduced)), dim=0)
 

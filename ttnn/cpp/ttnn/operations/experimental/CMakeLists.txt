@@ -33,9 +33,11 @@ add_subdirectory(reduction)
 # metalium-developers-sdpa
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
+add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
+add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
 
 # metalium-developers-external-experience
@@ -90,7 +92,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
+        TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
@@ -141,6 +145,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>

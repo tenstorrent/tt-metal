@@ -138,11 +138,11 @@ public:
         uint32_t addr = iface.fifo_limit - iface.fifo_size;
         uint32_t num_bytes = iface.fifo_size;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
-        return Lock([this, addr, num_bytes]() {
+        return Lock([addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
         });
 #else
-        return Lock([this]() {});
+        return Lock([]() {});
 #endif
     }
 
@@ -255,11 +255,16 @@ private:
     }
 };
 
-#ifdef ARCH_QUASAR
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<CircularBuffer> = true;
+
+#if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
 #include "internal/tt-2xx/noc_zero_l1.inl"
 #else
 #include "internal/tt-1xx/noc_zero_l1.inl"
 #endif
+#if !defined(ARCH_QUASAR) || !defined(NOC_API_V1)
 #include "internal/noc_zero_dram.inl"
+#endif
 
 #endif  // !COMPILE_FOR_TRISC

@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -36,25 +37,20 @@ uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
 
 // Run a pack relu test using the same infrastructure as test_direct.cpp's quasar path:
 // direct_reader_unary.cpp → eltwise_copy.cpp (with PACK_RELU) → direct_writer_unary.cpp
-static void run_pack_relu_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t relu_config,
-    const std::function<float(float)>& golden_fn) {
-    IDevice* dev = mesh_device->get_devices()[0];
+void run_pack_relu_test(
+    distributed::MeshDevice& mesh_device, uint32_t relu_config, const std::function<float(float)>& golden_fn) {
     const experimental::NodeCoord node{0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig src_config{
-        .device = dev, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
-    auto src_dram_buffer = CreateBuffer(src_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    InterleavedBufferConfig dst_config{
-        .device = dev, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
-    auto dst_dram_buffer = CreateBuffer(dst_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
@@ -139,14 +135,17 @@ static void run_pack_relu_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
-    const uint32_t src_aligned_page_size = static_cast<uint32_t>(src_dram_buffer->aligned_page_size());
-    const uint32_t dst_aligned_page_size = static_cast<uint32_t>(dst_dram_buffer->aligned_page_size());
+    const uint32_t src_aligned_page_size =
+        static_cast<uint32_t>(src_dram_buffer->get_reference_buffer()->aligned_page_size());
+    const uint32_t dst_aligned_page_size =
+        static_cast<uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -175,10 +174,10 @@ static void run_pack_relu_test(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    detail::LaunchProgram(dev, program, true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Build golden
     std::vector<uint32_t> golden(src_vec.size());
@@ -205,14 +204,14 @@ static void run_pack_relu_test(
 // ZERO_RELU: max(0, x)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZero) {
     run_pack_relu_test(
-        this->devices_.at(0), make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
+        this->device(), make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
 // MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
     const float threshold = 0.25f;
     run_pack_relu_test(
-        this->devices_.at(0), make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
+        this->device(), make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
             return x <= threshold ? 0.0f : x;
         });
 }
@@ -221,7 +220,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
     const float threshold = 0.5f;
     run_pack_relu_test(
-        this->devices_.at(0), make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
+        this->device(), make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
             return x < 0.0f ? 0.0f : std::min(x, threshold);
         });
 }

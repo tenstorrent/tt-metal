@@ -12,7 +12,7 @@
  *************************************************************************/
 
 inline void llk_math_eltwise_unary_datacopy_softmax_k(uint dst_index) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_eltwise_unary_datacopy_softmax_k_(dst_index);
 }
 

@@ -61,12 +61,8 @@ jobs:
         CCACHE_BASEDIR: /work
       volumes:
         - ${{ github.workspace }}:/work
-        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
-        --group-add 1457
         --tmpfs /tmp
     defaults:
       run:
@@ -279,7 +275,8 @@ jobs:
           # compile edge; the build preset's -k0 keeps going so all fixes still export.
           cmake --preset clang-tidy-fix-parallel \
             -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
-            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
+            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
+            -DTT_USE_SYSTEM_SFPI=ON
 
       - name: Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
@@ -393,18 +390,24 @@ jobs:
           # uncacheable-reason table; plain -s hides remote Hits/Misses/Errors.
           CCACHE_STATS=$(ccache -sv)
           echo "$CCACHE_STATS"
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "$CCACHE_STATS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
           # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
@@ -413,22 +416,28 @@ jobs:
             head -30 /tmp/ccache-storage-s3.log
             echo "=== ccache-storage-s3 log (last 80 lines) ==="
             tail -80 /tmp/ccache-storage-s3.log
-            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Storage Helper Log</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             head -30 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
             echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
             tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           {
-            echo '## ctcache Summary'
+            echo '<details><summary>ctcache Summary</summary>'
+            echo ''
             if command -v clang-tidy-cache &>/dev/null; then
               echo '```'
               clang-tidy-cache --show-stats 2>/dev/null || echo "stats unavailable"
               echo '```'
             fi
+            echo ''
+            echo '</details>'
           } >> $GITHUB_STEP_SUMMARY

@@ -22,9 +22,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     grouped_gate_golden_act,
     score_activation,
 )
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
-TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
+TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, PREFILL_CHUNK_TOKENS_PER_CHIP)]
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 
@@ -45,6 +47,7 @@ SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
 INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
 
+
 # Selected-weight PCC thresholds
 WEIGHTS_PCC_THRESHOLD_FP32 = 0.96
 WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
@@ -52,6 +55,7 @@ WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
 BIASED_PCC_THRESHOLD = 0.999
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_fp32_input)
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(

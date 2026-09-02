@@ -34,10 +34,10 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
@@ -267,10 +267,11 @@ void LogDfbInitTimingFromL1(
 }
 
 void LaunchAndLogDfbInitTiming(
-    IDevice* device, Program& program, const CoreCoord& core, const char* benchmark_name) {
-    ClearDfbInitTimingL1(device, core);
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
-    LogDfbInitTimingFromL1(device, core, benchmark_name, DfbInitTimingUsedSlotsMask(program, core));
+    DfbInitTimingBenchContext& ctx, Program&& program, const CoreCoord& core, const char* benchmark_name) {
+    ClearDfbInitTimingL1(ctx.device, core);
+    const uint16_t used_slots_mask = DfbInitTimingUsedSlotsMask(program, core);
+    LaunchProgram(*ctx.mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LogDfbInitTimingFromL1(ctx.device, core, benchmark_name, used_slots_mask);
 }
 }  // namespace
 
@@ -285,7 +286,6 @@ void LaunchAndLogDfbInitTiming(
 // Data movement is commented out in those kernels so measured time reflects DFB init overhead.
 void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     auto mesh_device = ctx.mesh_device;
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE = 1024;
@@ -362,11 +362,10 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseBase");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseBase");
 }
 
 void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 1024;
@@ -445,7 +444,7 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
     };
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseTwo");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseTwo");
 }
 
 // Worst-case DFB init benchmark.
@@ -468,7 +467,6 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
 //   reader: 4 implicit reads per DFB per DM
 //   compute: 16 copy_tile+pop_front per Neo per DFB (4 ALL TCs × 4 entries)
 void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE    = 1024;
@@ -536,7 +534,7 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     };
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseFour");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseFour");
 }
 
 // Average-case-two DFB init benchmark.
@@ -555,7 +553,6 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
 //   reader: 4 implicit reads per DFB per DM
 //   compute: 4 copy_tile+pop_front per Neo per DFB (eltwise_copy tile_regs pattern)
 void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE    = 1024;
@@ -623,7 +620,7 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     };
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseThree");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseThree");
 }
 
 // Worst-case-two DFB init benchmark.
@@ -654,7 +651,6 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
 //   reader: 16 implicit reads per DFB per DM (single producer)
 //   compute: 16 copy_tile+pop_front per Neo per DFB across all 12 DFBs
 void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 1024;
@@ -749,7 +745,7 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
     }
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseFive");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseFive");
 }
 
 // Worst-case-three DFB init benchmark.
@@ -786,7 +782,6 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
 // workaround where a default 2048 B unpack over-reads into the next ring slot.
 // Quasar copy_tile requires standard 32×32 tile geometry (narrow/partial tiles fault).
 void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 2048;
@@ -915,7 +910,7 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
             .num_threads_per_cluster = 4,
         });
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseSeven");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSeven");
 }
 
 // BenchmarkWorstCaseFour — exhausts all 16 one-to-many remapper slots AND exercises
@@ -1103,7 +1098,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(neo0_e0->entry_size == ENTRY_SIZE, "Neo0 entry_size preflight mismatch");
     TT_FATAL(neo0_tc0->limit - neo0_tc0->base_addr == ENTRY_SIZE / 16u, "Neo0 ring_tiles preflight mismatch");
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseSix");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSix");
 }
 
 // Minimal 1Sx1A isolation variant of BenchmarkCaseSix for remapper debugging.
@@ -1198,7 +1193,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     TT_FATAL(neo0_e0->entry_size == ENTRY_SIZE, "Neo0 entry_size preflight mismatch");
     TT_FATAL(neo0_tc0->limit - neo0_tc0->base_addr == ENTRY_SIZE / 16u, "Neo0 ring_tiles preflight mismatch");
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseSixDebug");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSixDebug");
 }
 
 // Same 1Sx1A topology as BenchmarkCaseSixDebug but with implicit_sync enabled.
@@ -1207,7 +1202,6 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
 // sync_threads(get_num_threads()) waits for all 6 launched DM harts even though
 // only DM4 issues the implicit read.
 void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) {
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE  = 2048;
@@ -1262,12 +1256,11 @@ void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) 
         ENTRY_SIZE,
         NUM_ENTRIES);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSync");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSync");
 }
 
 void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchContext& ctx) {
     auto mesh_device = ctx.mesh_device;
-    IDevice* device = ctx.device;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     constexpr uint32_t ENTRY_SIZE = 2048;
@@ -1342,7 +1335,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
     experimental::SetProgramRunArgs(program, run_args);
 
-    LaunchAndLogDfbInitTiming(device, program, CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSyncProgramSpec");
+    LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSyncProgramSpec");
 }
 
 struct DfbInitTimingBenchCase {

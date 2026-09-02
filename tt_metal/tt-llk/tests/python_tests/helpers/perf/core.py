@@ -1,0 +1,1065 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import glob
+import os
+import re
+import shutil
+from dataclasses import fields
+from datetime import datetime, timezone
+from functools import reduce
+from pathlib import Path
+from typing import Any, ClassVar
+
+import pandas as pd
+import pytest
+
+from ..chip_architecture import ChipArchitecture
+from ..counters import print_counters, read_counters
+from ..device import BootMode
+from ..format_config import FormatConfig
+from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
+from ..logger import logger
+from ..metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from ..profiler import Profiler, ProfilerData
+from ..stimuli_config import StimuliConfig
+from ..test_config import BuildMode, ProfilerBuild, TestConfig
+from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .schema import (
+    FLAG_HEADERS,
+    FORMAT_HEADERS,
+    LOOP_FACTOR_COLUMN,
+    MARKER,
+    MEAN,
+    STD,
+    TEXT_SIZE_PREFIX,
+    TILE_CNT_COLUMN,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_prefix,
+    text_size_column,
+)
+from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
+
+# Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
+# match the marker values the kernels record; a mismatch silently empties the
+# TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
+INIT_MARKER = "INIT"
+TILE_LOOP_MARKER = "TILE_LOOP"
+
+
+def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
+    """
+    Return zone names for mapping counter zones to profiler markers.
+
+    Zone 0 = INIT, Zone 1 = TILE_LOOP. This matches the order in which
+    MEASURE_PERF_COUNTERS is called in all perf test source files
+    (get_zone_id allocates sequential IDs on first encounter).
+    """
+    _ = elf_dir
+    return [INIT_MARKER, TILE_LOOP_MARKER]  # zone 0 = INIT, zone 1 = TILE_LOOP
+
+
+# All perf run types in canonical order. Tests that exercise the full pipeline
+# pass this; a test may still pass a subset (e.g. [MATH_ISOLATE]) when that is
+# all it can measure.
+ALL_PERF_RUN_TYPES = [
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+]
+
+# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
+_CODE_SIZE_COMPONENTS = {
+    PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
+    PerfRunType.UNPACK_ISOLATE: ["unpack"],
+    PerfRunType.MATH_ISOLATE: ["math"],
+    PerfRunType.PACK_ISOLATE: ["pack"],
+    PerfRunType.SFPU_ISOLATE: ["sfpu"],
+}
+
+# Common postprocessing
+
+
+def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+    """Derive per-tile TILE_LOOP figures from a raw report frame.
+
+    Divides each TILE_LOOP row's un-prefixed ``mean(...)``/``std(...)`` wall-clock
+    columns by ``loop_factor * tile_cnt`` (run-type-prefixed ``*_pct`` metric
+    columns are deliberately left untouched). Pure ``DataFrame -> DataFrame``, no
+    hardware — so it is the canonical way to turn the RAW stored table (a CSV or a
+    Parquet batch) into per-tile values downstream. Non-TILE_LOOP rows pass through
+    unchanged.
+    """
+    if frame.empty:
+        return pd.DataFrame()
+
+    mask = frame[MARKER] == TILE_LOOP_MARKER
+
+    if not mask.any():
+        return frame
+
+    # Ensure columns exist and default missing values only for masked rows
+    for col in [LOOP_FACTOR_COLUMN, TILE_CNT_COLUMN]:
+        if col not in frame.columns:
+            col_idx = frame.columns.get_loc(MARKER)
+            frame.insert(col_idx, col, 1)
+        frame[col] = frame[col].fillna(1)
+
+    # Compute divisor as Series aligned with masked rows
+    divisor = frame.loc[mask, LOOP_FACTOR_COLUMN] * frame.loc[mask, TILE_CNT_COLUMN]
+
+    # Select only the un-prefixed wall-clock mean/std columns. The startswith is
+    # prefix-anchored on purpose: run-type-prefixed metric columns from
+    # export_metrics (e.g. "L1_TO_L1_mean(fpu_utilization_pct)") are bounded
+    # percentages that must NOT be divided by loop_factor*tile_cnt — they escape
+    # only because metric_column puts the run type first.
+    mean_columns = [c for c in frame.columns if c.startswith(stat_prefix(MEAN))]
+    std_columns = [c for c in frame.columns if c.startswith(stat_prefix(STD))]
+
+    # Apply division
+    for cols in (mean_columns, std_columns):
+        if cols:
+            frame.loc[mask, cols] = frame.loc[mask, cols].div(divisor, axis=0)
+
+    return frame
+
+
+class PerfReport:
+    """
+    Lazy evaluation container for performance benchmark data.
+
+    Allows for lazy evaluated query and append operation to the report.
+
+    """
+
+    def __init__(
+        self,
+        frames: list[pd.DataFrame] | None = None,
+        masks: list[pd.Series] | None = None,
+    ):
+        self._frames = frames or [pd.DataFrame()]
+        self._masks = masks or [pd.Series()]
+        # signature (frozenset of columns) -> {label, columns, sample} for the
+        # FIRST frame seen with that schema. Populated on append() and never
+        # cleared by frame()/post_process(), so the homogeneity check survives
+        # the lazy frame collapsing.
+        self._schema_registry: dict[frozenset, dict] = {}
+
+    def append(self, frame: pd.DataFrame, label: str | None = None):
+        # Gate: a report must never carry two columns with the same header. We
+        # check here, at the single funnel every report row passes through
+        # A duplicate raises PerfSchemaError, so the contaminated CSV never ships.
+        assert_unique_columns(frame.columns, context=label or "report")
+        self._frames.append(frame)
+        self._masks.append(pd.Series(True, index=frame.index))
+        self._register_schema(frame, label)
+
+    def _register_schema(self, frame: pd.DataFrame, label: str | None):
+        if frame.empty:
+            return
+        sig = frozenset(frame.columns)
+        if sig in self._schema_registry:
+            return
+        # Identify a frame by its sweep-parameter columns (everything before the
+        # marker column) so the error can point the author at the offending test.
+        if MARKER in frame.columns:
+            sweep_cols = list(frame.columns[: frame.columns.get_loc(MARKER)])
+        else:
+            sweep_cols = list(frame.columns)
+        sample = frame.iloc[0][sweep_cols].to_dict() if sweep_cols else {}
+        self._schema_registry[sig] = {
+            "label": label,
+            "columns": list(frame.columns),
+            "sample": sample,
+        }
+
+    def assert_single_schema(self, context: str = ""):
+        """
+        Fail loud if this report mixes more than one column schema.
+
+        A sound perf CSV has exactly one homogeneous column set. More than one
+        means either (a) a single test emits different columns across its sweep,
+        or (b) two unrelated ops/families share the file. Both are actionable by
+        the test author; we refuse to write the contaminated artifact.
+        """
+        schemas = self._schema_registry
+        if len(schemas) <= 1:
+            return
+
+        sigs = list(schemas.keys())
+        common = sigs[0]
+        for s in sigs[1:]:
+            common = common & s
+
+        lines = [
+            f"Perf report schema contamination in {context or 'report'}: "
+            f"{len(schemas)} incompatible column schemas were appended to a single CSV.",
+            "",
+            "Every perf CSV must have ONE homogeneous column set. Stacking rows with "
+            "different columns NaN-fills the gaps, yielding a ragged artifact that "
+            "breaks strict-JSON dashboards and the compare feature.",
+            "",
+        ]
+        for i, info in enumerate(schemas.values(), 1):
+            unique = sorted(frozenset(info["columns"]) - common)
+            lines.append(f"  Schema #{i} (source: {info['label']}):")
+            lines.append(
+                "    distinguishing columns: "
+                + (
+                    str(unique)
+                    if unique
+                    else "<none — differs only by stat/metric columns>"
+                )
+            )
+            lines.append(f"    example params: {info['sample']}")
+        lines += [
+            "",
+            "Fix one of two ways:",
+            "  (a) One test emitting different columns across parametrizations — usually a "
+            "template/runtime param that is None for some sweep values and set for others "
+            "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
+            "  (b) Two genuinely different ops/families share the same py file — split them "
+            "into separate test files, one schema per file.",
+        ]
+        raise PerfSchemaError("\n".join(lines))
+
+    def frame(self) -> pd.DataFrame:
+        # merge
+        frame = pd.concat(self._frames, ignore_index=True)
+        mask = pd.concat(self._masks, ignore_index=True)
+
+        # apply masks
+        frame = frame[mask]
+
+        # save
+        self._frames = [frame]
+        self._masks = [pd.Series(True, index=frame.index)]
+
+        return frame
+
+    def filter(self, column: str, value: Any) -> "PerfReport":
+        """Filter: Generic column filter"""
+        mask_chain = [
+            mask & (frame[column] == value)
+            for frame, mask in zip(self._frames, self._masks)
+        ]
+        return PerfReport(frames=self._frames, masks=mask_chain)
+
+    def marker(self, marker: str) -> "PerfReport":
+        """Filter: Marker"""
+        return self.filter(MARKER, marker)
+
+    def post_process(self):
+        frame = pd.concat(self._frames, ignore_index=True)
+        mask = pd.concat(self._masks, ignore_index=True)
+
+        frame = postprocess_tile_loop(frame[mask])
+
+        self._frames = [pd.DataFrame(), frame]
+        self._masks = [pd.Series(), pd.Series(True, index=frame.index)]
+
+    def dump_csv(self, filename: str):
+        if not TestConfig.PERF_DATA_DIR.exists():
+            TestConfig.PERF_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        frame = pd.concat(self._frames, ignore_index=True)
+        mask = pd.concat(self._masks, ignore_index=True)
+
+        # apply masks
+        frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
+
+
+def get_unique_base_names(input_dir: Path):
+    """
+    Extract unique base filenames from files matching *.gw*.csv pattern.
+    For example: perf_pack_untilize.gw0.csv -> perf_pack_untilize
+    """
+
+    csv_files = list(input_dir.glob("*.gw*.csv")) + list(
+        input_dir.glob("*.master*.csv")
+    )
+
+    # Extract base names with regex that handles all patterns (.csv, .post.csv, .counters.csv)
+    unique_bases = {
+        re.sub(r"\.(?:gw\d+|master)(?:\.post|\.counters)?\.csv$", "", report_file.name)
+        for report_file in csv_files
+    }
+
+    return sorted(unique_bases)
+
+
+def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Fail the session if any rows share the same (sweep-params, marker) key."""
+    if frame.empty or MARKER not in frame.columns:
+        return frame
+
+    try:
+        marker_pos = frame.columns.get_loc(MARKER)
+        key_cols = list(frame.columns[: marker_pos + 1])
+        value_cols = [c for c in frame.columns if c not in key_cols]
+
+        # dropna=False: NaN-valued sweep columns are legitimate keys (pandas would
+        # otherwise drop those groups entirely).
+        group_sizes = frame.groupby(key_cols, dropna=False, sort=False).size()
+        dup_groups = group_sizes[group_sizes > 1]
+        if dup_groups.empty:
+            return frame
+
+        numeric_cols = [
+            c for c in value_cols if pd.api.types.is_numeric_dtype(frame[c])
+        ]
+        differing = 0
+        if numeric_cols:
+            nunique = frame.groupby(key_cols, dropna=False, sort=False)[
+                numeric_cols
+            ].nunique()
+            differing = int((nunique > 1).any(axis=1).sum())
+
+        examples = [
+            dict(zip(key_cols, key if isinstance(key, tuple) else (key,)))
+            for key in list(dup_groups.index[:3])
+        ]
+        raise PerfSchemaError(
+            f"{label}: {int(len(dup_groups))} duplicate (sweep-params, marker) "
+            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) "
+            "disagreed on a metric value. A key must identify one measurement. "
+            "Either the sweep varies something that is not recorded as a column, "
+            "or two sweep points normalize onto the same recorded value (e.g. "
+            "dest_acc promoted from No to Yes for an outlier format combo). "
+            f"First duplicate key(s): {examples}"
+        )
+    except PerfSchemaError:
+        raise
+    except Exception as e:
+        raise PerfSchemaError(
+            f"{label}: duplicate-key check failed: {type(e).__name__}: {e}"
+        ) from e
+
+
+def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
+    """
+    Fail loud if per-worker files for one test disagree on columns.
+
+    Each worker file already passed the per-report schema guard, so each is
+    internally homogeneous — but pytest-xdist can split one test's sweep across
+    workers, and if that test emits inconsistent columns (e.g. a param that is
+    None for some sweep values) the workers diverge only here. Stacking them
+    would NaN-fill the gaps, so we refuse instead of shipping a ragged CSV.
+    """
+    schemas = {}
+    for df in dfs:
+        if df.empty:
+            continue
+        schemas.setdefault(frozenset(df.columns), list(df.columns))
+    if len(schemas) <= 1:
+        return
+
+    sigs = list(schemas.keys())
+    common = sigs[0]
+    for s in sigs[1:]:
+        common = common & s
+    detail = "; ".join(
+        f"schema #{i}: +{sorted(frozenset(cols) - common) or '<none>'}"
+        for i, cols in enumerate(schemas.values(), 1)
+    )
+    raise PerfSchemaError(
+        f"Perf report schema contamination in combined '{label}': "
+        f"{len(schemas)} different column schemas across worker files ({detail}). "
+        "A single test is emitting inconsistent columns across its sweep, or two "
+        "tests with different schemas share this file — split them into separate "
+        "files (one schema per file)."
+    )
+
+
+# Run mode, not a test parameter: identical for every test, and carried by the CSV
+# and DB_SCHEMA but deliberately not by the per-test catalog.
+NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light"})
+
+
+def _assert_matches_catalog(frame: pd.DataFrame, base_name: str, label: str):
+    """Fail unless the CSV a run wrote carries exactly its catalog columns.
+
+    test_perf_header_gate.py checks the catalog against the test *source*, using
+    the reader that generated the catalog, so a blind spot makes both sides agree.
+    This reads what the run actually produced instead.
+
+    The catalog-column-absent direction is safe under pytest-split because
+    _assert_combined_schema already refuses a test whose cases emit different
+    columns, so any shard's CSV carries the test's full column set.
+    """
+    if frame.empty or MARKER not in frame.columns:
+        return
+
+    # getattr: CHIP_ARCH is set by TestConfig.setup_arch(), which a unit test
+    # exercising this function directly has no reason to have run.
+    quasar = getattr(TestConfig, "CHIP_ARCH", None) == ChipArchitecture.QUASAR
+    catalog = PERF_TEST_SCHEMAS_QSR if quasar else PERF_TEST_SCHEMAS
+    # A base name with no entry is already a merge-gate failure (the static gate
+    # reports "found in source but missing from the catalog"), and combine globs
+    # whatever CSVs are on disk, so skip rather than fail a partial local run.
+    entry = catalog.get(base_name)
+    if entry is None:
+        return
+
+    produced = set(frame.columns[: frame.columns.get_loc(MARKER) + 1])
+    produced -= NON_CATALOG_KEY_COLUMNS
+    unrecorded = sorted(produced - set(entry["columns"]))
+    absent = sorted(set(entry["columns"]) - produced)
+    if not (unrecorded or absent):
+        return
+    raise PerfSchemaError(
+        f"{label}: the CSV this run produced does not match catalog entry "
+        f"'{base_name}' (version {entry['version']})."
+        + (f" In the CSV but not the catalog: {unrecorded}." if unrecorded else "")
+        + (f" In the catalog but not the CSV: {absent}." if absent else "")
+        + " Update PERF_TEST_SCHEMAS in helpers/perf/test_schemas.py and raise its "
+        "version. If test_perf_header_gate.py still passes, its source reader "
+        "cannot see the construct that produced the column — fix the reader too."
+    )
+
+
+def _run_id() -> str:
+    """The ROW_KEY component that identifies one CI run, re-runs included.
+
+    "Re-run all/failed jobs" keeps ``GITHUB_RUN_ID`` and bumps
+    ``GITHUB_RUN_ATTEMPT``. Without the attempt, a re-run republishes a second,
+    different measurement under the same (test_name, commit_sha, arch, run_id) —
+    a colliding ROW_KEY. Attempt 1 stays bare so every row already archived keeps
+    the identity it was published with; every shard of one attempt still shares
+    one run_id, which is what the data team means by "one run".
+
+    Off CI there is no run id. The run tag is unique per invocation, so two local
+    runs of the same commit no longer collide the way the old constant "local" did.
+    """
+    run = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if not run:
+        return TestConfig.perf_run_tag()
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
+    return run if attempt == "1" else f"{run}-{attempt}"
+
+
+def _ci_provenance() -> dict:
+    """Run-context provenance for a published Parquet batch, read from the CI
+    environment (best-effort defaults when run off-CI)."""
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    return {
+        "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+        "arch": os.environ.get("CHIP_ARCH", "unknown"),
+        "run_id": _run_id(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pipeline": "PR" if event == "pull_request" else "nightly",
+        "pr_number": os.environ.get("PR_NUMBER") or None,
+    }
+
+
+def _refresh_latest(run_dir: Path) -> None:
+    """Point ``perf_data/latest`` at this run, so callers keep a stable path.
+
+    Best-effort: a report that exists but is not linked is still a usable report.
+    """
+    link = run_dir.parent.parent / "latest"
+    if link.exists() and not link.is_symlink():
+        # A real directory here is somebody's data, not our link. Leave it.
+        logger.warning(f"perf_data/latest exists and is not a symlink: {link}")
+        return
+    # Swap through a temporary name: Path.replace is one rename, so a reader that
+    # opens the link mid-update sees the old run or the new one, never nothing.
+    # The pid keeps two concurrent runs from fighting over the temporary.
+    tmp = link.with_name(f".latest.tmp.{os.getpid()}")
+    try:
+        tmp.unlink(missing_ok=True)  # debris from a crashed run with this pid
+        tmp.symlink_to(run_dir.relative_to(link.parent), target_is_directory=True)
+        tmp.replace(link)
+    except OSError as exc:  # noqa: BLE001 — the link is a convenience, not the report
+        logger.warning(f"perf_data/latest not updated: {exc}")
+        tmp.unlink(missing_ok=True)
+
+
+def _keep_runs() -> int:
+    """How many run directories to retain locally (``PERF_KEEP_RUNS``, default 10).
+
+    The archive is the published Parquet, not this directory, so local history is
+    a debugging convenience and wants a bound. 0 or less disables pruning.
+    """
+    raw = os.environ.get("PERF_KEEP_RUNS", "10")
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"PERF_KEEP_RUNS={raw!r} is not an integer; keeping 10 runs")
+        return 10
+
+
+def _prune_runs(runs_dir: Path, keep: int, current: Path) -> None:
+    """Keep the newest ``keep`` run directories, never deleting ``current``.
+
+    ``keep <= 0`` disables pruning. Every step is survivable on its own: one
+    unreadable directory costs that directory, not the whole prune, and the run
+    that just finished is protected by nfame rather than by being the newest —
+    a clock that jumped backwards must not be able to delete it.
+    """
+    if keep <= 0:
+        return
+    run_dirs: list[tuple[float, Path]] = []
+    try:
+        entries = list(runs_dir.iterdir())
+    except OSError as exc:
+        logger.warning(f"perf_data runs not pruned ({runs_dir}): {exc}")
+        return
+    for d in entries:
+        try:
+            if not d.is_dir() or d.is_symlink():
+                continue
+            run_dirs.append((d.stat().st_mtime, d))
+        except OSError as exc:
+            logger.warning(f"skipping run directory {d}: {exc}")
+    run_dirs.sort(key=lambda pair: pair[0], reverse=True)
+    survivors = {d for _, d in run_dirs[:keep]}
+    survivors.add(current)
+    for _, stale in run_dirs:
+        if stale in survivors:
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError as exc:
+            logger.warning(f"failed to prune run directory {stale}: {exc}")
+
+
+def _write_run_parquet(raw_csv_paths, out_dir) -> None:
+    """Publish the run's raw per-test CSVs as one Parquet batch beside them, so a
+    nightly/PR run emits both CSV and Parquet from the same data.
+
+    Raw is the canonical stored form (matching the historical migration): the
+    per-tile figures are derivable downstream (TILE_LOOP mean/std divided by
+    ``loop_factor * tile_cnt``, both present as columns), so storing raw keeps the
+    table lossless without a redundant per-tile copy.
+
+    Schema drift (unknown columns, or values that would coerce to NULL) raises
+    ``PerfSchemaError`` so the session fails instead of writing a lossy batch.
+    Other Parquet write failures (missing pyarrow, I/O) are logged and do not
+    break the CSV report, which is already on disk.
+    """
+    if not raw_csv_paths:
+        return
+    try:
+        from .parquet import convert_csvs_to_parquet
+
+        prov = _ci_provenance()
+        # Named from the run tag, not run_id. run_id is a ROW_KEY column and is
+        # shared by every shard of one CI workflow by design, so naming files
+        # after it gives all ten shards the same filename -- fine while each
+        # stays in its own directory, wrong the moment they are collected into
+        # one archive. The tag is the filesystem-unique name; use it here.
+        parquet_path = Path(out_dir) / f"{TestConfig.perf_run_tag()}.parquet"
+        convert_csvs_to_parquet(
+            sorted(raw_csv_paths), parquet_path, strict=True, **prov
+        )
+        logger.info(f"Wrote run Parquet batch: {parquet_path}")
+    except ValueError as exc:
+        raise PerfSchemaError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — Parquet is additive; CSV is primary
+        logger.warning(f"perf Parquet batch not written: {type(exc).__name__}: {exc}")
+
+
+def combine_perf_reports():
+    """
+    Combine performance report CSV files into two files per base name:
+    - One for regular files (without .post.csv)
+    - One for post files (with .post.csv)
+
+    Output goes to this run's own directory, ``perf_data/runs/<tag>/``, and
+    ``perf_data/latest`` is pointed at it. Writing every run into one shared
+    directory used to overwrite the previous run's reports and — worse — a
+    narrower second run left the first run's test directories untouched, so the
+    tree read as complete while holding a blend of two runs.
+
+    Also publishes the run's raw combined CSVs as one Parquet batch
+    (runs/<tag>/<tag>.parquet) so a run emits both CSV and Parquet.
+    Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
+    """
+
+    unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)
+    if not unique_module_names:
+        return
+
+    output_dir = TestConfig.perf_run_dir()
+
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_outputs = []  # combined raw per-test CSVs, published together as Parquet
+    for base_name in unique_module_names:
+        csv_files = glob.glob(
+            os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.gw*.csv")
+        )
+        csv_files += glob.glob(
+            os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.master*.csv")
+        )
+
+        temp_output_dir = output_dir / base_name
+        if not temp_output_dir.exists():
+            temp_output_dir.mkdir(parents=True, exist_ok=True)
+
+        regular_files, post_files, counter_files = [], [], []
+
+        for f in csv_files:
+            if f.endswith(".counters.csv"):
+                counter_files.append(f)
+            elif f.endswith(".post.csv"):
+                post_files.append(f)
+            else:
+                regular_files.append(f)
+
+        if regular_files:
+            dfs_regular = []
+            for file in sorted(regular_files):
+                logger.info(f"Raw appending: {file}")
+                try:
+                    df = pd.read_csv(file)
+                except:
+                    continue
+                dfs_regular.append(df)
+
+            if len(dfs_regular) == 0:
+                continue
+
+            _assert_combined_schema(dfs_regular, f"{base_name}.csv")
+            combined_regular = pd.concat(dfs_regular, ignore_index=True)
+            combined_regular = _reject_duplicate_keys(
+                combined_regular, f"{base_name}.csv"
+            )
+            _assert_matches_catalog(combined_regular, base_name, f"{base_name}.csv")
+            combined_regular = combined_regular.sort_values(
+                by=combined_regular.columns.tolist()
+            ).reset_index(drop=True)
+            output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
+            combined_regular.to_csv(output_regular, index=False)
+            raw_outputs.append(output_regular)
+
+        if post_files:
+            dfs_post = []
+            for file in sorted(post_files):
+                logger.info(f"Post appending: {file}")
+                try:
+                    df = pd.read_csv(file)
+                except:
+                    continue
+                dfs_post.append(df)
+
+            if len(dfs_post) == 0:
+                continue
+
+            _assert_combined_schema(dfs_post, f"{base_name}.post.csv")
+            combined_post = pd.concat(dfs_post, ignore_index=True)
+            combined_post = _reject_duplicate_keys(
+                combined_post, f"{base_name}.post.csv"
+            )
+            combined_post = combined_post.sort_values(
+                by=combined_post.columns.tolist()
+            ).reset_index(drop=True)
+            output_post = os.path.join(temp_output_dir, f"{base_name}.post.csv")
+            combined_post.to_csv(output_post, index=False)
+
+        if counter_files:
+            dfs_counters = []
+            for file in sorted(counter_files):
+                if os.path.getsize(file) <= 1:
+                    continue
+                df = pd.read_csv(file)
+                dfs_counters.append(df)
+
+            if dfs_counters:
+                combined_counters = pd.concat(dfs_counters, ignore_index=True)
+                combined_counters = _reject_duplicate_keys(
+                    combined_counters, f"{base_name}.counters.csv"
+                )
+                combined_counters = combined_counters.sort_values(
+                    by=combined_counters.columns.tolist()
+                ).reset_index(drop=True)
+                output_counters = os.path.join(
+                    temp_output_dir, f"{base_name}.counters.csv"
+                )
+                combined_counters.to_csv(output_counters, index=False)
+
+        for file in regular_files + post_files + counter_files:
+            Path(file).unlink()
+
+    _write_run_parquet(raw_outputs, output_dir)
+    _refresh_latest(output_dir)
+    _prune_runs(output_dir.parent, _keep_runs(), output_dir)
+
+
+class PerfConfig(TestConfig):
+    # === STATIC VARIABLES ===
+    TEST_COUNTER: ClassVar[int] = 0
+    COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
+
+    def __init__(
+        self,
+        test_name: str,
+        formats: FormatConfig = None,
+        run_types: list[PerfRunType] = [],
+        templates: list[TemplateParameter] = [],
+        runtimes: list[RuntimeParameter] = [],
+        variant_stimuli: StimuliConfig = None,
+        unpack_to_dest=False,
+        unpack_to_srcs=False,
+        disable_format_inference=False,
+        dest_acc=DestAccumulation.No,
+        l1_acc=L1Accumulation.No,
+        skip_build_header: bool = False,
+        compile_time_formats: bool = False,
+    ):
+
+        # Initialize passed templates and runtimes here so we don't get variant hash issues
+        # when we reasign them in run method of PerfConfig
+        self.passed_templates = templates.copy()
+        self.passed_runtimes = runtimes.copy()
+        self.current_run_type = None
+
+        # TODO Add check here for all selected runs, to see if the profiler/counter supports them
+        self.run_configs = [
+            (
+                templates.copy() + [PERF_RUN_TYPE(run_type)],
+                runtimes.copy(),
+                run_type,
+            )
+            for run_type in run_types
+        ]
+
+        super().__init__(
+            test_name,
+            formats,
+            templates,
+            runtimes,
+            variant_stimuli,
+            BootMode.DEFAULT,
+            ProfilerBuild.Yes,
+            1,  # L1_2_L1s
+            unpack_to_dest,
+            unpack_to_srcs,
+            disable_format_inference,
+            dest_acc,
+            l1_acc,
+            skip_build_header,
+            compile_time_formats,
+        )
+
+    @staticmethod
+    def _dataclass_name_and_values(obj):
+        """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
+
+    @staticmethod
+    def _build_sweep_frame(
+        code_sizes,
+        formats_config,
+        unpack_to_dest,
+        dest_acc,
+        passed_templates,
+        passed_runtimes,
+    ):
+        """Single-row frame of the sweep columns (formats, flags, non-None params,
+        code sizes) cross-joined onto every per-run-type result. Shared by the main
+        report and the counter report so both carry the same sweep columns.
+        """
+        # Setting header fields that are always there
+        names = list(FORMAT_HEADERS) if formats_config else []
+        values = (
+            [
+                formats_config[0].unpack_A_src,
+                formats_config[0].unpack_B_src,
+                formats_config[0].unpack_A_dst,
+                formats_config[0].unpack_B_dst,
+                formats_config[0].output_format,
+                formats_config[0].sfpu_src,
+                formats_config[0].sfpu_dst,
+            ]
+            if formats_config and formats_config[0]
+            else []
+        )
+
+        names += list(FLAG_HEADERS)
+        values += [unpack_to_dest, dest_acc]
+
+        # Run mode: whether this run compiled everything as speed-of-light. Kept in
+        # the report so SoL and non-SoL measurements are never compared together.
+        names.append("speed_of_light")
+        values.append(TestConfig.SPEED_OF_LIGHT)
+
+        for param in passed_templates + passed_runtimes:
+            for name, value in PerfConfig._dataclass_name_and_values(param):
+                if value is not None:
+                    names.append(name)
+                    values.append(value)
+
+        for run_type, size in code_sizes.items():
+            names.append(text_size_column(run_type.name))
+            values.append(size)
+
+        return pd.DataFrame([values], columns=names)
+
+    @staticmethod
+    def build_report_frame(
+        results,
+        code_sizes,
+        formats_config,
+        unpack_to_dest,
+        dest_acc,
+        passed_templates,
+        passed_runtimes,
+    ):
+        """Merge the per-run-type results and cross-join the sweep columns onto them.
+
+        Pure (no hardware): takes the stat/metric frames, ELF code sizes and the
+        config's parameters. Called by run(); also driven directly by the
+        hardware-free report test.
+        """
+        run_results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=MARKER, how="outer", validate="1:1"
+            ),
+            results,
+        )
+
+        sweep = PerfConfig._build_sweep_frame(
+            code_sizes,
+            formats_config,
+            unpack_to_dest,
+            dest_acc,
+            passed_templates,
+            passed_runtimes,
+        )
+        combined = sweep.merge(run_results, how="cross")
+
+        text_size_cols = [c for c in combined.columns if c.startswith(TEXT_SIZE_PREFIX)]
+        other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
+        return combined[other_cols + text_size_cols]
+
+    @staticmethod
+    def _validate_profiler_stats(stats_df: pd.DataFrame, run_type: PerfRunType) -> None:
+        """Reject missing or invalid wall-clock output for a requested run type."""
+        if stats_df.empty:
+            raise ValueError(
+                f"Profiler produced no timing statistics for requested run type "
+                f"{run_type.name}. Check profiler zone coverage and handshakes."
+            )
+
+        expected_mean_prefix = f"{stat_prefix(MEAN)}{run_type.name}"
+        mean_columns = [
+            column
+            for column in stats_df.columns
+            if column.startswith(expected_mean_prefix)
+        ]
+        if not mean_columns:
+            raise ValueError(
+                f"Profiler statistics for requested run type {run_type.name} "
+                f"contain no mean timing column with prefix "
+                f"{expected_mean_prefix!r}: {list(stats_df.columns)}"
+            )
+
+        negative_values = {
+            column: stats_df.loc[stats_df[column] < 0, column].tolist()
+            for column in mean_columns
+            if (stats_df[column] < 0).any()
+        }
+        if negative_values:
+            raise ValueError(
+                f"Profiler produced negative mean timing values for requested "
+                f"run type {run_type.name}: {negative_values}. Check profiler "
+                f"zone handshakes."
+            )
+
+    def run(self, perf_report: PerfReport, run_count=1):
+        results = []
+        counter_results_list = []
+        code_sizes = {}
+
+        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+            for templates, runtimes, run_type in self.run_configs:
+                self.current_run_type = run_type
+                # We need to manually assign different modified templates here if the speed of light is set,
+                # because we run TestConfig constructor only once
+                if TestConfig.SPEED_OF_LIGHT:
+                    self.templates = templates + runtimes
+                    self.runtimes = []
+                    self.compile_time_formats = True
+                else:
+                    self.templates = templates
+                    self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.build_elfs()
+
+        if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+        PerfConfig.TEST_COUNTER += 1
+
+        for templates, runtimes, run_type in self.run_configs:
+            self.current_run_type = run_type
+            # We need to manually assign different modified templates here if the speed of light is set,
+            # because we run TestConfig constructor only once
+            if TestConfig.SPEED_OF_LIGHT:
+                self.templates = templates + runtimes
+                self.runtimes = []
+                self.compile_time_formats = True
+            else:
+                self.templates = templates
+                self.runtimes = runtimes
+            self.generate_variant_hash()
+
+            elf_dir = (
+                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+            )
+            components = _CODE_SIZE_COMPONENTS.get(run_type)
+            # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
+            if run_type == PerfRunType.L1_TO_L1 and any(
+                rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
+            ):
+                components = ["unpack", "math", "pack", "sfpu"]
+            if components is not None:
+                code_sizes[run_type] = sum(
+                    TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
+                    for c in components
+                )
+
+            variant_raw_data = []
+            variant_counter_results = []
+            for run_index in range(run_count):
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+                # Counter config is written by BRISC from built-in array (local L1 write).
+                # Python NOC write is skipped to avoid L1 controller state change that
+                # causes ~7 cycle overhead on Float16 unpack operations.
+
+                profiler_data = Profiler.get_data(
+                    self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
+                )
+
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    try:
+                        counter_results = read_counters(
+                            location=TestConfig.TENSIX_LOCATION
+                        )
+                        if counter_results is not None and not counter_results.empty:
+                            counter_results["run_index"] = run_index
+                            variant_counter_results.append(counter_results)
+                            if TestConfig.DUMP_RAW_COUNTERS:
+                                print_counters(counter_results)
+                            if TestConfig.DUMP_RAW_METRICS:
+                                print_metrics(counter_results)
+                    except Exception as e:
+                        logger.warning("Error reading counters: {}", e)
+
+                # Tag profiler data with run index for proper L1-to-L1 pairing
+                profiler_data.df["run_index"] = run_index
+                variant_raw_data.append(profiler_data)
+
+            get_stats = Profiler.STATS_FUNCTION[run_type]
+            stats_df = get_stats(ProfilerData.concat(variant_raw_data))
+            # A WC build intentionally suppresses ZONE_SCOPED timing events and
+            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
+            # so it still requires wall-clock stats even when counters are requested.
+            counter_only_build = (
+                TestConfig.ENABLE_PERF_COUNTERS
+                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+            )
+            if not stats_df.empty or not counter_only_build:
+                PerfConfig._validate_profiler_stats(stats_df, run_type)
+                results.append(stats_df)
+
+            if variant_counter_results:
+                all_counters = pd.concat(variant_counter_results, ignore_index=True)
+
+                # Read zone names from ELF .perf_counter_meta section
+                zone_names = read_perf_zone_names_from_elf(
+                    TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+                )
+
+                computed = compute_metrics(all_counters)
+                if TestConfig.DUMP_RAW_METRICS:
+                    print_metrics(all_counters)
+
+                # Export efficiency metrics (percentages only) to the main CSV
+                csv_df = export_metrics(
+                    computed,
+                    run_type_name=run_type.name,
+                    zone_names=zone_names,
+                )
+                if not csv_df.empty:
+                    results.append(csv_df)
+
+                # Export raw counter values to the separate counters CSV
+                if (
+                    TestConfig.DUMP_CSV_COUNTERS
+                    and PerfConfig.COUNTER_REPORT is not None
+                ):
+                    counter_csv_df = export_counters(
+                        all_counters,
+                        run_type_name=run_type.name,
+                        zone_names=zone_names,
+                    )
+                    if not counter_csv_df.empty:
+                        counter_results_list.append(counter_csv_df)
+
+        # Assemble the per-test report frame (pure — see build_report_frame).
+        combined = PerfConfig.build_report_frame(
+            results,
+            code_sizes,
+            self.formats_config,
+            self.unpack_to_dest,
+            self.dest_acc,
+            self.passed_templates,
+            self.passed_runtimes,
+        )
+        perf_report.append(combined, label=self.test_name)
+
+        # Append raw counter data to the separate counter report
+        if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
+            counter_run_results = reduce(
+                lambda left, right: pd.merge(
+                    left, right, on=MARKER, how="outer", validate="1:1"
+                ),
+                counter_results_list,
+            )
+            sweep = PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
+            )
+            counter_combined = sweep.merge(counter_run_results, how="cross")
+            PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+
+def create_test_or_perf_config(
+    *,
+    is_perf: bool,
+    run_types: list[PerfRunType],
+    test_config_kwargs: dict,
+    boot_mode: BootMode | None = None,
+) -> TestConfig:
+    """Create the common functional or performance configuration.
+
+    The configuration is returned without running it so callers can apply
+    operation-specific format adjustments before execution. ``boot_mode`` is
+    functional-only because ``PerfConfig`` owns its fixed performance boot mode.
+    """
+    if is_perf:
+        return PerfConfig(run_types=list(run_types), **test_config_kwargs)
+
+    functional_kwargs = {
+        **test_config_kwargs,
+        "templates": test_config_kwargs["templates"]
+        + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+    }
+    if boot_mode is not None:
+        functional_kwargs["boot_mode"] = boot_mode
+
+    return TestConfig(**functional_kwargs)

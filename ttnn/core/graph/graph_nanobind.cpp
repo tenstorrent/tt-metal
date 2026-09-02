@@ -62,19 +62,12 @@ void py_graph_module(nb::module_& m) {
             std::stringstream ss;
             std::string type_str;
             switch (info.type) {
-                case tt::tt_metal::BufferType::DRAM:
-                    type_str = "DRAM";
-                    break;
-                case tt::tt_metal::BufferType::L1:
-                    type_str = "L1";
-                    break;
+                case tt::tt_metal::BufferType::DRAM: type_str = "DRAM"; break;
+                case tt::tt_metal::BufferType::L1: type_str = "L1"; break;
                 // Add more cases here as needed for other BufferType values
-                default:
-                    type_str = "UNKNOWN";
-                    break;
+                default: type_str = "UNKNOWN"; break;
             }
-            ss << "TensorInfo(shape=" << info.shape << ", size=" << info.size
-               << ", type=" << type_str << ")";
+            ss << "TensorInfo(shape=" << info.shape << ", size=" << info.size << ", type=" << type_str << ")";
             return ss.str();
         });
 
@@ -84,23 +77,34 @@ void py_graph_module(nb::module_& m) {
             "peak_cb", &ttnn::graph::PeakMemoryUsagePerCore::peak_cb, "Peak circular buffer usage per core in bytes")
         .def_ro("peak_l1", &ttnn::graph::PeakMemoryUsagePerCore::peak_l1, "Peak L1 buffer usage per core in bytes")
         .def_ro(
+            "peak_dataflow_buffer",
+            &ttnn::graph::PeakMemoryUsagePerCore::peak_dataflow_buffer,
+            "Peak Metal 2.0 dataflow buffer usage per core in bytes")
+        .def_ro(
+            "peak_scratchpad",
+            &ttnn::graph::PeakMemoryUsagePerCore::peak_scratchpad,
+            "Peak Metal 2.0 kernel scratchpad usage per core in bytes")
+        .def_ro(
             "peak_total",
             &ttnn::graph::PeakMemoryUsagePerCore::peak_total,
-            "Peak total memory (CB + L1) per core in bytes")
+            "Peak total memory per core in bytes: CB + L1 + dataflow buffers + scratchpads")
         .def(
             "__repr__",
             [](const ttnn::graph::PeakMemoryUsagePerCore& usage) {
                 std::stringstream ss;
                 ss << "PeakMemoryUsagePerCore(peak_cb=" << usage.peak_cb << ", peak_l1=" << usage.peak_l1
-                   << ", peak_total=" << usage.peak_total << ")";
+                   << ", peak_dataflow_buffer=" << usage.peak_dataflow_buffer
+                   << ", peak_scratchpad=" << usage.peak_scratchpad << ", peak_total=" << usage.peak_total << ")";
                 return ss.str();
             })
         .def("__str__", [](const ttnn::graph::PeakMemoryUsagePerCore& usage) {
             std::stringstream ss;
             ss << "Peak Memory Usage Per Core:\n"
-               << "  CB:    " << usage.peak_cb << " bytes\n"
-               << "  L1:    " << usage.peak_l1 << " bytes\n"
-               << "  Total: " << usage.peak_total << " bytes";
+               << "  CB:         " << usage.peak_cb << " bytes\n"
+               << "  L1:         " << usage.peak_l1 << " bytes\n"
+               << "  DFB:        " << usage.peak_dataflow_buffer << " bytes\n"
+               << "  Scratchpad: " << usage.peak_scratchpad << " bytes\n"
+               << "  Total:      " << usage.peak_total << " bytes";
             return ss.str();
         });
 
@@ -287,7 +291,9 @@ void py_graph_module(nb::module_& m) {
             PeakMemoryUsagePerCore: Object with three fields:
                 - peak_cb: Peak circular buffer usage per core (bytes)
                 - peak_l1: Peak L1 buffer usage per core (bytes)
-                - peak_total: Peak total memory (CB + L1) per core (bytes)
+                - peak_dataflow_buffer: Peak Metal 2.0 dataflow buffer usage per core (bytes)
+                - peak_scratchpad: Peak Metal 2.0 kernel scratchpad usage per core (bytes)
+                - peak_total: Peak total memory per core (bytes), every kind above
 
         Example:
             >>> usage = ttnn.graph.extract_resource_usage_per_core(graph)

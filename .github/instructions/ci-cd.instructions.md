@@ -1,6 +1,6 @@
 ---
 description: 'PR review for GitHub Actions workflows and CI infrastructure — security, runner hygiene, time budget, and pipeline structure'
-applyTo: '.github/workflows/**,.github/actions/**'
+applyTo: '.github/workflows/**,.github/actions/**,.github/time_budget.yaml'
 excludeAgent: "cloud-agent"
 ---
 
@@ -16,7 +16,7 @@ excludeAgent: "cloud-agent"
 ## 🟡 IMPORTANT
 
 - **Indirect runner reassignment**: a change can silently move a job to a different runner even when no `runs-on:` label is edited directly — for example, edits to the pipeline reorg YAML files (`tests/pipeline_reorg/`) or to `sku_config.yaml` that alter how a `sku` resolves to a runner pool. The reorg YAML tooling (@roseli-TT's work) generates the effective `runs-on:` assignment, so a small config change can re-route hardware. Flag any change that touches runner-routing config and verify the effective runner assignment via the pipeline reorg tooling before approving.
-- **`time_budget.yaml` changes**: any edit to `.github/time_budget.yaml` must include a justification comment explaining the new budget and which jobs drove the change.
+- **`time_budget.yaml` changes**: any edit to `.github/time_budget.yaml` must include a justification in the PR description explaining the new budget and which jobs drove the change.
 - **`fetch-depth`**: use `fetch-depth: 1` unless full history is explicitly needed (e.g., release tagging, `git describe`). Large repo + full history = slow CI.
 - **Caching**: if a workflow installs Python or C++ dependencies, it should cache them with a key based on `hashFiles('**/requirements*.txt')` or `hashFiles('**/CMakeLists.txt')`.
 - **Concurrency**: workflows that run on every push to `main` should set `concurrency:` to cancel in-progress runs when a new commit arrives.

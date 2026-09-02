@@ -28,6 +28,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
+    dataflow_buffer/test_dataflow_buffer_scoped_lock_cache.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
@@ -54,6 +55,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
+    test_cross_node_dfb.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -61,12 +63,14 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_pinned_memory.cpp
     test_blaze_named_args_hashing.cpp
     test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
     test_shape.cpp
+    test_shard_grid_validation.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
     test_tensor_accessor_default_page_size.cpp
@@ -76,6 +80,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
+    test_mx_common.cpp
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp

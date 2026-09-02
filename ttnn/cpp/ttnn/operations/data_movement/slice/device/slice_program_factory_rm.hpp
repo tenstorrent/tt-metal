@@ -6,7 +6,10 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <optional>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
@@ -22,6 +25,13 @@ struct SliceRmProgramFactory {
     // are not re-applied (the cached descriptor already carries them).
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const SliceParams& args,
+        const SliceInputs& tensor_args,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 // Per-dispatch dynamic runtime args for SliceRmProgramFactory: re-emits the reader's aligned source

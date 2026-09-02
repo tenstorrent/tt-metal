@@ -10,7 +10,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <tt_metal_profiler.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -36,7 +36,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -53,6 +53,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "program/program_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
@@ -63,6 +64,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include "tools/profiler/noc_event_profiler_utils.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -426,8 +428,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
         try {
-            detail::CompileProgram(device_sender, program_sender);
-            detail::CompileProgram(device_receiver, program_receiver);
+            program_sender.impl().compile(device_sender);
+            program_receiver.impl().compile(device_receiver);
         } catch (std::exception& e) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
@@ -813,8 +815,8 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        profiler.dumpRoutingInfo();
-        profiler.dumpClusterCoordinates();
+        tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }
@@ -1230,9 +1232,12 @@ void ReadMeshDeviceProfilerResults(
         if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
             noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            // Only print when called by the user (state == normal) to avoid duplicate printing
             if (state != ProfilerReadState::LAST_FD_READ) {
+                // User-initiated read: print the full aggregated summary.
                 noc_debug_state->print_aggregated_errors();
+            } else {
+                // Device close / final read: no full summary.
+                noc_debug_state->report_new_issues();
             }
         }
         return;

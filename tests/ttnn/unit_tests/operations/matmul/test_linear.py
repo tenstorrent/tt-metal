@@ -630,11 +630,17 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     # Run ttnn linear with the same operations
     ttnn_errored = False
     ttnn_error_msg = ""
+    # Add expected error markers, so log analyzing agents don't trigger on TT_FATAL.
+    # Same as the expect_error fixture from conftest.py (not used here, as we don't
+    # always expect an exception).
+    logger.info('[EXPECTED_ERROR BEGIN] RuntimeError message="Unsupported bias shape"')
     try:
         ttnn_result = ttnn.linear(ttnn_a, ttnn_b, bias=ttnn_bias)
     except Exception as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
+    finally:
+        logger.info('[EXPECTED_ERROR END] RuntimeError message="Unsupported bias shape"')
 
     # Compare error behavior
     if torch_errored != ttnn_errored:

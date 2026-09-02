@@ -5,6 +5,7 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
+from helpers.constraints import get_perf_math_operations
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -27,10 +28,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -42,7 +43,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
-    PERF_RUN_TYPE,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     generate_input_dim,
@@ -79,18 +79,28 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if is_perf:
-        return [MathOperation.Elwadd]
     if (
         formats.input_format == DataFormat.MxFp8R
         or formats.input_format == DataFormat.MxFp8P
     ):
-        return [MathOperation.Elwadd, MathOperation.Elwsub]
-    return [MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul]
+        supported_mathops = [MathOperation.Elwadd, MathOperation.Elwsub]
+    else:
+        supported_mathops = [
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+            MathOperation.Elwmul,
+        ]
+    if is_perf:
+        return [
+            mathop
+            for mathop in get_perf_math_operations()
+            if mathop in supported_mathops
+        ]
+    return supported_mathops
 
 
-def reuse_dest_math_fidelities(mathop, *, is_perf=False):
-    if is_perf or mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
+def reuse_dest_math_fidelities(mathop):
+    if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
         return [MathFidelity.LoFi]
     return [
         MathFidelity.LoFi,
@@ -151,7 +161,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
-    math_fidelity=lambda mathop: reuse_dest_math_fidelities(mathop, is_perf=False),
+    math_fidelity=reuse_dest_math_fidelities,
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
@@ -373,19 +383,16 @@ def test_eltwise_binary_reuse_dest_quasar(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "boot_mode": boot_mode,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     # Verify results match golden

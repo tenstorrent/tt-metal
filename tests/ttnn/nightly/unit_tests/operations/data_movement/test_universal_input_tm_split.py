@@ -892,3 +892,40 @@ def test_split_int_remainder(device, shape, split_size, dim):
     tt_out = ttnn.split(tt_in, split_size, dim=dim, memory_config=L1)
     assert len(tt_out) == 2, f"Expected 2 output chunks, got {len(tt_out)}"
     _check(tt_out, ref)
+
+
+# ---- Regression: logical-vs-padded shape in split output (#51214 items 6+7) ----
+
+
+@pytest.mark.parametrize(
+    "shape, split_size",
+    [
+        # Item 7: logical width not tile-aligned → must take slice fallback, not TILE kernel.
+        # Mid-tile slice bounds (50..100) are the first TILE coverage of that path in this file.
+        ([128, 100], 50),
+        # Item 6: padded height must not leak into chunk logical shape. N=2 → two-chunk helper.
+        ([100, 128], 64),
+        # Item 6 via N>2: routes through ttnn::prim::split directly (not the two-chunk helper).
+        ([100, 128], 32),
+        # Same padded/logical class on the batch>1 reshape path inside split_last_dim_two_chunks_tiled.
+        # On main this used padded Y=128 against logical height 100 and volume-mismatched.
+        ([2, 1, 100, 128], 64),
+    ],
+    ids=[
+        "item7_non_aligned_width_slice_fallback",
+        "item6_n2_padded_height",
+        "item6_n4_prim_split",
+        "item6_batch_gt1_reshape",
+    ],
+)
+def test_split_logical_vs_padded_shape(device, shape, split_size):
+    """#51214 items 6+7: chunk logical shapes and values must follow logical_shape, not padding."""
+    torch.manual_seed(42)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=-1)
+
+    tt_in = _from_torch(t, device, mc=DRAM)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=DRAM)
+    # _check asserts chunk count, per-chunk shape, and values. A padded_shape leak shows up as
+    # shape mismatch (e.g. [128,64] vs [100,64]); a wrong TILE-kernel split shows up as value mismatch.
+    _check(tt_out, ref)

@@ -227,18 +227,20 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // Heuristics to pick the kernel algorithm.
-    // Multicast supports all Fabric topologies, unicast only supports effectively-1D topologies.
-    // Where both apply, the winner is empirical and arch-specific -- see the per-arch rules below.
+    // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
     if (args.is_true_2d()) {
-        // Unicast algorithm currently does not support true Fabric 2D topologies
+        // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
+        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
+    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
+        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
+        use_unicast = true;
     } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // NeighborExchange only permits 1-hop unicast
+        // Limitation: NeighborExchange only permits 1-hop unicast
         use_unicast = true;
     } else {
-        // Decide between multicast or unicast algorithm
+        // Heuristics: Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
@@ -353,6 +355,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::array<bool, 2> axis_is_straight{true, true};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
     for (uint32_t axis = 0; axis < 2; ++axis) {
@@ -361,6 +364,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        axis_is_straight[axis] = ::ttnn::ccl::is_axis_straight(*mesh_device, axis);
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -388,6 +392,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             cluster_axis,
             fabric_config,
             axis_topology,
+            axis_is_straight,
             axis_num_devices,
             axis_num_links,
             num_devices,

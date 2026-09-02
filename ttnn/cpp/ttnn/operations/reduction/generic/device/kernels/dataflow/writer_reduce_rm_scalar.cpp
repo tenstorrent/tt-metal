@@ -8,13 +8,15 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 //
 // Dense RM reduce writer (handles both W reduce and H reduce; branched on REDUCE_DIM).
 //
-// Compute packs one or more output tiles per work unit into dfb_id_tile (c_3). The writer extracts
-// the meaningful datums from those tiles and emits them into the corresponding RM output pages.
+// Compute packs one or more output tiles per work unit into dfb::out (the tiled reduce result). The
+// writer extracts the meaningful datums from those tiles and emits them into the corresponding RM
+// output pages.
 //
 // W reduce path (REDUCE_DIM == REDUCE_ROW):
 //   Output: one scalar per reduced logical row, one RM page per scalar (page_id == logical row).
@@ -23,40 +25,42 @@
 //   datum_bytes-sized writes per popped tile, each to its own page.
 //
 // H reduce path (REDUCE_DIM == REDUCE_COL):
-//   Output: (N, C, 1, W) row-major. One page per (n, c) → page_id == nc, page width == W. Compute
-//   produces wt_in_chunk output tiles per (nc, w_chunk) work unit, each tile holding the reduced
-//   row of W datums in tile-row 0 (rows 1..TILE_HEIGHT-1 unused). Writer extracts that row
-//   face-by-face (1–2 wide writes per tile, each up to half_tile_width datums) into the (n, c)
+//   Compute produces wt_in_chunk output tiles per work unit, each tile holding the reduced row of
+//   W datums in tile-row 0 (rows 1..TILE_HEIGHT-1 unused). Under an H-axis split the work units are
+//   (nc, slice, wt) triples over a (N, C, num_h_slices, W) result; num_h_slices == 1 is the plain
+//   (N, C, 1, W) reduce. Two output layouts:
+//
+//   ROW_MAJOR (default): one page per (n, c, slice), page width == W. Writer extracts
+//   tile-row 0 face-by-face (1–2 wide writes per tile, each up to half_tile_width datums) into that
 //   page at offset (w_base_col * datum_bytes), clamping the last W tile to W_logical so we don't
 //   overflow the destination page.
+//
+//   TILE (REDUCE_RM_TILE_OUTPUT): one page per output tile, only reachable with num_h_slices == 1
+//   (validate rejects TILE for the H-axis split). The compute-packed tile is already the whole
+//   destination tile (identity in the padding), so one contiguous page write emits it.
 //
 
 template <ckernel::ReduceDim DIM>
 void reduce_rm_writer() {
     //
-    // Runtime args. Slots shared between paths; semantics differ:
-    //   W reduce: (dst_addr, num_rows, start_page)
-    //   H reduce: (dst_addr, num_output_tiles_local, start_output_tile_id)
+    // Runtime args. Names shared between paths; semantics differ:
+    //   W reduce: rt_count = num_rows,             rt_start = start_page
+    //   H reduce: rt_count = num_output_tiles_local, rt_start = start_output_tile_id
     //
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t rt_count = get_arg_val<uint32_t>(1);
-    const uint32_t rt_start = get_arg_val<uint32_t>(2);
+    const uint32_t rt_count = get_arg(args::rt_count);
+    const uint32_t rt_start = get_arg(args::rt_start);
 
-    //
-    // Compile-time args. Slot 0 (datum_bytes) is shared. The H reduce path adds Wt, W_logical, and
-    // wt_tiles_per_chunk at slots 1-3, so the dst TensorAccessor args start at slot 1 (W) or slot 4 (H).
-    //
-    constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 4>();
+    // Compile-time args. Both paths receive the whole set; each branch reads the names it needs.
+    constexpr auto datum_bytes = get_arg(args::datum_bytes);
 
-    constexpr uint32_t dfb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t tile_size_bytes = get_tile_size(dfb_id_tile);
-    const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
+    const auto dst_accessor = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_tile(dfb_id_tile);
+    // dfb::out carries the tiled reduce result produced by the compute kernel.
+    DataflowBuffer dfb_tile(dfb::out);
+    const uint32_t tile_size_bytes = dfb_tile.get_tile_size();
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
@@ -92,27 +96,24 @@ void reduce_rm_writer() {
         //
         // === H reduce path ===
         //
-        // One page per (n, c), W datums per page. Each output tile contributes one row-stripe of
-        // up to TILE_WIDTH datums (1–2 face-wise wide writes per tile).
+        // ROW_MAJOR extracts tile-row 0 into the (n, c, slice) page; TILE writes the tile whole.
         //
         // Wt, W_logical, and wt_tiles_per_chunk are only consumed here, so they live in this branch.
-        // The indices embed DIM to make them value-dependent: a literal `get_compile_time_arg_val(N)`
-        // is non-dependent and would be eagerly instantiated even in this discarded branch, tripping
-        // the index range check for the W path (which never passes these slots).
-        constexpr uint32_t Wt = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 1 : 0);
-        constexpr uint32_t W_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 2 : 0);
-        constexpr uint32_t wt_tiles_per_chunk =
-            get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 3 : 0);
+        constexpr auto Wt = get_arg(args::Wt);
+        constexpr auto W_logical = get_arg(args::W_logical);
+        constexpr auto wt_tiles_per_chunk = get_arg(args::wt_tiles_per_chunk);
         constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
         const uint32_t num_output_tiles_local = rt_count;
         const uint32_t start_output_tile_id = rt_start;
 
         uint32_t outputs_remaining = num_output_tiles_local;
-        uint32_t current_nc = start_output_tile_id / Wt;
+        // Peeling off the W column leaves the flattened (nc, slice) index == nc * num_h_slices +
+        // slice, matching the reader's decomposition of the same global tile id.
+        uint32_t nc_slice = start_output_tile_id / Wt;
         uint32_t wt_in_nc = start_output_tile_id % Wt;
 
         while (outputs_remaining > 0) {
-            // Pick the largest chunk that stays within one NC and within remaining work.
+            // Pick the largest chunk that stays within one (nc, slice) group and within remaining work.
             uint32_t wt_in_chunk = wt_tiles_per_chunk;
             if (wt_in_chunk > Wt - wt_in_nc) {
                 wt_in_chunk = Wt - wt_in_nc;
@@ -125,6 +126,18 @@ void reduce_rm_writer() {
 
             for (uint32_t wt = 0; wt < wt_in_chunk; ++wt) {
                 const uint32_t w_tile_col = wt_in_nc + wt;
+                const uint32_t src_tile_offset = wt * tile_size_bytes;
+
+#ifdef REDUCE_RM_TILE_OUTPUT
+                // num_h_slices == 1 here (validate enforces it), so nc_slice is nc and the packed
+                // tile is already the destination tile. See the header.
+                noc.async_write(
+                    dfb_tile,
+                    dst_accessor,
+                    tile_size_bytes,
+                    {.offset_bytes = src_tile_offset},
+                    {.page_id = nc_slice * Wt + w_tile_col, .offset_bytes = 0});
+#else
                 const uint32_t w_base_col = w_tile_col * tt::constants::TILE_WIDTH;
                 // Clamp the last W tile to W_logical so we don't write into padding.
                 uint32_t valid_cols = tt::constants::TILE_WIDTH;
@@ -143,9 +156,10 @@ void reduce_rm_writer() {
                         dfb_tile,
                         dst_accessor,
                         face_valid * datum_bytes,
-                        {.offset_bytes = wt * tile_size_bytes + src_idx_in_tile * datum_bytes},
-                        {.page_id = current_nc, .offset_bytes = (w_base_col + face_col) * datum_bytes});
+                        {.offset_bytes = src_tile_offset + src_idx_in_tile * datum_bytes},
+                        {.page_id = nc_slice, .offset_bytes = (w_base_col + face_col) * datum_bytes});
                 }
+#endif
             }
 
             noc.async_write_barrier();
@@ -155,7 +169,7 @@ void reduce_rm_writer() {
             outputs_remaining -= wt_in_chunk;
             if (wt_in_nc == Wt) {
                 wt_in_nc = 0;
-                ++current_nc;
+                ++nc_slice;
             }
         }
     }

@@ -44,7 +44,9 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& attention_sink,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
+    const std::optional<ttnn::Tensor>& cu_window_seqlens,
+    uint32_t windowed_q_token_offset,
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -92,7 +94,9 @@ ttnn::Tensor scaled_dot_product_attention(
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val,
-        cu_window_seqlens);
+        cu_window_seqlens,
+        windowed_q_token_offset,
+        windowed_q_token_offset_tensor);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -131,6 +135,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset (windowed mode only)
+        std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
 
@@ -170,6 +176,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset (windowed mode only)
+        std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
 }
 
@@ -291,7 +299,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

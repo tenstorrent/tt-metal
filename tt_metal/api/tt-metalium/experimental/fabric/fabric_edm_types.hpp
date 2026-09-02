@@ -90,4 +90,20 @@ struct EDMChannelWorkerLocationInfo {
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
+// Producer-owned cursor state for one sender channel, persisted in the *receiver's* L1
+// (router or mux) across connection open/close. The receiver only zeroes this at
+// bring-up; it never reads or writes it afterwards. The handoff is producer ->
+// producer, with the receiver's L1 acting only as the letterbox.
+//
+// write_index is persisted rather than re-derived as `write_counter % num_buffers`,
+// because that derivation is only correct when num_buffers divides 2^32.
+struct SenderChannelProducerCursor {
+    uint32_t write_counter{};
+    uint32_t write_index{};
+    uint32_t align_pad_0{};
+    uint32_t align_pad_1{};
+};
+
+static_assert(sizeof(SenderChannelProducerCursor) == 16);
+
 }  // namespace tt::tt_fabric
