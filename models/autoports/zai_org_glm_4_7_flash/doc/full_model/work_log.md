@@ -1087,7 +1087,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `7037afbba94` | the FM-016 evidence sweep and the report rebuilt from it |
 | `ae92cd90c78` | records the SHA above |
 | `ca0b1330d38` | round-5 source fixes (FM-017): the terminal warmup actually called, the recapture warmed inactive, the supported-context boundary, `user_ids=`, the page-table ownership guard, inactive slots after `reset()`, SLOW-row accounting, the committed evidence-sweep script |
-| `FULLMODEL_R5_EVIDENCE_SHA` | the FM-017 evidence sweep and the report rebuilt from it |
+| `8b5f776276c` | the FM-017 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
