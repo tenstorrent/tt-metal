@@ -7,6 +7,8 @@ print_usage() {
     echo "  --image <image>           (Optional) Docker image to use"
     echo "  --empty-entrypoint        (Optional) Pass --entrypoint=\"\" to docker run"
     echo "  --volume <path>           (Optional) Extra host path to mount into the container (repeatable)"
+    echo "  --docker-arg <arg>        (Optional) Extra argument passed verbatim to 'docker run' (repeatable)"
+    echo "                            e.g. --docker-arg --cap-add=SYS_PTRACE --docker-arg --shm-size=2g"
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
     echo "                            Interface names vary by site; override on non-Markham clusters."
@@ -47,6 +49,8 @@ default() {
     local image="ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
     local empty_entrypoint=false
     local extra_volumes=""
+    # Extra 'docker run' args (repeatable --docker-arg); %q-quoted to survive the eval below.
+    local docker_extra_args=""
     local print_flag=false
     local print_only=false
     # Host-tag each rank's output (replaces mpirun's [jobid,rank] --tag-output).
@@ -90,6 +94,26 @@ default() {
                     exit 1
                 fi
                 extra_volumes="$extra_volumes -v ${vol}:${vol}"
+                shift
+                ;;
+            --docker-arg)
+                # A docker arg may start with '-' (e.g. --cap-add), so don't reject dash-prefixed values.
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    echo "Error: --docker-arg requires a non-empty value"
+                    print_usage
+                    exit 1
+                fi
+                docker_extra_args="$docker_extra_args $(printf '%q' "$2")"
+                shift 2
+                ;;
+            --docker-arg=*)
+                local da="${1#--docker-arg=}"
+                if [[ -z "$da" ]]; then
+                    echo "Error: --docker-arg requires a non-empty value"
+                    print_usage
+                    exit 1
+                fi
+                docker_extra_args="$docker_extra_args $(printf '%q' "$da")"
                 shift
                 ;;
             --mpi-interface)
@@ -298,7 +322,7 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
         if [[ "$tag_host" == true ]]; then
@@ -375,7 +399,7 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
             if [[ "$tag_host" == true ]]; then
