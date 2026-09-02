@@ -213,15 +213,16 @@ python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov
 Both reports carry one overall session ID, so they can be paired without relying on directory timestamps:
 
 - The memory report stores it in the `session_id` column of each `graph_captures` row in `db.sqlite`.
-- The performance report stores it as `SESSION_ID` in the first line of `profile_log_device.csv`.
+- TTNN emits one `TTNN_SESSION_ID: <id>` metadata message into the `.tracy` capture.
+- Tracy report postprocessing copies that ID into the first line of `profile_log_device.csv` as `SESSION_ID: <id>`.
 
-The ID is generated once per process. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
+This uses Tracy's existing message API and postprocessing, so Metal does not manage the ID. The ID is generated once per process. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
 
 ```bash
 export TTNN_RUN_SESSION_ID=$(uuidgen)
 ```
 
-After selecting the performance report whose `profile_log_device.csv` `SESSION_ID` matches the memory report's `session_id`, use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
+Match `SESSION_ID` in `profile_log_device.csv` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
 
 | Column | Meaning |
 | --- | --- |
@@ -246,7 +247,7 @@ AND ((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) < device_operation_id_end
 
 Comparing `GLOBAL CALL COUNT` directly against the range matches nothing: on a 2-chip run the smallest encoded value is already `1 << 10`. Each dispatched operation contributes one row per device, so a capture of N operations on a D-device mesh selects N×D rows.
 
-Upload the two directories as usual. The session ID identifies the matching report; each range then indexes into that report. The session ID is intentionally not repeated on every row of `ops_perf_results*.csv`.
+Upload the two directories as usual. The session ID in `profile_log_device.csv` identifies the matching performance report; each range then indexes into `ops_perf_results*.csv`. The session ID is intentionally absent from `ops_perf_results*.csv`.
 
 A process that captures more than once (several pytest cases, successive model iterations, or repeated manual captures) produces one row per capture, each with its own range, so a capture is paired with its own interval rather than with everything the process did.
 

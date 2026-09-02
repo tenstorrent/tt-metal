@@ -63,7 +63,6 @@ set(UNIT_TESTS_API_SOURCES
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp
     test_noc.cpp
-    test_session_id.cpp
     test_blaze_named_args_hashing.cpp
     test_blaze_named_runtime_args.cpp
     test_runtime_args.cpp

@@ -7,7 +7,10 @@ import sys
 import signal
 import os
 import io
+import csv
+import shutil
 import subprocess
+import tempfile
 import time
 import socket
 
@@ -19,6 +22,7 @@ from .common import (
     PROFILER_BIN_DIR,
     PROFILER_LOGS_DIR,
     PROFILER_ARTIFACTS_DIR,
+    PROFILER_DEVICE_SIDE_LOG,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_WASM_DIR,
     PROFILER_WASM_TRACE_FILE_NAME,
@@ -36,6 +40,60 @@ from .common import (
 import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
+TTNN_SESSION_ID_MESSAGE_PREFIX = "TTNN_SESSION_ID:"
+
+
+def extract_ttnn_session_ids(messages_file):
+    """Return the non-empty TTNN session IDs in a Tracy message export."""
+    session_ids = set()
+    with open(messages_file, newline="") as csv_file:
+        for row in csv.reader(csv_file, delimiter=";"):
+            if not row:
+                continue
+            message = row[0].strip()
+            if message.startswith(TTNN_SESSION_ID_MESSAGE_PREFIX):
+                session_id = message.removeprefix(TTNN_SESSION_ID_MESSAGE_PREFIX).strip()
+                if session_id:
+                    session_ids.add(session_id)
+    return session_ids
+
+
+def annotate_profile_log_session_id(profile_log, session_id):
+    """Append SESSION_ID to the device-log preamble without changing its CSV rows."""
+    profile_log = os.fspath(profile_log)
+    with open(profile_log, "r", newline="") as source:
+        preamble = source.readline()
+        if "SESSION_ID:" in preamble:
+            return
+
+        with tempfile.NamedTemporaryFile(
+            "w", newline="", dir=os.path.dirname(profile_log) or ".", delete=False
+        ) as destination:
+            temporary_path = destination.name
+            destination.write(f"{preamble.rstrip()}, SESSION_ID: {session_id}\n")
+            shutil.copyfileobj(source, destination)
+
+    os.chmod(temporary_path, os.stat(profile_log).st_mode)
+    os.replace(temporary_path, profile_log)
+
+
+def annotate_profile_log_from_tracy_messages(messages_file, profile_log):
+    """Stamp a device log when its Tracy export has exactly one TTNN session ID."""
+    session_ids = extract_ttnn_session_ids(messages_file)
+    if not session_ids:
+        logger.warning("No TTNN_SESSION_ID metadata found; device profile log will not be annotated")
+        return None
+    if len(session_ids) != 1:
+        logger.warning(
+            "Found multiple TTNN session IDs in one Tracy capture ({}); device profile log will not be annotated",
+            ", ".join(sorted(session_ids)),
+        )
+        return None
+
+    session_id = next(iter(session_ids))
+    annotate_profile_log_session_id(profile_log, session_id)
+    logger.info(f"Added SESSION_ID: {session_id} to {profile_log}")
+    return session_id
 
 
 def signpost(header, message=None):
@@ -171,6 +229,10 @@ def generate_report(
         )
 
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
+
+    profile_log = logsFolder / PROFILER_DEVICE_SIDE_LOG
+    if profile_log.is_file():
+        annotate_profile_log_from_tracy_messages(logsFolder / TRACY_OPS_DATA_FILE_NAME, profile_log)
 
     process_ops(
         outputFolder,

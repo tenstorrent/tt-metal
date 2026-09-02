@@ -82,11 +82,13 @@ COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 # process, which identifies that process only.
 CAPTURE_CORRELATION_SIDECAR_SUFFIX = ".capture_correlation.json"
 RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
+SESSION_ID_TRACY_MESSAGE_PREFIX = "TTNN_SESSION_ID"
 
 _capture_index: int = 0
 # Session id generated for this process, created on first use when the environment does
 # not supply one.  Cached so every capture in the process reports the same id.
 _generated_session_id: Union[str, None] = None
+_session_id_tracy_message_emitted: bool = False
 # Correlation record for the reporting capture currently open, else None.  Only
 # outermost user-initiated captures get one: the per-operation sessions started by
 # the operation decorator (_internal=True) and captures started from C++ produce no
@@ -106,10 +108,21 @@ def _run_session_id() -> str:
         return from_env
     if _generated_session_id is None:
         _generated_session_id = uuid.uuid4().hex
-        # The device profiler reads the same environment variable when it writes
-        # profile_log_device.csv, giving both reports one shared session identifier.
+        # Publish it for Python-side reporting launched later from this process.
         os.environ[RUN_SESSION_ID_ENV] = _generated_session_id
     return _generated_session_id
+
+
+def _emit_session_id_to_tracy(session_id: str) -> None:
+    """Write the process session ID into the Tracy capture exactly once."""
+    global _session_id_tracy_message_emitted
+    if _session_id_tracy_message_emitted:
+        return
+
+    import ttnn
+
+    ttnn.tracy_message(f"{SESSION_ID_TRACY_MESSAGE_PREFIX}: {session_id}")
+    _session_id_tracy_message_emitted = True
 
 
 def _begin_capture_correlation() -> None:
@@ -117,9 +130,11 @@ def _begin_capture_correlation() -> None:
     global _capture_index, _capture_correlation
     import ttnn
 
+    session_id = _run_session_id()
+    _emit_session_id_to_tracy(session_id)
     _capture_correlation = {
         "capture_index": _capture_index,
-        "session_id": _run_session_id(),
+        "session_id": session_id,
         "device_operation_id_begin": int(ttnn._ttnn.get_device_operation_id()),
         "start_timestamp_ns": time.time_ns(),
     }

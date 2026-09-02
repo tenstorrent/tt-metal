@@ -3,7 +3,6 @@ set(COMMON_SOURCES
     core_coord.cpp
     filesystem_utils.cpp
     mesh_coord.cpp
-    session_id.cpp
     shape.cpp
     shape2d.cpp
     shape_base.cpp

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tracy import process_ops_logs
+from tracy import annotate_profile_log_from_tracy_messages, extract_ttnn_session_ids, process_ops_logs
 from tracy.process_device_log import extract_device_info
 
 
@@ -204,8 +204,7 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         assert "SESSION ID" not in reader.fieldnames
 
 
-# The profiler appends "SESSION_ID: <id>" to the device log preamble so a performance report can be
-# paired with the memory report from the same run. Readers of the preamble must ignore it.
+# Keep readers compatible with device logs from builds that appended a SESSION_ID field.
 _SESSION_ID = "0123456789abcdef0123456789abcdef"
 
 
@@ -245,3 +244,50 @@ def test_build_sub_device_id_lookup_skips_preamble_with_session_id(tmp_path):
     lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_log)
 
     assert lookup[(0, 42, 0, 1)] == 3
+
+
+def test_extract_ttnn_session_ids_from_tracy_message_export(tmp_path):
+    messages = tmp_path / "tracy_ops_data.csv"
+    messages.write_text(
+        "unrelated message;100\n"
+        "TTNN_SESSION_ID: abc123;101\n"
+        "TTNN_SESSION_ID: abc123;102\n"
+    )
+
+    assert extract_ttnn_session_ids(messages) == {"abc123"}
+
+
+def test_annotate_profile_log_from_unique_tracy_session_id(tmp_path):
+    messages = tmp_path / "tracy_ops_data.csv"
+    messages.write_text("TTNN_SESSION_ID: abc123;101\n")
+    profile_log = tmp_path / "profile_log_device.csv"
+    profile_log.write_text(
+        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64\n"
+        "PCIe slot,core_x\n"
+        "0,1\n"
+    )
+
+    assert annotate_profile_log_from_tracy_messages(messages, profile_log) == "abc123"
+    assert profile_log.read_text() == (
+        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: abc123\n"
+        "PCIe slot,core_x\n"
+        "0,1\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        "unrelated message;100\n",
+        "TTNN_SESSION_ID: first;101\nTTNN_SESSION_ID: second;102\n",
+    ],
+)
+def test_profile_log_is_not_annotated_without_one_unique_session_id(tmp_path, messages):
+    messages_file = tmp_path / "tracy_ops_data.csv"
+    messages_file.write_text(messages)
+    profile_log = tmp_path / "profile_log_device.csv"
+    original = "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64\n"
+    profile_log.write_text(original)
+
+    assert annotate_profile_log_from_tracy_messages(messages_file, profile_log) is None
+    assert profile_log.read_text() == original
