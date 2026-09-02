@@ -86,7 +86,6 @@ class _MoEPerfCase:
 
 # K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-<<<<<<< HEAD
 # Re-centred 2026-09-03: device time came in at 5,413,674 ns, 9.9% below the old band's lower edge
 # (previous midpoint 6,260,834). Per the repo's rule that is fixed by lowering the midpoint, never by
 # widening the margin. ONE sample, from the failing gate run itself.
@@ -106,20 +105,6 @@ _K2_7 = _MoEPerfCase(
     config=KimiK27Config,
     expected_ns=5_413_674,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
-=======
-# Re-centred 2026-09-01: the routed experts now take the fused-only dispatch K2.6's config ships, so
-# the 6,574,780 midpoint measures a schedule this model no longer runs. Per the repo's rule that is
-# fixed by lowering the midpoint, never by widening the margin.
-#
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33529630383: 5,526,814 ns
-# over 24 programs -- the same count the superseded midpoint reported, so the 16% is the same work
-# done faster rather than a short trace. ONE sample, as with the midpoint it replaces.
-_K2_6 = _MoEPerfCase(
-    label="kimi-k2.6",
-    config=KimiK26Config,
-    expected_ns=5_526_814,
-    # 4%, not 3%: K2.6 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
->>>>>>> 72cd4197139 (tests: re-centre the K2.6 MoE gate on the fused-only dispatch)
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
     # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.

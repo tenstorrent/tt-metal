@@ -362,7 +362,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         activation_slice,
         l1_max - geo::L1_CB_RESERVE,
         output_tile,
-        /*enable_phase_alias=*/true,
+        /*enable_phase_alias_=*/true,
         activations_are_row_major);
 
     const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
@@ -385,7 +385,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         blocking.describe());
 
     for (const auto& allocation : blocking.cb_allocations(
-             activations_are_row_major, output_tile, idx_page, counts_page, /*enable_phase_alias=*/true)) {
+             activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
         CBDescriptor cb_descriptor{
             .total_size = allocation.total_size,
             .core_ranges = all_cores,
