@@ -104,7 +104,12 @@ struct AllGatherMinimalMatmulAsyncParams {
         "config",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
-        "using_persistent_weight_buffer");
+        "using_persistent_weight_buffer",
+        // chunks/dim set how many output tensors the program reserves runtime args for; a
+        // program cached under one (chunks, dim) must not be replayed for another, or
+        // override_runtime_arguments writes past the reserved common-arg block.
+        "chunks",
+        "dim");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -119,7 +124,9 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->config,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
-            this->using_persistent_weight_buffer);
+            this->using_persistent_weight_buffer,
+            this->chunks,
+            this->dim);
     }
 };
 
