@@ -785,8 +785,9 @@ def _load_reference_module(model_id: str, demo_dir=None):
 
         # The gate's verdict is consulted here, not just recorded. Until this existed the only
         # question asked was whether the loader FILE was present, so a reference the gate had
-        # already condemned -- self-contradictory, or disagreeing with the constants its own
-        # checkpoint declares -- was loaded and used to enumerate the module tree regardless, and
+        # already condemned -- self-contradictory, disagreeing with the constants its own
+        # checkpoint declares, or holding none of the weights that checkpoint ships -- was loaded
+        # and used to enumerate the module tree regardless, and
         # every PCC measured against it inherited the fault. Behaviour change, stated plainly: a
         # model whose loader is demonstrably wrong now stops here instead of proceeding quietly.
         # Only positive evidence refuses it; a check that could not run never blocks.

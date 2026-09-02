@@ -21,6 +21,7 @@ from scripts.tt_hw_planner.reference_loader_resolver import (
     _resolved,
     _validates,
     _NATIVE_CONFIG_FILE,
+    assess,
     check_invariants,
     config_fidelity,
     loader_path,
@@ -177,20 +178,23 @@ def test_runtime_gate_accepts_a_loader_that_returns_a_real_module(tmp_path: Path
 # --- provenance: break the model on purpose ---------------------------------------------------
 
 
-def _checkpoint(tmp_path: Path, tensors: dict) -> str:
+def _checkpoint(tmp_path: Path, *shards: dict) -> str:
+    """Write one safetensors file per shard; a lone dict is the single-file case."""
     from safetensors.torch import save_file
 
     d = tmp_path / "ckpt"
     d.mkdir(parents=True, exist_ok=True)
-    save_file(tensors, str(d / "model.safetensors"))
+    for i, tensors in enumerate(shards):
+        save_file(tensors, str(d / f"model-{i:05d}.safetensors"))
     return str(d)
 
 
-def _module_with(weight) -> "torch.nn.Module":
+def _module_with(*weights) -> "torch.nn.Module":
     import torch
 
     m = torch.nn.Module()
-    m.w = torch.nn.Parameter(weight, requires_grad=False)
+    for i, w in enumerate(weights):
+        setattr(m, f"w{i}", torch.nn.Parameter(w, requires_grad=False))
     return m
 
 
@@ -236,6 +240,59 @@ def test_unreachable_checkpoint_is_unverified_not_a_failure(tmp_path: Path) -> N
     import torch
 
     out = weight_provenance(str(tmp_path / "nothing-here"), _module_with(torch.randn(4096)))
+    assert out["status"] == "unverified", out
+
+
+@requires_torch
+def test_a_loader_that_rewrites_one_shard_is_not_convicted_by_it(tmp_path: Path) -> None:
+    """Why the sample spans shards: which file a tensor lands in is an artefact of the writer.
+
+    This loader transformed everything in the largest shard and loaded the rest verbatim, which is
+    what a real conversion does. Sampling only the largest shard would read zero matches and -- now
+    that the verdict blocks -- refuse a correct loader.
+    """
+    import torch
+
+    kept = torch.randn(4096)
+    ckpt = _checkpoint(tmp_path, {"a": torch.randn(8192)}, {"b": kept})
+    out = weight_provenance(ckpt, _module_with(torch.randn(8192) * 3.0, kept.clone()))
+    assert out["status"] == "from_checkpoint", out
+
+
+@requires_torch
+def test_a_reference_that_loaded_nothing_matches_nothing_in_any_shard(tmp_path: Path) -> None:
+    import torch
+
+    ckpt = _checkpoint(tmp_path, {"a": torch.randn(8192)}, {"b": torch.randn(4096)})
+    out = weight_provenance(ckpt, _module_with(torch.randn(8192) * 0.02, torch.randn(4096) * 0.02))
+    assert out["status"] == "no_match", out
+    assert "2 checkpoint file(s)" in out["reason"], out
+
+
+@requires_torch
+def test_weights_that_never_loaded_now_stop_the_run_rather_than_warn(tmp_path: Path) -> None:
+    """The reason this blocks: the TT port is built FROM this module (`_build_ttnn_port`).
+
+    So a randomly-initialised reference hands its random weights to the TT side too, both agree
+    perfectly, and every component passes having compared noise to the same noise. The failure is
+    not red, it is green -- which is exactly why warning about it was not enough.
+    """
+    import torch
+
+    ckpt = _checkpoint(tmp_path, {"a": torch.randn(8192)}, {"b": torch.randn(4096)})
+    verdict = assess(_module_with(torch.randn(8192) * 0.02, torch.randn(4096) * 0.02), ckpt)
+    assert verdict["ok"] is False, verdict
+    assert "randomly initialised" in verdict["reason"], verdict
+
+
+@requires_torch
+def test_a_checkpoint_that_stops_being_readable_is_not_blamed_on_the_loader(tmp_path: Path) -> None:
+    """A read that dies partway cannot claim "nothing matched" -- the matches may be in the rest."""
+    import torch
+
+    ckpt = _checkpoint(tmp_path, {"a": torch.randn(8192)}, {"b": torch.randn(4096)})
+    (Path(ckpt) / "model-00001.safetensors").write_bytes(b"truncated, not a safetensors file")
+    out = weight_provenance(ckpt, _module_with(torch.randn(8192) * 0.02, torch.randn(4096) * 0.02))
     assert out["status"] == "unverified", out
 
 

@@ -14,8 +14,8 @@ gate) picks it up automatically.
 What validation here does and does NOT mean, in three layers:
   1. STRUCTURAL — it parses and really defines `load_reference_model(model_id)` (`_validates`).
   2. RUNTIME — it is executed, and must hand back an `nn.Module` that has parameters (`verify`).
-  3. PROVENANCE — its parameters are sampled against the shipped checkpoint, which catches a
-     reference built from config with weights never loaded (`weight_provenance`, advisory).
+  3. PROVENANCE — its parameters are sampled against every shard of the shipped checkpoint, which
+     catches a reference built from config with weights never loaded (`weight_provenance`).
   4. Self-consistency, which catches a reference that loads the right weights but wires them up
      wrongly -- the one failure with no golden to be caught by (`check_invariants`).
 
@@ -59,7 +59,9 @@ _CONSTANT_REL_TOL = 1e-9
 _NATIVE_CONFIG_FILE = "params.json"
 # Positive evidence of a bug, as opposed to a check that could not run or a value that merely did
 # not turn up. Only these refuse a loader; everything else is reported and stays out of the way.
-_FATAL_STATUSES = ("violated", "diverges")
+# `no_match` earns its place here only because the sample now spans every shard: on a one-file
+# sample it could not tell "loaded nothing" from "rewrote the file we happened to read".
+_FATAL_STATUSES = ("violated", "diverges", "no_match")
 # Long enough that a causal model has a past to respect, short enough to stay cheap on CPU.
 _PROBE_SEQ = 8
 # The invariants are exact statements, so this is float noise from reordered reductions only.
@@ -67,8 +69,8 @@ _INVARIANT_ATOL = 1e-4
 
 # Weight-provenance sampling. Small tensors (norms, biases) are skipped because their moments
 # collide easily -- a vector of ones matches a vector of ones whatever checkpoint it came from.
-# Sampling a handful of tensors is enough: a real load matches nearly all of them, random init
-# essentially none, so the verdict does not get sharper by reading more of a multi-GB shard.
+# The sample is a floor, not a ceiling: it is spread over every shard (see `_shipped_fingerprints`),
+# so a many-shard model is read more widely than a single-file one rather than less.
 _FINGERPRINT_MIN_NUMEL = 4096
 _PROVENANCE_SAMPLE = 12
 _MOMENT_TOL = 1e-4
@@ -307,14 +309,16 @@ def assess(ref, model_id: str) -> dict:
     """
     invariants = check_invariants(ref)
     constants = config_fidelity(model_id, ref)
+    provenance = weight_provenance(model_id, ref)
     detail = {
         "invariants": invariants,
         "constants": constants,
-        "provenance": weight_provenance(model_id, ref),
+        "provenance": provenance,
     }
-    # `absent` stays out of this: it is a value that did not turn up, which has innocent
-    # explanations, whereas these two are the reference contradicting itself or its own checkpoint.
-    for verdict in (invariants, constants):
+    # `absent` and `unverified` stay out of this: one is a value that did not turn up and the other
+    # a check that could not run, both of which have innocent explanations, whereas these are the
+    # reference contradicting itself, its own checkpoint, or the weights it claims to have loaded.
+    for verdict in (invariants, constants, provenance):
         if verdict.get("status") in _FATAL_STATUSES:
             return {"ok": False, "status": "broken", "reason": verdict["reason"], **detail}
     return {
@@ -530,7 +534,7 @@ def _probe_input(ref) -> Optional[dict]:
 
 
 def check_invariants(ref) -> dict:
-    """Advisory: does this reference obey properties every correct implementation must obey?
+    """Does this reference obey the properties every correct implementation must obey?
 
     Provenance answers "are these the shipped weights"; it cannot answer "are they wired up
     right". A transposed projection or a wrong RoPE base loads real weights, returns real-looking
@@ -662,24 +666,50 @@ def _fingerprint(t) -> Optional[Tuple[int, float, float]]:
         return None
 
 
+def _shipped_fingerprints(files: List[Path], per_file: int):
+    """Fingerprints from EVERY shard, rather than however many fit in whichever shard is largest.
+
+    Which shard a tensor lands in is an artefact of how the checkpoint was written, so a sample
+    drawn from one file says nothing about the rest of the model. That was tolerable while this
+    only warned; a verdict that refuses a loader has to be a statement about the model. A correct
+    loader is allowed to rewrite whatever happens to live in one file -- reading only that file
+    would convict it -- so every shard contributes and "nothing matched" means nothing anywhere.
+    """
+    from safetensors import safe_open
+
+    for path in files:
+        with safe_open(str(path), framework="pt") as f:
+            taken = 0
+            for key in f.keys():
+                if taken >= per_file:
+                    break
+                fp = _fingerprint(f.get_tensor(key))
+                if fp:
+                    taken += 1
+                    yield fp
+
+
 def weight_provenance(model_id: str, ref) -> dict:
-    """Advisory: do this module's parameters actually come from the shipped checkpoint?
+    """Do this module's parameters actually come from the shipped checkpoint?
 
     This is the closest thing to numerical proof available without a golden output to compare
     against. It cannot confirm the maths is right, but it does catch the failure that is otherwise
     invisible -- a loader that builds the architecture from config and never loads the weights, so
-    PCC is measured against a randomly-initialised "reference" and means nothing.
+    PCC is measured against a randomly-initialised "reference" and means nothing. That failure is
+    also silent AND green: the TT port is built from this very module, so both sides end up holding
+    the same random weights, agree perfectly, and every component passes having proved nothing.
 
     Matching is on (numel, mean, std) because a real load copies most tensors through unchanged,
     while random init reproduces neither the moments nor the per-tensor spread of trained weights.
-    Advisory only: a loader that legitimately transforms weights (dequantising, merging LoRA) can
-    score low while being correct, so this reports and never blocks.
+    A loader that legitimately transforms weights (dequantising, merging LoRA) still matches the
+    tensors it leaves alone, which is why `no_match` means zero across the whole checkpoint rather
+    than a low score -- and why a read that could not finish reports `unverified` instead.
     """
     files = _checkpoint_files(model_id)
     if not files:
         return {"status": "unverified", "reason": "no local safetensors checkpoint to compare against"}
     try:
-        from safetensors import safe_open
+        import safetensors  # noqa: F401 -- availability probe; each shard is opened as it is read
     except Exception as exc:  # noqa: BLE001 -- absence of the reader is an environment fact
         return {"status": "unverified", "reason": f"safetensors unavailable: {exc}"}
 
@@ -692,30 +722,33 @@ def weight_provenance(model_id: str, ref) -> dict:
         return {"status": "unverified", "reason": "no parameters large enough to fingerprint"}
 
     checked = matched = 0
+    # A ceiling per shard, so the total grows with the shard count instead of being spent on the
+    # first file. `max` keeps the floor for a single-file checkpoint, where per_file IS the sample.
+    per_file = math.ceil(max(_PROVENANCE_SAMPLE, len(files)) / len(files))
+    partial = None
     try:
-        with safe_open(str(files[0]), framework="pt") as f:
-            for key in list(f.keys()):
-                if checked >= _PROVENANCE_SAMPLE:
-                    break
-                fp = _fingerprint(f.get_tensor(key))
-                if not fp:
-                    continue
-                checked += 1
-                matched += any(
-                    abs(fp[1] - c[1]) <= _MOMENT_TOL and abs(fp[2] - c[2]) <= _MOMENT_TOL for c in have.get(fp[0], ())
-                )
+        for fp in _shipped_fingerprints(files, per_file):
+            checked += 1
+            matched += any(
+                abs(fp[1] - c[1]) <= _MOMENT_TOL and abs(fp[2] - c[2]) <= _MOMENT_TOL for c in have.get(fp[0], ())
+            )
     except Exception as exc:  # noqa: BLE001 -- unreadable shard is not the loader's fault
-        return {"status": "unverified", "reason": f"could not read checkpoint: {exc}"}
+        partial = exc
 
     if not checked:
         return {"status": "unverified", "reason": "no comparable tensors in checkpoint"}
     if matched:
         return {"status": "from_checkpoint", "reason": f"{matched}/{checked} sampled tensors match the checkpoint"}
+    if partial is not None:
+        # Refusing on a read that stopped early would blame the loader for the environment: the
+        # shards left unread are exactly where the matches would have been.
+        return {"status": "unverified", "reason": f"could not read checkpoint: {partial}"}
     return {
         "status": "no_match",
         "reason": (
-            f"0/{checked} sampled tensors match the shipped checkpoint -- the reference may be "
-            f"randomly initialised, which would make any PCC against it meaningless"
+            f"0/{checked} sampled tensors across {len(files)} checkpoint file(s) match the shipped "
+            f"weights -- the reference is randomly initialised, which would make any PCC against "
+            f"it meaningless"
         ),
     }
 
