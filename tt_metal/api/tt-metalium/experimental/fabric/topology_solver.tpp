@@ -3247,9 +3247,38 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
 
         const size_t target_idx = selection.target_idx;
 
+        // Hard host-group cap (max_same_rank_groups_used): the enumeration must occupy at most k distinct
+        // same-rank global groups (host partitions), the same in-search constraint dfs_recursive applies for the
+        // single solve and the SAT backend applies via its at-most-k clause. Enforcing it here (not only as a
+        // post-hoc filter in the caller) keeps all three engines' enumeration in lockstep and makes the caller's
+        // post-hoc cap check redundant. Built once per node from the current partial mapping; empty when inactive.
+        const size_t host_group_cap = constraint_data.max_same_rank_groups_used;
+        const auto& global_to_host = constraint_data.global_to_same_rank_group;
+        const bool host_cap_active = host_group_cap > 0 && !global_to_host.empty();
+        std::set<int> occupied_host_groups;
+        if (host_cap_active) {
+            for (int g : state_.mapping) {
+                if (g >= 0 && static_cast<size_t>(g) < global_to_host.size()) {
+                    const int grp = global_to_host[static_cast<size_t>(g)];
+                    if (grp >= 0) {
+                        occupied_host_groups.insert(grp);
+                    }
+                }
+            }
+        }
+
         for (size_t global_idx : selection.candidates) {
             if (all_mappings_out.size() >= max_solutions) {
                 return;
+            }
+
+            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
+            if (host_cap_active && global_idx < global_to_host.size()) {
+                const int grp = global_to_host[global_idx];
+                if (grp >= 0 && !occupied_host_groups.contains(grp) &&
+                    occupied_host_groups.size() >= host_group_cap) {
+                    continue;  // would exceed at-most-k occupied host groups
+                }
             }
 
             if (!ConsistencyChecker::check_local_consistency(
