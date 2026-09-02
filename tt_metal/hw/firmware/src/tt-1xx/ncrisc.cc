@@ -64,6 +64,7 @@ uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __a
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+bool zoneValid __attribute__((used)) = true;  // SPSC publish gate; see kernel_profiler.hpp
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
@@ -130,6 +131,7 @@ int main(int argc, char* argv[]) {
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+        DeviceZoneSetCounter(launch_msg->kernel_config.host_assigned_id);
 
         uint32_t kernel_config_base =
             firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());

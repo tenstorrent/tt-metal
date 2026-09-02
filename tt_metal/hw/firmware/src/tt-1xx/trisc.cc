@@ -28,6 +28,7 @@
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+bool zoneValid __attribute__((used)) = true;  // SPSC publish gate; see kernel_profiler.hpp
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
@@ -151,6 +152,7 @@ int main(int argc, char* argv[]) {
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+        DeviceZoneSetCounter(launch_msg->kernel_config.host_assigned_id);
 
         uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 

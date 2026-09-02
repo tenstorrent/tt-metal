@@ -5,8 +5,8 @@
 // Real-time profiler BRISC kernel (fast path)
 // Reads timestamp data from dispatch_s A/B buffers and writes it into an L1
 // ring buffer. The companion NCRISC kernel drains the ring buffer to the host
-// via PCIe. This split decouples the NOC read from the PCIe push, allowing
-// dispatch_s to proceed without waiting.
+// via PCIe. This split decouples the fast NOC read (~0.3 µs) from the slow
+// PCIe push (~50-80 µs), allowing dispatch_s to proceed without waiting.
 
 #include <cstdint>
 #include "risc_common.h"
