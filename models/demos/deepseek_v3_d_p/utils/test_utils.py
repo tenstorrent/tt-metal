@@ -92,17 +92,21 @@ def print_l1_small_buffers(device, name):
     print_buffers(device, name, ttnn.BufferType.L1_SMALL)
 
 
-def adjust_shapes_for_testing(config, mesh_device):
-    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
+def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
+    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
+
+    `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
+    a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
+    it is the default, and it is a no-op for every model whose per-device width already is (only
+    GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
+    where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
+    """
     _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
-    # The gate input/weight are width-sharded across the TP axis, so the per-device width
-    # (config.dim / n_tp_devices) must be tile-aligned (a multiple of 32). Round the model dim up to
-    # a multiple of 32 * n_tp_devices when it does not divide evenly (e.g. GPT-OSS 2880 -> 720/device,
-    # which is 22.5 tiles). This is a no-op for models whose per-device width is already tile-aligned.
-    tile_multiple = 32 * n_tp_devices
-    config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
+    if tile_align_width:
+        tile_multiple = 32 * n_tp_devices
+        config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
 
 
 def get_input_mem_config(config, mesh_shape):

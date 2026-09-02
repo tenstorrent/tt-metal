@@ -336,6 +336,12 @@ public:
 private:
     D2HSocket() = default;
 
+    // Mock owner only: redirect the device-produced counter to a host-side stand-in.
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
+
+    // Release a blocked mock wait without advertising persistent availability.
+    void simulate_device_sent(uint32_t num_bytes) { mock_bytes_sent_ = bytes_acked_ + num_bytes; }
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
@@ -382,6 +388,9 @@ private:
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
+    // Host-side device-counter stand-in and its activation flag for mock.
+    uint32_t mock_bytes_sent_ = 0;
+    bool mock_flow_control_enabled_ = false;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
     std::unique_ptr<NamedShm> shm_;
     ProcessScope process_scope_ = ProcessScope::CrossProcess;

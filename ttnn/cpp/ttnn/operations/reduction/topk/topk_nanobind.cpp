@@ -18,6 +18,17 @@
 namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_topk_operation(nb::module_& mod) {
+    mod.def(
+        "_sampling_topk_would_route_to_large_indices",
+        &ttnn::operations::reduction::topk::detail::sampling_topk_would_route_to_large_indices,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("k"),
+        R"doc(Return whether the canonical sampling top-k call will use the Blackhole large-indices route.
+
+        This is an internal model helper. It accepts an on-device, four-dimensional tensor and models
+        ``ttnn.topk(input_tensor, k, dim=-1, largest=True, stable=False)`` without custom tensors, grids,
+        or memory configuration.)doc");
+
     const auto* doc =
         R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
@@ -45,7 +56,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (tuple[ttnn.Tensor, ttnn.Tensor], optional): A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as :attr:`input_tensor`. Defaults to (`None`, `None`).
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
-                indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation returns the labels held in this tensor for the selected elements instead of generating positional indices. It must have the same logical shape as :attr:`input_tensor`, be in TILE layout, and be UINT16, UINT32, or INT32. Its width must match the resolved output index dtype: a UINT16 tensor is rejected when 32-bit indices are required (reduced dimension above 65535, or a `float32` :attr:`input_tensor`), and a UINT32/INT32 tensor widens the output indices to 32-bit. Defaults to `None`.
                 stable (bool, optional): EXPERIMENTAL, best effort only -- do not rely on this for correctness. Asks the LLK's stable bitonic network to break exact-value ties by lowest index rather than by array position. The stable network is an open issue (tenstorrent/tt-metal#33492): it can still return incorrect indices for tied values, and every stable case in the LLK test suite is currently skipped, so a caller passing `True` may get either tie-break. Only Wormhole B0 and Blackhole implement it at all; other architectures raise. Off by default. Defaults to `False`.
 
             Returns:
@@ -67,11 +78,13 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - UINT16, UINT32
+                    * - UINT16, UINT32, INT32
                       - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
-                The :attr:`output_index_tensor` will be UINT16 if the dimension size is less than or equal to 65535, otherwise it will be UINT32. It will be in TILE layout.
+                The :attr:`output_index_tensor` will be in TILE layout. Its data type is UINT16 or UINT32 by default (chosen
+                based on the reduced dimension size), widened to 32-bit by a UINT32 or INT32 :attr:`indices_tensor`, or
+                matching the preallocated index tensor dtype (UINT16, UINT32, or INT32) when one is provided.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -83,7 +96,8 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
                 - The width of :attr:`input_tensor` along :attr:`dim` should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
-                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - Multi-core execution is selected automatically when :attr:`k` is at most 64 and the size of :attr:`input_tensor` along :attr:`dim` is a power of two no larger than 32768. That size must normally be at least 8192; the floor drops to 1024 when the input spans at most 2 tile rows after tile padding (64 rows with the default 32x32 tile). Nothing needs to be passed to opt in — shapes outside these bounds, or qualifying shapes that do not fit the available core grid and L1 memory (which can depend on data type), automatically run on a single core with identical results.
+                - On Blackhole, wide bfloat16 inputs with :attr:`largest` set and otherwise default arguments may instead be served transparently by a faster composite implementation for certain width and :attr:`k` ranges.
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
         )doc";

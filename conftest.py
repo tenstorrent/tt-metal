@@ -24,6 +24,11 @@ from tests.scripts.common import get_updated_device_params, run_process_and_get_
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
 
+# Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole}
+# in tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B).
+# Not bound to Python; update here if the C++ constants change.
+MAX_FABRIC_PACKET_PAYLOAD_SIZE_BYTES = {"wormhole_b0": 7 * 1088, "blackhole": 14 * 1088}
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -507,6 +512,15 @@ def set_fabric(
         if fabric_manager is None:
             fabric_manager = ttnn.FabricManagerMode.DEFAULT
 
+        if fabric_router_config is not None:
+            requested_payload = fabric_router_config.max_packet_payload_size_bytes
+            arch_max_payload = MAX_FABRIC_PACKET_PAYLOAD_SIZE_BYTES.get(ttnn.get_arch_name())
+            if requested_payload is not None and arch_max_payload is not None and requested_payload > arch_max_payload:
+                pytest.skip(
+                    f"Test requests a fabric packet payload of {requested_payload} B, more than the "
+                    f"{arch_max_payload} B maximum on {ttnn.get_arch_name()}. Test not applicable for machine"
+                )
+
         # Build kwargs for set_fabric_config, only include fabric_router_config if provided
         if fabric_router_config is not None:
             ttnn.set_fabric_config(
@@ -560,17 +574,39 @@ def mesh_device(request, silicon_arch_name, device_params):
     try:
         param = request.param
     except (ValueError, AttributeError):
-        # Get number of devices from the system mesh descriptor.
-        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        # No explicit parametrization; fall back to the system mesh size resolved below.
+        param = None
+
+    # The mesh that open_mesh_device can actually allocate is bounded by the system mesh exposed
+    # by the control plane, which may be smaller than the number of physical chips. For example,
+    # fabric auto-discovery can downgrade the mesh (e.g. to 2x2) when ethernet/fabric links are
+    # missing or fail to train, even though get_num_devices() still reports all physical chips.
+    # Comparing only against get_num_devices() would let the test proceed and then crash inside
+    # open_mesh_device with a TT_FATAL; also accounting for the system mesh size lets us skip
+    # gracefully on such machines instead.
+    #
+    # Query the system mesh once. A failure here means control-plane / mesh-graph discovery itself
+    # errored (missing descriptor, untrained eth links, control-plane regression, ...). That is an
+    # infrastructure/software fault, not a capacity mismatch, so we must FAIL fixture setup instead
+    # of skipping: turning discovery errors into skips would let a broken machine report false-green
+    # CI with no device path exercised. The confirmed capacity-mismatch case is handled below via
+    # pytest.skip, once the system mesh size is known.
+    try:
+        system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}"
+        ) from e
+
+    if param is None:
+        param = system_mesh_size
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
         available_num_devices = (
-            ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
-            if ttnn.using_distributed_env()
-            else ttnn.get_num_devices()
+            system_mesh_size if ttnn.using_distributed_env() else min(ttnn.get_num_devices(), system_mesh_size)
         )
         if (
             device_params.get("require_exact_physical_num_devices", False)
@@ -586,10 +622,12 @@ def mesh_device(request, silicon_arch_name, device_params):
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip(
-                f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
-            )
+        if not ttnn.using_distributed_env():
+            available_num_devices = min(ttnn.get_num_devices(), system_mesh_size)
+            if param > available_num_devices:
+                pytest.skip(
+                    f"Requested more devices ({param}) than available ({available_num_devices}). Test not applicable for machine"
+                )
         mesh_shape = ttnn.MeshShape(1, param)
 
     # Resolve trace_region_size against the SKU of the submesh actually opened.

@@ -21,10 +21,6 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
-// Canonical generalized_moe_gate requires an explicit path select and hard-errors without
-// one: 0 = grouped DeepSeek gate (top-4 groups, then top-8 within them), 1 = ungrouped
-// global top-8. This is the DeepSeek gate, so 0.
-#define GMG_UNGROUPED_TOP8 0
 #include "api/compute/experimental/generalized_moe_gate.h"
 #endif
 
@@ -114,7 +110,7 @@ struct DeepseekMoeGate {
             // ================================================================
 
             // Input indices CB should have the same tile shape as the input CB
-            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
             // Output indices CB should have the same tile shape as the output CB
             pack_reconfig_data_format<true>(CTArgs::output_cb);
 
@@ -123,7 +119,7 @@ struct DeepseekMoeGate {
             cb_wait_front(CTArgs::bias_cb, 1);
 
             // Compute portion
-            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            copy_init(CTArgs::input_indices_cb);
 
             tile_regs_acquire();
 
@@ -133,7 +129,8 @@ struct DeepseekMoeGate {
             reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
             generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
             cb_wait_front(CTArgs::input_cb, 1);
-            generalized_moe_gate<CTArgs::enable_sigmoid>(
+            // Path select: false = the grouped DeepSeek gate (top-4 groups, then top-8 within them).
+            generalized_moe_gate</*ungrouped_top8=*/false, CTArgs::enable_sigmoid>(
                 CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
             // Pop input tile
             cb_pop_front(CTArgs::input_cb, 1);

@@ -158,11 +158,15 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
+// this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
+// No-op on tt-1xx, which has no packet tags.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
-    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool flush_last_transfer = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
@@ -180,10 +184,24 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        }
+#endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        }
+#endif
         return 0;
     } else {
+        static_assert(
+            !flush_last_transfer,
+            "flush_last_transfer requires write_last_packet: this call does not issue the final transfer, so there "
+            "is nothing to tag here. Tag it at the call that does.");
         return size;
     }
 }
@@ -397,12 +415,10 @@ public:
             }
         }
 #endif
-#ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(downstream_sem_id).up(n);
-#else
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
-#endif
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};
@@ -763,4 +779,18 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
     uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
     return round_up_pow2(command_size, L1_ALIGNMENT);
+}
+
+// Single wide load of a field in a `packed` struct, which the compiler would otherwise reassemble from
+// byte loads (packed sets struct alignment to 1).
+//
+// The `void*` parameter is required: taking the address of a packed member as `T*` trips
+// -Waddress-of-packed-member, which this build promotes to an error.
+//
+// Unchecked caller obligations: T must match the field's width (a narrower T silently truncates), and
+// the field must be naturally aligned.
+template <typename T>
+FORCE_INLINE T load_aligned(const volatile void* ptr) {
+    ASSERT((reinterpret_cast<uintptr_t>(ptr) & (alignof(T) - 1)) == 0);
+    return *reinterpret_cast<const volatile T*>(ptr);
 }

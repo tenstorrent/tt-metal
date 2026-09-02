@@ -170,6 +170,19 @@ protected:
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
 // Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
+protected:
+    void create_devices() override {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
+    }
+};
+
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires slow dispatch mode.
 class UnitMeshFixture : public MeshDeviceSingleCardFixture {
 public:
     distributed::MeshDevice& device() { return *devices_.front(); }
@@ -196,7 +209,7 @@ protected:
     }
 };
 
-class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+class QuasarMeshDeviceSingleCardFixture : public UnitMeshFixture {
 protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

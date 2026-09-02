@@ -24,11 +24,12 @@ from models.common.utility_functions import is_blackhole
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
 
 
 def get_max_payload_size() -> int:
     """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
 @dataclass
@@ -983,18 +984,38 @@ def create_gate_weights(
     }
 
 
+# HF key template for the MoE gate, per checkpoint family. ``{layer_idx}`` is substituted.
+#
+# DeepSeek-V3 and Kimi-K2.6/K2.7 nest the router under ``mlp.gate``. Kimi-K3 renames the MoE module
+# to ``block_sparse_moe`` AND lives under a ``language_model.`` prefix (it is a multimodal
+# checkpoint), so it needs its own template rather than a tweak to the default.
+GATE_KEY_PREFIX_DEEPSEEK = "model.layers.{layer_idx}.mlp.gate."
+GATE_KEY_PREFIX_KIMI_K3 = "language_model.model.layers.{layer_idx}.block_sparse_moe.gate."
+
+
 def load_gate_weights_from_hf(
     model_id: str,
     layer_idx: int,
     dtype: torch.dtype = torch.bfloat16,
+    key_prefix_template: str = GATE_KEY_PREFIX_DEEPSEEK,
 ) -> dict:
     """
     Load MoE gate (router) weights from a HuggingFace checkpoint.
 
+    Only the gate is read, through a prefix-filtered ``safe_open``, so this is cheap even against a
+    multi-terabyte checkpoint (Kimi-K3's gate is ~12.8 MB out of 1.5 TB) and it never touches the
+    dequantization path -- the router is not in a quantized group in any supported checkpoint.
+
     Args:
         model_id: HuggingFace model ID or local checkpoint path
         layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
-        dtype: Target dtype for the returned tensors
+        dtype: Target dtype for the returned weight AND for ``e_score_correction_bias``. The
+            checkpoints store the bias as fp32, but it is downcast here on purpose: the device gate
+            (``ttnn.experimental.deepseek_grouped_gate``) requires a bf16 bias, so keeping it wider
+            on the host would only put the reference and the device on different precisions at the
+            top-k tie-break.
+        key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the
+            DeepSeek/Kimi-K2.x layout; pass ``GATE_KEY_PREFIX_KIMI_K3`` for Kimi-K3.
 
     Returns dict matching MoEGate / ``create_gate_weights`` format:
         "weight": (n_routed_experts, dim) — HF convention
@@ -1006,11 +1027,11 @@ def load_gate_weights_from_hf(
     """
     from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-    prefix = f"model.layers.{layer_idx}.mlp.gate."
+    prefix = key_prefix_template.format(layer_idx=layer_idx)
     state_dict = load_hf_state_dict_filtered(model_id, [prefix])
 
-    weight_key = f"model.layers.{layer_idx}.mlp.gate.weight"
-    bias_key = f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"
+    weight_key = f"{prefix}weight"
+    bias_key = f"{prefix}e_score_correction_bias"
 
     if weight_key not in state_dict:
         raise KeyError(f"Gate weight not found at {weight_key}. Layer {layer_idx} may not be an MoE layer.")
@@ -1084,6 +1105,35 @@ def create_shared_expert_weights(
         "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
         "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
         "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32, generator=gen) * 0.02,
+    }
+
+
+def create_latent_weights(
+    emb_dim: int,
+    routed_emb_dim: int,
+    seed: int | None = None,
+) -> dict:
+    """
+    Create random LatentMoE projection weights: emb_dim -> latent before dispatch, latent -> emb_dim
+    after the reduce.
+
+    Args:
+        emb_dim: Model embedding dimension
+        routed_emb_dim: Latent (routed-side) dimension the experts run at
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
+
+    Returns:
+        Dict with down_proj (routed_emb_dim, emb_dim) and up_proj (emb_dim, routed_emb_dim) in HF
+        format, plus norm (routed_emb_dim,). The norm gamma is drawn around 1.0 rather than set to
+        ones, so a dropped or mis-sharded norm weight cannot pass as identity.
+    """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    return {
+        "down_proj": torch.randn(routed_emb_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "up_proj": torch.randn(emb_dim, routed_emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "norm": 1.0 + torch.randn(routed_emb_dim, dtype=torch.float32, generator=gen) * 0.02,
     }
 
 

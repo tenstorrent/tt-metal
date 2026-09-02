@@ -433,7 +433,47 @@ size_t serialize_dfb_config_for_core(
     if (dfbs_on_core.empty()) { return 0; }
     const ContextId context_id = dfbs_on_core.front()->get_context_id();
     const auto& hal = MetalContext::instance(context_id).hal();
-    TT_FATAL(hal.has_tile_counter_registers(), "serialize_dfb_config_for_core requires Quasar");
+    if (!hal.has_tile_counter_registers()) {
+        constexpr size_t config_bytes_per_slot = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+        size_t bytes_written = 0;
+        for (const auto& dfb : dfbs_on_core) {
+            TT_FATAL(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
+            auto it = dfb->core_lookup_.find(core);
+            TT_FATAL(it != dfb->core_lookup_.end(), "DFB {} has no config for core ({}, {})", dfb->id, core.x, core.y);
+            const uint32_t alloc_addr = it->second.second;
+            TT_FATAL(
+                !dfb->borrows_memory() || alloc_addr != 0,
+                "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+                dfb->id);
+
+            const size_t byte_offset = static_cast<size_t>(dfb->device_slot) * config_bytes_per_slot;
+            TT_FATAL(
+                byte_offset + config_bytes_per_slot <= out.size(),
+                "DFB {} (device slot {}) config at byte offset {} does not fit in the {}-byte config payload "
+                "sized by finalize_dfbs",
+                dfb->id,
+                dfb->device_slot,
+                byte_offset,
+                out.size());
+            bytes_written = std::max(bytes_written, byte_offset + config_bytes_per_slot);
+        }
+
+        // A core can have gaps in its device slots. Keep those entries zero while placing each
+        // config at the slot firmware and kernel accessors use.
+        std::fill(out.begin(), out.begin() + bytes_written, uint8_t{0});
+        for (const auto& dfb : dfbs_on_core) {
+            const size_t byte_offset = static_cast<size_t>(dfb->device_slot) * config_bytes_per_slot;
+            const uint32_t alloc_addr = dfb->core_lookup_.at(core).second;
+            const uint32_t words[UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG] = {
+                alloc_addr,
+                dfb->config.entry_size * dfb->config.num_entries,
+                dfb->config.num_entries,
+                dfb->config.entry_size,
+            };
+            std::memcpy(out.data() + byte_offset, words, sizeof(words));
+        }
+        return bytes_written;
+    }
 
     // ---------------------------------------------------------------------------
     // 1. Collect per-core risc configs for every DFB (base/limit resolved per core).
@@ -1367,34 +1407,6 @@ void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& cor
     }
 }
 
-// WH/BH only: emit the 4-word CB-format config for the legacy firmware path.
-std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
-    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
-    TT_FATAL(
-        !MetalContext::instance(context_id_).hal().has_tile_counter_registers(),
-        "serialize_for_core is only used on WH/BH; Quasar uses serialize_dfb_config_for_core");
-
-    auto it = this->core_lookup_.find(core);
-    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-    const uint32_t alloc_addr = it->second.second;
-    TT_FATAL(
-        !this->borrows_memory() || alloc_addr != 0,
-        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-        this->id);
-
-    std::vector<uint8_t> data;
-    data.reserve(dfb_wh_bh_serialized_size());
-    const uint32_t words[4] = {
-        alloc_addr,
-        this->config.entry_size * this->config.num_entries,
-        this->config.num_entries,
-        this->config.entry_size,
-    };
-    const auto* bytes = reinterpret_cast<const uint8_t*>(words);
-    data.insert(data.end(), bytes, bytes + sizeof(words));
-    return data;
-}
-
 uint32_t DataflowBufferImpl::serialized_size() const {
     if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         return dfb_wh_bh_serialized_size();
@@ -1545,7 +1557,7 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
         }
     }
 
-    // Address arithmetic: see inline comments in old serialize_for_core for rationale.
+    // Resolve the per-core address arithmetic used by Quasar serialization.
     const uint32_t entry_size      = this->config.entry_size;
     const uint32_t effective_stride = this->stride_in_entries;
     const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
@@ -1853,6 +1865,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
+    this->compile_and_allocate_needed_ = true;
 
     return dfb->id;
 }
@@ -1961,8 +1974,8 @@ void ProgramImpl::finalize_single_dfb_config(
 
     // Finds the DfbGroup whose hw_risc_configs match new_hw_risc_configs (creating one
     // if none exists), extends its core_ranges to include `core`, and appends an
-    // l1_by_core entry.  base_addr/limit are not part of the equality check because
-    // they are derived per-core in serialize_for_core() from each core's alloc_addr.
+    // l1_by_core entry. base_addr/limit are not part of the equality check because
+    // they are derived per-core during serialization from each core's alloc_addr.
     auto bin_into_group = [&]() {
         auto hw_risc_configs_equal = [](const std::vector<DFBRiscConfig>& a, const std::vector<DFBRiscConfig>& b) {
             if (a.size() != b.size()) {
@@ -2490,6 +2503,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
     // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
     this->scratchpads_allocated_ = false;
+    this->compile_and_allocate_needed_ = true;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }

@@ -94,6 +94,33 @@ def test_publish_rejects_unknown_pipeline(tmp_path, monkeypatch):
         publish(str(tmp_path), str(tmp_path / "x.parquet"), "wormhole")
 
 
+def test_publish_quasar_uses_quasar_schema(tmp_path, monkeypatch):
+    sub = tmp_path / "perf_unpack_tilize_quasar"
+    sub.mkdir()
+    _write_csv(
+        sub / "perf_unpack_tilize_quasar.csv",
+        pd.DataFrame(
+            {
+                "marker": ["INIT"],
+                "face_c_dim": [16],
+                "implied_math_format": ["ImpliedMathFormat.Yes"],
+                "unpacker_engine_sel": ["UnpackerEngine.UnpA"],
+                "tile_cnt": [8],
+            }
+        ),
+    )
+    _set_provenance(monkeypatch)
+
+    out = tmp_path / "run.parquet"
+    diag = publish(str(tmp_path), str(out), "quasar")
+
+    assert diag["unknown_columns"] == {}
+    df = pq.read_table(out).to_pandas()
+    assert set(df["arch"]) == {"quasar"}
+    assert list(df["face_c_dim"].dropna()) == [16]
+    assert "face_c_dim" in pq.read_table(out).schema.names
+
+
 def test_main_rejects_bad_arch(tmp_path, monkeypatch):
     _set_provenance(monkeypatch)
     # argparse choices reject wormhole_b0 before publish() runs.

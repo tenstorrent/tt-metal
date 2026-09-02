@@ -220,7 +220,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest>
-inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_shape)
+inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
 {
     LLK_ASSERT(
         tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,

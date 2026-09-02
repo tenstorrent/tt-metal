@@ -38,6 +38,10 @@ HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/tria
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
+HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socket_hang.py"
+
+MESH_SOCKET_FIFO_SIZE = 8192
+
 HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_ADD_2_INTEGERS: {
         "lightweight_asserts": {
@@ -111,18 +115,27 @@ def cause_hang_with_app(request):
     global metal_home
 
     app, args, app_configuration, timeout = request.param
-    build_dir = os.path.join(metal_home, "build")
-    app_path_str = os.path.join(build_dir, app)
     os.environ.pop("TT_METAL_LOGS_PATH", None)
     request.cls.exalens_context = init_ttexalens()
+    min_devices = app_configuration.get("min_devices", 1)
+    if len(request.cls.exalens_context.devices) < min_devices:
+        pytest.skip(f"{app} needs {min_devices} chips")
+
+    if app.endswith(".py"):
+        # Python apps live in the source tree and need this venv's interpreter, not the system one.
+        cmd = [sys.executable, os.path.join(metal_home, app)]
+    else:
+        cmd = [os.path.join(metal_home, "build", app)]
     proc = subprocess.Popen(
-        [app_path_str] + args,
+        cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **app_configuration.get("env", {})},
     )
     auto_timeout = app_configuration.get("auto_timeout", False)
-    if auto_timeout:
+    # auto_timeout apps exit 0 once they detect their own hang; expect_running ones must stay wedged.
+    expect_running = app_configuration.get("expect_running", False)
+    if auto_timeout or expect_running:
         # Wait for the application to hang itself
         try:
             proc.wait(timeout=timeout)
@@ -130,7 +143,7 @@ def cause_hang_with_app(request):
             pass
 
         # Check if the process has exited
-        if proc.returncode != 0:
+        if proc.returncode != (None if expect_running else 0):
             # Print process output for debugging
             print("The application did not hang as expected.")
             print_process_output(proc)
@@ -636,3 +649,85 @@ class TestTriage:
             ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
         return result
+
+
+@pytest.mark.parametrize(
+    "cause_hang_with_app",
+    [
+        (
+            HANG_APP_MESH_SOCKET,
+            [str(MESH_SOCKET_FIFO_SIZE)],
+            {"min_devices": 2, "expect_running": True},
+            15,
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.usefixtures("cause_hang_with_app")
+class TestMeshSocketTriage:
+    exalens_context: Context
+
+    def test_dump_mesh_sockets(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        assert not FAILURE_CHECKS, f"dump_mesh_sockets.py failed with: {FAILURE_CHECKS}"
+        assert result is not None, "Expected socket rows while MeshSockets are wedged"
+
+        rows = [check.result for check in result]
+        device_of = {id(check.result): check.device_description.device.id for check in result}
+        senders = [row for row in rows if row.role == "sender"]
+        receivers = [row for row in rows if row.role == "receiver"]
+
+        # One 1:1 socket pair each way, plus a fan-out sender feeding two receiver cores. The fan-out
+        # sender is a single core, so it contributes one row per downstream.
+        pair_senders = [row for row in senders if row.num_downstreams == 1]
+        fanout_senders = [row for row in senders if row.num_downstreams == 2]
+        assert len(pair_senders) == 2, f"Expected 2 paired sender rows, got {len(pair_senders)}"
+        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
+        assert len(receivers) == 4, f"Expected 4 receiver rows, got {len(receivers)}"
+        assert len({device_of[id(r)] for r in pair_senders}) == 2, "Expected the paired senders on different devices"
+
+        for row in rows:
+            # A row only carries the columns that live in its own config buffer.
+            if row.role == "sender":
+                assert (row.sent_at_receiver, row.acked_at_receiver, row.read_ptr) == (None, None, None)
+            else:
+                assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
+                assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
+            assert row.fifo_size == MESH_SOCKET_FIFO_SIZE
+            # Every core is on this host, so each names its peer by device id.
+            assert row.peer.startswith("dev"), f"Expected a device id for a local peer, got {row.peer}"
+            # Node is the core's own fabric node, so it agrees with the device the row came from.
+            assert row.node == f"chip{device_of[id(row)]}/mesh0"
+
+        # The fan-out rows come from one core, so they share its config buffer and differ
+        # only in which downstream they describe.
+        assert len({r.config_addr for r in fanout_senders}) == 1, "Fan-out rows should share one config buffer"
+        assert len({str(r.location) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
+        assert sorted(r.downstream for r in fanout_senders) == [0, 1]
+        assert len({r.peer for r in fanout_senders}) == 2, "Each downstream should name its own receiver core"
+
+        # Downstream Addr is the documented join key: it names the peer receiver's config buffer. The
+        # fan-out receivers are pages of one buffer, so they share an address and both match.
+        receivers_by_config_addr: dict[int, list] = {}
+        for row in receivers:
+            receivers_by_config_addr.setdefault(row.config_addr, []).append(row)
+        for snd in senders:
+            matched = receivers_by_config_addr.get(snd.downstream_config_addr)
+            assert matched, f"Sender at {snd.config_addr:#x} points at no receiver row"
+            for rcv in matched:
+                assert device_of[id(rcv)] != device_of[id(snd)], "Each socket should cross to the other device"
+        assert len(receivers_by_config_addr[fanout_senders[0].downstream_config_addr]) == 2
+
+        # Of the two 1:1 sockets, one is wedged with a full fifo and one never saw a byte.
+        paired_receivers = [rcv for snd in pair_senders for rcv in receivers_by_config_addr[snd.downstream_config_addr]]
+        sent = sorted(rcv.sent_at_receiver for rcv in paired_receivers)
+        assert sent == [0, MESH_SOCKET_FIFO_SIZE], f"Expected a starved and a backpressured receiver, got {sent}"

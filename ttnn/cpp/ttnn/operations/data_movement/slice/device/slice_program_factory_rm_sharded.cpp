@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
 #include <map>
 #include <optional>
@@ -389,36 +390,38 @@ void patch_slice_program_addresses(
                 tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
             } else if constexpr (std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
                 patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
-            } else {
-                // Tile factories carry the reader's addresses in common args: input, then the
-                // start/end tensors for the tensor-args variant.
-                auto& common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
-                if (common.size() > 0) {
-                    common[0] = tensor_args.input.buffer()->address();
-                }
+            } else if constexpr (
+                std::is_same_v<Factory, SliceTileProgramFactory> ||
+                std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
+                // Divergent-partition hit leaves writer num_pages=0 -> all-zero output (#52651).
+                std::vector<tt::tt_metal::DynamicRuntimeArg> dyn{
+                    {kReaderKernelIdx, {}, 0, tensor_args.input.buffer()->address(), true}};
                 if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                    if (common.size() > 2) {
-                        common[1] = tensor_args.start_tensor.value().buffer()->address();
-                        common[2] = tensor_args.end_tensor.value().buffer()->address();
-                    }
+                    dyn.push_back(
+                        {kReaderKernelIdx, {}, 1, tensor_args.start_tensor.value().buffer()->address(), true});
+                    dyn.push_back({kReaderKernelIdx, {}, 2, tensor_args.end_tensor.value().buffer()->address(), true});
                 }
+                tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
+
+                const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
+                                                  ? ttnn::operations::data_movement::get_tiled_start_offset(
+                                                        tensor_args.input, operation_attributes.slice_start)
+                                                  : 0u;
+                const auto per_core = slice_tile_dynamic_args(
+                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
+                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
             }
         },
         factory);
 }
 
-void SliceDeviceOperation::override_runtime_arguments(
+void SliceRmShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    patch_slice_program_addresses(
-        program,
-        select_program_factory(operation_attributes, tensor_args),
-        operation_attributes,
-        tensor_args,
-        tensor_return_value);
+    patch_slice_program_addresses(program, SliceRmShardedProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

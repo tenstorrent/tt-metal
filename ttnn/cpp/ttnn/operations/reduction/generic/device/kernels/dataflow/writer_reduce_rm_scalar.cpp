@@ -8,13 +8,15 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 //
 // Dense RM reduce writer (handles both W reduce and H reduce; branched on REDUCE_DIM).
 //
-// Compute packs one or more output tiles per work unit into dfb_id_tile (c_3). The writer extracts
-// the meaningful datums from those tiles and emits them into the corresponding RM output pages.
+// Compute packs one or more output tiles per work unit into dfb::out (the tiled reduce result). The
+// writer extracts the meaningful datums from those tiles and emits them into the corresponding RM
+// output pages.
 //
 // W reduce path (REDUCE_DIM == REDUCE_ROW):
 //   Output: one scalar per reduced logical row, one RM page per scalar (page_id == logical row).
@@ -41,30 +43,24 @@
 template <ckernel::ReduceDim DIM>
 void reduce_rm_writer() {
     //
-    // Runtime args. Slots shared between paths; semantics differ:
-    //   W reduce: (dst_addr, num_rows, start_page)
-    //   H reduce: (dst_addr, num_output_tiles_local, start_output_tile_id)
+    // Runtime args. Names shared between paths; semantics differ:
+    //   W reduce: rt_count = num_rows,             rt_start = start_page
+    //   H reduce: rt_count = num_output_tiles_local, rt_start = start_output_tile_id
     //
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t rt_count = get_arg_val<uint32_t>(1);
-    const uint32_t rt_start = get_arg_val<uint32_t>(2);
+    const uint32_t rt_count = get_arg(args::rt_count);
+    const uint32_t rt_start = get_arg(args::rt_start);
 
-    //
-    // Compile-time args. Slot 0 (datum_bytes) is shared; the H path adds slots 1-6 (Wt, W_logical,
-    // wt_tiles_per_chunk, then tile_output / num_h_slices / out_tile_rows, unused here since
-    // REDUCE_RM_TILE_OUTPUT picks the branch), so dst TensorAccessor args start at slot 1 (W) / 7 (H).
-    //
-    constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 7>();
+    // Compile-time args. Both paths receive the whole set; each branch reads the names it needs.
+    constexpr auto datum_bytes = get_arg(args::datum_bytes);
 
-    constexpr uint32_t dfb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t tile_size_bytes = get_tile_size(dfb_id_tile);
-    const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
+    const auto dst_accessor = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_tile(dfb_id_tile);
+    // dfb::out carries the tiled reduce result produced by the compute kernel.
+    DataflowBuffer dfb_tile(dfb::out);
+    const uint32_t tile_size_bytes = dfb_tile.get_tile_size();
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
@@ -103,13 +99,9 @@ void reduce_rm_writer() {
         // ROW_MAJOR extracts tile-row 0 into the (n, c, slice) page; TILE writes the tile whole.
         //
         // Wt, W_logical, and wt_tiles_per_chunk are only consumed here, so they live in this branch.
-        // The indices embed DIM to make them value-dependent: a literal `get_compile_time_arg_val(N)`
-        // is non-dependent and would be eagerly instantiated even in this discarded branch, tripping
-        // the index range check for the W path (which never passes these slots).
-        constexpr uint32_t Wt = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 1 : 0);
-        constexpr uint32_t W_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 2 : 0);
-        constexpr uint32_t wt_tiles_per_chunk =
-            get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 3 : 0);
+        constexpr auto Wt = get_arg(args::Wt);
+        constexpr auto W_logical = get_arg(args::W_logical);
+        constexpr auto wt_tiles_per_chunk = get_arg(args::wt_tiles_per_chunk);
         constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
         const uint32_t num_output_tiles_local = rt_count;
         const uint32_t start_output_tile_id = rt_start;

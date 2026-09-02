@@ -14,6 +14,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE) || defined(PAD_CORRECTION)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
     DataflowBuffer dfb(dfb_id);
@@ -92,53 +95,82 @@ void kernel_main() {
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
 #ifdef PAD_CORRECTION
-    // Non-tile-aligned H*W: a second, row-masked set of mask tiles is streamed behind the normal
-    // one, which compute selects with +block_w. Arg 9 equals input_mask_tile_start_id on cores that
-    // do not hold a batch's final row-tile, making their second set a copy of the first.
-    constexpr uint32_t mask_tiles_per_group = 2 * block_w;
-    const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(9);
-#else
-    constexpr uint32_t mask_tiles_per_group = block_w;
+    // Non-tile-aligned H*W: c_7 still carries only the row-0-only column selector; the row
+    // exclusion on each batch's final row-tile is applied by the compute kernel, which composes
+    // the selector with the once-per-core c_18 rowvalid tile synthesized below. Arg 9 carries the
+    // per-core valid-row count: rows_in_last_tile on the core holding a batch's final row-tile,
+    // and tile_height elsewhere (an all-ones rowvalid tile, making the composition a no-op there).
+    const uint32_t rows_valid_this_core = get_arg_val<uint32_t>(9);
 #endif
+    // c_7 ships one row-0-only column-selector set per (batch, group) in every build.
+    constexpr uint32_t mask_tiles_per_group = block_w;
 
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
+#ifdef PAD_CORRECTION
+    constexpr uint32_t dfb_rowvalid_id = tt::CBIndex::c_18;
+#endif
 
     Noc noc;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t dfb_input_negative_mask_id = tt::CBIndex::c_14;
-    const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(dfb_input_negative_mask_id);
-
     DataflowBuffer dfb_input_negative_mask(dfb_input_negative_mask_id);
+    const uint32_t input_negative_mask_single_tile_size_bytes = dfb_input_negative_mask.get_tile_size();
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
+#endif
 
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE) || defined(PAD_CORRECTION)
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+#endif
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+    // Full group size (num_channels / num_groups, e.g. 10 for SDXL C=320,
+    // num_groups=32). The row_offset wrapping recurrence mirrors
+    // groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % MASK_TILE_W;
 #endif
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
-#ifdef PAD_CORRECTION
-        uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
-#endif
 #if defined(FUSE_NEGATIVE_MASK)
         uint32_t input_negative_mask_tile_id = input_mask_tile_start_id;
 #endif
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+        // start_stride for the first group on this core is 0. Subsequent
+        // groups advance row_offset by group_size_mod_tile_w with wrapping.
+        uint32_t mask_row_offset = 0;
+#endif
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
+            // The matching push_back below must use the same count, or the compute kernel's
+            // wait_front(mask_tiles_per_group) starves. Every build ships exactly block_w
+            // row-0-only column-selector tiles per (batch, group).
             dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                l1_write_addr_input_mask,
+                mask_row_offset,
+                num_channels_per_group,
+                block_w,
+                input_mask_single_tile_size_bytes,
+                MASK_TILE_W,
+                tt::tt_metal::groupnorm::BF16_ONE,
+                tt::tt_metal::groupnorm::BF16_ZERO);
+#else
+            // Only the first (row-0-only column selector) set of the caller's mask is read.
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     mask,
@@ -149,24 +181,26 @@ void kernel_main() {
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
-#ifdef PAD_CORRECTION
-            for (uint32_t j = 0; j < block_w; ++j) {
-                noc.async_read(
-                    mask,
-                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
-                    input_mask_single_tile_size_bytes,
-                    {.page_id = input_mask_row_tile_id},
-                    {});
-                l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
-                input_mask_row_tile_id += 1;
-            }
-#endif
             noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
             dfb_input_mask.push_back(mask_tiles_per_group);
 
 #if defined(FUSE_NEGATIVE_MASK)
             dfb_input_negative_mask.reserve_back(block_w);
             uint32_t l1_write_addr_input_negative_mask = dfb_input_negative_mask.get_write_ptr();
+#if defined(NEGATIVE_MASK_SYNTHESIZE)
+            // Negative mask: same start_stride as positive mask but inverted
+            // fill values (1s outside the group, 0s inside).
+            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                l1_write_addr_input_negative_mask,
+                mask_row_offset,
+                num_channels_per_group,
+                block_w,
+                input_negative_mask_single_tile_size_bytes,
+                MASK_TILE_W,
+                tt::tt_metal::groupnorm::BF16_ZERO,
+                tt::tt_metal::groupnorm::BF16_ONE);
+#else
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     negative_mask_tensor_accessor,
@@ -178,7 +212,15 @@ void kernel_main() {
                 input_negative_mask_tile_id += 1;
             }
             noc.async_read_barrier();
+#endif  // NEGATIVE_MASK_SYNTHESIZE
             dfb_input_negative_mask.push_back(block_w);
+#endif
+
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+            // Advance row_offset for the next group (same recurrence as
+            // groupnorm_input_mask.cpp:64-70).
+            mask_row_offset =
+                tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
 #endif
 
             if (i == 0 and b == 0) {
@@ -202,6 +244,22 @@ void kernel_main() {
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
                 generate_tile_with_packed_bfloat16_values(dfb_ones_id, ones);
 
+#ifdef PAD_CORRECTION
+                // Once-per-core rowvalid tile (c_18): rows < rows_valid_this_core all-ones,
+                // the rest zero. Compute composes it with the c_7 column selectors to build
+                // each batch's final row-tile mask.
+                DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
+                dfb_rowvalid.reserve_back(1);
+                tt::tt_metal::groupnorm::synthesize_mask_tile_full_bf16(
+                    dfb_rowvalid.get_write_ptr(),
+                    0,            // start_col_in_tile: the whole width is "inside", ...
+                    MASK_TILE_W,  // ... so every valid row comes out all-ones
+                    rows_valid_this_core,
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+                dfb_rowvalid.push_back(1);
+#endif
+
                 if constexpr (is_mcast_sender) {
                     constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -216,7 +274,7 @@ void kernel_main() {
                 generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
                     const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
@@ -232,7 +290,7 @@ void kernel_main() {
                 }
 
                 if constexpr (fuse_beta) {
-                    const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
                     const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 

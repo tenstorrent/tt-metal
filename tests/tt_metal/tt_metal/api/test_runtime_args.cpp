@@ -31,6 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
@@ -339,8 +340,7 @@ void verify_core_rt_args(
     const std::vector<uint32_t>& written_args,
     const uint32_t incr_val) {
     std::vector<uint32_t> observed_args;
-    auto* device = mesh_device->get_devices()[0];
-    tt_metal::detail::ReadFromDeviceL1(device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
+    slow_dispatch::ReadFromL1(*mesh_device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
 
     for (size_t i = 0; i < written_args.size(); i++) {
         uint32_t expected_result = written_args.at(i) + incr_val;
@@ -370,12 +370,11 @@ void verify_results(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
             kernel->get_kernel_processor_type(0),
             false);
@@ -393,7 +392,7 @@ void verify_results(
         // Verify common RT Args (same for all cores) if they exist.
         if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),
                 kernel->get_kernel_processor_type(0),
                 true);
@@ -426,7 +425,6 @@ void verify_quasar_crtas(
     const CoreCoord& core,
     const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
-    auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
@@ -450,7 +448,7 @@ void verify_quasar_crtas(
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(*mesh_device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -462,7 +460,7 @@ void verify_quasar_crtas(
         uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
+        slow_dispatch::ReadFromL1(*mesh_device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
@@ -1117,14 +1115,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
-    auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});
-
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -1134,7 +1127,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
 
     // Zero-init both output slots.
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+    slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
     // Two kernels, each using one DM thread, writing to distinct L1 addresses.
     const experimental::KernelSpecName K1{"k1"}, K2{"k2"};
@@ -1150,7 +1143,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
     experimental::ProgramSpec spec{
         .name = "merge_test", .kernels = {make_dm_spec(K1), make_dm_spec(K2)}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     // Build two partial ProgramRunArgs, one per kernel.
     experimental::ProgramRunArgs part1;
@@ -1171,24 +1164,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     experimental::ProgramRunArgs merged = experimental::MergeProgramRunArgs(std::move(part1), rest);
     experimental::SetProgramRunArgs(program, merged);
 
-    distributed::MeshWorkload workload;
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), out);
+    slow_dispatch::ReadFromL1(this->device(), node, address_1, 2 * sizeof(uint32_t), out);
     ASSERT_EQ(out, std::vector<uint32_t>({value_1, value_2}));
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
-    auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -1209,11 +1199,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
         .name = "update_run_args_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
     Program& prog = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+    slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
     // First enqueue: write value_1 to address_1.
     experimental::ProgramRunArgs params1;
@@ -1236,7 +1226,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> outputs(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), outputs);
+    slow_dispatch::ReadFromL1(this->device(), node, address_1, 2 * sizeof(uint32_t), outputs);
     ASSERT_EQ(outputs, std::vector<uint32_t>({value_1, value_2}));
 }
 

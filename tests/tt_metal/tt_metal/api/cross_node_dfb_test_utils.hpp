@@ -17,6 +17,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -25,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal::cross_node_dfb_test {
 
@@ -35,15 +37,6 @@ enum class SenderDataPattern : uint32_t {
     PerReceiverConstant = 2,  // receiver r: all bytes = r & 0xFF (reused each entry)
 };
 
-// MeshDevice::id() is a mesh handle (often 1), not the physical chip id (0).
-// Host-side CreateBuffer/WriteToBuffer must target the local physical device.
-inline IDevice* local_physical_device(IDevice* device) {
-    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
-        return mesh->get_devices().at(0);
-    }
-    return device;
-}
-
 inline uint32_t align_staging_size_bytes(uint32_t size_bytes) {
     const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     return (size_bytes + alignment - 1) & ~(alignment - 1);
@@ -53,7 +46,7 @@ inline uint32_t align_staging_size_bytes(uint32_t size_bytes) {
 // Must use the same device pointer passed to CreateCrossNodeDFB so L1 allocation is
 // consistent with the runtime-allocated config buffer (esp. on MeshDevice).
 inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
-    IDevice* device,
+    distributed::MeshDevice* device,
     const CoreRangeSet& all_cores,
     uint32_t entry_size,
     uint32_t num_entries,
@@ -189,7 +182,7 @@ inline void assert_staging_disjoint_from_cross_node_dfb(
 // at low L1 addresses (~MEM_MAP_END), which is far from the top-of-L1 staging area,
 // so the dispatch does not overwrite this data.
 inline void write_sender_l1_staging(
-    IDevice* device,
+    distributed::MeshDevice& mesh_device,
     const CoreRangeSet& sender_cores,
     const experimental::CrossNodeDFB& gdfb,
     uint32_t data_pattern,
@@ -199,7 +192,6 @@ inline void write_sender_l1_staging(
     uint32_t counter_base = 0,
     uint32_t entry_size_resized = 0,
     uint32_t num_entries_after = 0) {
-    IDevice* physical_device = local_physical_device(device);
     const auto bytes = build_sender_staging_bytes(
         data_pattern, entry_size, num_entries, num_receivers, counter_base, entry_size_resized, num_entries_after);
     const uint32_t staging_size_bytes = static_cast<uint32_t>(bytes.size());
@@ -210,7 +202,7 @@ inline void write_sender_l1_staging(
     std::vector<uint32_t> words(aligned_words, 0);
     std::memcpy(words.data(), bytes.data(), bytes.size());
     for (const auto& core : corerange_to_cores(sender_cores)) {
-        detail::WriteToDeviceL1(physical_device, core, staging_addr, words, CoreType::WORKER);
+        slow_dispatch::WriteToL1(mesh_device, core, staging_addr, words, CoreType::WORKER);
     }
 }
 
@@ -263,16 +255,18 @@ inline std::vector<uint8_t> expected_receiver_ring_bytes(
 }
 
 inline std::vector<uint8_t> read_receiver_ring_bytes(
-    IDevice* device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core, uint32_t num_bytes) {
-    IDevice* physical_device = local_physical_device(device);
+    distributed::MeshDevice& mesh_device,
+    const experimental::CrossNodeDFB& gdfb,
+    const CoreCoord& receiver_core,
+    uint32_t num_bytes) {
     const uint32_t ring_size = gdfb.ring_size();
     const uint32_t copy_size = std::min(num_bytes, ring_size);
     std::vector<uint8_t> bytes(num_bytes, 0);
     if (copy_size == 0) {
         return bytes;
     }
-    detail::ReadFromDeviceL1(
-        physical_device,
+    slow_dispatch::ReadFromL1(
+        mesh_device,
         receiver_core,
         gdfb.buffer_address(),
         std::span<uint8_t>(bytes.data(), copy_size),
@@ -282,16 +276,15 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
 
 // CreateCrossNodeDFB does not zero the data ring; clear L1 before "untouched" checks.
 inline void zero_receiver_ring(
-    IDevice* device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
-    IDevice* physical_device = local_physical_device(device);
+    distributed::MeshDevice& mesh_device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
     const uint32_t ring_size = gdfb.ring_size();
     const uint32_t aligned_words = (ring_size + sizeof(uint32_t) - 1) / sizeof(uint32_t);
     std::vector<uint32_t> zeros(aligned_words, 0);
-    detail::WriteToDeviceL1(physical_device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);
+    slow_dispatch::WriteToL1(mesh_device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);
 }
 
 inline bool verify_receiver_ring(
-    IDevice* device,
+    distributed::MeshDevice& mesh_device,
     const experimental::CrossNodeDFB& gdfb,
     const CoreCoord& receiver_core,
     uint32_t data_pattern,
@@ -311,18 +304,18 @@ inline bool verify_receiver_ring(
         counter_base,
         entry_size_resized,
         num_entries_after);
-    const auto received = read_receiver_ring_bytes(device, gdfb, receiver_core, static_cast<uint32_t>(expected.size()));
+    const auto received =
+        read_receiver_ring_bytes(mesh_device, gdfb, receiver_core, static_cast<uint32_t>(expected.size()));
     return received == expected;
 }
 
 // Read pages_sent / pages_acked from a core's sharded config page at the given slot.
 inline std::pair<uint32_t, uint32_t> read_credit_pair(
-    IDevice* device, const CoreCoord& core, uint32_t pages_sent_addr) {
-    IDevice* physical_device = local_physical_device(device);
+    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t pages_sent_addr) {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     std::vector<uint8_t> bytes(2 * l1_alignment, 0);
-    detail::ReadFromDeviceL1(
-        physical_device, core, pages_sent_addr, std::span<uint8_t>(bytes.data(), bytes.size()), CoreType::WORKER);
+    slow_dispatch::ReadFromL1(
+        mesh_device, core, pages_sent_addr, std::span<uint8_t>(bytes.data(), bytes.size()), CoreType::WORKER);
     uint32_t sent = 0;
     uint32_t acked = 0;
     std::memcpy(&sent, bytes.data(), sizeof(uint32_t));
@@ -338,14 +331,13 @@ inline uint32_t cross_node_config_page_l1_address(Program& program, uint8_t remo
 // After a full drain, every receiver slot must have pages_sent == pages_acked == expected units
 // on both the sender and that receiver's page in the dedicated config Buffer.
 inline bool verify_credits_drained(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     Program& program,
     uint8_t remote_dfb_id,
     const CoreCoord& sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries_pushed_per_receiver) {
-    IDevice* device = mesh_device;
     const experimental::CrossNodeDFB& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     TT_FATAL(entry_size % l1_alignment == 0, "entry_size must be L1-aligned for credit accounting");
@@ -356,8 +348,8 @@ inline bool verify_credits_drained(
     bool ok = true;
     for (uint32_t ri = 0; ri < receivers.size(); ++ri) {
         const uint32_t slot_addr = credit_base + 2 * ri * l1_alignment;
-        const auto [sent_s, acked_s] = read_credit_pair(device, sender_core, slot_addr);
-        const auto [sent_r, acked_r] = read_credit_pair(device, receivers[ri], slot_addr);
+        const auto [sent_s, acked_s] = read_credit_pair(mesh_device, sender_core, slot_addr);
+        const auto [sent_r, acked_r] = read_credit_pair(mesh_device, receivers[ri], slot_addr);
         if (sent_s != expected_units || acked_s != expected_units || sent_r != expected_units ||
             acked_r != expected_units) {
             log_error(

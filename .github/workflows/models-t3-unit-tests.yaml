@@ -34,7 +34,16 @@ on:
           - bevformer
           - mistral-small-3.1-24b
           - sd35
+          - mochi
           - bert-large
+          - tt-model-sampling
+          - efficientdet-d0
+          - mobilenetv3
+          - retinanet
+          - ssd512
+          - vadv2
+          - openpdn-mnist
+          - yunet
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -43,6 +52,7 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
+          - "wh_n150_civ2 (N150 CIv2)"
           - "wh_n300 (N300)"
           - "wh_llmbox (T3000)"
           - "wh_llmbox_perf (T3000 perf)"
@@ -101,7 +111,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n150_civ2,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -119,6 +129,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -132,6 +143,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     # OIDC only on this caller (multihost-ci runner chart may need it), not workflow-wide.
     # Job-level permissions replace inherited defaults, so restate what tests need.

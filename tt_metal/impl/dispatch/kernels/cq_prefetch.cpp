@@ -26,6 +26,14 @@
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
+// FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
+// Quasar FD assumes prefetcher and dispatcher share a Tensix; remote-chip support needs cross-Tensix verification.
+// That includes payload-before-credit ordering: these builds relay over fabric, where the NoC packet flush tag
+// this file relies on does not apply.
+#if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
+#error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
+#endif
+
 #include <array>
 #include <cstdint>
 
@@ -264,6 +272,11 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_log_page_size = dispatch_s_cb_log_page_size;
     static constexpr uint32_t downstream_cb_base_addr = dispatch_s_buffer_base;
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
+    // tt-1xx has a separate cmd buf for small writes, so this state keeps its own DEST_COORD there. Quasar has
+    // only one full write buffer, so this aliases onto cmd buf 0 and shares DispatchRelayInlineState's
+    // DEST_COORD, which cq_noc_async_write_init_state programs once (CQ_NOC_SnDL does not refresh it). Safe
+    // only while dispatch_s is co-resident with the dispatcher, so both init calls write the same coordinate.
+    // TODO: revisit when the FD command-buffer policy is reworked.
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
     static inline CBWriter<
@@ -349,30 +362,6 @@ bool process_cmd(
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state);
 
-#ifdef ARCH_QUASAR
-// Same-core copy: L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
-// the same core.
-FORCE_INLINE void local_copy_bytes(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
-    ASSERT((src_addr & 0x3u) == 0);
-    ASSERT((dst_addr & 0x3u) == 0);
-    ASSERT(dst_addr + num_bytes <= dst_end);
-    volatile uint32_t tt_l1_ptr* dst_ptr = uncached_l1_ptr<uint32_t>(dst_addr);
-    volatile uint32_t tt_l1_ptr* src_ptr = uncached_l1_ptr<uint32_t>(src_addr);
-    const uint32_t words = num_bytes >> 2;
-    for (uint32_t i = 0; i < words; ++i) {
-        dst_ptr[i] = src_ptr[i];
-    }
-    const uint32_t tail_bytes = num_bytes & 0x3u;
-    if (tail_bytes != 0) {
-        volatile uint8_t tt_l1_ptr* dst_tail = uncached_l1_ptr<uint8_t>(dst_addr + (words << 2));
-        volatile uint8_t tt_l1_ptr* src_tail = uncached_l1_ptr<uint8_t>(src_addr + (words << 2));
-        for (uint32_t i = 0; i < tail_bytes; ++i) {
-            dst_tail[i] = src_tail[i];
-        }
-    }
-}
-#endif
-
 template <uint32_t downstream_cb_base_addr, uint32_t downstream_cmd_buf>
 FORCE_INLINE void write_downstream(
     uintptr_t& data_ptr,
@@ -388,8 +377,6 @@ FORCE_INLINE void write_downstream(
                 static_cast<uint32_t>(data_ptr),
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
-#elif defined(ARCH_QUASAR)
-            local_copy_bytes(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -407,10 +394,13 @@ FORCE_INLINE void write_downstream(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        downstream_cmd_buf,
+        /*flush_last_transfer=*/true>(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
@@ -868,13 +858,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
 uint32_t process_debug_cmd(uintptr_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    return cmd->debug.stride;
+    return load_aligned<uint32_t>(&cmd->debug.stride);
 }
 
 template <bool cmddat_wrap_enable, typename RelayInlineState>
 static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_downstream_data_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t length = cmd->relay_inline.length;
+    uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     uint32_t npages =
@@ -907,7 +897,7 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
     RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
-    return cmd->relay_inline.stride;
+    return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
 
 // This version of inline sends inline data to the dispatcher but doesn't flush the page to the dispatcher
@@ -918,34 +908,29 @@ template <bool cmddat_wrap_enable>
 static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& dispatch_data_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
 
-    uint32_t length = cmd->relay_inline.length;
+    uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     DispatchRelayInlineState::cb_writer.acquire_pages(1);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
+    // On Quasar these writes carry no flush tag: this routine does not release the page, so the header
+    // and the payload that follows are published by one release_pages, and the flush on the payload's
+    // last transfer covers all packets before it.
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
-#if defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
-#else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-#endif
         dispatch_data_ptr += remaining;
         length -= remaining;
         data_ptr = cmddat_q_base;
     }
-#if defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
-#else
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
-#endif
     dispatch_data_ptr += length;
 
-    return cmd->relay_inline.stride;
+    return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
 
 // The hard problem here is: when an xfer lands exactly at a page boundary, who is responsible for getting the next
@@ -963,35 +948,36 @@ static uint32_t write_pages_to_dispatcher(
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
 
-    [[maybe_unused]] uint64_t noc_addr;
+    uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
-#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#endif
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
-        cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
+        cq_noc_async_write_with_state_any_len<
+            true,
+            true,
+            CQNocWait::CQ_NOC_WAIT,
+            DispatchRelayInlineState::downstream_write_cmd_buf>(scratch_write_addr, noc_addr, last_chunk_size);
 #endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
-#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#endif
 
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        DispatchRelayInlineState::downstream_write_cmd_buf,
+        /*flush_last_transfer=*/true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
     downstream_data_ptr += amt_to_write;
 
@@ -1396,10 +1382,11 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     noc_async_writes_flushed();
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t base_addr = cmd->relay_paged.base_addr;
-    uint32_t page_size = cmd->relay_paged.page_size;
-    uint32_t pages = cmd->relay_paged.pages;
-    uint16_t length_adjust = cmd->relay_paged.is_dram_and_length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
+    uint32_t base_addr = load_aligned<uint32_t>(&cmd->relay_paged.base_addr);
+    uint32_t page_size = load_aligned<uint32_t>(&cmd->relay_paged.page_size);
+    uint32_t pages = load_aligned<uint32_t>(&cmd->relay_paged.pages);
+    uint16_t length_adjust = load_aligned<uint16_t>(&cmd->relay_paged.is_dram_and_length_adjust) &
+                             CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
 
     if (page_size > scratch_db_half_size) {
         return process_relay_paged_cmd_large<is_dram>(
@@ -1652,9 +1639,10 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_paged_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t total_length = cmd->relay_paged_packed.total_length;
-    uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
-    uint32_t stride = cmd->relay_paged_packed.stride;
+    uint32_t total_length = load_aligned<uint32_t>(&cmd->relay_paged_packed.total_length);
+    uint32_t sub_cmds_length =
+        load_aligned<uint16_t>(&cmd->relay_paged_packed.count) * sizeof(CQPrefetchRelayPagedPackedSubCmd);
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_paged_packed.stride);
     ASSERT(total_length > 0);
     // DPRINT("paged_packed: total_length={} stride={}\n", total_length, cmd->relay_paged_packed.stride);
 
@@ -1723,9 +1711,9 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     noc_async_writes_flushed();
 
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmdLarge>(cmd_ptr);
-    uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
-    uint64_t read_addr = cmd->relay_linear.addr;
-    uint64_t wlength = cmd->relay_linear.length;
+    uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear.noc_xy_addr);
+    uint64_t read_addr = load_aligned<uint64_t>(&cmd->relay_linear.addr);
+    uint64_t wlength = load_aligned<uint64_t>(&cmd->relay_linear.length);
     // DPRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 
@@ -1927,7 +1915,7 @@ template <typename RelayInlineState>
 FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uintptr_t& cmd_ptr, uint32_t& local_downstream_data_ptr, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t length = cmd->relay_inline.length;
+    uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     // DPRINT("relay_inline_exec_buf_cmd: length={}\n", length);
@@ -1940,7 +1928,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
     RelayInlineState::cb_writer.acquire_pages(npages);
-    uint32_t stride = cmd->relay_inline.stride;
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_inline.stride);
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
@@ -1985,10 +1973,10 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
     uintptr_t& cmd_ptr, uint32_t& dispatch_data_ptr, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
 
-    uint32_t length = cmd->relay_inline.length;
+    uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    uint32_t stride = cmd->relay_inline.stride;
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_inline.stride);
 
     DispatchRelayInlineState::cb_writer.acquire_pages(1);
     if (dispatch_data_ptr == downstream_cb_end) {
@@ -2001,10 +1989,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
-        cq_noc_async_write_with_state_any_len<true, true>(
+        cq_noc_async_write_with_state_any_len<
+            true,
+            true,
+            CQNocWait::CQ_NOC_WAIT,
+            DispatchRelayInlineState::downstream_write_cmd_buf>(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #endif
         dispatch_data_ptr += remaining;
@@ -2023,10 +2013,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true>(
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        DispatchRelayInlineState::downstream_write_cmd_buf>(
         static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #endif
     dispatch_data_ptr += length;
@@ -2079,9 +2071,10 @@ void* copy_into_l1_cache(
 static uint32_t process_exec_buf_relay_paged_packed_cmd(
     uintptr_t& cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t total_length = cmd->relay_paged_packed.total_length;
-    uint32_t sub_cmds_length = cmd->relay_paged_packed.count * sizeof(CQPrefetchRelayPagedPackedSubCmd);
-    uint32_t stride = cmd->relay_paged_packed.stride;
+    uint32_t total_length = load_aligned<uint32_t>(&cmd->relay_paged_packed.total_length);
+    uint32_t sub_cmds_length =
+        load_aligned<uint16_t>(&cmd->relay_paged_packed.count) * sizeof(CQPrefetchRelayPagedPackedSubCmd);
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_paged_packed.stride);
     ASSERT(total_length > 0);
     // DPRINT("paged_packed: total_length={} stride={}\n", total_length, cmd->relay_paged_packed.stride);
 
@@ -2103,9 +2096,9 @@ uint32_t process_exec_buf_cmd(
 
     // setup exec_buf_state the first time
     exec_buf_state.page_id = 0;
-    exec_buf_state.base_addr = cmd->exec_buf.base_addr;
-    exec_buf_state.log_page_size = cmd->exec_buf.log_page_size;
-    exec_buf_state.pages = cmd->exec_buf.pages;
+    exec_buf_state.base_addr = load_aligned<uint32_t>(&cmd->exec_buf.base_addr);
+    exec_buf_state.log_page_size = load_aligned<uint32_t>(&cmd->exec_buf.log_page_size);
+    exec_buf_state.pages = load_aligned<uint32_t>(&cmd->exec_buf.pages);
     exec_buf_state.length = 0;
     exec_buf_state.read_ptr = cmddat_q_base;
     exec_buf_state.prefetch_length = 0;
@@ -2137,12 +2130,12 @@ uint32_t process_paged_to_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream
 
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
     uint32_t start_page = cmd->paged_to_ringbuffer.start_page;
-    uint32_t base_addr = cmd->paged_to_ringbuffer.base_addr;
+    uint32_t base_addr = load_aligned<uint32_t>(&cmd->paged_to_ringbuffer.base_addr);
     uint8_t log2_page_size = cmd->paged_to_ringbuffer.log2_page_size;
     uint32_t page_size = 1 << log2_page_size;
-    uint32_t length = cmd->paged_to_ringbuffer.length;
+    uint32_t length = load_aligned<uint32_t>(&cmd->paged_to_ringbuffer.length);
     uint8_t flags = cmd->paged_to_ringbuffer.flags;
-    uint32_t wp_update_offset = cmd->paged_to_ringbuffer.wp_offset_update;
+    uint32_t wp_update_offset = load_aligned<uint32_t>(&cmd->paged_to_ringbuffer.wp_offset_update);
 
     ASSERT(length <= wp_update_offset);
 
@@ -2182,7 +2175,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream
 
 uint32_t process_set_ringbuffer_offset(uintptr_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t offset = cmd->set_ringbuffer_offset.offset;
+    uint32_t offset = load_aligned<uint32_t>(&cmd->set_ringbuffer_offset.offset);
 
     if (cmd->set_ringbuffer_offset.update_wp) {
         ringbuffer_wp = scratch_db_base + offset;
@@ -2222,9 +2215,9 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t count = cmd->relay_ringbuffer.count;
+    uint32_t count = load_aligned<uint16_t>(&cmd->relay_ringbuffer.count);
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
-    uint32_t stride = cmd->relay_ringbuffer.stride;
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_ringbuffer.stride);
     // DPRINT("relay_ringbuffer: count={} stride={}\n", count, cmd->relay_ringbuffer.stride);
 
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
@@ -2259,9 +2252,9 @@ uint32_t process_relay_ringbuffer_cmd(uintptr_t cmd_ptr, uint32_t& downstream__d
 static uint32_t process_exec_buf_relay_ringbuffer_cmd(
     uintptr_t& cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t count = cmd->relay_ringbuffer.count;
+    uint32_t count = load_aligned<uint16_t>(&cmd->relay_ringbuffer.count);
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
-    uint32_t stride = cmd->relay_ringbuffer.stride;
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_ringbuffer.stride);
 
     copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
@@ -2275,6 +2268,8 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
+    // addr is not load_aligned-able: this sub-cmd is 12 bytes, so in an array every odd element's
+    // 8-byte addr lands 4-mod-8, and l1_cache only guarantees 4-byte alignment anyway.
     uint64_t current_addr = sub_cmd->addr;
     uint32_t current_length = sub_cmd->length;
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -2354,10 +2349,11 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_linear_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
-    uint32_t total_length = cmd->relay_linear_packed.total_length;
-    uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
-    uint32_t stride = cmd->relay_linear_packed.stride;
+    uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear_packed.noc_xy_addr);
+    uint32_t total_length = load_aligned<uint32_t>(&cmd->relay_linear_packed.total_length);
+    uint32_t sub_cmds_length =
+        load_aligned<uint16_t>(&cmd->relay_linear_packed.count) * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_linear_packed.stride);
     ASSERT(total_length > 0);
     // DPRINT("linear_packed: {} {}\n", total_length, cmd->relay_linear_packed.stride);
 
@@ -2393,10 +2389,11 @@ uint32_t process_relay_linear_packed_cmd(uintptr_t cmd_ptr, uint32_t& downstream
 static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uintptr_t& cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-    uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
-    uint32_t total_length = cmd->relay_linear_packed.total_length;
-    uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
-    uint32_t stride = cmd->relay_linear_packed.stride;
+    uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear_packed.noc_xy_addr);
+    uint32_t total_length = load_aligned<uint32_t>(&cmd->relay_linear_packed.total_length);
+    uint32_t sub_cmds_length =
+        load_aligned<uint16_t>(&cmd->relay_linear_packed.count) * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_linear_packed.stride);
 
     copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
@@ -2422,7 +2419,8 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT("relay_paged: {}\n", cmd_ptr);
             {
-                uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
+                uint32_t is_dram_and_length_adjust =
+                    load_aligned<uint16_t>(&cmd->relay_paged.is_dram_and_length_adjust);
                 uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
                 uint32_t start_page = cmd->relay_paged.start_page;
                 if (is_dram) {
@@ -2608,7 +2606,7 @@ static void relay_linear_to_downstream(
 uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_ptr) {
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = nullptr;
     cmd = uncached_l1_ptr<CQPrefetchCmdLarge>(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
-    uint64_t wlength = cmd->relay_linear_h.length;
+    uint64_t wlength = load_aligned<uint64_t>(&cmd->relay_linear_h.length);
     uint32_t scratch_read_addr = scratch_db_top[0];
     constexpr uint32_t start_offset = sizeof(CQPrefetchHToPrefetchDHeader);
     // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
@@ -2618,8 +2616,8 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
     dptr->header.raw_copy = true;
     scratch_read_addr += sizeof(CQPrefetchHToPrefetchDHeader);
 
-    uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
-    uint64_t read_addr = cmd->relay_linear_h.addr;
+    uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear_h.noc_xy_addr);
+    uint64_t read_addr = load_aligned<uint64_t>(&cmd->relay_linear_h.addr);
 
     // DPRINT("relay_linear_h: cmd_ptr:0x{:08x}, length:0x{:08x}, addr:0x{:08x}, nocxy:0x{:08x},
     // downstream_data_ptr:0x{:08x}\n",
@@ -2690,10 +2688,11 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
 uint32_t process_relay_linear_packed_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd =
         uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
-    uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
-    uint32_t total_length = cmd->relay_linear_packed.total_length;
-    uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
-    uint32_t stride = cmd->relay_linear_packed.stride;
+    uint32_t noc_xy_addr = load_aligned<uint32_t>(&cmd->relay_linear_packed.noc_xy_addr);
+    uint32_t total_length = load_aligned<uint32_t>(&cmd->relay_linear_packed.total_length);
+    uint32_t sub_cmds_length =
+        load_aligned<uint16_t>(&cmd->relay_linear_packed.count) * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t stride = load_aligned<uint32_t>(&cmd->relay_linear_packed.stride);
     ASSERT(total_length > 0);
 
     // Copy sub-commands into L1 cache (same pattern as process_relay_linear_packed_cmd)
@@ -3058,13 +3057,10 @@ void kernel_main_d() {
         num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
-#if !defined(ARCH_QUASAR)
-    // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
-#endif
 #endif
 
     // Initialize cmd_ptr tracking for release_pages synchronization assertions
@@ -3116,13 +3112,10 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
-#if !defined(ARCH_QUASAR)
-    // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
-#endif
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
@@ -3164,12 +3157,20 @@ void kernel_main() {
     } else {
         ASSERT(0);
     }
-    IDLE_ERISC_RETURN();
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    if (early_exit()) {
+        noc_async_full_barrier();
+        noc_clear_packet_tags(my_noc_index);
+        set_l1_data_cache<false>();
+        return;
+    }
+#endif
 
     // Confirm expected number of pages, spinning here is a leak
     DispatchRelayInlineState::cb_writer.wait_all_pages(downstream_cb_pages);
 
     noc_async_full_barrier();
+    noc_clear_packet_tags(my_noc_index);
 
     DPRINT("prefetcher_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();

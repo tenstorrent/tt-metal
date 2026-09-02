@@ -26,12 +26,14 @@ from ...layers.audio_ops import (
     _all_gather_t,
     _partition_t,
     _set_tpad_tail,
+    channel_factor,
     partition_channel,
 )
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 
@@ -52,7 +54,6 @@ class DilatedConv1d(_AlignedOutConv1d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -67,7 +68,6 @@ class DilatedConv1d(_AlignedOutConv1d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
 
@@ -85,9 +85,7 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -110,7 +108,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -128,7 +125,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -149,7 +145,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -169,7 +164,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -234,9 +228,7 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
@@ -271,6 +263,14 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
+        # conv_pre stays UNSHARDED under T-sharding: at (2048 -> 1024, k=7), the widest conv in the
+        # decode, the sharded path returns uninitialized memory (absmax 2.6e+11 vs a reference 1.391,
+        # -204 dB), which made every T-sharded decode wrong. A shape sweep found it the only one
+        # affected; `_partition_t` and `_t_neighbor_pad` were exact here. Replicating is near-free --
+        # conv_pre sees the 207-latent input, ~1/800th of the waveform -- so `_forward_device` runs it
+        # first and partitions T after. Not under channel-TP, where conv_pre's own
+        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
+        self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=upsample_initial_channel,
@@ -280,10 +280,9 @@ class Vocoder(Module):
             bias=True,
             mesh_device=mesh_device,
             dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
+            parallel_config=None if self._conv_pre_unsharded else parallel_config,
+            ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
         self.ups = ModuleList(
@@ -299,7 +298,6 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -320,9 +318,7 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
-                        prefer_mac=prefer_mac,
                         split_mode=split_mode,
-                        tap_matmul=tap_matmul,
                     )
                 )
 
@@ -341,7 +337,6 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -358,7 +353,6 @@ class Vocoder(Module):
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -448,18 +442,21 @@ class Vocoder(Module):
 
     @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
-        """Pure-device graph: partition → conv_pre → ups/AMP stack → act_post → conv_post →
+        """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
         T-gather. Fixed-shape device in/out, so this region is trace-capturable."""
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         t_pad = self._t_pad
+        pre_unsharded = self._conv_pre_unsharded
 
-        if sharded:
+        if sharded and not pre_unsharded:
+            # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
             x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
             x_dev = _partition_t(x_dev, self.parallel_config)
             x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
+        # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
         def _set_tail(xd, cumrate, mode):
@@ -478,7 +475,15 @@ class Vocoder(Module):
             )
 
         cumrate = 1
+        # Runs on the full replicated sequence -- see the constructor for why this one conv is not
+        # sharded. T is partitioned immediately afterwards, so everything downstream is sharded as
+        # before.
         x_dev = self.conv_pre(x_dev)
+
+        if sharded and pre_unsharded:
+            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)
+            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
@@ -525,7 +530,7 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
+        x_host = local_device_to_torch(x_dev)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:

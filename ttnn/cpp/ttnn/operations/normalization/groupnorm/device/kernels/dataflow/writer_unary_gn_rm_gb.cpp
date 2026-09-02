@@ -14,6 +14,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 // Queue the DRAM read of a gamma/beta row (TILE_WIDTH datums) into face 0; byte offsets scale with
 // datum size (2B bf16 / 4B fp32). Full row goes to face 0 (Blackhole DRAM reads need 64B granularity).
@@ -99,9 +102,14 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(9);
-    // Only read when has_row_mask; equals input_mask_tile_start_id on cores that do not hold a
-    // batch's final row-tile.
+    // Only read when has_row_mask. Under synthesis it is the per-core valid-row count; on the
+    // DRAM-read path it is where to read the row-masked set from. Both encode "does this core hold
+    // a batch's final row-tile" -- cores that do not get data making compute's switch a no-op.
+#if defined(MASK_SYNTHESIZE)
+    const uint32_t mask_rows_valid = get_arg_val<uint32_t>(10);
+#else
     const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(10);
+#endif
 
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
@@ -122,8 +130,8 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_out_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t single_tile_size_bytes = dfb_out.get_tile_size();
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 #ifdef UNTILIZE_OUT
     constexpr uint32_t tile_hw = get_named_compile_time_arg_val("TILE_HW");
     constexpr uint32_t tile_height = tile_hw / tile_width;
@@ -147,15 +155,72 @@ void kernel_main() {
     index_b_offset = 0;
     constexpr uint32_t row_tile_max_index = num_cols_tile_gamma_beta;
 
+#if defined(MASK_SYNTHESIZE)
+    // Group sizing for in-kernel mask synthesis — mirrors the host
+    // start_stride recurrence in groupnorm_input_mask.cpp:60-72.
+    //
+    // num_cols_per_group (above) is num_channels_per_group_mod_tile_w, used by
+    // the existing index_g_offset arithmetic. The mask synthesis path needs
+    // the FULL group size (num_channels_per_group) to compute end_stride
+    // correctly when block_wt > 1.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % tile_width;
+#endif
+
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if !defined(MASK_SYNTHESIZE)
         uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
+#endif
         index_g_offset = 0;
         row_offset = num_cols_per_group;
+#if defined(MASK_SYNTHESIZE)
+        uint32_t mask_row_offset = 0;
+#endif
 
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
             dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+            if constexpr (has_row_mask) {
+                // Compute consumes the mask with a full-tile mul_tiles here and selects a second,
+                // row-masked set on each batch's final row-tile, so both sets need all 32 rows.
+                // Set 1 zeroes rows >= mask_rows_valid, which is tile_width on cores that do not
+                // hold that row-tile -- making their second set identical to the first.
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
+                    l1_write_addr_input_mask,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    tile_width,  // set 0: every row valid
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
+                    l1_write_addr_input_mask + block_w * input_mask_single_tile_size_bytes,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    mask_rows_valid,  // set 1: the row-masked set
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+            } else {
+                tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                    l1_write_addr_input_mask,
+                    mask_row_offset,
+                    num_channels_per_group,
+                    block_w,
+                    input_mask_single_tile_size_bytes,
+                    tile_width,
+                    tt::tt_metal::groupnorm::BF16_ONE,
+                    tt::tt_metal::groupnorm::BF16_ZERO);
+            }
+            mask_row_offset =
+                tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, tile_width);
+#else
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     mask,
@@ -180,6 +245,7 @@ void kernel_main() {
                 }
             }
             noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
             dfb_input_mask.push_back(mask_tiles_per_group);
 
             if (i == 0 and b == 0) {
@@ -218,7 +284,7 @@ void kernel_main() {
                 generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
                     const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
@@ -243,7 +309,7 @@ void kernel_main() {
                 }
 
                 if constexpr (fuse_beta) {
-                    const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
                     const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
