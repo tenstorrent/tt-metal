@@ -100,6 +100,8 @@ inline int32_t bf16_to_q16(uint16_t bf16, int32_t clamp_q16) {
     return negative ? -magnitude : magnitude;
 }
 
+// Precondition: v != 0. __builtin_clz(0) is undefined, and the fallback loop
+// below would never terminate. Both callers check for zero first.
 inline uint32_t count_leading_zeros(uint32_t v) {
 #if defined(__GNUC__) || defined(__clang__)
     return static_cast<uint32_t>(__builtin_clz(v));
