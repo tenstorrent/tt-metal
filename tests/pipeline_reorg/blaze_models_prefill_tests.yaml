@@ -628,6 +628,7 @@
       timeout: 45
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  sp_config: sc1
 
 
 # TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
