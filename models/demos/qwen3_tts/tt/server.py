@@ -586,7 +586,9 @@ def _argmax_into(logits_tt: ttnn.Tensor, out_tok_tt: ttnn.Tensor) -> None:
     # End index per dim is logical_size - 1.
     end = [int(s) - 1 for s in logits_tt.shape]
     logits_rm = ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=end, use_multicore=True)
-    ttnn.argmax(logits_rm, dim=-1, keepdim=False, use_multicore=True, output_tensor=out_tok_tt)
+    # ttnn.argmax dropped its use_multicore kwarg; passing it raises TypeError, which made
+    # this whole greedy fast path dead code. Multicore selection is internal now.
+    ttnn.argmax(logits_rm, dim=-1, keepdim=False, output_tensor=out_tok_tt)
     ttnn.deallocate(logits_rm)
 
 
