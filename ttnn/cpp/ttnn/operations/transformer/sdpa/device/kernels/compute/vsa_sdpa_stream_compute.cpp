@@ -181,41 +181,48 @@ void kernel_main() {
         }
         stream_pack_to_unpack_sync();  // the chunk's probs must be visible (usually free by now)
         reconfig_data_format(cb_v_stream, cb_qk);
+        // MOP PV: one matmul_block per (block, inner) is a full Sqt x vDHt outer-product step
+        // (8 tile-MACs per issue instead of 8 no-MOP issues). PV has no transpose, so the MOP path
+        // is safe; kt_dim only sets the probs row stride, and a V slot's [Skt x vDHt] tile layout is
+        // exactly the [kt x ct] row-major block the MOP expects. DEST ends up row-major
+        // (sr * vDHt + vd), so each row's O tiles pack as ONE blocked call.
         uint32_t init_cols = 0;  // sparse listings make same-width (usually 1-block) visits common
         for (uint32_t i = 0; i < pend_n; ++i) {
             const Visit& v = pend_v[i];
             const uint32_t qk_cols = v.n * Skt;
             if (qk_cols != init_cols) {
-                mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, qk_cols);
+                matmul_block_init(cb_qk, cb_v_stream, /*transpose=*/0, vDHt, Sqt, qk_cols);
                 init_cols = qk_cols;
             }
             tile_regs_acquire();
-            for (uint32_t vd = 0; vd < vDHt; ++vd) {
-                for (uint32_t b = 0; b < v.n; ++b) {
-                    const uint32_t slot = v.entries[b] & 0xff;
-                    for (uint32_t inner = 0; inner < Skt; ++inner) {
-                        matmul_block_no_mop(
-                            cb_qk,
-                            cb_v_stream,
-                            /*in0=*/pend_qk_base + v.tile_base + b * Skt + inner,
-                            /*in1=*/slot * v_tiles_per_block + inner * vDHt + vd,
-                            /*dst=*/vd * Sqt,
-                            /*transpose=*/false,
-                            /*w=*/1,
-                            /*h=*/Sqt,
-                            /*stride=*/qk_cols);
-                    }
+            for (uint32_t b = 0; b < v.n; ++b) {
+                const uint32_t slot = v.entries[b] & 0xff;
+                for (uint32_t inner = 0; inner < Skt; ++inner) {
+                    matmul_block(
+                        cb_qk,
+                        cb_v_stream,
+                        /*in0=*/pend_qk_base + v.tile_base + b * Skt + inner,
+                        /*in1=*/slot * v_tiles_per_block + inner * vDHt,
+                        /*dst=*/0,
+                        /*transpose=*/0,
+                        /*ct=*/vDHt,
+                        /*rt=*/Sqt,
+                        /*kt=*/qk_cols);
                 }
             }
             tile_regs_commit();
             tile_regs_wait();
             const bool is_first = (v.flags & ROW_IS_FIRST) != 0;
             const uint32_t o_base_p = v.row_slot * Sqt * vDHt;
-            configure_row_pack_width(cb_o_res, 1);
+            const bool blocked_o = configure_row_pack_width(cb_o_res, vDHt);
             PACK((llk_pack_reconfig_l1_acc(is_first ? 0 : 1)));
-            for (uint32_t vd = 0; vd < vDHt; ++vd) {
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    pack_tile<true>(vd * Sqt + sr, cb_o_res, o_base_p + sr * vDHt + vd);
+            for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                if (blocked_o) {
+                    sdpa_pack_tile_ooo(sr * vDHt, cb_o_res, o_base_p + sr * vDHt);
+                } else {
+                    for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                        pack_tile<true>(sr * vDHt + vd, cb_o_res, o_base_p + sr * vDHt + vd);
+                    }
                 }
             }
             PACK((llk_pack_reconfig_l1_acc(0)));

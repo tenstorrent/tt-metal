@@ -194,6 +194,18 @@ no-MOP issue + delivery bandwidth) is ~28-32%; the 60% goal needs either coarser
 granularity (256-token blocks -- amortizes every per-visit cost 4x, projected ~2x util; model-level
 quality tradeoff) or exp/fidelity relaxation (excluded as lossy).
 
+Lever sweep (2026-09-02), rows-per-pass vs stream depth (`TT_VSA_RMAX`/`TT_VSA_DEPTH` knobs):
+(15,14) 16.2/16.2 | (15,16) L1 overflow | (12,18) HANG (workers stuck in try_emit landed/kack
+check; not depth-monotonic, untested config, not shipped) | (10,20) 17.4/16.5 | (8,22) 19.4/17.6.
+Trading resident rows for window depth is monotonically worse: the extra passes cost more than the
+wider batches return. Lever 1 closed at (15,14).
+
+Lever 3 (conditional rescale, 2026-09-02): UNPACK compares old/new max column-0 datums and
+broadcasts a per-chunk changed-mask; unchanged visits skip corr+rescale, with a compute-local sum
+parity so no carry copy is needed. Measured skip rate 40% (a visit spans 64 query rows; P(all
+unchanged) ~ e^{-64/k}), net neutral (16.5/16.4 vs 16.2/16.2) -- reverted, variant kept in
+scratchpad notes. Per-row granularity would skip ~95% but the rescale is per-tile anyway.
+
 Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 1/3/5/7):
 - SFPU exp (lossless, pack-thread): ~6.5 ms -- sets util ceiling ~60% ALONE if everything else hides under it
 - PACK thread total (exp + ~30 packs/visit): ~10 ms

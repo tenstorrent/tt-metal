@@ -137,8 +137,23 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
     const uint32_t idx_row_bytes = W * t.indices.element_size();
     const uint32_t counts_row_bytes = W * t.block_counts.element_size();
-    const uint32_t bitmap_bytes = ((kRMax * ((n_kv_blocks + 31) / 32) * 4 + 15) / 16) * 16;
-    const uint32_t ctrl_page_bytes = ((4 + kRMax) * 4 + 15) / 16 * 16;
+    // Residency vs. window trade (lever 1): fewer resident rows free L1 for a deeper stream ring
+    // (bigger windows -> more blocks per visit -> amortized softmax rounds) at the cost of more
+    // passes. Tuning knobs for the sweep; defaults are the committed values.
+    uint32_t rmax = kRMax;
+    uint32_t stream_depth = kStreamDepth;
+    if (const char* e = std::getenv("TT_VSA_RMAX"); e != nullptr && e[0] != '\0') {
+        rmax = static_cast<uint32_t>(std::atoi(e));
+    }
+    if (const char* e = std::getenv("TT_VSA_DEPTH"); e != nullptr && e[0] != '\0') {
+        stream_depth = static_cast<uint32_t>(std::atoi(e));
+    }
+    TT_FATAL(rmax >= 1 && rmax <= 16 && stream_depth >= 8 && stream_depth % 2 == 0, "bad rmax/depth");
+    const uint32_t log_depth = stream_depth + 8;  // arrival-log ring must exceed the slot ring + sentinel slack
+    const uint32_t bitmap_bytes = ((rmax * ((n_kv_blocks + 31) / 32) * 4 + 15) / 16) * 16;
+    // A VISIT message carries up to half_slots entries; the page must hold whichever is larger.
+    const uint32_t ctrl_words = 4 + ((rmax > stream_depth / 2) ? rmax : stream_depth / 2);
+    const uint32_t ctrl_page_bytes = (ctrl_words * 4 + 15) / 16 * 16;
 
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr uint32_t tile_bytes = tt::tile_size(bf);
@@ -185,29 +200,29 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
                 .buffer_index = static_cast<uint8_t>(idx), .data_format = df, .page_size = page_size}}},
         });
     };
-    cb(q_tile_bytes, kRMax * q_tiles_per_row, q_df);           // cb_q_res
-    cb(k_tile_bytes, kStreamDepth * k_tiles_per_block, k_df);  // cb_k_stream
-    cb(v_tile_bytes, kStreamDepth * v_tiles_per_block, v_df);  // cb_v_stream
-    cb(tile_bytes, kRMax * out_tiles_per_row, bf);             // cb_o_res
-    cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_max_res
-    cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_sum_res
+    cb(q_tile_bytes, rmax * q_tiles_per_row, q_df);           // cb_q_res
+    cb(k_tile_bytes, stream_depth * k_tiles_per_block, k_df);  // cb_k_stream
+    cb(v_tile_bytes, stream_depth * v_tiles_per_block, v_df);  // cb_v_stream
+    cb(tile_bytes, rmax * out_tiles_per_row, bf);             // cb_o_res
+    cb(tile_bytes, rmax * 2 * Sqt, bf);                       // cb_max_res
+    cb(tile_bytes, rmax * 2 * Sqt, bf);                       // cb_sum_res
     cb(tile_bytes, kRowGroup * Sqt, bf);                       // cb_corr
-    cb(tile_bytes, kStreamDepth * Skt * Sqt, bf);              // cb_qk (two ping-pong window regions)
+    cb(tile_bytes, stream_depth * Skt * Sqt, bf);              // cb_qk (two ping-pong window regions)
     cb(tile_bytes, 1, bf);                                     // cb_scale
     cb(tile_bytes, 1, bf);                                     // cb_col_identity
     cb(tile_bytes, 1, bf);                                     // cb_recip_scratch
     cb(tile_bytes, 1, bf);                                     // cb_neginf
-    cb(tile_bytes, kStreamDepth, bf);                          // cb_vmask (slot-indexed RAM)
+    cb(tile_bytes, stream_depth, bf);                          // cb_vmask (slot-indexed RAM)
     cb(ctrl_page_bytes, 8, bf);                                // cb_ctrl
-    cb(16, kStreamDepth, bf);                                  // cb_kreq
-    cb(16, kStreamDepth, bf);                                  // cb_kack
-    cb(16, kStreamDepth + 2, bf);                              // cb_free
+    cb(16, stream_depth, bf);                                  // cb_kreq
+    cb(16, stream_depth, bf);                                  // cb_kack
+    cb(16, stream_depth + 2, bf);                              // cb_free
     cb(16, 2, bf);                                             // cb_qdone
     cb(out_tile_bytes, 2 * out_tiles_per_row, out_df);         // cb_out
     cb(idx_row_bytes, 1, bf);                                  // cb_idxrow
     cb(counts_row_bytes, 1, bf);                               // cb_counts
     cb(bitmap_bytes, 1, bf);                                   // cb_bitmap
-    cb(16, kLogDepth, bf);                                     // cb_log
+    cb(16, log_depth, bf);                                     // cb_log
     cb(4 * kMaxWorkers, 1, bf);                                // cb_ackbox
 
     // ---- compile-time args ----
@@ -216,9 +231,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         n_kv_blocks,
         n_q_tiles,
         block_size,
-        kRMax,
-        kStreamDepth,
-        kLogDepth,
+        rmax,
+        stream_depth,
+        log_depth,
         k_tiles_per_block,
         v_tiles_per_block,
         v_head_stride,
@@ -239,7 +254,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
 
     std::vector<uint32_t> writer_ct = {
         n_q_tiles,
-        kRMax,
+        rmax,
         q_tiles_per_row,
         out_tiles_per_row,
         k_tiles_per_block,
@@ -256,10 +271,10 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {
-        DHt, vDHt, Skt, Sqt, kRMax, kRowGroup, block_size, scale_packed,
+        DHt, vDHt, Skt, Sqt, rmax, kRowGroup, block_size, scale_packed,
         cb_q_res, cb_k_stream, cb_v_stream, cb_o_res, cb_max_res, cb_sum_res, cb_corr, cb_qk,
         cb_scale, cb_col_identity, cb_recip_scratch, cb_neginf, cb_vmask, cb_ctrl, cb_free,
-        cb_qdone, cb_out, kStreamDepth};
+        cb_qdone, cb_out, stream_depth};
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -356,7 +371,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
                 max_rows += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
             }
         }
-        const uint32_t n_passes = is_idle ? 0 : (max_rows + kRMax - 1) / kRMax;
+        const uint32_t n_passes = is_idle ? 0 : (max_rows + rmax - 1) / rmax;
         // Chunked round-robin placement: 4-row contiguous chunks dealt cyclically across the
         // group's workers. Adjacent rows share most of their index sets (spatial correlation plus
         // the exempt prefix), so intra-chunk contiguity feeds the engine's multi-row batching,
