@@ -64,20 +64,13 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Hands out the tu_id half of a structural device zone id (hostdevcommon/profiler_zone_id.h) as
-// -DTT_PROFILER_TU_ID. Ids must be unique across translation units, since the local half is only unique
-// within one, and stable across runs, since a cached ELF keeps the id baked into its .tt_zone_meta
-// records -- hence a file rather than an in-memory counter.
-//
-// The key is source identity plus build target: the local half is a __COUNTER__ position, and one source
-// compiled for BRISC vs NCRISC pulls in different preprocessor-gated headers and can number its zones
-// differently. Compile-time args are left out to keep the registry bounded; the cost is that two
-// define-variants of one source share a tu_id, which the host reports as a zone-id collision
-// (llrt/zone_meta.cpp) rather than silently mis-naming.
-//
-// Append-only "<source_id>\t<tu_id>" lines, allocated lowest-free-id so a deleted registry rebuilds
-// compactly. flock() covers the whole read-modify-write against parallel builds sharing a cache root; the
-// process-local mutex covers the JIT's own thread pool.
+// Hands out the tu_id half of a structural zone id (hostdevcommon/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
+// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
+// hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
+// number its zones differently. Compile-time args are left out to keep the registry bounded; two
+// define-variants of one source then share a tu_id, which the host reports as a collision rather than
+// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
+// sharing a cache root, the mutex covers the JIT's own thread pool.
 uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
@@ -306,8 +299,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
 
-        // A define of its own rather than a PROFILER_OPT bit, so the sync-event hook headers can gate on
-        // it without parsing PROFILE_KERNEL's value.
+        // Its own define so the sync-event hook headers can gate on it without parsing PROFILE_KERNEL's value.
         if (rtoptions.get_profiler_sync_events_enabled()) {
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
@@ -738,13 +730,11 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    // Per-TU half of the structural device zone id. Kept out of `defines_`/`build_key_`: a tu_id is a
-    // property of the source, not of the build recipe, so folding it into the cache key would split the
-    // cache for no reason.
+    // Kept out of `defines_`/`build_key_`: a tu_id is a property of the source, not the build recipe.
     std::vector<std::string> defines = recipe.defines;
     if (env_.get_rtoptions().get_profiler_enabled()) {
-        // Firmware has no JitBuildSettings, so its identity is the source path plus the target. Not
-        // out_dir: that carries the build key and would mint a fresh tu_id per config for one source.
+        // Firmware has no JitBuildSettings, so its identity is the source path plus target; out_dir carries the build
+        // key and would mint a tu_id per config.
         const std::string source_id = (settings != nullptr)
                                           ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
                                           : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;

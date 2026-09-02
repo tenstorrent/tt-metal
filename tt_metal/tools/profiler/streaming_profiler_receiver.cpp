@@ -60,24 +60,20 @@ void StallIdMirror::refresh() {
 
 namespace {
 
-// Credit-return quantum: pop+ack every 8 decoded frames (about one relay push) rather than once per
-// pass, so the device sees credit at decode pace.
+// pop+ack every 8 decoded frames (about one relay push) so the device sees credit at decode pace.
 constexpr uint32_t kAckBatchFrames = 8;
-// Per-pass peek window (~680 KB). Pages peeked but not consumed are clflushed again by the next peek,
-// so the only re-flush waste is a partial tail frame.
+// Pages peeked but not consumed are clflushed again by the next peek, so the only re-flush waste is a partial
+// tail frame.
 constexpr uint32_t kMaxPagesPerPass = 64 * profiler::kSpscMaxFramePages;
 constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr size_t kConsumerScratchRecs = 1 << 16;
-// Ring lines a consumer pulls per read (256 KB scratch), and the records one frame can decode to at
-// most (payload <= 2640 words, 2 words per record, plus DATA head/ext expansion slack).
+// Ring lines per consumer read (256 KB scratch), and the most records one frame can decode to (payload <= 2640
+// words, 2 words per record, plus DATA expansion slack).
 constexpr size_t kConsumerLineBatch = 1 << 12;
 constexpr size_t kMaxFrameRecs = 2048;
 constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
-// Decode threads probe the FIFO at least this often when idle; consumers are latency-tolerant and may
-// sleep longer. Anything under ~50 us needs the timer slack shrunk or sleep_for quietly rounds up to it.
-// Deliberately tiny despite the wakeup cost: the sleep is a window in which no credit is returned at all,
-// and raising it to 200 us to reclaim cores doubled the relays' worst credit wait and multiplied producer
-// stalls several-fold.
+// Idle probe period. Under ~50 us sleep_for rounds up unless the timer slack is shrunk; raising it to 200 us
+// doubled the relays' worst credit wait, since no credit returns during the sleep.
 constexpr uint32_t kProbeSleepCapUs = 5;
 
 namespace {
@@ -180,10 +176,8 @@ StreamingProfilerReceiver::StreamingProfilerReceiver(std::vector<ReceiverDeviceC
 
 StreamingProfilerReceiver::~StreamingProfilerReceiver() { shutdown(); }
 
-// Pin each ring's pages to its device's node and fault them here, before the workload can produce: the
-// ~400 MB per stream would otherwise be faulted by the decode thread with the producers already running.
-// numa_tonode_memory makes placement independent of the touching thread, so the prefault can run
-// anywhere -- one thread per stream, bound to that node so the zeroing is local.
+// Pin each ring to its device's node and fault it before the workload produces; numa_tonode_memory makes
+// placement independent of the touching thread, so one thread per stream bound to that node zeroes locally.
 void StreamingProfilerReceiver::prefault_rings() {
     std::vector<std::thread> pf;
     pf.reserve(streams_.size());
@@ -227,10 +221,9 @@ void StreamingProfilerReceiver::start() {
 }
 
 namespace {
-// Whole aligned lines, each written once by one NT store: the ring is written at wire rate and read back
-// cold by consumers, so cached stores would only pollute both sides' caches. The source is cold DRAM, so
-// the distance prefetch keeps lines in flight -- it runs into the next frame's bytes, which sit
-// contiguously behind this one in the FIFO.
+// Whole aligned lines, one NT store each: the ring is written at wire rate and read back cold, so cached
+// stores would pollute both sides. The distance prefetch runs into the next frame, which sits contiguously
+// behind this one in the FIFO.
 __attribute__((target("avx512f"))) void ingest_copy_lines_512(
     BroadcastRing<StreamingProfilerRingLine>::Writer& w, uint64_t lpos, const uint32_t* frame, uint32_t nlines) {
     for (uint32_t k = 0; k < nlines; k++) {
@@ -358,10 +351,8 @@ bool StreamingProfilerReceiver::ingest_pass(Stream& s) {
 }
 
 void StreamingProfilerReceiver::decode_thread(std::vector<Stream*> streams) {
-    // Run on the node the ring was bound to: this thread NT-stores into the ring at tens of GB/s while
-    // reading the FIFO at tens more, so a cross-node ring puts every store on the interconnect -- one
-    // stream took 172 ms of frame time against a peer's 111 ms for the same work, and the slowest stream
-    // gates the pipeline: its relay blocks on credit, its ring fills, its producers stall.
+    // Run on the ring's node: this thread NT-stores into the ring at tens of GB/s while reading the FIFO, a
+    // cross-node ring puts every store on the interconnect, and the slowest stream gates the pipeline.
     if (!streams.empty() && streams.front()->ring_node >= 0) {
         bind_current_thread_to_numa_node(streams.front()->ring_node);
     }
@@ -455,17 +446,14 @@ void StreamingProfilerReceiver::remove_consumer(StreamingProfilerConsumerHandle 
     }
 }
 
-// Baseline code: nothing here may carry an AVX-512 target attribute or the compiler could emit AVX-512
-// into paths that run on any host. The 512-bit kernels are separate attributed functions, called once
-// per block and gated on spsc_host_avx512().
+// Baseline code: no AVX-512 target attribute here, or the compiler could emit it into paths that run on any
+// host. The 512-bit kernels are separate attributed functions gated on spsc_host_avx512().
 namespace {
 
-// One stream's decode, owned by one consumer thread. The Sink type decides what a decoded record
-// becomes: SpscCachedRecSink composes 24 B records into the consumer's scratch (cached stores -- the
-// scratch is re-read immediately by the same thread), while SpscNullRecSink composes nothing and the
-// vector blocks skip their compose entirely -- that is the audit, which only wants the wire-integrity
-// accounting. `st`/`last_ts` are externally owned so the audit can decode straight into the Stream's
-// report fields while user consumers keep private copies.
+// One stream's decode, owned by one consumer thread. The Sink decides what a record becomes:
+// SpscCachedRecSink composes 24 B records into the consumer's scratch, SpscNullRecSink composes nothing (the
+// audit, which wants only wire-integrity accounting). `st`/`last_ts` are externally owned so the audit
+// decodes straight into the Stream's report fields.
 template <typename Sink>
 struct StreamDecoder {
     using SinkT = Sink;
@@ -486,9 +474,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     namespace profiler = tt::tt_metal::profiler;
     using tt::tt_metal::streaming_profiler::StreamingProfilerRawRecType;
     stall_ids.refresh();
-    // Raw locals for the per-marker probe and tallies: the emitters store through casted pointers, so
-    // anything reached via `this` would be reloaded after every store. Locals whose address never
-    // escapes stay in registers.
+    // Raw locals: the emitters store through casted pointers, so anything reached via `this` would be reloaded
+    // after every store.
     const uint32_t* const stall_tab = stall_ids.table.empty() ? nullptr : stall_ids.table.data();
     const uint32_t stall_mask = stall_ids.mask;
     auto is_stall = [stall_tab, stall_mask](uint32_t id) -> bool {
@@ -525,12 +512,10 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             rt = type == PP_ZONE_START ? StreamingProfilerRawRecType::ZoneStart : StreamingProfilerRawRecType::ZoneEnd;
         }
         if (type != PP_ZONE_TOTAL) {
-            // Counted in halves: a ZONE_ATOMIC record is a whole zone, a START/END is half of one, and
-            // every reader of this counter divides by two.
+            // Counted in halves: an atomic record is a whole zone, a START/END is half; every reader divides by two.
             zm += type == PP_ZONE_ATOMIC ? 2 : 1;
-            // PRODUCER-STALL, matched by ELF-resolved name via the id table: a producer RISC blocked on
-            // a full ring. Stall zones ship as single ZONE_ATOMIC packets, one per stall event; the START
-            // probe covers the non-atomic path.
+            // PRODUCER-STALL, matched by ELF-resolved name: a producer RISC blocked on a full ring. Stall zones ship as
+            // single atomic packets; the START probe covers the non-atomic path.
             sz += ((type == PP_ZONE_ATOMIC || type == PP_ZONE_START) && is_stall(zone_id)) ? 1 : 0;
             if (ts < lts[lane]) {
                 oreg++;
@@ -555,8 +540,7 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
                          const uint32_t* payload,
                          uint32_t n) {
         const uint64_t pg = prog;
-        // PP_EVENT is payload-less by wire shape: one record is the whole packet, and no Ext or Cont
-        // ever follows an Event.
+        // PP_EVENT is payload-less: one record is the whole packet, no Ext or Cont follows.
         if (type != PP_DATA) {
             rc++;
             if constexpr (Sink::kStores) {
@@ -566,8 +550,7 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
         }
         rc += 2 + (n > 2 ? (n - 1) / 2 : 0);
         if constexpr (Sink::kStores) {
-            // Ext carries the payload count in its id field and payload words 1-2 in its ts field, so a
-            // short DATA is two records.
+            // Ext carries the payload count in its id and payload words 1-2 in its ts, so a short DATA is two records.
             const uint64_t hi0 = n >= 1 ? payload[0] : 0;
             const uint64_t lo0 = n >= 2 ? payload[1] : 0;
             sk.put3(ts, meta_hi(lane, StreamingProfilerRawRecType::Data) | id, pg);
@@ -585,9 +568,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
 #if defined(__AVX2__)
     auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
         zm += 8;
-        // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
-        // the boundary compare still catches every head-mirror/resync error class. th is block-constant,
-        // so comparing on it is exact.
+        // Order checked at block endpoints only: the producer guarantees monotonicity inside a run, so the boundary
+        // compare catches every head-mirror/resync error. th is block-constant.
         const uint64_t ts_first =
             (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 0));
         const uint64_t ts_last =
@@ -608,9 +590,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             sz += (((end_mask >> k) & 1u) == 0 && is_stall(id_arr[k])) ? 1 : 0;
         }
         if constexpr (Sink::kStores) {
-            // A 24 B record is three quadwords: q0 = ts (th<<32 | w1), q1 = meta<<32 | id27, q2 = prog.
-            // meta = lane | dev | type, with type = ZoneStart + the wire's END bit (an ADD, not an OR --
-            // the type field is a small integer, not a bit set).
+            // q0 = ts (th<<32 | w1), q1 = meta<<32 | id27, q2 = prog; type = ZoneStart + the wire's END bit, an add
+            // (the type field is a small integer, not a bit set).
             const uint32_t meta_base = (lane << 16) | (d << 26) | (1u << 29);  // type = ZoneStart
             const __m256i meta = _mm256_add_epi32(
                 _mm256_slli_epi32(_mm256_and_si256(w0s, _mm256_set1_epi32(0x08000000)), 2),  // END: +1 in type
@@ -639,8 +620,7 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             return 0;
         }
         zm += a.n * 2;  // halves: every record in an atomic block is a whole zone
-        // Stall zones ride the atomic wire, so the block pays the id probe: one L1 load per record on
-        // the miss path.
+        // Stall zones ride the atomic wire, so the block pays the id probe: one L1 load per record on the miss path.
         if (stall_tab != nullptr) {
             for (uint32_t k = 0; k < a.n; k++) {
                 sz += is_stall(src[3u * k] & 0x07FFFFFFu) ? 1 : 0;
@@ -664,8 +644,7 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             return z;
         }
         zm += z.n * 2;
-        // Exact here, not sampled: in-block ends are cursor + positive deltas, monotonic by
-        // construction.
+        // Exact, not sampled: in-block ends are cursor + positive deltas.
         oreg += z.ts_first < lts[lane] ? 1 : 0;
         lts[lane] = z.ts_last;
         if (mn == 0) {
@@ -716,9 +695,8 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
     }
     std::vector<StreamingProfilerRingLine> lines(kConsumerLineBatch);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
-    // Frame re-assembly, per ring: ring lines accumulate here until a whole frame is present. After a
-    // drop the stream position is arbitrary, so scan line by line for the next plausible frame head --
-    // the decoder's head-adoption path then counts the gap as a resync, as for a device-side loss.
+    // Ring lines accumulate here until a whole frame is present. After a drop the position is arbitrary, so scan
+    // line by line for the next plausible head; the decoder's head adoption then counts the gap as a resync.
     struct Assembly {
         std::vector<uint32_t> pending;
         bool scanning = false;
@@ -752,11 +730,9 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
             udecs[i].sink.buf = reinterpret_cast<uint8_t*>(scratch.data());
         }
     }
-    // The pairing stage (public consumers only). Zones are RAII scopes on the device, so per lane the
-    // raw stream obeys strict stack discipline: push on ZoneStart, pop on ZoneEnd, and the pop's mate is
-    // the matching open. One stack per (dev, lane), owned by this thread -- every consumer thread reads
-    // the whole ring independently, so there is no sharing and no lock. A Zone record is emitted at END
-    // time; everything else converts 1:1.
+    // Pairing (public consumers only): zones are RAII scopes on the device, so per lane the raw stream obeys
+    // stack discipline, push on ZoneStart and pop on ZoneEnd. One stack per (dev, lane), owned by this thread. A
+    // Zone record is emitted at END time; everything else converts 1:1.
     struct OpenZone {
         uint64_t ts;
         uint32_t id;
@@ -830,9 +806,8 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
             }
         }
     };
-    // Hand the scratch records (plus the ring-drop and stall deltas) to the callback, then reset the
-    // scratch. The audit has no callback: it publishes its tallies into the Stream's report fields
-    // instead, and is their only writer.
+    // The audit has no callback: it publishes its tallies into the Stream's report fields and is their only
+    // writer.
     auto deliver = [&](auto& dec, size_t r, uint64_t& dd) {
         using DT = std::decay_t<decltype(dec)>;
         if constexpr (std::is_same_v<typename DT::SinkT, profiler::SpscCachedRecSink>) {
@@ -943,9 +918,8 @@ void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
     for (auto& r : readers) {
         c.dropped += r.dropped();
     }
-    // A lossless capture ends with every stack empty: the producers close every scope they open and the
-    // quiesce path drains to the last marker. Leftover opens mean records were lost (ring drops for this
-    // consumer) or a start/end pair was corrupted.
+    // A lossless capture ends with every stack empty; leftover opens mean records were lost (ring drops for this
+    // consumer) or a pair was corrupted.
     uint64_t leftover_opens = 0;
     for (const auto& st : stacks) {
         leftover_opens += st.size();
@@ -1016,8 +990,8 @@ void StreamingProfilerReceiver::log_report() const {
     uint64_t total_pages = 0, total_wire_words = 0, total_zone_markers = 0, total_resync_words = 0;
     uint64_t busy_ticks = 0, order_regressions = 0;
     uint64_t first_tsc = 0, last_tsc = 0;
-    // Busy is the busiest thread, so ticks group by owning thread (stream i -> thread i % nthreads_) and
-    // not by stream: with fewer threads than sockets a per-stream max understates busy several-fold.
+    // Busy is the busiest thread, so ticks group by owning thread (stream i -> thread i % nthreads_); with fewer
+    // threads than sockets a per-stream max understates busy.
     std::vector<uint64_t> thread_ticks(std::max<uint32_t>(nthreads_, 1), 0);
     for (size_t i = 0; i < streams_.size(); i++) {
         const Stream& s = *streams_[i];

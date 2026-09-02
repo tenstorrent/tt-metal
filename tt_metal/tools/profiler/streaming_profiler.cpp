@@ -60,8 +60,7 @@ namespace pz = tt::tt_metal::profiler;
 
 namespace {
 
-// DRAM view ids the relays occupy, one per relay. Views 7 and 2 sit at the end of the roster so that a
-// roster truncated to fewer relays sheds the historically bring-up-fragile views first.
+// Views 7 and 2 last: a roster truncated to fewer relays sheds the bring-up-fragile views first.
 constexpr std::array<uint32_t, 8> kRelayBankRoster = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
 
 // Staging slots per relay, capped at what a DRISC's L1 fits.
@@ -69,11 +68,9 @@ constexpr uint32_t kMaxStageSlots = 7;
 
 }  // namespace
 
-// Host<->device clock sync. Without one, AddDevice() can only anchor "device time 0" at the host time the
-// first marker was CONSUMED, which lags production by the whole drain+decode latency and shifts every
-// device zone right of the host CPU zones. Done host-side: read the Tensix wall clock (the counter kernel
-// markers timestamp with) straight over NoC, bracketed by host clock reads -- Cristian's algorithm, whose
-// bracket midpoint cancels the round-trip to first order.
+// Host<->device clock sync: the Tensix wall clock is read over NoC bracketed by host clock reads (Cristian's
+// algorithm; the midpoint cancels the round trip to first order). Without it device zones anchor at the time
+// the first marker was consumed and lag the host zones by the drain latency.
 struct StreamingProfilerSync {
     double frequency = 0.0;  // device cycles per nanosecond (GHz)
     uint64_t device_at_anchor = 0;
@@ -81,15 +78,12 @@ struct StreamingProfilerSync {
     bool valid = false;
 };
 
-// spacing_us spreads the samples out to lengthen the regression baseline: at 0 (back-to-back) the baseline
-// is only ~360 us -- 100 samples x ~3.6 us of MMIO round trip -- and with ~us of host-timestamp jitter the
-// fitted frequency then carries ~1e-4 of error. That is a rate error, so it grows with time since the
-// anchor and shows up as rows drifting apart rather than as a constant skew.
+// spacing_us lengthens the regression baseline: back-to-back samples span only ~360 us and the fitted
+// frequency then carries ~1e-4 of error, which grows with time since the anchor.
 StreamingProfilerSync sync_device_clock(
     tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker, uint32_t spacing_us = 0) {
-    // RISCV_DEBUG_REG_WALL_CLOCK_L/H are Tensix-tile debug registers by spec, but a DRAM tile answers them
-    // too (measured on all 7 views with `test_streaming_profiler_zones --clkprobe 1`), which is what makes
-    // the per-core anchor below possible.
+    // RISCV_DEBUG_REG_WALL_CLOCK_L/H are Tensix debug registers by spec, but a DRAM tile answers them too, which
+    // is what allows a per-relay anchor.
     constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
     constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
     constexpr uint32_t kSamples = 100;
@@ -121,7 +115,7 @@ StreamingProfilerSync sync_device_clock(
     std::sort(rts.begin(), rts.end());
     const int64_t rt_cut = rts[rts.size() / 2] + rts[rts.size() / 2] / 2;
 
-    // Centered least squares (centering avoids catastrophic cancellation at absolute-timestamp magnitudes).
+    // Centered least squares: centering avoids cancellation at absolute-timestamp magnitudes.
     double hx = 0, dy = 0;
     uint32_t n = 0;
     for (const auto& s : samples) {
@@ -158,16 +152,16 @@ StreamingProfilerSync sync_device_clock(
     const double ns_per_tick = 1.0;
 #endif
     out.frequency = slope / (ns_per_tick > 0.0 ? ns_per_tick : 1.0);  // cycles per ns
-    // Anchor on the sample mean (self-consistent: device time AT that host time), rather than extrapolating
-    // an intercept back to host_time=0 where a tiny slope error becomes a huge offset.
+    // Anchor on the sample mean: extrapolating an intercept to host_time=0 turns a tiny slope error into a huge
+    // offset.
     out.host_anchor = static_cast<int64_t>(hx);
     out.device_at_anchor = static_cast<uint64_t>(dy);
     out.valid = out.frequency > 0.0;
     return out;
 }
 
-// Last bring-up step entered. Bring-up runs several distinct MMIO paths and a hang in any of them reports
-// only "MMIO per-op timeout", so this is what names the stall site.
+// Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
+// the stall site.
 thread_local std::string g_bringup_step = "(not started)";
 
 StreamingProfiler::DeviceCtx::DeviceCtx() = default;
@@ -200,9 +194,7 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 
     tracy_ = std::make_unique<StreamingProfilerTracyHandler>();
-    // Zone names are not loaded here or on the first drain: they arrive per-ELF as each binary is loaded
-    // (llrt::ZoneMetaRegistry). At MeshDevice bring-up no workload kernel has been compiled yet, and by the
-    // first drain the later kernels still have not been.
+    // Zone names arrive per ELF as binaries load (llrt::ZoneMetaRegistry); none exist at bring-up.
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
@@ -213,9 +205,6 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         if (!boot_device(mesh_device, ctx, coord)) {
             continue;  // boot logs its own reason; degrade to no-capture for this device
         }
-        // Anchor the device timeline with a measured clock sync (see sync_device_clock). The fallback --
-        // aiclk plus "device 0 == now" -- places device zones relative to the first marker consumed, so they
-        // lag the host zones by the drain latency.
         double freq = cluster.get_device_aiclk(ctx.chip_id) / 1000.0;
         if (freq <= 0.0) {
             freq = 1.0;
@@ -223,8 +212,8 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         StreamingProfilerSync sync;
         if (!ctx.core_virt.empty()) {
             const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
-            // 100 samples x 500 us spans ~50 ms of baseline instead of ~360 us, cutting the fitted-frequency
-            // error by the baseline ratio (~140x). This is the one frequency every context on this chip uses.
+            // 500 us spacing spans ~50 ms of baseline instead of ~360 us; this is the one frequency every context on
+            // the chip uses.
             sync = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
         }
         if (sync.valid) {
@@ -249,15 +238,12 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             ctx.freq_ghz = freq;
             tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
         }
-        // A relay does not share the worker's clock origin. Both counters zero at chip reset, but the Tensix
-        // domain is clocked only while out of reset (measured 1.8 s per 32 s of wall against the DRAM core's
-        // 19.8 s), so a chip-wide worker anchor put DRISC rows up to 42 minutes to the right while their
-        // spans stayed correct to 0.17%. The duty ratio is unpredictable from the host and board-dependent
-        // (on another part the same offset is 3 us), so each relay core gets its own measured anchor.
+        // A relay does not share the worker clock origin: both counters zero at chip reset, but the Tensix domain is
+        // clocked only while out of reset, so a chip-wide worker anchor puts DRISC rows minutes to the right by a
+        // board-dependent duty ratio. Each relay core gets its own anchor.
         if (sync.valid && tracy_ != nullptr) {
             for (uint32_t d = 0; d < ctx.n_drisc; d++) {
-                // Keyed on NOC0 like every other context lookup, while the register read needs the virtual
-                // pair. No mapping means self-profiling is off, so this core has no Tracy row to anchor.
+                // Keyed on NOC0 like every other context lookup; no mapping means self-profiling is off.
                 const auto nit = ctx.virt_to_noc0.find(
                     (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
                     static_cast<uint64_t>(ctx.drisc_virtual[d].y));
@@ -266,8 +252,7 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 }
                 const StreamingProfilerSync ds = sync_device_clock(cluster, ctx.chip_id, ctx.drisc_virtual[d]);
                 if (!ds.valid) {
-                    // Degrade to the worker anchor rather than dropping the rows: a misplaced row is still
-                    // readable, an absent one is not.
+                    // Degrade to the worker anchor: a misplaced row is still readable, an absent one is not.
                     log_warning(
                         tt::LogMetal,
                         "[streaming profiler] Device {} DRISC {} at NOC0 ({},{}): DRAM-core clock sync FAILED; "
@@ -279,10 +264,8 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                         nit->second.second);
                     continue;
                 }
-                // One shared frequency, per-core anchors. Alignment is relative, so a shared rate makes
-                // differential drift zero by construction and any error in it is common-mode. The cores' true
-                // rates agree to ~5 ppm while their individual fits scatter over ~99 ppm, so fitting per core
-                // would trade a 5 ppm physical term for a 99 ppm noise one.
+                // One shared frequency, per-core anchors: a shared rate makes differential drift zero by construction,
+                // and the cores' true rates agree to ~5 ppm while individual fits scatter over ~99 ppm.
                 tracy_->AddCore(
                     ctx.chip_id,
                     nit->second.first,
@@ -311,15 +294,14 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                     off_ms);
             }
         }
-        // Per-core Tracy contexts are created lazily on each core's first zone: only ~16 of ~110 cores
-        // typically run the workload, and pre-creating the grid litters the capture with empty contexts
-        // that read as "cores not showing up".
+        // Contexts are created on each core's first zone: pre-creating the grid litters the capture with empty rows
+        // for cores that never ran.
         ctx.active = true;
         devices_.push_back(std::move(ctx));
     }
 
-    // Built after devices_ is stable: socket ownership moves into the receiver, and the lane tables it
-    // hands consumers are flattened here so no consumer ever does a per-record hash lookup.
+    // After devices_ is stable: socket ownership moves into the receiver, and the lane tables are flattened so
+    // no consumer does a per-record hash lookup.
     if (!devices_.empty()) {
         std::vector<streaming_profiler::ReceiverDeviceConfig> rdevs;
         for (auto& ctx : devices_) {
@@ -363,8 +345,8 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         receiver_ = std::make_unique<streaming_profiler::StreamingProfilerReceiver>(std::move(rdevs));
         if (rtopts.get_streaming_profiler_tracy_enabled()) {
             tracy_consumer_ = std::make_unique<streaming_profiler::StreamingProfilerTracyConsumer>(tracy_.get());
-            // Tracy takes device zones whole (one QueueGpuZone item per zone), and the paired stream's
-            // per-lane completion order is the order the Tracy server rebuilds nesting from.
+            // Tracy takes zones whole; the paired stream's per-lane completion order is what the server rebuilds
+            // nesting from.
             receiver_->add_consumer(
                 "tracy",
                 [c = tracy_consumer_.get()](const streaming_profiler::StreamingProfilerRecordBatch& b) { (*c)(b); });
@@ -384,15 +366,10 @@ void StreamingProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 }
 
-// Put every relay's NIU into stream mode (1) or back to NOC2AXI (0). Run to completion because D2HSocket
-// construction writes the config into DRISC L1 from the host, which only lands once the NIU terminates
-// inbound traffic at L1 instead of forwarding it to GDDR.
-//
-// One launch for all of them. Every LaunchProgram carries a dram_barrier, which MMIO-polls a core
-// in every DRAM channel, so flipping one relay per launch makes the second flip's barrier address a core
-// that is already in stream mode -- where an inbound DRAM-range address no longer means what the barrier
-// assumes -- and the read never completes (~210 ms root-port completion timeout). One launch is one
-// barrier, before any core is flipped. Restores (stream -> noc2axi) go through the same path.
+// Stream mode (1) or NOC2AXI (0) for every relay's NIU, in one launch, run to completion. D2HSocket
+// construction writes its config into DRISC L1 from the host, which only lands once the NIU terminates
+// inbound traffic at L1. One launch: every LaunchProgram carries a dram_barrier that MMIO-polls a core in
+// every DRAM channel, and a barrier that reaches a core already in stream mode never completes.
 void StreamingProfiler::set_drisc_niu_mode(
     IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream) {
     if (drisc_logicals.empty()) {
@@ -413,9 +390,8 @@ void StreamingProfiler::set_drisc_niu_mode(
     detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
     g_bringup_step = who + ":WriteRuntimeArgs";
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
-    // Split into launch and wait so a failure names which half stalled. The barrier runs before any core
-    // is in stream mode, so a failure on the first label means a core was already in stream mode when this
-    // run began -- a restore that did not complete, or a reset that did not cover it.
+    // Launch and wait split so a failure names which half stalled; a stall on the first label means a core was
+    // already in stream mode when this run began.
     g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
     detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
     g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
@@ -423,10 +399,8 @@ void StreamingProfiler::set_drisc_niu_mode(
     g_bringup_step = who + ":done";
 }
 
-// Producers are armed by TT_METAL_DEVICE_PROFILER, not by us, and a lossless producer blocks on a full
-// ring. So whenever the relay fails to come up the workload does not merely lose its capture, it wedges
-// with every lane parked in ring_ensure_room. PROFILER_TERMINATE exists for this: while set, the producer
-// stops blocking and proceeds.
+// Producers are armed by TT_METAL_DEVICE_PROFILER and block on a full ring, so a relay that fails to come up
+// wedges the workload; PROFILER_TERMINATE makes the producer proceed instead.
 void StreamingProfiler::disarm_producers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -456,11 +430,9 @@ void StreamingProfiler::disarm_producers(
         n);
 }
 
-// Wait until every producer's ring is empty with the relays still running: head is relay-written and tail
-// is producer-written, so head == tail on every RISC means the consumer has taken everything published.
-//
-// This must precede the quiesce. Dispatch cores keep emitting zones through device close, so with the
-// relays already stopped they would park in ring_ensure_room for however long that takes.
+// Head is relay-written and tail producer-written, so head == tail on every RISC means everything published
+// was consumed. Must precede the quiesce: dispatch cores emit zones through device close and would park in
+// ring_ensure_room against stopped relays.
 bool StreamingProfiler::wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget) {
     if (ctx.core_virt.empty()) {
         return true;
@@ -499,8 +471,8 @@ bool StreamingProfiler::wait_producer_rings_drained(DeviceCtx& ctx, std::chrono:
     return pending == 0;
 }
 
-// Last resort, and the only path that drops a marker: a producer still publishing after the drain budget
-// expired. Unblocking it keeps device close from wedging in wait_until_cores_done().
+// The only path that drops a marker: a producer still publishing after the drain budget, unblocked so device
+// close does not wedge in wait_until_cores_done().
 void StreamingProfiler::disarm_producer_backpressure(DeviceCtx& ctx) {
     if (ctx.core_virt.empty()) {
         return;
@@ -522,17 +494,10 @@ void StreamingProfiler::disarm_producer_backpressure(DeviceCtx& ctx) {
 
 namespace {
 
-// A static TLB window skips UMD's per-access TLB reconfigure on the socket's per-read ack write:
-// measured 171 ns/write static against 382 ns dynamic.
-//
-// Metal maps static windows at device init for workers/eth/dispatch and, on Blackhole, one 4 GB
-// window per DRAM channel -- but only on that channel's preferred worker endpoint port
-// (ll_api::configure_static_tlbs -> blackhole::ddr_to_noc0 takes the channel's last of 3 NoC ports).
-// The relay deliberately sits on the unused port, so its core is not in that map and the socket
-// would otherwise find no window. 2 MB at address 0 spans the DRISC's whole 128 KB L1
-// (MEM_DRISC_L1_BASE = 0), and Strict ordering matches what workers get.
-//
-// Best-effort: a window is a finite device resource, and losing the race only costs the ~210 ns.
+// A static TLB window skips UMD's per-access reconfigure on the socket's ack write (171 vs 382 ns). Metal
+// maps a window per DRAM channel only on the channel's preferred worker endpoint port (configure_static_tlbs
+// -> ddr_to_noc0) and the relay sits on the unused port, so it maps its own: 2 MB at address 0 spans the whole
+// 128 KB DRISC L1. Best-effort: windows are finite, and losing the race costs only the ~210 ns.
 void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual, uint32_t d) {
     if (cluster.is_mock_or_emulated()) {
         return;
@@ -556,9 +521,8 @@ void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const 
     }
 }
 
-// A resident relay is launched fire-and-forget, so a core that fails to come out of reset produces no
-// error: the producers fill their rings, block (they are lossless), and the workload wedges forever with
-// a perfectly healthy card. Poll the heartbeat instead of assuming -- it must leave 0 and then advance.
+// A resident relay launches fire-and-forget, so a core that never leaves reset produces no error and the
+// workload wedges on full rings; the heartbeat must leave 0 and then advance.
 bool relay_heartbeat_advanced(
     tt::Cluster& cluster,
     uint32_t device_id,
@@ -576,8 +540,7 @@ bool relay_heartbeat_advanced(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    // Poll for advance rather than sampling once: a single short sample cannot tell a dead relay
-    // from a slow one. 200 ms is ~6000 idle sweeps of headroom at 30 us/sweep.
+    // A single sample cannot tell a dead relay from a slow one; 200 ms is ~6000 idle sweeps.
     if (hb0 != 0) {
         const auto adv_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
         do {
@@ -608,10 +571,7 @@ bool relay_heartbeat_advanced(
 
 }  // namespace
 
-// Pre-zero every core's profiler control vector and build the maps the host owns: core index ->
-// virtual (x,y), which is the relay's poll list and Tracy's view, and the inverse packed (y<<16)|x ->
-// core index. Core identity is not on the wire; it travels in the payload, written by the producing
-// core into SPSC_CORE_XY.
+// Core identity is not on the wire: the producing core writes it into SPSC_CORE_XY and these maps resolve it.
 void StreamingProfiler::enumerate_worker_grid(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -621,10 +581,8 @@ void StreamingProfiler::enumerate_worker_grid(
 
     plan.prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    // The poll list built here defines the drained set, and a producer outside it hangs the workload:
-    // producers are lossless, so an undrained one fills its ring, blocks forever in ring_ensure_room and
-    // takes the host down with it in wait_until_cores_done. The relay lives on a DRAM core, so no worker is
-    // spent on it and the full grid can be polled.
+    // The poll list defines the drained set; a producer outside it fills its ring, blocks forever, and takes the
+    // host down in wait_until_cores_done. The relay lives on a DRAM core, so the full grid is polled.
     const uint32_t gx = static_cast<uint32_t>(grid.x);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     plan.num_cores = static_cast<uint64_t>(gx) * gy;
@@ -651,8 +609,8 @@ void StreamingProfiler::enumerate_worker_grid(
     }
 }
 
-// Decide how many relays run, which DRAM view each takes and which core each lands on, then put every
-// relay's NIU into stream mode. False means no relay can run on this device.
+// Relay count, each relay's DRAM view and core, then every relay's NIU into stream mode. False: no relay can
+// run on this device.
 bool StreamingProfiler::choose_relay_banks(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -706,8 +664,6 @@ bool StreamingProfiler::choose_relay_banks(
             kMaxRelays);
     }
 
-    // The roster lists all 8 views, fragile ones last; views this part lacks drop out before the n_drisc
-    // prefix is taken.
     plan.banks.clear();
     for (const uint32_t b : kRelayBankRoster) {
         if (b < nbanks) {
@@ -728,10 +684,8 @@ bool StreamingProfiler::choose_relay_banks(
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
         plan.relay_cores.push_back(mesh_device->impl().pick_unused_dram_logical_core(ctx.device, plan.banks[d]));
     }
-    // pick_unused_dram_logical_core() takes a DRAM view and reserves that view's worker/eth endpoints;
-    // it has no idea another view can resolve to the same physical port (views 0 and 7 have both come
-    // back as NoC core 0-0). Two resident relays sharing one core's L1 would overlap staging, socket
-    // config and results with nothing to notice, so refuse to launch instead.
+    // pick_unused_dram_logical_core() reserves per view and cannot see two views resolving to one physical port
+    // (views 0 and 7 have both come back as NoC core 0-0); two relays on one L1 would silently overlap, so refuse.
     for (uint32_t a = 0; a < plan.relay_cores.size(); a++) {
         for (uint32_t b = a + 1; b < plan.relay_cores.size(); b++) {
             TT_FATAL(
@@ -746,11 +700,9 @@ bool StreamingProfiler::choose_relay_banks(
                 plan.relay_cores[a].y);
         }
     }
-    // Cluster::dram_barrier passes no subchannel, so LocalChip::dram_membar syncs subchannel 0 of every
-    // channel, and every LaunchProgram carries one. A relay resident on such a core is in stream mode,
-    // where an inbound DRAM-range address no longer forwards to GDDR, so the barrier is addressing a
-    // core whose semantics changed under it. Reported rather than fatal: the configuration usually
-    // works, and the point is to have the explanation available for a later MMIO timeout.
+    // Cluster::dram_barrier syncs subchannel 0 of every channel and every LaunchProgram carries one; a relay
+    // resident there is in stream mode, where a DRAM-range address no longer forwards to GDDR. Reported, not
+    // fatal: it usually works, and this is the explanation for a later MMIO timeout.
     std::vector<uint32_t> collide;
     for (int ch = 0; ch < soc.get_num_dram_channels(); ch++) {
         const CoreCoord bar = soc.get_dram_core_for_channel(ch, 0, CoordSystem::LOGICAL);
@@ -780,10 +732,9 @@ bool StreamingProfiler::choose_relay_banks(
     return true;
 }
 
-// One replicated mesh buffer with one interleaved page per DRAM bank reserves the same
-// [address, address+spool) window in every bank of every device, so a single buffer covers every relay.
-// It must be a mesh-level buffer: MeshBuffer allocations run through the mesh lock-step allocator,
-// which never sees a device-local Buffer::create and would hand the same region out again.
+// One replicated mesh buffer with one interleaved page per bank reserves the same window in every bank of
+// every device. Mesh-level because the lock-step allocator never sees a device-local Buffer::create and
+// would hand the region out again.
 void StreamingProfiler::reserve_spool(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx, BootPlan& plan) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -833,9 +784,8 @@ bool StreamingProfiler::launch_relay(
     const uint32_t device_id = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(device_id);
 
-    // Each relay's coords are a contiguous run of the same grid order the host uses everywhere else, so a
-    // core belongs to exactly one relay and nothing -- L1, socket, head mirrors -- is shared on the device.
-    // The integer prefix split is exact: every core assigned once, no rounding gap.
+    // Contiguous bands in the host's grid order: a core belongs to exactly one relay, and the integer prefix
+    // split assigns every core once.
     const uint32_t lo = static_cast<uint32_t>((plan.num_cores * d) / ctx.n_drisc);
     const uint32_t hi = static_cast<uint32_t>((plan.num_cores * (d + 1)) / ctx.n_drisc);
     const uint32_t my_cores = hi - lo;
@@ -903,18 +853,12 @@ bool StreamingProfiler::launch_relay(
         ctx.stop_addr[d] + kernel_profiler::kRelayCtrlWordStride <= cfg_l1,
         "DRISC L1 layout overlaps the socket config");
 
-    // Stream mode -- already flipped for every relay by choose_relay_banks -- is what makes the
-    // host-written socket config land in this L1 instead of being forwarded to GDDR; the kernel
-    // restores NOC2AXI on the host's word.
     configure_relay_static_tlb(cluster, device_id, ctx.drisc_virtual[d], d);
 
     const uint32_t sk = d;
     try {
-        // sender_uses_physical_noc_addr switches the socket between "physical NoC coord + full L1
-        // address" and the normal worker path (logical coord, worker-L1 semantics). The socket picks
-        // the static-vs-dynamic write path by asking UMD whether this core has a window (see
-        // init_sender_tlb), so the window configured just above is what puts the DRISC on the
-        // static path.
+        // sender_uses_physical_noc_addr selects physical coord + full L1 address; the socket takes the static write
+        // path because the window configured above exists (init_sender_tlb asks UMD).
         g_bringup_step = fmt::format("relay {}: D2HSocket construct (writes config into DRISC L1)", d);
         ctx.sockets[sk] = std::make_unique<distributed::D2HSocket>(
             mesh_device,
@@ -923,11 +867,9 @@ bool StreamingProfiler::launch_relay(
             distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_uses_physical_noc_addr = true});
         ctx.sockets[sk]->set_page_size(kPageSize);
 
-        // Zero the relay core's own profiler ring. The relay kernel is built with PROFILE_KERNEL=1, so
-        // the firmware writes its own zone markers into this core's ring on every launch, and this core
-        // is excluded from the drained set, so nothing ever empties it. The ring is 512 words and the
-        // SPSC backend blocks on a full ring rather than dropping, so after ~74 launches inside one
-        // card-reset window the RISC wedges in firmware init and the relay silently never starts.
+        // Zero the relay core's own profiler ring: the relay is built with PROFILE_KERNEL, firmware writes zone
+        // markers into this ring on every launch, nothing drains it, and the SPSC backend blocks on a full ring, so
+        // after ~74 launches in one reset window the RISC wedges in firmware init.
         const uint64_t relay_prof_l1 = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER);
         cluster.write_core(
             plan.zero_ctrl.data(),
@@ -935,18 +877,15 @@ bool StreamingProfiler::launch_relay(
             tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
             relay_prof_l1);
 
-        // done | heartbeat and the rest of the 64 B pad: a stale value from the previous run reads as
-        // this run's live state.
+        // A stale done or heartbeat from the previous run reads as this run's live state.
         uint32_t zero3[13] = {};
         cluster.write_core(
             zero3,
             sizeof(zero3),
             tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
             ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
-        // The stop word, plus the sync-event rendezvous triple (req | ack | go) sharing its 64 B pad.
-        // Teardown leaves stop at 1 or 2 and the relay loop is `while (... && *stop == 0 ...)`, so a
-        // stale value makes the next kernel exit after one sweep; a stale `req` parks every relay at a
-        // barrier nobody is going to release.
+        // Teardown leaves stop at 1 or 2 and the relay loop exits on nonzero stop; a stale rendezvous `req` parks
+        // every relay at a barrier nobody releases.
         uint32_t zero4[4] = {};
         cluster.write_core(
             zero4,
@@ -955,7 +894,6 @@ bool StreamingProfiler::launch_relay(
             ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
 
         ctx.relay_program[d] = std::make_unique<Program>(CreateProgram());
-        // Read on the kernel side with get_named_compile_time_arg_val, so retiring one is a local edit.
         const std::unordered_map<std::string, uint32_t> cargs = {
             {"stage_base", stage_base},
             {"n_stage", nstage},
@@ -967,9 +905,8 @@ bool StreamingProfiler::launch_relay(
             // d&2 splits the pushers across two of the four unicast request VCs.
             {"write_vc", (d & 2u) ? 0u : 1u},
             {"ship_min_pct", rtopts.get_streaming_profiler_ship_min_pct()},
-            // The bounce slots cost the kernel a staging generation, so the spool needs the full slot
-            // count; a smaller L1 falls back to direct push rather than tripping the kernel's geometry
-            // static_asserts.
+            // The bounce slots cost a staging generation, so a smaller L1 falls back to direct push rather than
+            // tripping the kernel's geometry static_asserts.
             {"spool_base", plan.spool_addr},
             {"spool_bytes", nstage >= 7u ? plan.spool_bytes : 0u}};
         if (plan.spool_bytes != 0 && nstage < 7u) {
@@ -989,13 +926,13 @@ bool StreamingProfiler::launch_relay(
             *ctx.relay_program[d],
             "tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp",
             ctx.drisc_logical[d],
-            // Every relay egresses on NOC 0 (reads take the other): NOC 1 egress runs ~2x the service
-            // interval, so a relay parked there takes essentially every producer stall.
+            // NOC 1 egress runs ~2x the service interval of NOC 0, so a relay parked there takes essentially every
+            // producer stall.
             DramConfig{
                 .noc = NOC::NOC_0, .defines = {{"STREAMING_PROFILER_RELAY_KERNEL", "1"}}, .named_compile_args = cargs});
         std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(plan.prof_l1)};
-        // Reversed: launch order follows global index, so the slice's last-launched cores land in the
-        // first-chunk slots, which are read and serviced first.
+        // Reversed: launch order follows global index, so the slice's last-launched cores land in the first-chunk
+        // slots, which are serviced first.
         rt.insert(
             rt.end(),
             plan.coords.rbegin() + (plan.coords.size() - hi),
@@ -1017,8 +954,7 @@ bool StreamingProfiler::launch_relay(
             return false;
         }
     } catch (const std::exception& e) {
-        // A code-region overflow makes the relay fail to load rather than fail to start, and the run
-        // then exits 0 with every marker silently dropped, so name the cause at error level.
+        // A code-region overflow fails the load, not the start, and the run then exits 0 with every marker dropped.
         const std::string what = e.what();
         const bool elf_too_big = what.find("overflows region") != std::string::npos;
         log_error(
@@ -1100,8 +1036,7 @@ void StreamingProfiler::stop() {
         return;
     }
 
-    // Producers before consumers: let the rings empty while the relays are still draining them, so no
-    // producer ever meets a stopped consumer.
+    // Producers before consumers: the rings empty while the relays still drain them.
     for (auto& ctx : devices_) {
         if (!wait_producer_rings_drained(ctx, std::chrono::seconds(2))) {
             log_warning(
@@ -1138,12 +1073,11 @@ void StreamingProfiler::stop() {
                 log_warning(
                     tt::LogMetal, "[streaming profiler] Device {}: DRISC relay did not acknowledge stop", ctx.chip_id);
             } else if (receiver_ != nullptr) {
-                // done follows the relay's socket barrier, so the host has already acked every byte this
-                // socket will ever carry and the stream can retire on one final empty check.
+                // done follows the relay's socket barrier, so the host has already acked every byte this socket will
+                // carry.
                 receiver_->notify_producers_done(static_cast<uint32_t>(&ctx - devices_.data()), d);
             }
-            // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
-            // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
+            // Release restores the NIU; NOC2AXI takes this L1 out of the host's view, so it comes last.
             uint32_t release = kernel_profiler::kRelayStopRelease;
             cluster.write_core(
                 &release, sizeof(uint32_t), drisc, ctx.drisc_l1_noc[d] + (ctx.stop_addr[d] - ctx.drisc_l1_base[d]));
@@ -1173,14 +1107,12 @@ void StreamingProfiler::stop() {
     tracy_consumer_.reset();
     tracy_.reset();
     devices_.clear();
-    // After the relays are quiesced, so nothing touches the spool, and while the mesh allocator is still
-    // alive to take the region back.
+    // After the quiesce, while the mesh allocator is still alive to take the region back.
     spool_buffer_.reset();
 }
 
-// One MMIO pass per worker core: the producer-owned stall counters, which nothing downstream can lose, and
-// each lane's own tail against the receiver's consumed-words mirror, which is the direct assertion that the
-// stop-path sweep-to-empty held.
+// One MMIO pass per worker core: the producer-owned stall counters, and each lane's tail against the
+// receiver's consumed-words mirror.
 void StreamingProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_index) {
     if (ctx.core_virt.empty()) {
         return;
@@ -1201,9 +1133,8 @@ void StreamingProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
         uint32_t count, vx, vy, idx;
     };
     std::vector<CoreStall> stalled_cores;
-    // Worker cores only. With DRISC self-profiling on, core_virt also holds the relay cores, and a DRAM
-    // core has no producer and no stall counters -- reading the Tensix profiler address on one returns
-    // whatever happens to be at that offset in DRISC L1.
+    // Worker cores only: a DRAM core has no producer, and the Tensix profiler address on one reads whatever
+    // sits at that offset in DRISC L1.
     const size_t n_stall_cores = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
     for (size_t ci = 0; ci < n_stall_cores; ci++) {
         const auto [vx, vy] = ctx.core_virt[ci];

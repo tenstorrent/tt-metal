@@ -90,7 +90,6 @@ void StreamingProfilerTracyConsumer::operator()(const StreamingProfilerRecordBat
             pend_.prog = r.prog;
             continue;
         }
-        // Zone: forwarded whole and in arrival order -- see the header on the ordering contract.
         note_ts(r.meta.dev, r.data.zone.start);
         const StreamingProfilerLaneInfo& li = ctx.devices[r.meta.dev].lanes[r.meta.lane];
         WorkerZonePacket pkt;

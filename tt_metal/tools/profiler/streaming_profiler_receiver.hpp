@@ -2,21 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Streaming profiler host receiver: D2H socket streams -> frames mirrored verbatim into per-stream
-// BroadcastRings -> per-consumer decode + pairing -> registered consumers.
-//
-// Ingest threads fuse poll + frame + copy + ack: whole frames are NT-streamed from the pinned FIFO into
-// ring lines and acked as soon as they land, so credit return is copy-paced and the ring -- host RAM,
-// sized by env -- is the capture's elastic buffer, not the FIFO. One ring per socket stream keeps each
-// ring single-writer.
-//
-// All decoding happens on the consumer side: each consumer thread owns a reader and a decode state per
-// ring, walks the frames itself (the wire's BULK_SPAN prefix does the framing; every frame starts on a
-// ring line), and pairs start/end markers into the public 32 B StreamingProfilerRec before its callback.
-// A lagging consumer drops its own oldest lines (counted, per consumer) and recovers the way decode
-// recovers from a device-side drop: head adoption plus resync counters, timestamps re-anchoring at the
-// next absolute zone. An internal audit consumer (record composition compiled out) decodes every stream
-// to produce the per-stream wire-integrity report that ingest, a pure copier, does not see.
+// Streaming profiler host receiver: D2H socket streams are mirrored verbatim into per-stream BroadcastRings,
+// and every consumer thread decodes and pairs for itself before its callback. Ingest fuses poll + frame + copy
+// + ack: frames are NT-streamed from the pinned FIFO into ring lines and acked as they land, so the ring (host
+// RAM) is the capture's elastic buffer, not the FIFO; one ring per socket stream keeps each ring
+// single-writer. A lagging consumer drops its own oldest lines (counted per consumer) and recovers as decode
+// recovers from a device-side drop: head adoption, resync counters, timestamps re-anchoring at the next
+// absolute zone. An internal audit consumer decodes every stream for the wire-integrity report that ingest, a
+// pure copier, cannot produce.
 #pragma once
 
 #include <atomic>
@@ -42,15 +35,12 @@ class BroadcastRing;
 
 namespace streaming_profiler {
 
-// Receiver-internal record, not the consumer contract: the record consumer-side decode composes into
-// its scratch, holding the device's own unpaired start/end markers in 24 B. Its field and bit layout
-// (lane at 16, dev at 26, type at 29; ZoneStart=1 / ZoneEnd=2) is pinned by the vectorized packer --
-// widening or reordering it is a multi-x decode regression, which is why the public
-// StreamingProfilerRec is a separate type built on top.
+// Receiver-internal record, not the consumer contract: the device's own unpaired start/end markers in 24 B.
+// The bit layout (lane at 16, dev at 26, type at 29; ZoneStart=1 / ZoneEnd=2) is pinned by the vectorized
+// packer, which is why the public StreamingProfilerRec is a separate type.
 enum class StreamingProfilerRawRecType : uint32_t {
-    // A complete zone from the device's atomic-zone path (PP_ZONE_ATOMIC): ts is the END and `duration`
-    // is set, so start = ts - duration and no pairing is required. Value 0 because the 3-bit type field
-    // has 1..7 spoken for.
+    // A complete zone from the atomic wire path: ts is the END and `duration` is set, so no pairing. 0 because the
+    // 3-bit type field has 1..7 spoken for.
     Zone = 0,
     ZoneStart = 1,
     ZoneEnd = 2,
@@ -84,9 +74,8 @@ struct StreamingProfilerRawRec {
 static_assert(sizeof(StreamingProfilerRawRec) == 24);
 static_assert(std::is_trivially_copyable_v<StreamingProfilerRawRec>);
 
-// Ring transport unit: one 64 B cache line of wire words. The per-stream ring mirrors the D2H FIFO's
-// frames verbatim -- frames are page(=line)-multiples stored back to back, so every frame starts on a
-// line and the wire's own BULK_SPAN prefix does the framing.
+// One 64 B line of wire words. Frames are line-multiples stored back to back, so every frame starts on a line
+// and the BULK_SPAN prefix does the framing.
 struct alignas(64) StreamingProfilerRingLine {
     uint32_t w[16];
 };
@@ -103,12 +92,9 @@ struct ReceiverDeviceConfig {
     int numa_node = -1;  // host node closest to this device; -1 leaves ring and thread unbound
 };
 
-// Mirror of the ELF-resolved PRODUCER-STALL zone ids -- one per kernel TU, because that header declares
-// the zone at namespace scope. Refreshed by cursor once per decoded frame.
-//
-// The membership test runs per marker on the decode walk, so it is an open-addressed table: one L1 load
-// on the overwhelming miss path. A [min,max] pre-screen would not work -- stall ids carry tu_id in their
-// high bits like every other zone id, so their range spans the whole id space.
+// Mirror of the ELF-resolved PRODUCER-STALL zone ids, one per kernel TU. Open-addressed because the membership
+// test runs per marker on the decode walk; a [min,max] pre-screen cannot work since stall ids carry tu_id in
+// their high bits.
 struct StallIdMirror {
     uint32_t cursor = 0;
     std::vector<uint32_t> ids;    // insertion order, source for rebuilds
@@ -146,15 +132,15 @@ public:
     StreamingProfilerConsumerHandle add_consumer(std::string name, StreamingProfilerRecordCallback cb);
     void remove_consumer(StreamingProfilerConsumerHandle handle);
 
-    // Every relay owning (device, socket) has published done, which implies the device saw all its
-    // bytes acked, so the stream retires itself after one final empty check.
+    // Every relay owning (device, socket) has published done, so the device saw all its bytes acked and the
+    // stream retires after one final empty check.
     void notify_producers_done(uint32_t device_index, uint32_t socket_index);
 
     void shutdown();
 
     const StreamingProfilerCaptureContext& capture_context() const { return ctx_; }
-    // Final per-lane words-consumed mirrors; valid after shutdown(). Feeds the control
-    // plane's completeness check against the workers' own tails.
+    // Final per-lane words-consumed mirrors, valid after shutdown(); the completeness check compares them
+    // against the workers' own tails.
     std::vector<uint32_t> final_lane_heads(uint32_t device_index) const;
     void log_report() const;
 
@@ -165,8 +151,7 @@ private:
         uint32_t sock_idx = 0;
         int ring_node = -1;  // node this stream's ring is bound to, and that its ingest thread runs on
         std::unique_ptr<BroadcastRing<StreamingProfilerRingLine>> ring;
-        // Decode-quality accounting, written by the audit consumer and never by the ingest thread:
-        // the per-stream decode state plus the counters the report lines quote.
+        // Written by the audit consumer, never by ingest.
         profiler::SpanDecodeState decode;
         std::vector<uint64_t> last_zone_ts;  // per lane, order invariant (must never regress)
         std::atomic<bool> producers_done{false};
@@ -189,8 +174,7 @@ private:
         std::string name;
         StreamingProfilerRecordCallback cb;
         StreamingProfilerConsumerHandle handle = 0;
-        // The internal wire auditor: decodes every stream (record composition compiled out) and owns
-        // the per-stream decode-quality fields on Stream. No callback, not in the public consumer set.
+        // The internal wire auditor: decodes every stream, owns the decode-quality fields on Stream, has no callback.
         bool audit = false;
         std::atomic<int> mode{0};  // 0 = run, 1 = drain-then-stop, 2 = stop-now
         uint64_t delivered = 0;

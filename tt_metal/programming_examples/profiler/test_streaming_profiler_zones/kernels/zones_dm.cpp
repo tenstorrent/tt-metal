@@ -11,10 +11,8 @@
 #define N_ITERS 50u
 #endif
 
-// ZONE_MODE selects the zone body; ZONE_CYC is the nop-iteration count used when ZONE_MODE == 1. They are
-// separate because ZONE_CYC == 0 is a legitimate producer-rate point (max rate, no spin at all) and so
-// cannot double as "use the graduated table". Uniform durations give a single marker rate per lane
-// (2 markers per zone); graduated ones would smear a rate sweep across the table of durations.
+// ZONE_CYC == 0 is a legitimate rate point (max rate, no spin), so it cannot double as "use the graduated
+// table"; ZONE_MODE selects the body instead.
 #ifndef ZONE_MODE
 #define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
 #endif
@@ -28,13 +26,10 @@
 #define ZTAG "NC"
 #endif
 
-// One named zone whose body busy-waits CYC wall-clock spin-counts. CYC is calibrated so the zone displays
-// ~CYC/2500 us in Tracy: at the ~1.35 GHz boosted aiclk the profiler records ~0.55 timestamp tick per
-// spin-count at a ~0.741 ns context period, so displayed_ns ~= CYC * 0.41. Reading the low register only,
-// with unsigned-wrap subtraction, is tear-free for spins << 2^32.
-// Not kernel_profiler::WALL_CLOCK_LOW_INDEX: that constant lives inside kernel_profiler.hpp's
-// `#if defined(PROFILE_KERNEL) && ...` block, so referencing it breaks the build when the profiler is
-// compiled out, even though DeviceZoneScopedN() expands to nothing there.
+// Body busy-waits CYC spin-counts, calibrated so the zone displays ~CYC/2500 us in Tracy (displayed_ns ~=
+// CYC * 0.41 at the 1.35 GHz aiclk). Low register only with wrap-safe subtraction, tear-free for spins << 2^32.
+// Not kernel_profiler::WALL_CLOCK_LOW_INDEX: it lives inside the PROFILE_KERNEL block and breaks the
+// profiler-off build.
 static constexpr int kWallClockLowIdx = 0;
 
 #define ZONE_WALL(NAME, CYC)                                                               \
@@ -48,8 +43,7 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                                  \
     }
 
-// Uniform-spin body (ZONE_MODE == 1). The counter must stay `volatile`: that is what forces a
-// load/increment/store/compare per iteration, giving the calibrated 10 cycles rather than a single nop.
+// `volatile` forces load/increment/store/compare per iteration, the calibrated 10 cycles.
 #define ZONE_NOPS(NAME, ITERS)                                            \
     {                                                                     \
         DeviceZoneScopedN(NAME);                                          \
@@ -58,10 +52,8 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
-// Empty body (ZONE_MODE == 3): back-to-back empty zones with nothing between them, so the captured stream
-// prices the profiler itself. The host's --empty 1 consumer turns those zones into per-RISC duration and gap
-// numbers. Mode 2 below is the device-side twin: mode 3 prices what the capture observes, mode 2 what the
-// producer pays.
+// Back-to-back empty zones, so the stream prices the profiler itself; mode 2 is the device-side twin (what the
+// producer pays vs what the capture observes).
 #define ZONE_EMPTY(NAME)         \
     {                            \
         DeviceZoneScopedN(NAME); \
@@ -91,10 +83,9 @@ static constexpr int kWallClockLowIdx = 0;
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
-// ZONE_MODE == 2: device-side microbench of DeviceZoneScopedN. The kernel does nothing but enter and leave
-// empty scopes, times each burst against the wall clock, and leaves the totals in L1 for the host to read
-// (DPRINT is unusable here: it and the profiler are mutually exclusive). kBurst * 3 words stays under the
-// 512-word ring so a burst never blocks on ring room, and the relay empties the ring between bursts.
+// Device-side microbench: enter and leave empty scopes, time each burst against the wall clock, leave totals
+// in L1 (DPRINT and the profiler are mutually exclusive). kBurst * 3 words stays under the 512-word ring so a
+// burst never blocks.
 #if ZONE_MODE == 2
 void kernel_main() {
     volatile tt_reg_ptr uint32_t* wc = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -121,8 +112,7 @@ void kernel_main() {
 void kernel_main() {
     // Durations span ~1..100 us. CYC = us * 2500, per the ZONE_WALL calibration above.
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-// The marker trio is opt-in (--markers 1): it exercises every point-marker shape on the wire, but it adds
-// wire volume that a rate sweep does not want, and the overhead modes never emit it.
+// Opt-in (--markers 1): exercises every point-marker shape but adds wire volume a rate sweep does not want.
 #if defined(EMIT_MARKERS) && EMIT_MARKERS && ZONE_MODE < 3
         DeviceFlag(ZTAG "_Flag");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);

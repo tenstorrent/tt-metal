@@ -166,20 +166,17 @@ public:
         /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
         void emit_store(uint64_t pos, const T& item) noexcept {
 #if defined(__x86_64__)
-            // Non-temporal stores: the ring is written far beyond cache capacity and the writer never
-            // re-reads it, so a normal store's read-for-ownership is pure waste, and emit_commit's sfence
-            // orders these before the head release. They bypass the slot's atomic words, which leaves
-            // tearing bounded by the claim-recheck readers already tolerate. Every writer path must stay
-            // non-temporal: mixing cached and NT stores into the same lines forces a WC-buffer flush plus an
-            // RFO per collision, worth ~4x on the streaming profiler decode.
+            // Non-temporal: the ring is written far beyond cache capacity and never re-read by the writer, and
+            // emit_commit's sfence orders these before the head release. They bypass the slot's atomic words, so
+            // tearing stays bounded by the claim-recheck readers already tolerate. Every writer path must stay NT:
+            // mixing cached and NT stores into one line costs a WC flush plus an RFO per collision.
             if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
                 _mm_stream_si128(
                     reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
                     _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
                 return;
             }
-            // 8-byte-multiple slots (the 24 B streaming profiler record): movnti per quadword, on the
-            // 8-byte alignment AtomicSlot's layout already gives.
+            // 8-byte-multiple slots (the 24 B streaming profiler record): movnti per quadword.
             if constexpr (kTriviallyCopyable && sizeof(T) % 8 == 0 && sizeof(Slot) == sizeof(T)) {
                 auto* q = reinterpret_cast<long long*>(&view_.slot_at(pos));
                 const auto* src = reinterpret_cast<const long long*>(&item);
@@ -504,11 +501,10 @@ private:
         size_t map_bytes = 0;
     };
 
-    // mmap-backed at every size: direct emitters stream 64 B non-temporal stores at emit_slot_ptr
-    // addresses, which fault unless the base is cache-line aligned, and the new[] fallback only guarantees
-    // 16 B. Large slot arrays are also walked far beyond TLB reach, so they ask for 2 MiB pages explicitly
-    // (THP is madvise-opt-in on typical deployments), over-mapped by one huge page because the huge-page
-    // fault path requires an aligned start.
+    // mmap-backed at every size: direct emitters stream 64 B NT stores at emit_slot_ptr addresses, which fault
+    // unless the base is cache-line aligned, and new[] only guarantees 16 B. Large arrays ask for 2 MiB pages
+    // explicitly (THP is madvise-opt-in), over-mapped by one huge page because the huge-page fault path needs an
+    // aligned start.
     static SlotStorage allocate_slots(size_t n, bool construct_slots) {
         SlotStorage storage;
 #if defined(__linux__)

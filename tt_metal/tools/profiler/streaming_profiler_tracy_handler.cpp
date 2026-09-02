@@ -99,8 +99,7 @@ TracyTTCtx StreamingProfilerTracyHandler::GetOrCreateContext(
     }
     ZoneScopedNC("ctx-create", 0xD35400);
     TracyTTCtx ctx = TracyTTContext();
-    // The calibrated variant suppresses the GUI's per-context drift control: timestamps are host-rebased,
-    // so the anchor mapping is exact and no drift correction is wanted.
+    // Calibrated: timestamps are host-rebased, so the GUI's per-context drift correction must stay off.
     TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
     TracyTTContextName(ctx, name.c_str(), name.size());
     tracy_contexts_[key] = ctx;
@@ -143,8 +142,8 @@ void StreamingProfilerTracyHandler::HandleWorkerZone(
         tracy::RiscType::TRISC_1,
         tracy::RiscType::TRISC_2};
 
-    // Same thread-id packing the marker path uses (TTDeviceMarker::get_thread_id), so zones and point
-    // markers land on the same per-RISC row of the core's context.
+    // Same thread-id packing as the marker path (TTDeviceMarker::get_thread_id), so zones and markers share
+    // the per-RISC row.
     tracy::TTDeviceMarker tm;
     tm.chip_id = zone.chip_id;
     tm.core_x = zone.core_noc0_x;
@@ -152,19 +151,16 @@ void StreamingProfilerTracyHandler::HandleWorkerZone(
     tm.risc = kRisc[zone.risc % 5];
     const uint32_t thread = tm.get_thread_id();
 
-    // Colour resolution, matching getMarkerColor (TracyTTDevice.hpp): an explicit colour wins, then
-    // PROFILER-keyword names go Tomato3, then the per-RISC palette -- BRISC Orange2, NCRISC SeaGreen3,
-    // TRISC_0/1/2 SkyBlue3/Turquoise2/CadetBlue1. Shipping colour 0 instead makes the GUI fall back to
-    // its own palette.
+    // Matches getMarkerColor (TracyTTDevice.hpp): explicit colour, then Tomato3 for PROFILER-keyword names,
+    // then the per-RISC palette; colour 0 makes the GUI fall back to its own.
     uint32_t color = zone.color;
     if (color == 0) {
         static constexpr uint32_t kRiscColor[5] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu};
         color = zone.name.find("PROFILER") != std::string_view::npos ? 0xCD4F39u : kRiscColor[zone.risc % 5];
     }
 
-    // Intern the srcloc: QueueGpuZone ships a raw pointer that the server dereferences by querying this
-    // process later, so the SourceLocationData and its name string must outlive the capture -- allocated
-    // once per (zone id, colour), never freed.
+    // The server dereferences this pointer by querying the process later, so the srcloc and its name are
+    // allocated once per (id, colour) and never freed.
     const tracy::SourceLocationData* srcloc = nullptr;
     {
         const uint64_t key = (static_cast<uint64_t>(zone.timer_id) << 32) | color;
@@ -180,9 +176,8 @@ void StreamingProfilerTracyHandler::HandleWorkerZone(
         srcloc = static_cast<const tracy::SourceLocationData*>(it->second);
     }
 
-    // Serial rather than lock-free, deliberately: context creation and point markers ride the serial
-    // queue and the client drains the lock-free queues before the serial one each pass, so a lock-free
-    // zone could overtake the GpuNewContext it references -- an intermittent tracy-capture segfault.
+    // Serial, deliberately: the client drains the lock-free queues before the serial one, so a lock-free zone
+    // could overtake the GpuNewContext it references (an intermittent tracy-capture segfault).
     TracyTTPushZoneSerial(ctx, srcloc, thread, zone.start, zone.end);
 #endif
 }

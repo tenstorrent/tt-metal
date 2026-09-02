@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Stall-timeline CSV consumer, enabled by TT_METAL_STREAMING_PROFILER_STALL_CSV=<path>: attaches when a
-// capture starts and writes at exit, like the ops CSV. One row per PRODUCER-STALL zone (a producer RISC
-// blocked on its full ring) and, when DRISC self-profiling is on, per DRISC-* zone: identity, start
-// timestamp and duration in raw device cycles. That timeline says when producers stall relative to what
-// the relay was doing, which no end-of-run counter can.
+// Stall-timeline CSV, enabled by TT_METAL_STREAMING_PROFILER_STALL_CSV=<path> and written at exit: one row
+// per PRODUCER-STALL zone (and per DRISC-* zone with self-profiling on) with identity, start and duration
+// in device cycles.
 #pragma once
 
 #include <cstdint>

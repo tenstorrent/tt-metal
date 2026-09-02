@@ -19,8 +19,7 @@ namespace tt::llrt {
 
 namespace {
 
-// The on-wire record, mirroring TT_ZONE_DEFINE_ID in hostdevcommon/profiler_zone_id.h. The host walks the
-// section at a fixed 16-byte stride and does no parsing, so these records must stay fixed-length.
+// Mirrors TT_ZONE_DEFINE_ID; the host walks the section at a fixed 16-byte stride.
 struct ZoneMetaRecord {
     uint32_t zone_id;
     uint32_t name_ptr;  // VMA into .tt_zone_str
@@ -46,9 +45,8 @@ State& state() {
     return s;
 }
 
-// Resolve a device VMA in .tt_zone_str to a NUL-terminated string inside the mapped section bytes, or
-// nullptr if it lands outside the section or is unterminated. Rebasing by the section's own address (as
-// the DPRINT string table does) also covers the linker leaving it a non-ALLOC orphan at sh_addr 0.
+// Resolve a device VMA in .tt_zone_str to a string inside the mapped section, rebased by the section's own
+// address so a non-ALLOC orphan at sh_addr 0 works too.
 const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
     if (ptr < str_vma) {
         return nullptr;
@@ -91,10 +89,8 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
         if (!meta.empty()) {
             uint64_t str_vma = 0;
             auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
-            // The JIT cache key does not cover this section's layout, so a root written by an older
-            // layout can still be reused, and walking one at our stride would mint plausible ids bound to
-            // the wrong names. Our emitter always writes both sections and every record is 16 bytes, so
-            // either guard failing means the section is not ours; reject it whole.
+            // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
+            // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
             if (strs.empty()) {
                 log_debug(
                     tt::LogLLRuntime,

@@ -2,14 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Set this DRISC's NIU mode and leave it that way.
-//
-// The relay's D2H socket config (and its bytes_acked write-back) must reach DRISC L1 from the host
-// before the relay kernel ever runs. In NOC2AXI mode an inbound address in the DRAM range is forwarded
-// to GDDR and reaching L1 needs the 0x2000000000 tag, which does not fit the socket's uint32_t config
-// address. In stream mode all inbound NoC traffic terminates at L1, so a plain local address works.
-//
-// NIU_CFG_0 persists across programs, so whoever sets mode=1 owns restoring mode=0.
+// Set this DRISC's NIU mode and leave it. The relay's socket config must reach DRISC L1 from the host before
+// the kernel runs; in NOC2AXI mode a DRAM-range address forwards to GDDR and reaching L1 needs the
+// 0x2000000000 tag, which does not fit the socket's uint32_t address, while in stream mode inbound traffic
+// terminates at L1. NIU_CFG_0 persists across programs, so whoever sets mode=1 restores mode=0.
 
 #include "api/compile_time_args.h"
 #include "experimental/drisc_mode.h"

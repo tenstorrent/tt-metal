@@ -81,8 +81,7 @@ std::vector<FileConsumer*>& file_consumers() {
     return v.get();
 }
 
-// Ask each declared file consumer for its path and register the enabled ones. Runs at capture attach,
-// not at declaration, because the paths come from rtoptions.
+// Runs at capture attach, not declaration: the paths come from rtoptions.
 void resolve_file_consumers() {
     static bool exit_hooked = false;
     for (FileConsumer* fc : file_consumers()) {
@@ -97,8 +96,8 @@ void resolve_file_consumers() {
         fc->handle = register_consumer(fc->name, fc->on_batch);
         if (!exit_hooked) {
             exit_hooked = true;
-            // Runs after receiver shutdown has delivered every buffered batch, and unregisters first so
-            // no batch can race the write.
+            // After receiver shutdown has delivered every buffered batch; unregisters first so no batch races the
+            // write.
             std::atexit([] {
                 for (FileConsumer* c : file_consumers()) {
                     if (c->handle != 0) {

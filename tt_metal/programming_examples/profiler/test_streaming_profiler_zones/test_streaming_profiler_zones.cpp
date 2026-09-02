@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Streaming-profiler workload: dispatches kernels that emit 10 differently-named DeviceZoneScopedN zones, with
-// increasing durations, on all 5 RISCs of a small core grid, then closes. Run it with
-// TT_METAL_STREAMING_PROFILER=1 so the profiler boots at MeshDevice bring-up and captures these zones (that
-// switch also implies TT_METAL_DEVICE_PROFILER, arming the kernels' markers). The Tracy sink is opt-in: add
-// TT_METAL_STREAMING_PROFILER_TRACY=1 to verify against a connected tracy-capture. Grid and iteration count
-// are overridable via argv.
+// Streaming-profiler workload: kernels emit 10 differently-named DeviceZoneScopedN zones of increasing duration
+// on all 5 RISCs of a small grid. Run with TT_METAL_STREAMING_PROFILER=1 (which implies TT_METAL_DEVICE_PROFILER);
+// add TT_METAL_STREAMING_PROFILER_TRACY=1 to check against a connected tracy-capture. Grid and iterations via
+// argv.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -56,10 +54,9 @@ uint64_t read_wall_clock(tt::Cluster& cluster, const tt_cxy_pair& target) {
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
-// RISCV_DEBUG_REG_WALL_CLOCK is documented as a Tensix debug register; this probes whether a DRAM tile answers
-// it too. Per core it prints the raw counter, its advance over a known wall-clock interval (implied MHz should
-// be ~aiclk), and the DRAM-core-minus-worker offset at a common instant. No relay is booted, so a hang here
-// indicts the register read alone.
+// Probes whether a DRAM tile answers RISCV_DEBUG_REG_WALL_CLOCK (documented as a Tensix register): raw counter,
+// advance over a known interval, and DRAM-minus-worker offset. No relay is booted, so a hang here indicts the
+// register read alone.
 void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const auto context_id = mesh_device->impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id).get_cluster();
@@ -137,13 +134,10 @@ void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     fflush(stdout);
 }
 
-// --empty mode (kernel ZONE_MODE=3) emits 10 unrolled empty zones per iteration, so the captured stream
-// measures the profiler itself. Per lane, sorted by zone start:
-//   duration = one empty zone's end - start: the close's ring room check plus the wall-clock read latency;
-//   gap      = next.start - this.end: the close's post-clock work (sticky check, 3 ring stores, fence, tail
-//              publish) plus the next open's clock read.
-// duration + gap is the full cost one zone adds to a kernel at max rate. Negative gaps are nested pairs (the
-// "<RISC>-KERNEL" wrapper zone contains everything) and are dropped.
+// --empty (ZONE_MODE=3) emits 10 unrolled empty zones per iteration, so the stream measures the profiler itself.
+// Per lane, sorted by start: duration = one zone's close cost up to the clock read; gap = the close's post-clock
+// work plus the next open's clock read. duration + gap is the full cost one zone adds at max rate. Negative
+// gaps are nested pairs (the kernel wrapper zone) and are dropped.
 struct EmptyZoneStats {
     std::mutex mu;  // register/unregister lifetime only; batches arrive on a single consumer thread
     // Keyed (dev << 10) | lane: (start, duration) of every Zone record seen.
@@ -174,7 +168,6 @@ struct EmptyZoneStats {
     void report() {
         std::lock_guard<std::mutex> lk(mu);
         const double ghz = frequency_ghz > 0.0 ? frequency_ghz : 1.35;
-        // Aggregate by RISC index, which is lane % 5.
         static const char* kRisc[5] = {"BRISC ", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
         printf(
             "\n[empty-zone overhead] per-RISC, cycles @ %.4f GHz (median [mean]); duration = in-zone "
@@ -204,8 +197,7 @@ struct EmptyZoneStats {
                         }
                     }
                 }
-                // The kernel-wrapper zone spans the whole run; drop it, the per-lane max, so it does not
-                // dwarf the stats.
+                // Drop the kernel-wrapper zone (the per-lane max) so it does not dwarf the stats.
                 if (!durs.empty()) {
                     auto mx = std::max_element(durs.begin(), durs.end());
                     durs.erase(mx);
@@ -288,8 +280,7 @@ int main(int argc, char** argv) {
     const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
 
     int device_id = 0;
-    // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC (e.g. 2x4) opens the whole mesh in one process, giving the
-    // bring-up shape of a real multi-device workload: N devices, 2N sockets, one profiler boot.
+    // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC opens the whole mesh in one process: N devices, one profiler boot.
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     if (const char* fm = std::getenv("TT_METAL_STREAMING_PROFILER_FULL_MESH"); fm != nullptr && *fm != '\0') {
         uint32_t rows = (uint32_t)std::strtoul(fm, nullptr, 10);
@@ -407,7 +398,7 @@ int main(int argc, char** argv) {
     }
     mesh_device->close();
     if (empty_mode != 0) {
-        // close() joined the delivery threads, so the stats are complete and race-free to read here.
+        // close() joined the delivery threads, so the stats are complete.
         streaming_profiler::unregister_consumer(empty_handle);
         empty_stats->report();
     }

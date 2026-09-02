@@ -43,8 +43,7 @@ void StreamingProfilerOpsCsvConsumer::operator()(const StreamingProfilerRecordBa
         }
         constexpr uint32_t kLaneShift = 32;
         constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kStreamingProfilerMaxLanes - 1u);
-        // A Zone record is one completed kernel-wrapper pair and the wrapper zone never self-nests, so
-        // the k-th Zone on a lane for a given prog is execution k.
+        // The wrapper zone never self-nests, so the k-th Zone on a lane for a prog is execution k.
         uint32_t& completed = pair_count_
             [(static_cast<uint64_t>(rec.meta.dev) << kDevShift) | (static_cast<uint64_t>(rec.meta.lane) << kLaneShift) |
              rec.prog];

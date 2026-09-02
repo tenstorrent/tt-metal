@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Tracy sink on the public paired-Zone contract: an ordinary consumer callback, registered through
-// add_consumer exactly like the ops CSV. Tracy takes a device zone whole (both timestamps in one queue
-// item) and the paired stream already delivers zones whole in per-lane completion order, which is the
-// order the Tracy server rebuilds nesting from, so every record forwards as it arrives and nothing is
-// buffered.
+// Tracy sink on the paired-Zone contract, registered like any consumer. Tracy takes a zone whole and the
+// paired stream delivers zones in per-lane completion order, which is what the server rebuilds nesting
+// from, so records forward as they arrive.
 #pragma once
 
 #include <cstdint>
@@ -47,10 +45,8 @@ private:
 
     StreamingProfilerTracyHandler* handler_;
     PendingEvent pend_;
-    // Per device: rebase origin for an unsynced device clock, a running min over zone starts and
-    // marker timestamps. Records forward live, so it is the min seen so far; the base only ever
-    // decreases, which shifts later pushes right and so cannot break the per-lane end order Tracy
-    // depends on. The synced path never uses this.
+    // Rebase origin for an unsynced device clock: a running min over starts, which only decreases and so shifts
+    // later pushes right without breaking per-lane end order. Unused on the synced path.
     std::vector<uint64_t> ts_base_;
     std::vector<uint8_t> clock_synced_;
     // id -> name, mirrored per-ELF from llrt::ZoneMetaRegistry.

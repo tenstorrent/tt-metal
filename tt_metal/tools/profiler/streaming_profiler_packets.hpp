@@ -20,16 +20,15 @@ struct WorkerZonePacket {
     uint32_t risc = 0;      // 0=BRISC 1=NCRISC 2/3/4=TRISC_0/1/2
     uint32_t timer_id = 0;  // the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h)
     std::string_view name;  // resolved from the kernel's own ELF; stable for the profiler session
-    // One complete zone, both endpoints in full device ticks. Per (core, risc), packets must arrive in
-    // zone-completion order (non-decreasing `end`): that is what the Tracy server rebuilds nesting from.
+    // Per (core, risc), packets must arrive in zone-completion order: that is what the Tracy server rebuilds
+    // nesting from.
     uint64_t start = 0;
     uint64_t end = 0;
     uint32_t color = 0;  // explicit Tracy zone color (0 = auto by name)
 };
 
-// A point-in-time worker-core event: a PP_DATA packet (with payload) or a PP_EVENT flag (without). It
-// has no duration, so it lands on the lane's marker row rather than in the zone nesting. `values` and
-// `name` are non-owning views, valid only for the duration of the HandleWorkerEvent call.
+// A point-in-time event (PP_DATA with payload or PP_EVENT flag) on the lane's marker row. `values` and
+// `name` are views valid only during HandleWorkerEvent.
 struct WorkerEventPacket {
     uint32_t chip_id = 0;
     uint32_t core_virtual_x = 0;

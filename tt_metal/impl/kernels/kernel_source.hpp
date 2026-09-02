@@ -35,9 +35,7 @@ struct KernelSource {
         return "Kernel_Source_Code";
     }
 
-    // Stable, variant-independent identity of this source, for the profiler zone tu-id registry. The full
-    // path, not name(): stems recur across ops (reader_unary.cpp, ...) and would fuse unrelated TUs onto
-    // one id.
+    // The full path, not name(): stems recur across ops and would fuse unrelated TUs onto one zone tu-id.
     std::string profiler_zone_src_id() const {
         if (this->source_type_ == SourceType::FILE_PATH) {
             return this->path_.string();

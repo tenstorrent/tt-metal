@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Streaming profiler: the host-side control plane for the Blackhole device-zone capture path -- relay
-// bring-up (resident kernels, NIU stream-mode flips, D2H socket construction, static TLBs), host<->device
-// clock sync and Tracy anchoring, the quiesce, and the teardown completeness check. Everything from the
-// socket reads to the record consumers lives in StreamingProfilerReceiver.
+// Streaming profiler control plane: relay bring-up, host<->device clock sync and Tracy anchoring, quiesce, and
+// the teardown completeness check. Everything from socket reads to record consumers is
+// StreamingProfilerReceiver.
 #pragma once
 
 #include <cstdint>
@@ -65,9 +64,8 @@ private:
         uint32_t nl = 0;  // lanes = num_cores * NRISC (+ n_drisc * NRISC with self-profiling on)
         // Where the DRISC self-profiling lane block starts inside core_virt; 0 when self-profiling is off.
         uint32_t n_worker_cores = 0;
-        // Resident for the life of the profiler, and launched outside the command queue: a DRAM-only
-        // program touches no fast-dispatch resource, so it can sit there across every user workload, while
-        // going through the CQ would deadlock the first Finish().
+        // Launched outside the command queue: a DRAM-only program touches no fast-dispatch resource, so it stays
+        // resident across every workload, while going through the CQ would deadlock the first Finish().
         std::unique_ptr<Program> relay_program[kMaxRelays];
         IDevice* device = nullptr;
         CoreCoord drisc_logical[kMaxRelays];
@@ -91,12 +89,10 @@ private:
     };
 
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    // Put these DRISCs' NIUs into stream mode (1) or back to NOC2AXI (0), in one program launch; doing
-    // them one per launch hangs bring-up (see the .cpp).
+    // Stream mode (1) or NOC2AXI (0) for these DRISCs' NIUs, in one launch (see the .cpp).
     static void set_drisc_niu_mode(IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream);
-    // Set PROFILER_TERMINATE on every worker so producers stop blocking on a full ring. Required on every
-    // path where the relay does not come up: producers are armed by TT_METAL_DEVICE_PROFILER independently
-    // of us and are lossless, so with no consumer they block forever and the workload wedges.
+    // Set PROFILER_TERMINATE on every worker so producers stop blocking on a full ring; required on every path
+    // where the relay does not come up.
     void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
     bool wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget);
     void disarm_producer_backpressure(DeviceCtx& ctx);

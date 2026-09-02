@@ -2959,10 +2959,9 @@ bool getDeviceProfilerState(ContextId context_id) {
         return false;
     }
 
-    // Kernel marker emission keys off get_profiler_enabled() directly (build.cpp / build_env_manager.cpp
-    // set PROFILE_KERNEL from it), so a false here stands down only the DRAM readback and reset. The
-    // streaming profiler drains the same rings, and the DRAM profiler's per-program control-buffer reset
-    // rewinds the ring tail under it, so the two never run together.
+    // PROFILE_KERNEL keys off get_profiler_enabled() directly, so a false here stands down only the DRAM readback
+    // and reset; the DRAM profiler's per-program control-buffer reset would rewind the ring tail under the
+    // streaming profiler.
     return ctx.rtoptions().get_profiler_enabled() && !ctx.rtoptions().get_streaming_profiler_enabled();
 }
 

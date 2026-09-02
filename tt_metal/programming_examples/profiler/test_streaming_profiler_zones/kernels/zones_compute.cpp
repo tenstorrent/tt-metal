@@ -11,10 +11,8 @@
 #define N_ITERS 50u
 #endif
 
-// ZONE_MODE selects the zone body; ZONE_CYC is the nop-iteration count used when ZONE_MODE == 1. They are
-// separate because ZONE_CYC == 0 is a legitimate producer-rate point (max rate, no spin at all) and so
-// cannot double as "use the graduated table". Uniform durations give a single marker rate per lane
-// (2 markers per zone); graduated ones would smear a rate sweep across the table of durations.
+// ZONE_CYC == 0 is a legitimate rate point (max rate, no spin), so it cannot double as "use the graduated
+// table"; ZONE_MODE selects the body instead.
 #ifndef ZONE_MODE
 #define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
 #endif
@@ -30,13 +28,10 @@
 #define ZTAG "T2"
 #endif
 
-// One named zone whose body busy-waits CYC wall-clock spin-counts. CYC is calibrated so the zone displays
-// ~CYC/2500 us in Tracy: at the ~1.35 GHz boosted aiclk the profiler records ~0.55 timestamp tick per
-// spin-count at a ~0.741 ns context period, so displayed_ns ~= CYC * 0.41. Reading the low register only,
-// with unsigned-wrap subtraction, is tear-free for spins << 2^32.
-// Not kernel_profiler::WALL_CLOCK_LOW_INDEX: that constant lives inside kernel_profiler.hpp's
-// `#if defined(PROFILE_KERNEL) && ...` block, so referencing it breaks the build when the profiler is
-// compiled out, even though DeviceZoneScopedN() expands to nothing there.
+// Body busy-waits CYC spin-counts, calibrated so the zone displays ~CYC/2500 us in Tracy (displayed_ns ~=
+// CYC * 0.41 at the 1.35 GHz aiclk). Low register only with wrap-safe subtraction, tear-free for spins << 2^32.
+// Not kernel_profiler::WALL_CLOCK_LOW_INDEX: it lives inside the PROFILE_KERNEL block and breaks the
+// profiler-off build.
 static constexpr int kWallClockLowIdx = 0;
 
 #define ZONE_WALL(NAME, CYC)                                                               \
@@ -50,8 +45,7 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                                  \
     }
 
-// Uniform-spin body (ZONE_MODE == 1). The counter must stay `volatile`: that is what forces a
-// load/increment/store/compare per iteration, giving the calibrated 10 cycles rather than a single nop.
+// `volatile` forces load/increment/store/compare per iteration, the calibrated 10 cycles.
 #define ZONE_NOPS(NAME, ITERS)                                            \
     {                                                                     \
         DeviceZoneScopedN(NAME);                                          \

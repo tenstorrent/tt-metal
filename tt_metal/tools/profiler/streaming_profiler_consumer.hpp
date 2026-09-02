@@ -2,28 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Streaming profiler record contract: the record the receiver delivers to consumers, the lane
-// table consumers resolve identity against, and the batch-callback types.
-//
-// Stream contracts:
-//  - A zone arrives as one record, `Zone`, carrying its start timestamp and duration; the receiver
-//    pairs the device's raw start/end markers per lane before delivery, so consumers never see an
-//    unpaired half.
-//  - A Zone is emitted when it closes, so per lane Zones arrive in end order: with nested zones the
-//    child precedes its parent and data.zone.start is not monotonic. Sort on start if your analysis
-//    needs open order.
+// Streaming profiler record contract: the record the receiver delivers, the lane table identity resolves
+// against, and the batch-callback types.
+//  - A zone arrives as one `Zone` record with start and duration; consumers never see an unpaired half.
+//  - Zones are emitted at close, so per lane they arrive in end order: a nested child precedes its parent and
+//    start is not monotonic.
 //  - Cross-lane and cross-socket interleaving is arbitrary; demux by meta.lane / meta.dev.
-//  - A Data head is followed immediately by one Ext record (id = payload word count, data.ext =
-//    payload words 1-2 as (hi << 32) | lo, zero-filled) and then Cont records for words 3 and up
-//    (one payload uint64 each, hi word first), with no other records interleaved. An Event is
-//    payload-less and complete in itself.
+//  - A Data head is followed immediately by one Ext record (id = payload word count, data.ext = payload words
+//    1-2 as (hi << 32) | lo) and then Cont records for words 3 and up (one uint64 each, hi word first), with
+//    nothing interleaved. An Event is complete in itself.
 //  - ZoneTotal carries an accumulated duration sum (data.sum), not a timestamp.
-//  - Every id is the full 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and resolves
-//    to a name from the emitting binary's own ELF via ZoneNameMirror below, zones and markers alike;
-//    an unnamed id is a bug.
-//
-// The record is in-process only (never serialized), so bit-field and union layout portability
-// is not a concern; the static_asserts pin the size.
+//  - Every id is the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and resolves to a name via
+//    ZoneNameMirror; an unnamed id is a bug.
+// In-process only, never serialized; the static_asserts pin the size.
 #pragma once
 
 #include <cstdint>
@@ -87,9 +78,8 @@ struct StreamingProfilerLaneInfo {
     StreamingProfilerLaneRole role = StreamingProfilerLaneRole::Worker;
 };
 
-// Immutable once the receiver starts. Zone names are not here: they arrive per-ELF as binaries
-// JIT-load, so the table grows throughout a run and each consumer keeps its own lazily-refreshed
-// ZoneNameMirror below.
+// Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
+// each consumer keeps its own ZoneNameMirror.
 struct StreamingProfilerCaptureContext {
     struct Device {
         uint32_t chip_id = 0;
@@ -100,13 +90,10 @@ struct StreamingProfilerCaptureContext {
     std::vector<Device> devices;
 };
 
-// Per-consumer mirror of the process-wide per-ELF zone-name registry (llrt::ZoneMetaRegistry). Each
-// consumer runs on its own delivery thread, so a member mirror needs no lock on the per-record lookup.
-// Call refresh() once per batch, lookup() per record.
-//
-// `unnamed` must end at 0: a binary's names are registered when it is loaded, strictly before it can
-// emit, so a miss means a binary without .tt_zone_meta or a tu_id collision. The distinct offending ids
-// are kept (capped) so the count says which.
+// Per-consumer mirror of the process-wide per-ELF zone-name registry; each consumer runs on its own thread,
+// so lookups need no lock. refresh() once per batch, lookup() per record. `unnamed` must end at 0: names
+// register at load, strictly before a binary can emit, so a miss is a binary without .tt_zone_meta or a
+// tu_id collision.
 class ZoneNameMirror {
 public:
     static constexpr size_t kMaxUnnamedIds = 16;
@@ -139,28 +126,22 @@ struct StreamingProfilerRecordBatch {
     std::span<const StreamingProfilerRec> records;  // oldest first; valid only for the duration of the call
     uint64_t dropped_delta = 0;                     // records this consumer lost to ring lag since its last batch
     const StreamingProfilerCaptureContext* context = nullptr;
-    // PRODUCER-STALL zones in this batch (matched by ELF-resolved name): each is one time a producer
-    // RISC blocked on a full L1 ring. Counted among the records handed over here, so it carries the
-    // same delivery lag as they do.
+    // PRODUCER-STALL zones in this batch, each one time a producer RISC blocked on a full ring.
     uint64_t stall_delta = 0;
 };
 
 using StreamingProfilerRecordCallback = std::function<void(const StreamingProfilerRecordBatch&)>;
 using StreamingProfilerConsumerHandle = uint64_t;
 
-// Registers with a process-wide registry rather than a live receiver, so it works at any time: before
-// the profiler boots, mid-capture, between captures. The profiler attaches every registered consumer at
-// capture start, a mid-capture registration attaches immediately, and registrations persist across
-// captures until unregistered. Each attached consumer gets its own delivery thread; a slow consumer
-// drops only its own records, reported per batch via dropped_delta. Must not be called from inside a
-// consumer callback.
+// Registers with a process-wide registry, so it works before the profiler boots, mid-capture or between
+// captures; registrations persist until unregistered. Each attached consumer gets its own thread, and a
+// slow one drops only its own records (dropped_delta). Not from inside a consumer callback.
 StreamingProfilerConsumerHandle register_consumer(std::string name, StreamingProfilerRecordCallback cb);
 void unregister_consumer(StreamingProfilerConsumerHandle handle);
 
 class StreamingProfilerReceiver;
-// Capture-lifetime glue for the profiler control plane: attach binds every registered consumer to the
-// receiver and routes later registrations to it; detach must precede the receiver's shutdown so a
-// concurrent registration cannot attach to a dying receiver.
+// attach binds every registered consumer to the receiver and routes later registrations to it; detach must
+// precede the receiver's shutdown.
 void attach_registered_consumers(StreamingProfilerReceiver& receiver);
 void detach_registered_consumers();
 
@@ -170,13 +151,10 @@ void register_file_consumer_impl(
     StreamingProfilerRecordCallback on_batch,
     std::function<void(const std::string&)> write);
 
-// Declares a consumer that accumulates over the whole process and writes one file at exit, enabled by
-// `path` returning a non-empty string. `Consumer` needs operator()(const StreamingProfilerRecordBatch&)
-// and write_csv(const std::string&).
-//
-// Meant to be called from a static initializer, so `path` is not invoked here: it reads rtoptions, which
-// only exists once MetalContext is constructed. It runs when a capture attaches, and the consumer is
-// registered only then and only if the path is non-empty.
+// A consumer that accumulates over the process and writes one file at exit, enabled by `path` returning
+// non-empty. `Consumer` needs operator()(const StreamingProfilerRecordBatch&) and write_csv(const
+// std::string&). Callable from a static initializer: `path` reads rtoptions, so it runs when a capture
+// attaches, and the consumer registers only then.
 template <typename Consumer>
 void register_file_consumer(std::string name, std::string (*path)()) {
     // Leaked deliberately: an exit-time destructor would be ordered against other statics.

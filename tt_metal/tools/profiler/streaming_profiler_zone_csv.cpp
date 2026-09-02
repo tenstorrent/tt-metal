@@ -16,8 +16,7 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-// risc index -> the name the classic CSV uses; the index order is tracy::RiscType
-// (TracyTTDeviceData.hpp).
+// risc index -> the classic CSV's name; the index order is tracy::RiscType.
 const char* risc_name(uint8_t risc) {
     switch (risc) {
         case 0: return "BRISC";
@@ -30,14 +29,9 @@ const char* risc_name(uint8_t risc) {
     }
 }
 
-// The synchronization point events by name (synchronization_event_profiler.hpp), each with the legacy
-// numeric id the classic reader keys on: the streaming wire carries per-TU structural ids instead, so
-// the mapping lives here.
-//
-// Only events that carry a payload are listed, because this table exists to fill the CSV's `data`
-// column. A wait is a zone plus one "<name>-KEY" marker holding the join key, so the four wait-half ids
-// below are never reused -- a stale reader keying on 1001 would otherwise silently pick up something
-// else.
+// Sync events by name with the legacy numeric id the classic reader keys on (the wire carries per-TU
+// structural ids). Only payload-carrying events are listed; the wait-half ids stay reserved so a stale
+// reader keying on them cannot pick up something else.
 struct SyncName {
     const char* name;
     uint32_t legacy_id;
@@ -82,8 +76,8 @@ void StreamingProfilerZoneCsvConsumer::flush_pending(
     }
     Pending& p = it->second;
     if (p.payload.empty()) {
-        // A Data with no payload is counted, not emitted as zero: a semaphore event at address 0
-        // would pair against a real waiter and invent a dependency.
+        // A Data with no payload is counted, not emitted as zero: a semaphore event at address 0 would invent a
+        // dependency.
         incomplete_++;
         p = Pending{};
         return;
@@ -120,8 +114,7 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
 
         switch (rec.meta.type) {
             case StreamingProfilerRecType::Zone: {
-                // The record is a complete zone; both rows are emitted so the classic reader,
-                // which pairs ZONE_START with ZONE_END itself, needs no change.
+                // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
                 const std::string name(names_.lookup(rec.id));
                 for (int end = 0; end < 2; end++) {
                     Row& r = rows_.emplace_back();
@@ -138,8 +131,7 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
                 break;
             }
             case StreamingProfilerRecType::Data: {
-                // Only sync events belong here: the classic reader interprets the `data` column as
-                // a CB id or semaphore address.
+                // Sync events only: the reader interprets `data` as a CB id or semaphore address.
                 const uint32_t legacy = sync_legacy_id(rec.id);
                 if (legacy == 0) {
                     break;
@@ -157,9 +149,8 @@ void StreamingProfilerZoneCsvConsumer::operator()(const StreamingProfilerRecordB
                 if (!p.active) {
                     break;
                 }
-                // Ext carries the payload word count in id and words 1-2 packed ((hi << 32) | lo) in
-                // data.ext, and every sync macro passes exactly one datum, so the event completes
-                // here; the Cont arm below only covers a >2-word payload.
+                // Every sync macro passes exactly one datum, so the event completes at the Ext; Cont only covers a
+                // >2-word payload.
                 p.words_expected = rec.id;
                 p.payload.push_back(rec.data.ext);
                 if (p.words_expected <= 2) {
@@ -189,8 +180,7 @@ void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const 
         std::fprintf(stderr, "[streaming profiler zone-csv] cannot open %s\n", path.c_str());
         return;
     }
-    // The classic preamble: only CHIP_FREQ is parsed downstream, but the shape is kept so an existing
-    // reader does not have to special-case this file.
+    // Only CHIP_FREQ is parsed downstream; the shape is kept so an existing reader needs no special case.
     std::fprintf(
         f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_ > 0.0 ? freq_mhz_ : 1000.0);
     std::fprintf(
@@ -199,8 +189,8 @@ void StreamingProfilerZoneCsvConsumer::write_csv(const std::string& path) const 
         "time[cycles since reset], data, run host ID, trace id, trace id counter, "
         "zone name, type, source line, source file, meta data\n");
 
-    // The PID rather than a constant: two captures concatenated by hand then carry different ids, so
-    // the reader's multi-run warning still fires instead of going quiet.
+    // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
+    // multi-run warning still fires.
     const uint32_t run_id = static_cast<uint32_t>(::getpid());
 
     for (const Row& r : rows_) {

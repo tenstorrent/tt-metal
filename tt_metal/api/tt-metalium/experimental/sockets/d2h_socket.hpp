@@ -104,15 +104,10 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
-        // Set when the sender core is not a Tensix worker (e.g. a Blackhole DRAM core / DRISC). The
-        // socket then addresses it by physical->virtual NoC translation plus the full L1 address, for
-        // both the config write and the bytes_acked write-back.
-        //
-        // Addressing only: static vs dynamic TLB is decided by asking UMD whether the sender core has a
-        // static window spanning the config buffer (init_sender_tlb). On Blackhole only one NoC port per
-        // DRAM channel is statically mapped at device init (ll_api::configure_static_tlbs), so a caller
-        // on a different port should configure a window before constructing the socket, or every read()
-        // pays a ~210 ns TLB reconfigure.
+        // Set when the sender is not a Tensix worker (a Blackhole DRISC): the socket then addresses it by
+        // physical->virtual NoC translation plus the full L1 address. Addressing only: the static-vs-dynamic TLB
+        // path is decided by asking UMD for a window over the config buffer (init_sender_tlb), so a caller on a DRAM
+        // port without one should configure a window first or every read() pays a ~210 ns reconfigure.
         bool sender_uses_physical_noc_addr = false;
     };
 

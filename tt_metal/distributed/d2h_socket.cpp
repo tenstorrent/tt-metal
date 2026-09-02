@@ -98,9 +98,8 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
             "Anonymous mmap failed for D2H socket buffer ({} B): {}",
             alloc_size,
             std::strerror(errno));
-        // Bound before pinning, since pages are immovable once gup holds them. The receiver's ingest
-        // thread runs on the device's NUMA node; a FIFO left on the allocating thread's node reads at
-        // about half the local-node bandwidth.
+        // Bound before pinning (pages are immovable once gup holds them); the ingest thread runs on the device's
+        // node, and a FIFO on another node reads at about half the bandwidth.
         bind_memory_to_numa_node(
             p,
             alloc_size,
@@ -154,11 +153,10 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
 
-    // sysmem_manager::allocate_region draws from a ~8 KB auxiliary region, far too small for a FIFO that
-    // must hold a whole drain snapshot, so carve the FIFO plus a contiguous bytes_sent slot out of the upper
-    // half of the main hugepage channel, which is free while the device's raw rings are unused. Each socket
-    // gets a 2 MB-aligned region, one relay posted-TLB window. The dev addr returned is the channel offset
-    // (hi=0); the sender ORs in pcie_base (NOC_XY_PCIE_ENCODING bit 60).
+    // sysmem_manager::allocate_region draws from a ~8 KB region, far too small for a FIFO holding a whole drain
+    // snapshot, so the FIFO plus a contiguous bytes_sent slot is carved from the upper half of the main hugepage
+    // channel, free while the device's raw rings are unused; 2 MB-aligned, one relay posted-TLB window each. The
+    // returned dev addr is the channel offset; the sender ORs in pcie_base.
     static std::atomic<uint64_t> s_hugepage_bump{0};
     uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
     uint64_t region = ((static_cast<uint64_t>(fifo_size_) + 64 + 0x1FFFFFull) & ~0x1FFFFFull);
@@ -258,8 +256,8 @@ void D2HSocket::write_socket_metadata(
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else if (sender_uses_physical_noc_addr_) {
-        // Non-worker sender: core_coord is a physical NoC coord and config_buffer_address_ a full L1
-        // address, so write via the virtual coord -- the WORKER translation would target a Tensix instead.
+        // Non-worker sender: core_coord is a physical NoC coord, so write via the virtual coord; the WORKER
+        // translation would target a Tensix.
         const auto& cluster = MetalContext::instance().get_cluster();
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         CoreCoord virt =
@@ -309,12 +307,9 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
             sender_uses_physical_noc_addr_
                 ? cluster.get_virtual_coordinate_from_physical_coordinates(sender_device_id, sender_core_.core_coord)
                 : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        // Ask UMD whether this core has a static window rather than inferring it from the sender kind:
-        // Metal maps static TLBs at device init for workers/eth/dispatch and, on Blackhole, one 4 GB window
-        // per DRAM channel (ll_api::configure_static_tlbs), so a DRAM (DRISC) sender may or may not be among
-        // them. The address overload also proves the window spans the config buffer, which notify_sender()
-        // writes on every read(). Only Blackhole takes the static path below, so a window recorded here on
-        // any other arch would never be used.
+        // Ask UMD rather than inferring from the sender kind: Metal maps one 4 GB static window per DRAM channel at
+        // init on the channel's preferred port only, so a DRISC sender may or may not have one. The address overload
+        // also proves the window spans the config buffer, which notify_sender() writes on every read().
         if (!cluster.is_mock_or_emulated() && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
             auto* tlb_manager = cluster.get_driver()->get_chip(sender_device_id)->get_tlb_manager();
             const tt_xy_pair tlb_core(sender_virtual_core.x, sender_virtual_core.y);
@@ -338,8 +333,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
             sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
         };
     } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && sender_core_tlb_ != nullptr) {
-        // A static window covering the config buffer means these writes need no driver reconfig; a sender
-        // that did not get one stays on the dynamic path.
+        // With a window over the config buffer these writes need no driver reconfig.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
@@ -391,8 +385,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         }
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
-        // bytes_sent sits immediately after the FIFO, in the slot init_host_buffer_hugepage reserved, so the
-        // sender derives its address as data_addr + fifo_size and needs no second region.
+        // bytes_sent sits immediately after the FIFO, so the sender derives its address as data_addr + fifo_size.
         hugepage_bytes_sent_host_ptr_ = hugepage_data_host_ptr_ + fifo_size_ / sizeof(uint32_t);
         *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
         uint64_t bs_dev = ((static_cast<uint64_t>(data_info.addr_hi) << 32) | data_info.addr_lo) + fifo_size_;
