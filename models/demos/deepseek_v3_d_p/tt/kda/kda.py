@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.offset_prototype import mla_to_temporal_sp, temporal_to_mla_sp
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -380,8 +381,10 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        *,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, KdaState]:
-        """Run prefill KDA and return replacement logical carries.
+        """Run prefill KDA, with a throwaway host-orchestrated offset reshard.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
@@ -389,7 +392,14 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state)
-        projected = self._project_inputs(hidden_states)
+        temporal_hidden = hidden_states
+        if actual_start:
+            temporal_hidden = mla_to_temporal_sp(
+                hidden_states,
+                actual_start=actual_start,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+            )
+        projected = self._project_inputs(temporal_hidden)
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
         gate, beta = self._compute_gates(
             beta=projected.beta,
@@ -405,4 +415,10 @@ class ttKDA:
         )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
+        if actual_start:
+            output = temporal_to_mla_sp(
+                output,
+                actual_start=actual_start,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+            )
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
