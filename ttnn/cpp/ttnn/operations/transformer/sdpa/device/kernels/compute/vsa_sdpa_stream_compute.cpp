@@ -241,14 +241,27 @@ void kernel_main() {
         mm_no_mop_init_short(cb_q_res, cb_k_stream, /*transpose=*/true, 1, Sqt, DHt);
         pack_reconfig_data_format(cb_qk);
         configure_row_pack_width(cb_qk, 1);
-        for (uint32_t i = 0; i < nv; ++i) {
-            const Visit& v = vs[i];
-            const uint32_t qk_cols = v.n * Skt;
-            for (uint32_t b = 0; b < v.n; b += 2) {
-                const uint32_t nb = (v.n - b < 2) ? (v.n - b) : 2;
+        {
+            // Walk (visit, block) units in a flat stream, filling DEST with two units per acquire
+            // regardless of visit boundaries -- single-block visits (sparse listings) would
+            // otherwise quarter-fill DEST and pay the acquire round-trip per block.
+            uint32_t ui = 0, ub = 0;  // next unit: visit ui, block ub
+            while (ui < nv) {
+                uint32_t unit_v[2], unit_b[2];
+                uint32_t nu = 0;
+                while (nu < 2 && ui < nv) {
+                    unit_v[nu] = ui;
+                    unit_b[nu] = ub;
+                    ++nu;
+                    if (++ub == vs[ui].n) {
+                        ub = 0;
+                        ++ui;
+                    }
+                }
                 tile_regs_acquire();
-                for (uint32_t j = 0; j < nb; ++j) {
-                    const uint32_t slot = v.entries[b + j] & 0xff;
+                for (uint32_t j = 0; j < nu; ++j) {
+                    const Visit& v = vs[unit_v[j]];
+                    const uint32_t slot = v.entries[unit_b[j]] & 0xff;
                     for (uint32_t c = 0; c < Skt; ++c) {
                         for (uint32_t inner = 0; inner < DHt; ++inner) {
                             matmul_block_no_mop(
@@ -262,12 +275,14 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t j = 0; j < nb; ++j) {
+                for (uint32_t j = 0; j < nu; ++j) {
+                    const Visit& v = vs[unit_v[j]];
+                    const uint32_t qk_cols = v.n * Skt;
                     for (uint32_t sr = 0; sr < Sqt; ++sr) {
                         for (uint32_t c = 0; c < Skt; ++c) {
                             pack_tile<true>(
                                 j * Skt * Sqt + c * Sqt + sr, cb_qk,
-                                qk_base + v.tile_base + sr * qk_cols + (b + j) * Skt + c);
+                                qk_base + v.tile_base + sr * qk_cols + unit_b[j] * Skt + c);
                         }
                     }
                 }
@@ -582,7 +597,12 @@ void kernel_main() {
                     i += take;
                 }
                 vn = 0;
-                pend_credits += n_slots;
+                if (pend_n == 0) {  // no deferred PV holds these V slots (e.g. probe-1 skips)
+                    free_cb.reserve_back(n_slots);
+                    free_cb.push_back(n_slots);
+                } else {
+                    pend_credits += n_slots;
+                }
                 continue;
             }
 
@@ -608,11 +628,11 @@ void kernel_main() {
         rows_done += pass_rows;
     }
 #if defined(VSA_PROBE) && VSA_PROBE == 9
-    MATH(({
+    {
         const uint32_t t_total = VSA_TICK() - t_begin;
         DPRINT(
             "VSAC v={} total={} wait={} qk={} max={} corr={} pv={} exp={} flush={}\n",
             n_visits, t_total, t_wait, t_qk, t_max, t_corr, t_pv, t_exp, t_flush);
-    }));
+    }
 #endif
 }
