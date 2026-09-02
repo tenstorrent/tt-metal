@@ -128,7 +128,9 @@ STANDARD_SWEEP_OPS = sorted(
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
 # per-format default in passed_test.
 CUSTOM_TOLERANCES = {
-    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
+    # Coarse LUT op: good PCC, but the piecewise-linear fit needs a loosened atol.
+    # (GeluAppx is a 6-segment SFPLUTFP32 table -- see gelu_init in ckernel_sfpu_gelu.h;
+    # its fit error peaks ~0.024 near the knees and grows with |x| in the identity tail.)
     MathOperation.GeluAppx: (0.13, 0.05),
     # SigmoidAppx no longer needs a loosened atol: its kernel moved from the 3-segment
     # SFPLUT table (peak abs error 0.1192, hence the old 0.13) to a 6-segment SFPLUTFP32
