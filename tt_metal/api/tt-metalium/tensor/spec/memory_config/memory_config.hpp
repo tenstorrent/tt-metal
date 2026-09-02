@@ -76,7 +76,9 @@ private:
         BufferType buffer_type,
         std::optional<ShardSpec> shard_spec,
         std::optional<NdShardSpec> nd_shard_spec,
-        bool created_with_nd_shard_spec);
+        bool created_with_nd_shard_spec,
+        bool per_core_allocation,
+        bool range_lockstep_allocation);
 
     MemoryConfig(
         TensorMemoryLayout memory_layout,
