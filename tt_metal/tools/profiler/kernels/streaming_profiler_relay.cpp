@@ -703,9 +703,6 @@ void kernel_main() {
     uint32_t quiet_streak = 0;
     constexpr uint32_t kBatchArmSweeps = 3;
     constexpr uint32_t kFlushQuietSweeps = 8;
-    // Re-posting every head on this cadence bounds a lost posted relief to a stall instead of a parked producer.
-    constexpr uint32_t kHeadRefreshSweeps = 64;
-    static_assert((kHeadRefreshSweeps & (kHeadRefreshSweeps - 1u)) == 0, "the refresh cadence is a mask");
     // Persists across sweeps so a sweep's final ship drains under the pace gap, not on its own critical path.
     uint32_t gen_shipped = 0;  // bit g: generation g's last frame may still be leaving staging
     static_assert(kNGens <= 32, "gen_shipped is a bit mask");
@@ -966,12 +963,6 @@ void kernel_main() {
         }
         all_live = next;
 
-        // Every issued batch has passed its read barrier, so each scratch is exactly the head it was relieved to.
-        if ((sweeps & (kHeadRefreshSweeps - 1u)) == 0) {
-            for (uint32_t c = 0; c < num_cores; c++) {
-                post_heads(core_coord, c);
-            }
-        }
         // Busy sweeps below the first band skip the post-sweep pump: a capture that fits the spool gets pure gather.
         if constexpr (kSpool) {
             const bool half_turn = pump.level == SpoolPump::kLevelHalf && (sweeps & 1u) != 0;
