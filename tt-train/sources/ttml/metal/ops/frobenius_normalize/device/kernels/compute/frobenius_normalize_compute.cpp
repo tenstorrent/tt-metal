@@ -22,6 +22,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/sfpu_reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
