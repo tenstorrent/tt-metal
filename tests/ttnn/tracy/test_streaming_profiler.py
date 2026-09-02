@@ -7,7 +7,7 @@
 Runs the ``test_streaming_profiler_zones`` workload with ``TT_METAL_STREAMING_PROFILER=1`` and
 ``TT_METAL_STREAMING_PROFILER_TRACY=1`` under a connected ``tracy-capture``, and checks that the relays go
 resident at bring-up and that the capture holds device zones across the workload's per-core contexts. Needs a
-Blackhole box with DRAM programmable cores and a built ``tools/drisc_drain/tracy_ctx_inspect``; device work runs
+Blackhole box with DRAM programmable cores and a built ``tracy_ctx_inspect`` (in ``build/tools/profiler/bin``); device work runs
 in a subprocess so the pytest parent never takes the PCIe lock.
 """
 
@@ -26,7 +26,7 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_META
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_streaming_profiler_zones"
-CTX_INSPECT = Path(TT_METAL_HOME) / "tools" / "drisc_drain" / "tracy_ctx_inspect" / "tracy_ctx_inspect"
+CTX_INSPECT = PROFILER_BIN_DIR / "tracy_ctx_inspect"  # built by tools/drisc_drain/CMakeLists.txt next to tracy-capture
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "streaming_profiler_tests"
 
 
@@ -108,10 +108,9 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     if not CTX_INSPECT.exists():
         pytest.fail(
             f"tracy_ctx_inspect not built at {CTX_INSPECT} -- the device-zone assertions cannot run and "
-            f"this test would otherwise verify only that the capture exceeds 4096 bytes. Build it with:\n"
-            f"  bash tools/drisc_drain/tracy_ctx_inspect/build.sh "
-            f"$TT_METAL_HOME/tools/drisc_drain/tracy_ctx_inspect/tracy_ctx_inspect\n"
-            f"(the output path must be ABSOLUTE -- build.sh cds into third_party/tracy first)"
+            f"this test would otherwise verify only that the capture exceeds 4096 bytes. It is a normal "
+            f"CMake target (tools/drisc_drain/CMakeLists.txt) that ./build_metal.sh builds next to tracy-capture; "
+            f"rebuild, or `cmake --build build --target tracy_ctx_inspect`."
         )
 
     n_ctx, n_with_zones = _gpu_context_stats(out_tracy)

@@ -44,29 +44,6 @@ struct Win {
     double span_ms() const { return valid() ? double(hi - lo) / 1e6 : 0.0; }
 };
 
-// Window of a GPU timeline's TOP-LEVEL zones. Deliberately does NOT recurse into children and does NOT
-// resolve source locations: both were tried and both segfaulted on this capture (srcloc resolution on a
-// GPU-zone index, and Child() whose empty sentinel is not >= 0). Neither is needed -- a context's top-level
-// zones already bound its window, and role is identified by CONTEXT SHAPE below rather than by zone name.
-void walk_top(const tracy::Vector<tracy::short_ptr<tracy::GpuEvent>>& v, Win& win) {
-    // INDEXED, and size-checked. A range-for over a Tracy Vector that was never populated dereferences a null
-    // data pointer -- which is what segfaulted here, on a context whose lane exists but whose timeline is
-    // empty. is_empty() is the guard; do not "simplify" this back to a range-for.
-    if (v.empty()) {
-        return;
-    }
-    for (size_t i = 0; i < v.size(); i++) {
-        const tracy::GpuEvent* e = v[i];
-        if (e == nullptr) {
-            continue;
-        }
-        const int64_t s = e->GpuStart(), t = e->GpuEnd();
-        if (s >= 0 && t >= s) {
-            win.add(s, t);
-        }
-    }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {

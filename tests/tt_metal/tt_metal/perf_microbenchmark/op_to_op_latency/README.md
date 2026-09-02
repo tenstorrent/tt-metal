@@ -19,12 +19,12 @@ NoC-direction metric with its own golden).
 
 By default the kernels run **lean**: they emit only the profiler markers the CI metrics
 actually consume (the firmware `{BRISC,NCRISC,TRISC}-KERNEL` zones for the gated metric,
-plus compute `PROG_ID` / tile-0 first-math / pack-finish for `pack_to_unpack`). The lean
-compute markers are emitted as `DeviceTimestampedData("OP2OP-EVENT", <EV_* id>)`, and
-`op_to_op_postprocess.py` maps the event ids back to the `TILE_IDX` / `FINISH_LAST_PUSH`
-names (`EVENT_NAMES`, kept in sync with the kernel `EV_*` constants). That decode still reads
-the id out of the timer id and has to read the payload instead before this benchmark runs
-again. The extra reader/writer `GO`/`DONE`/`BARRIER` markers and the per-tile compute
+plus compute `PROG_ID` / tile-0 first-math / pack-finish for `pack_to_unpack`). The two
+lean compute markers are emitted with `DeviceRecordEvent` (event id only, no data payload)
+rather than `DeviceTimestampedData`, so they write fewer words to the L1 profiler buffer and
+perturb the op2op gap less; `op_to_op_postprocess.py` maps the event ids back to the
+`TILE_IDX` / `FINISH_LAST_PUSH` names (`EVENT_NAMES`, kept in sync with the kernel `EV_*`
+constants). The extra reader/writer `GO`/`DONE`/`BARRIER` markers and the per-tile compute
 `TILE_IDX` + `MATH` zone used by the research BW/gap-decomposition analysis are gated behind
 `--profile-detail` (off by default) so they don't add device cycles that perturb the gated
 op2op number.
@@ -79,8 +79,9 @@ is active.
 The CI run sets `TT_METAL_PROFILER_ACCUMULATE=1`: the profiler accumulates markers in
 per-RISC L1 and defers the L1→DRAM dump instead of flushing after every program. Without
 it, that ~3 µs per-program dump lands inside the op2op gap and inflates the measured
-latency (reviewer feedback). The tile-0 and pack-finish markers ride fixed `EV_*` ids, and
-`PROG_ID` encodes the program
+latency (reviewer feedback). Accumulate compiles out `DeviceTimestampedData`, so every custom
+marker we rely on is emitted with `DeviceRecordEvent` instead (which survives): the tile-0 and
+pack-finish markers as fixed event ids, and `PROG_ID` as an event id that encodes the program
 (`EV_PROG_BASE + program_id`, recovered host-side). Together with the firmware KERNEL zones,
 that keeps both the `official` and `pack_to_unpack` metrics working under accumulate. Both
 goldens currently ship `null` (record mode) while the accumulate baseline is collected on CI;
