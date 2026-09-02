@@ -1,6 +1,6 @@
-# This script automatically download the model weights from Google Drive
+#!/usr/bin/env bash
 
-#!/bin/bash
+# This script automatically download the model weights from Google Drive
 
 # Output filename
 OUTPUT="models/demos/vision/segmentation/vanilla_unet/unet.pt"
