@@ -1550,7 +1550,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `5823e5ddf6c` | records the SHA above |
 | `188541a6a7b` | round-8 source fixes (FM-020): the absence-checking figure check, the LM-head docstrings and `in0_block_w` sweep, the failing sweep, and the tightened terminal-path assertion |
 | `d91df21262a` | FM-021: `in0_block_w` back to 4 after the readiness gates measured what it costs |
-| `FULLMODEL_R9_EVIDENCE_SHA` | the FM-020/021/022 evidence sweep and the report rebuilt from it |
+| `3c1ff5dcbb0` | the FM-020/021/022 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
