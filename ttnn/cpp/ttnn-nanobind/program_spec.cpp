@@ -388,7 +388,23 @@ void py_module_types(nb::module_& mod) {
                         : std::nullopt;
             },
             "Entry data format, required for any DFB bound to a compute kernel. Set with a ttnn "
-            "DataType (e.g. ttnn.bfloat16); reads back as the raw tt::DataFormat enum value.");
+            "DataType (e.g. ttnn.bfloat16); reads back as the raw tt::DataFormat enum value.")
+        // The tile geometry the entry holds. Without this the JIT emits the 32x32 defaults
+        // into chlkc_descriptors.h -- unpack_tile_face_r_dim 16, num_faces 4, tile_size 2048
+        // -- however small entry_size is. A row-form buffer (ttnn.Tile([1, 32]), a 64-byte
+        // page) then has its pages allocated at 64 bytes and its tiles UNPACKED at 2048, so
+        // the unpacker strides straight out of the buffer. Nothing checks the two agree, and
+        // the result is wrong data rather than an error.
+        //
+        // The field has always existed on the C++ spec; only this binding was missing, which
+        // left the sub-tile geometry reachable through cb_descriptor_from_sharded_tensor on
+        // the descriptor path and unreachable from a ProgramSpec.
+        .def_rw(
+            "tile_format_metadata",
+            &exp::DataflowBufferSpec::tile_format_metadata,
+            "Entry tile geometry as a ttnn.Tile. Defaults to None, meaning a full 32x32 tile. "
+            "Required for a sub-tile entry (e.g. ttnn.Tile([1, 32])), or the compute kernel is "
+            "built for 32x32 tiles regardless of entry_size.");
 
     nb::class_<exp::SemaphoreSpec>(mod, "SemaphoreSpec")
         .def(nb::init<>())
