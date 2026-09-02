@@ -26,6 +26,6 @@ def test_gemma4_prefill_manifest_matches_supported_runtime():
     assert (int(env["PREFILL_SP"]), int(env["PREFILL_TP"])) == (8, 4)
     assert int(env["PREFILL_NUM_LAYERS"]) == 60
     assert int(env["PREFILL_CHUNK_SIZE"]) == 8192
-    assert int(env["PREFILL_MAX_SEQ_LEN"]) == 65536
-    assert int(env["PREFILL_NUM_USERS"]) == 8
+    assert int(env["PREFILL_MAX_SEQ_LEN"]) == 262144
+    assert int(env["PREFILL_NUM_USERS"]) == 2
     assert env["PREFILL_USE_TRACE"] == "1"
