@@ -10,12 +10,8 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -93,7 +89,6 @@ def run_ring_joint_sdpa(
     pcc_threshold,
     max_mse=None,
     is_causal=False,
-    is_balanced=False,
     cache_path=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
@@ -214,18 +209,6 @@ def run_ring_joint_sdpa(
         padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
         padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
         padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
-
-        # Apply balanced reordering if requested
-        chunk_order = None
-        if is_balanced and skip_check == False:
-            # Do not reorder if skipping pcc check
-            rp_factor = submesh.shape[rp_axis]
-            chunk_order = create_balanced_chunk_order(rp_factor)
-            logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
-
-            padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
-            padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
-            padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
     else:
         logger.info("Skipping PyTorch tensor creation - loading from cache")
         padded_Q = None  # Will load directly from cache
@@ -244,8 +227,6 @@ def run_ring_joint_sdpa(
         logger.debug(f"padded_Q: {padded_Q.shape}")
         logger.debug(f"padded_K: {padded_K.shape}")
         logger.debug(f"padded_V: {padded_V.shape}")
-        if is_balanced:
-            logger.debug(f"Balanced reordering applied with chunk order: {chunk_order}")
 
     sdpa_input_shard_dims = [None, None]
     sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
@@ -370,7 +351,6 @@ def run_ring_joint_sdpa(
                 ccl_core_grid_offset=ccl_core_grid_offset,
                 use_column_major_ccl=True,
                 is_causal=is_causal,
-                is_balanced=is_balanced,
             )
             tt_out_list.append(tt_out)
 
@@ -417,16 +397,8 @@ def run_ring_joint_sdpa(
                 ),
             )
 
-            # Reverse reordering for TT output if balanced reordering was applied
-            if is_balanced and chunk_order is not None:
-                logger.debug("Reversing balanced reordering for TT output")
-                # First slice to padded sequence length, then reverse reorder
-                tt_out_padded = tt_out[:, :, :padded_seq_len, :]
-                tt_out_reordered = reverse_reorder_tensor_chunks(tt_out_padded, chunk_order, seq_dim=2)
-                tt_out = tt_out_reordered[:, :, :base_seq_len, :]
-            else:
-                # Slice out any tile-padding
-                tt_out = tt_out[:, :, :base_seq_len, :]
+            # Slice out any tile-padding
+            tt_out = tt_out[:, :, :base_seq_len, :]
 
             if n_iters > 1:
                 if expected_output is None:
@@ -487,10 +459,9 @@ def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
 @pytest.mark.parametrize(
     "seq_len, q_chunk_size, k_chunk_size",
     [
-        (128 * 1024, 256, 128),
-        (100 * 1024, 160, 160),
+        (PREFILL_CHUNK_TOKENS, 160, 160),
     ],
-    ids=["seq128k", "seq100k"],
+    ids=["seq5k"],
 )
 @pytest.mark.parametrize(
     "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
@@ -525,7 +496,6 @@ def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
         "rpxup",
     ],
 )
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 @pytest.mark.timeout(0)
 def test_mla_sdpa(
     mesh_device,
@@ -546,7 +516,6 @@ def test_mla_sdpa(
     rp_axis,
     up_axis,
     skip_check,
-    is_balanced,
     reset_seeds,
 ):
     all_gather_topology = per_axis_topology(device_params["fabric_config"])[rp_axis]
@@ -595,7 +564,6 @@ def test_mla_sdpa(
         skip_check,
         0.999,
         is_causal=True,
-        is_balanced=is_balanced,
         cache_path=cache_path,
     )
 
@@ -622,7 +590,6 @@ def run_ring_joint_sdpa_perf(
     up_axis,
     all_gather_topology,
     is_causal=False,
-    is_balanced=False,
     math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
     """Run ring joint SDPA with 1 compile run + num_perf_runs measured runs with signposts."""
@@ -712,14 +679,6 @@ def run_ring_joint_sdpa_perf(
     padded_Q = torch.cat([Q, torch.zeros(b, nhq, padded_seq_len - base_seq_len, head_dim_q)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
-
-    if is_balanced:
-        rp_factor = submesh.shape[rp_axis]
-        chunk_order = create_balanced_chunk_order(rp_factor)
-        logger.info(f"Perf test: applying balanced reordering (rp_factor={rp_factor})")
-        padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
-        padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
-        padded_V = reorder_tensor_chunks(padded_V, chunk_order, seq_dim=2)
 
     # Joint tensors
     joint_Q = fa_rand(b, nhq, joint_seq_len, head_dim_q)
@@ -822,7 +781,6 @@ def run_ring_joint_sdpa_perf(
             ccl_core_grid_offset=ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_causal=is_causal,
-            is_balanced=is_balanced,
         )
 
     # Step 1: Compile run (caches kernels)
@@ -853,10 +811,9 @@ def run_ring_joint_sdpa_perf(
 @pytest.mark.parametrize(
     "seq_len, q_chunk_size, k_chunk_size",
     [
-        (128 * 1024, 256, 128),
-        (100 * 1024, 160, 160),
+        (PREFILL_CHUNK_TOKENS, 160, 160),
     ],
-    ids=["seq128k", "seq100k"],
+    ids=["seq5k"],
 )
 @pytest.mark.parametrize(
     "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
@@ -898,7 +855,6 @@ def run_ring_joint_sdpa_perf(
     [[0, 1]],
     ids=["rpxup"],
 )
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 @pytest.mark.timeout(0)
 def test_mla_sdpa_perf(
     mesh_device,
@@ -917,7 +873,6 @@ def test_mla_sdpa_perf(
     num_links,
     rp_axis,
     up_axis,
-    is_balanced,
     reset_seeds,
 ):
     all_gather_topology = per_axis_topology(device_params["fabric_config"])[rp_axis]
@@ -966,5 +921,4 @@ def test_mla_sdpa_perf(
         up_axis,
         all_gather_topology,
         is_causal=True,
-        is_balanced=is_balanced,
     )
