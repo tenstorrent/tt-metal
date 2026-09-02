@@ -48,7 +48,6 @@ def demo_run():
         ref_text=REF_TEXT,
         output_path=OUTPUT_WAV,
         seed=42,
-        pre_measurement_warmup=True,
     )
     assert isinstance(result, dict), f"run_full_ttnn_tts must return a dict; got {type(result)}"
     return result
