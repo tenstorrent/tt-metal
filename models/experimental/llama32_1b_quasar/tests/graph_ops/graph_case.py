@@ -454,14 +454,22 @@ def build_tensor(spec, mesh_device, case, op_name, key):
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
+    # Build (and tilize) on host, then upload. Passing device=mesh_device together with layout=TILE and
+    # a mesh_mapper makes from_torch run the row-major->tile conversion ON-DEVICE via the mainline tilize
+    # op, which is unsupported on Quasar (legacy CreateKernel path has no Gen2 branch, so it asserts:
+    # "DataMovementKernel is not supported on Quasar"). Omitting device= tilizes on the host CPU; the
+    # separate to_device then just uploads the already-tiled tensor (the pattern the quasar op tests use).
     tt = ttnn.from_torch(
         data,
         dtype=DTYPE[spec["dtype"]],
         layout=LAYOUT[spec["layout"]],
-        device=mesh_device,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+    )
+    tt = ttnn.to_device(
+        tt,
+        mesh_device,
         # a partially filled shard is reached in two steps, see _is_partial_shard
         memory_config=ttnn.DRAM_MEMORY_CONFIG if partial else memory_config,
-        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
     if partial:
         tt = ttnn.to_memory_config(tt, memory_config)
