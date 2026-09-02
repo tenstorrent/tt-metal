@@ -1317,6 +1317,74 @@ def test_srcreg_dummy_publication_scoped_to_publisher_functions():
     assert out == [], out
 
 
+@case
+def test_srcreg_waitlike_zerosrc_guards_a_following_set_dvalid():
+    # Regression: the WH fix shape is a wait-like ZEROSRC followed by a bare
+    # SET_DVALID that INHERITS that wait by sequencing. Crediting only a real
+    # UNPACR flagged the SET_DVALID and false-positived on correct code.
+    F = "tt_llk_wormhole_b0/llk_lib/experimental/llk_unpack_mul_reduce_scalar.h"
+    FIX = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    PUB = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)"
+    fixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", FIX, func="u"),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", fixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+    # The same pair with a PLAIN ZEROSRC (wait on MatrixUnit's bank) still flags both.
+    unfixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out2 = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", unfixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out2) == 2, out2
+
+
+@case
+def test_srcreg_dummy_publication_guard_is_per_src_register():
+    # A guard established on SrcA must NOT clear a publication on SrcB.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_sdpa.h"
+    facts = [
+        fn("_llk_unpack_A_sdpa_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].line == 111, out
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 

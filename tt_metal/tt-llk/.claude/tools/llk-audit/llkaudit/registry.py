@@ -765,6 +765,19 @@ def macro_args(text: str) -> list:
     return [a.strip() for a in args]
 
 
+def src_reg_of(text: str):
+    """ "A" / "B" from a macro's first operand (e.g. TTI_UNPACR_NOP(SrcA, ...)), else None."""
+    args = macro_args(text)
+    if not args:
+        return None
+    a0 = args[0]
+    if "SrcA" in a0 or "SRCA" in a0.upper():
+        return "A"
+    if "SrcB" in a0 or "SRCB" in a0.upper():
+        return "B"
+    return None
+
+
 def publication_waits_own_bank(text: str) -> bool:
     """True if an UNPACR_NOP publication gates on Unpackers[i].SrcBank.
 
