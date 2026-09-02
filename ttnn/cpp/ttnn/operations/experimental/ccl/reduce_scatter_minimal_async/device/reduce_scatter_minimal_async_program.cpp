@@ -150,6 +150,9 @@ std::unordered_map<std::string, uint32_t> get_ring_writer_named_compile_args(
         {"page_size", page_size},
         {"num_tiles_to_write_per_packet", num_tiles_to_write_per_packet},
         {"output_batch_num_pages", output_batch_num_pages},
+        // Batch stride of the tiled (input-shaped) intermediate; the writer needs it to give each
+        // batch its own staging region on that layout, as the chunk-paged one already does.
+        {"input_batch_num_pages", input_batch_num_pages},
         {"input_channel_num_pages", input_channel_num_pages},
         {"output_channel_num_pages", output_channel_num_pages},
         {"input_tensor_B", input_tensor_B},

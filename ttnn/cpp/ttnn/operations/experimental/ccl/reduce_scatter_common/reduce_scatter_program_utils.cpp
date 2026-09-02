@@ -159,7 +159,13 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     const uint32_t chunks_per_channel = (output_channel_num_pages + tile_granularity - 1) / tile_granularity;
-    const uint32_t total_chunks = ring_size * slice_C * chunks_per_channel;
+    // One staging region per batch. Without the batch axis every batch reuses the same chunks, and a
+    // cross-device barrier has to stand between consecutive batches to stop the next one overwriting
+    // partial sums the current one has not consumed yet -- input_tensor_B - 1 full fabric round trips
+    // per worker. Giving each batch its own region removes the hazard, and with it the barrier. The
+    // arrival semaphores need no such protection: they are monotonic across batches (never reset per
+    // batch) and fabric ordering keeps increment N paired with chunk N.
+    const uint32_t total_chunks = input_tensor_B * ring_size * slice_C * chunks_per_channel;
     const uint32_t page_bytes = tile_granularity * single_tile_bytes;
 
     // The contiguous fast path covers the ring topology on dims 1/2/3 (dim 0 uses distinct kernels).
@@ -212,8 +218,10 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_penult_intermediate_
         return std::nullopt;
     }
     // Same chunk-paged layout as the main intermediate, but sized without the ring_size (slice_idx)
-    // axis: total_chunks == ring_size * slice_C * chunks_per_channel, so this region is exactly
-    // slice_C * chunks_per_channel pages, addressed as (c * chunks_per_channel + chunk-in-channel).
+    // axis: total_chunks == input_tensor_B * ring_size * slice_C * chunks_per_channel, so this region
+    // is exactly input_tensor_B * slice_C * chunks_per_channel pages, addressed as
+    // ((b * slice_C + c) * chunks_per_channel + chunk-in-channel). The batch axis carries over from
+    // total_chunks, for the same reason the main intermediate needs it.
     const uint32_t penult_intermediate_chunks = params.total_chunks / ring_size;
     return tt::tt_metal::TensorSpec(
         ttnn::Shape({penult_intermediate_chunks, params.page_bytes}),

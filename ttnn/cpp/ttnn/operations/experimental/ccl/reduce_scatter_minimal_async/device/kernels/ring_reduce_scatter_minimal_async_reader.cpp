@@ -117,7 +117,10 @@ struct IntermSource</*Contiguous=*/false> {
         start_tiles_read(tiles_read_start) {}
 
     void begin_iteration(uint32_t b, uint32_t slice_idx) {
-        interm_slice_base = slice_base_tile_id(slice_idx);
+        // Per-batch staging region, as on the chunk-paged layout. Free here: this intermediate is
+        // input-shaped, and the slice addressing above spans exactly input_batch_num_pages tiles,
+        // so the B regions tile a buffer that was already allocated at full input size.
+        interm_slice_base = b * input_batch_num_pages + slice_base_tile_id(slice_idx);
         output_batch_base = b * output_batch_num_pages;
     }
 
@@ -195,20 +198,25 @@ struct IntermSource</*Contiguous=*/true> {
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
     uint32_t penult_interm_channel_chunk_base = 0;
+    uint32_t penult_interm_batch_chunk_base = 0;
 
     // The per-worker row/column starts are meaningless here: chunk pages are addressed straight
     // from tiles_read, so nothing has to be tracked across chunks.
     IntermSource(uint32_t, uint32_t, uint32_t) {}
 
-    void begin_iteration(uint32_t /*b*/, uint32_t slice_idx) {
-        interm_slice_chunk_base = slice_idx * slice_C * chunks_per_channel;
+    void begin_iteration(uint32_t b, uint32_t slice_idx) {
+        // Each batch stages into its own region, so a batch never overwrites partial sums an
+        // earlier one has yet to consume. This is what lets the per-batch barrier go away.
+        interm_slice_chunk_base = (b * ring_size + slice_idx) * slice_C * chunks_per_channel;
+        penult_interm_batch_chunk_base = b * slice_C * chunks_per_channel;
     }
 
     void begin_channel(uint32_t c) {
         interm_channel_chunk_base = interm_slice_chunk_base + c * chunks_per_channel;
         // The penult intermediate has no slice_idx axis (each device receives exactly one such
-        // contribution, from exactly one neighbor, at exactly one iteration).
-        penult_interm_channel_chunk_base = c * chunks_per_channel;
+        // contribution, from exactly one neighbor, at exactly one iteration), but it does carry the
+        // batch axis, for the same reason the main staging region does.
+        penult_interm_channel_chunk_base = penult_interm_batch_chunk_base + c * chunks_per_channel;
     }
 
     void skip_chunk(uint32_t) {}
