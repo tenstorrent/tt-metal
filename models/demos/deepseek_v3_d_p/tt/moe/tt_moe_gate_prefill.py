@@ -80,6 +80,11 @@ def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMod
     review once already). Checked by family, not exact value: HOST_ALL/DEVICE/DEVICE_FP32 rows
     intentionally diverge from each other to exercise host-fallback paths, and must keep passing.
     """
+    # A dense row drives no MoE gate and passes None: there is no chosen mode to cross-check, and
+    # looking it up raises KeyError(None). Return rather than assert -- the check exists to catch a
+    # row on the wrong routing FAMILY, and a row with no routing at all cannot be on the wrong one.
+    if gate_fallback_mode is None:
+        return
     default_mode = GateComputeMode[variant.default_gate_mode]
     expected_family = GATE_MODE_FAMILY[default_mode]
     actual_family = GATE_MODE_FAMILY[gate_fallback_mode]
