@@ -45,6 +45,12 @@ struct Gelu : UnaryOp<Gelu<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { gelu_tile(to_u32(Slot) + slot_offset); }
 };
 
+template <Dst Slot>
+struct Silu : UnaryOp<Silu<Slot>, Slot> {
+    static ALWI void init() { silu_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { silu_tile(to_u32(Slot) + slot_offset); }
+};
+
 /// d/dx(tanh) = sech²(x). LLK uses `fast_and_approx` bool template param;
 /// surfaced as `Approx::Exact` (default) / `Approx::Fast` in chain style.
 template <Approx fast, Dst Slot>
