@@ -956,7 +956,7 @@ int main(int argc, char** argv) {
                 // rewrite solutions_index.yaml immediately, instead of collecting every solution before writing any.
                 // A consumer can pick up / test solution k while solution k+1 is still being searched for, and a
                 // crash/timeout leaves a valid index for every solution already written. Selection is IDENTICAL to
-                // the batch run_topology_mapping_n path (same session, constraints, unique_shapes).
+                // the batch run_topology_mapping_n path (same session, constraints, unique_shapes, signature dedup).
                 auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
                 MultiMeshSolutionEnumerator enumerator(
                     inputs.logical_graph,
