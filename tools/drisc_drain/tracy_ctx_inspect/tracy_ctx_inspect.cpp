@@ -80,6 +80,7 @@ struct EthIv {
     long long lo, hi;
 };
 static std::vector<EthIv> g_rtt;
+static const char* g_cur_ctx_name = "";
 static std::vector<long long> g_echo;
 static std::vector<EthIv> g_close_rtt;
 // Per RECEIVER CONTEXT, not pooled. Links drift independently and in OPPOSITE directions (measured
@@ -95,6 +96,15 @@ static void collect_rtt(const tracy::Worker& w, const tracy::Vector<tracy::short
         const char* nm = w.GetZoneName(e);
         if (nm != nullptr && strcmp(nm, "ETH_SYNC_RTT") == 0) {
             g_rtt.push_back(EthIv{(long long)e.GpuStart(), (long long)e.GpuEnd()});
+        }
+        // TT_DUMP_RTT=1: one line per FSYNC_RTT zone (lane, start ns, width ns) for offline
+        // correlation of sample-0 doorbell waits against time-within-run.
+        if (nm != nullptr && strcmp(nm, "FSYNC_RTT") == 0 && getenv("TT_DUMP_RTT") != nullptr) {
+            printf(
+                "RTTZ\t%s\t%lld\t%lld\n",
+                g_cur_ctx_name,
+                (long long)e.GpuStart(),
+                (long long)(e.GpuEnd() - e.GpuStart()));
         }
         if (nm != nullptr && strcmp(nm, "ETH_SYNC_CLOSE_RTT") == 0) {
             g_close_rtt.push_back(EthIv{(long long)e.GpuStart(), (long long)e.GpuEnd()});
@@ -219,6 +229,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 64; ++i) { dev_lo[i] = 0x7fffffffffffffffLL; dev_hi[i] = -1; }
         for (auto* c : gpu) {
             const char* nm = c->name.Active() ? worker.GetString(c->name) : "(unnamed)";
+            g_cur_ctx_name = nm;
             // Per-thread (RISC) max nesting depth; flag any thread deeper than 3 (staircase bug).
             int ctx_max_depth = 0;
             char depth_note[256] = {0};
@@ -271,13 +282,15 @@ int main(int argc, char** argv) {
                 if (win_hi > dev_hi[devno]) { dev_hi[devno] = win_hi; }
             }
             printf(
-                "[%3zu] count=%-8llu threads=%-3zu hasCal=%d maxdepth=%-3d period=%.3f name=%s%s\n",
+                "[%3zu] count=%-8llu threads=%-3zu hasCal=%d maxdepth=%-3d period=%.3f win=[%lld..%lld] name=%s%s\n",
                 idx++,
                 (unsigned long long)c->count,
                 (size_t)c->threadData.size(),
                 (int)c->hasCalibration,
                 ctx_max_depth,
                 c->period,
+                win_hi > 0 ? win_lo : 0,
+                win_hi > 0 ? win_hi : 0,
                 nm,
                 depth_note[0] ? depth_note : "");
             if (ctx_max_depth > 3) {

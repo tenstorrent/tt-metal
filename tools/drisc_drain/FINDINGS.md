@@ -6601,3 +6601,87 @@ expiries rarer in wall-clock. Instrument the prescaler period per chip, or lower
 `test_tt_fabric` emits ~612 zones for the whole run -- every device reads `0.00 Mzones/s`. All four
 devices are now REGISTERED and anchored, but this harness will never fill a timeline. For a capture
 with real device rows, use a zone-producing workload.
+
+---
+
+## REGRESSION, take 2: the frequency push fixed the STATS, not the ROWS — the real bug was clock_synced
+
+The previous section's fix made the receiver report a zone window for all 4 devices, and the GUI
+still showed devices 1-3 empty. Receiver-stats truth is not GUI truth; the user caught it in the
+capture. Forensics, in the order they actually excluded things:
+
+1. **The zones are in the file.** `tracy_ctx_inspect` (now prints per-context `win=[lo..hi]`):
+   devices 1-3 carry the same per-core zone counts as device 0. Nothing was dropped.
+2. **Their eth rows render correctly; their Physical rows are at [0.03..1.78] s against a true
+   [4.13..7.72] s** — ~4 s left of the workload and ~2x compressed. That is why the GUI looks
+   empty: the rows sit far off-screen from the workload.
+3. **Wrong suspect #1 eliminated by a probe, not by argument.** The misplaced rows were first taken
+   for DRISC drainer rows missing per-DRAM-core anchors; a counter in compose said `0/7 re-anchored`
+   and a follow-up probe printed `map size 110` — the DRISC coords are not even in `virt_to_noc0`
+   because **drainer self-zones are OFF in these runs; there are no DRISC rows at all**. The
+   misplaced rows are WORKLOAD worker rows (72/54/36/18 zones = one per test that used the core).
+   The per-core compose loop stays (it is correct and needed when self-zones are ON) but it was not
+   the bug.
+4. **The receiver's own per-device zone window is 3650.6 ms on ALL FOUR devices** — identical raw
+   spans. The raw timestamps are fine; the mangling happens at materialization.
+5. **Real cause:** `PerfDebugTracyConsumer` rebases a non-`clock_synced` device's timestamps to a
+   first-marker base (`clock_synced_[dev] ? 0 : ts_base_[dev]`), while the composed Tracy anchor
+   maps ABSOLUTE device cycles. Post-nuke, a non-root device is clock_synced=false at receiver
+   build (compose flips it 2 s later), so its zones were (first-marker-rebased) values pushed
+   through an (absolute-cycles) calibration. Two transforms that do not compose = rows seconds off
+   and scale-warped.
+
+### The trap generalizes: THREE stale copies of per-device sync state
+- `ReceiverDeviceConfig.{frequency_ghz, clock_synced}` — snapshotted at receiver build (drives
+  receiver stats; the previous fix updated frequency only, which is why stats lied "fixed").
+- `PerfDebugCaptureContext.Device.{frequency_ghz, clock_synced}` — a SECOND copy made at receiver
+  build, handed to every consumer ("immutable once the receiver starts" — no longer quite true).
+- The tracy consumer's own `clock_synced_[]` — a THIRD copy, cached on first batch.
+
+Fix: `set_device_sync(chip, freq)` (replaces `set_device_frequency`) updates frequency AND
+clock_synced in BOTH receiver-side copies; the consumer refreshes its cache every batch. Benign
+write race, stated in a comment: compose runs before workload zones exist, and a marker converted
+under the old flag keeps the rebase it was given. Plus a loud warning in `AddCore` when an anchor
+arrives AFTER its context was minted (calibration bakes in at first zone) — the silent variant of
+this family.
+
+### Method notes, earned the hard way this session
+- "All four devices report" from receiver stats is NOT "all four devices render". Verify placement
+  in the FILE (`tracy_ctx_inspect` per-context windows), not in a summary line.
+- `grep -c` on an error string dates when the TEXT appeared, not when the BEHAVIOR broke.
+- `pkill -f <pattern>` from inside an ssh one-liner matches the ssh command line itself and kills
+  its own session (the pgrep self-match trap, remote edition).
+
+## Chip-3 doorbell: two candidates eliminated, one sharpened
+
+New instrumentation and forensics on the ~200 us sample-0 doorbell stalls confined to the two
+links touching chip 3 (in EITHER direction, 9 runs reproducible):
+
+1. **NOT load.** Wide (>50 us) sample-0 zones on the slow lanes are uniform in time: 19-25 per
+   250 ms bin, every bin, straight through test-setup gaps and across the 1/2/3/4-link phases.
+   Load-dependent interference would track traffic; this does not.
+2. **The stall is entirely on the ping side.** Pairing each wide FSYNC_RTT zone with its
+   FSYNC_ECHO marker: the echo sits at 99.8% of the zone width on every wide zone, every lane.
+   The responder stamps t1 ~400 ns before the initiator sees the echo -- the return leg and the
+   responder's TX path are instant. The ~200 us elapses between ping SEND and responder STAMP:
+   either ping transit or responder noticing. (t1 cannot separate those two -- it is the
+   observation instant.)
+3. **Fast links show the SAME signature, 300x rarer.** 0.3-0.6% of their rounds have a wide
+   sample-0 (max 240-355 us) with the same 0.998 echo-frac. One mechanism, per-link incidence.
+4. **Link-health counters are clean everywhere** (new `FSYNC LINK-HEALTH` line at teardown, both
+   ends per edge, from the base-FW eth mailbox): retrain 0, port 0x1, pcs 0x1 on fast and slow
+   links alike. Whatever this is, it does not bump retrain/port/pcs.
+5. **The wait distribution fits "responder notices at its next poll", with a per-link poll
+   period.** min ~0 / mean ~P/2 / max ~P shapes on both classes: P ~33 us on fast links, P ~330 us
+   on slow ones. The occasional sub-us sample-0 on slow links (rtt0 min 917 cy) is exactly what
+   uniform phase predicts, and what a constant-slow link would forbid.
+6. **The box's MMIO degradation cannot explain it: ALL FOUR cards are degraded** (device-open
+   probes 1.4-1.9 us/read vs ~180 ns healthy, every open), uniformly -- nothing distinguishes
+   chip 3 there. For the pending power-cycle decision: the degradation is box-wide.
+
+Remaining discriminator, designed but NOT built: publish per-lane prescaler-expiry gap stats
+(min/mean/max) from the hook -- now64() is already in hand at every expiry, so the measurement is
+free. Prediction if "notice": slow-link responders show ~300+ us expiry gaps (the router loop or
+its base-FW yield runs that rarely); if gaps are ~33 us everywhere, the ping itself arrives late
+(link-level transit) despite clean counters. Both ends of one physical link sharing the behavior
+suggests link-attached state either way.

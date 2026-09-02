@@ -2952,7 +2952,60 @@ void PerfDebugProfiler::compose_device_anchors_from_root() {
         // the receiver reports no per-device stats for chips 1..N and their cycles cannot be
         // converted, which reads downstream as "only device 0 has data".
         if (receiver_ != nullptr) {
-            receiver_->set_device_frequency(ctx.chip_id, ctx.freq_ghz);
+            receiver_->set_device_sync(ctx.chip_id, ctx.freq_ghz);
+        }
+        // PER-DRAM-CORE ANCHORS, and BEFORE the chip anchor goes in. The open-time loop that anchors
+        // every drainer core is gated on (sync.valid || derived); a COMPOSED device had neither at
+        // open, so when drainer self-zones are ON its DRISC rows would have no per-core anchor and
+        // would fall back to this chip anchor -- worker origin, worker slope -- off the timeline by
+        // the DRAM tile's banked-count difference. Same shape as the open-time loop for an anchored
+        // device: per-core ORIGIN from a host bracket read, shared root SLOPE. (With self-zones OFF
+        // this loop is a no-op: the DRISC coords are not in virt_to_noc0 and no DRISC rows exist.
+        // NOTE it was NOT the cause of the misplaced-rows bug on this box -- that was the Tracy
+        // consumer rebasing non-clock_synced devices to a first-marker base while the composed
+        // anchor expects absolute cycles; see set_device_sync.)
+        // Ordering: contexts are minted lazily on a core's first zone with whatever anchor exists at
+        // that instant, then CACHED -- if the chip anchor landed first, a zone arriving between the
+        // two calls would mint a chip-anchored context for a DRAM core and keep it forever.
+        if (tracy_ != nullptr) {
+            auto& cluster = MetalContext::instance().get_cluster();
+            uint32_t recored = 0;
+            for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+                const auto nit = ctx.virt_to_noc0.find(
+                    (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                    static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+                if (nit == ctx.virt_to_noc0.end()) {
+                    // With drainer self-zones OFF the DRISC coords are never entered into the map and
+                    // there are no DRISC rows to anchor -- expected, not an error.
+                    continue;
+                }
+                const PerfDebugSync ds = sync_device_clock(cluster, ctx.chip_id, ctx.drisc_virtual[d]);
+                if (!ds.valid) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] Device {} DRISC at NOC0 ({},{}): DRAM-core clock sync "
+                        "FAILED at compose; its rows fall back to the chip anchor and will render off "
+                        "the timeline",
+                        ctx.chip_id,
+                        nit->second.first,
+                        nit->second.second);
+                    continue;
+                }
+                tracy_->AddCore(
+                    ctx.chip_id,
+                    nit->second.first,
+                    nit->second.second,
+                    ds.host_anchor,
+                    static_cast<double>(ds.device_at_anchor),
+                    root_freq_ghz_);
+                ++recored;
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: {}/{} DRISC cores re-anchored at compose",
+                ctx.chip_id,
+                recored,
+                ctx.n_drisc);
         }
         tracy_->AddDevice(ctx.chip_id, root_host_anchor_, dev_at_root_anchor, ctx.freq_ghz);
         ctx.anchor_host = root_host_anchor_;
@@ -3491,6 +3544,45 @@ void PerfDebugProfiler::stop_fabric_sync() {
             stat_r >> 8,
             stat_r & 0xFF,
             e.in_tree ? "" : " [closure]");
+        // LINK HEALTH on both ends, from the base-FW eth mailbox (the same reads as
+        // print_aerisc_training_status, which llrt does not export). Motivated by the slow-doorbell
+        // investigation: sample-0 stalls of ~200 us sit on specific PHYSICAL LINKS in either
+        // direction, uniformly in time and independent of traffic -- retrain/port/pcs counters are
+        // the cheapest discriminator between link-level maintenance and everything else.
+        try {
+            const auto& hal = MetalContext::instance().hal();
+            if (hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API) &&
+                hal.get_supports_eth_debug_regs()) {
+                auto rd3 = [&](uint32_t chip, const CoreCoord& virt, uint32_t out[3]) {
+                    const tt_cxy_pair tgt(chip, virt);
+                    auto rd = [&](uint64_t addr) {
+                        uint32_t v = 0;
+                        cluster.read_reg(&v, tgt, addr);
+                        return v;
+                    };
+                    out[0] = rd(hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT));
+                    out[1] = rd(hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS));
+                    out[2] = rd(hal.get_eth_debug_reg_addr(tt::tt_metal::EthDebugReg::PCS_STATUS));
+                };
+                uint32_t hi[3] = {0, 0, 0};
+                uint32_t hr[3] = {0, 0, 0};
+                rd3(e.init.chip, e.init.virt, hi);
+                rd3(e.resp.chip, e.resp.virt, hr);
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FSYNC LINK-HEALTH {}<->{}: init retrain {} port {:#x} pcs {:#x} "
+                    "| resp retrain {} port {:#x} pcs {:#x}",
+                    e.init.chip,
+                    e.resp.chip,
+                    hi[0],
+                    hi[1],
+                    hi[2],
+                    hr[0],
+                    hr[1],
+                    hr[2]);
+            }
+        } catch (const std::exception&) {
+        }
     }
     log_fabric_sync_closure(true);
     render_fabric_sync_into_tracy();

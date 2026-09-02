@@ -86,7 +86,20 @@ void PerfDebugTracyHandler::AddCore(
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    core_anchors_[ContextKey(chip_id, noc0_x, noc0_y)] = ChipAnchor{host_start, first_timestamp, frequency};
+    const uint64_t key = ContextKey(chip_id, noc0_x, noc0_y);
+    // A context is Populated with its anchor ONCE, at mint (first zone). An anchor arriving after
+    // that is a silent no-op for every zone on the row -- the exact failure being chased when this
+    // was added -- so make it loud instead of silent.
+    if (tracy_contexts_.count(key) != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] AddCore({}, {}, {}) AFTER its context was minted -- the new anchor "
+            "will NOT apply to this row (calibration is baked in at first zone)",
+            chip_id,
+            noc0_x,
+            noc0_y);
+    }
+    core_anchors_[key] = ChipAnchor{host_start, first_timestamp, frequency};
 #endif
 }
 

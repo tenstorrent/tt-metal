@@ -111,14 +111,23 @@ struct IdleBackoff {
 
 }  // namespace
 
-void PerfDebugReceiver::set_device_frequency(uint32_t chip_id, double freq_ghz) {
+void PerfDebugReceiver::set_device_sync(uint32_t chip_id, double freq_ghz) {
     if (freq_ghz <= 0.0) {
         return;
     }
     for (auto& d : devices_) {
         if (d.chip_id == chip_id) {
             d.frequency_ghz = freq_ghz;
-            return;
+            d.clock_synced = true;
+        }
+    }
+    for (auto& cd : ctx_.devices) {
+        if (cd.chip_id == chip_id) {
+            cd.frequency_ghz = freq_ghz;
+            // Plain (unsynchronized) write racing delivery threads: benign here because compose runs
+            // before workload zones exist, and a marker converted under the old flag just keeps the
+            // rebase it was already given.
+            cd.clock_synced = true;
         }
     }
 }

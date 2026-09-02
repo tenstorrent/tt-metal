@@ -85,9 +85,12 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
     if (ts_base_.size() < ctx.devices.size()) {
         ts_base_.resize(ctx.devices.size(), 0);
         clock_synced_.resize(ctx.devices.size(), 0);
-        for (size_t d = 0; d < ctx.devices.size(); d++) {
-            clock_synced_[d] = ctx.devices[d].clock_synced ? 1 : 0;
-        }
+    }
+    // Refresh EVERY batch, not once at resize: a composed device flips clock_synced AFTER the
+    // receiver (and this consumer) exist -- set_device_sync updates the capture context in place,
+    // and caching the build-time value re-creates the misplaced-rows bug this fixes.
+    for (size_t d = 0; d < ctx.devices.size(); d++) {
+        clock_synced_[d] = ctx.devices[d].clock_synced ? 1 : 0;
     }
     // Mirror any zone names registered since the last batch. Names arrive per-ELF as binaries load, so
     // the table GROWS throughout a model run -- a one-shot snapshot would be taken when it holds a

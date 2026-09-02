@@ -123,13 +123,18 @@ class PerfDebugReceiver {
 public:
     PerfDebugReceiver(ReceiverConfig config, std::vector<ReceiverDeviceConfig> devices);
 
-    // Late-arriving frequency for a device whose anchor is COMPOSED from the root AFTER the receiver
-    // was built. ReceiverDeviceConfig::frequency_ghz is snapshotted at construction, and for a
-    // non-root device it is still 0 at that point -- the host-fit fallback that used to fill it in
-    // was deliberately removed (it injected us-scale cross-device skew). Without this refresh the
-    // device keeps frequency 0 forever: its per-device stats are skipped by the `freq > 0.0` gate
-    // and nothing downstream can turn its cycles into time.
-    void set_device_frequency(uint32_t chip_id, double freq_ghz);
+    // Late-arriving clock sync for a device whose anchor is COMPOSED from the root AFTER the
+    // receiver was built. TWO snapshots go stale at construction, and both must be refreshed:
+    // ReceiverDeviceConfig (drives the receiver's own per-device stats) and the capture context's
+    // Device entry (drives every consumer's timestamp handling). For a non-root device both hold
+    // frequency 0 / clock_synced false at build -- the host-fit fallback that used to fill them in
+    // was deliberately removed (it injected us-scale cross-device skew). Left unrefreshed, the Tracy
+    // consumer REBASES that device's timestamps to its first marker while the composed Tracy anchor
+    // expects ABSOLUTE device cycles -- the two transforms do not compose, and the device's rows
+    // render seconds off the timeline (worker rows drawn ~4 s left of the workload on bh-31).
+    // Call BEFORE workload zones flow (compose runs pre-workload); records already delivered keep
+    // the base they were converted with.
+    void set_device_sync(uint32_t chip_id, double freq_ghz);
     ~PerfDebugReceiver();
 
     PerfDebugReceiver(const PerfDebugReceiver&) = delete;
