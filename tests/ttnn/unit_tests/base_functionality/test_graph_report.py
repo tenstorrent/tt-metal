@@ -4827,10 +4827,7 @@ class TestFastOperationGraphTracking:
         conn.close()
 
     def test_setup_failure_closes_scope_so_later_ops_stay_top_level(self, monkeypatch, expect_error):
-        """record_python_operation after track_function_start must not leave the scope open.
-
-        Copilot r3905642313: that hole skips unwind_open_functions and hides later ops.
-        """
+        """A Python-I/O setup failure must close its scope so later operations stay top-level."""
         from ttnn.decorators import FastOperation
 
         def boom(*_args, **_kwargs):
