@@ -5,7 +5,7 @@
 # ops_unit_tests.yaml; in consequence each (test, sku) leg has exactly
 # one owning pipeline and one time budget.
 
-- name: ttnn nightly matmul tests
+- name: ttnn release matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
@@ -16,7 +16,7 @@
   team: ttnn
   category: matmul
 
-- name: ttnn nightly fused tests
+- name: ttnn release fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
@@ -27,7 +27,7 @@
   team: ttnn
   category: fused
 
-- name: ttnn nightly reduction tests
+- name: ttnn release reduction tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
@@ -38,7 +38,7 @@
   team: ttnn
   category: reduction
 
-- name: ttnn nightly moreh tests
+- name: ttnn release moreh tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
