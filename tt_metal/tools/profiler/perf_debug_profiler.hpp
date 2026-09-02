@@ -61,15 +61,20 @@ public:
     void stop();
 
 private:
-    // EIGHT DRISC FILLERS, each sweeping an eighth of the worker grid and pushing frames straight into its
-    // own D2H socket. The knee is the filler's scan over its slice (FINDINGS N+28/N+34/N+40), so fillers are
-    // the thing to multiply, and every DRAM view with a spare NoC port can host one -- as of the 2026-08
+    // UP TO EIGHT DRISC FILLERS, each sweeping a slice of the worker grid and pushing frames straight into
+    // its own D2H socket. The knee is the filler's scan over its slice (FINDINGS N+28/N+34/N+40), so fillers
+    // are the thing to multiply, and every DRAM view with a spare NoC port can host one -- as of the 2026-08
     // UMD/soc-descriptor state all eight views pick distinct spare ports (the view-7-collides-with-view-0
     // and view-2-bringup failures that capped this at six no longer reproduce). Host-facing duty from
     // NoC rows y != 0 rides each filler's own static TLB window (configured at bring-up; the socket asks
     // UMD for it in init_sender_tlb), the same path the two y == 0 movers used before direct push.
-    static constexpr uint32_t kNFillers = 8;
-    static constexpr uint32_t kNSockets = kNFillers;
+    //
+    // The COUNT is a runtime value, DeviceCtx::n_drisc, decided in boot_device: min(kMaxFillers, DRAM views),
+    // so a harvested part (7 views) runs 7 fillers rather than refusing; TT_METAL_PERF_DEBUG_NFILLERS forces
+    // 1..kMaxFillers (clamped to the view count). One socket per filler. kMaxFillers only sizes the fixed
+    // arrays below and bounds the knob; an 8-view part with no override behaves exactly as the fixed 8 did.
+    static constexpr uint32_t kMaxFillers = 8;
+    static constexpr uint32_t kMaxSockets = kMaxFillers;
     // Host FIFO per socket: TT_METAL_PERF_DEBUG_FIFO_MB, default 64 MiB (host_fifo_bytes() in the .cpp).
     // This FIFO is the pipeline's ONLY elasticity now that the device-DRAM ring is gone; the default
     // matches the per-filler ring the direct push deleted, and growing it to hold a whole capture makes a
@@ -82,7 +87,7 @@ private:
 
     struct DeviceCtx {
         uint32_t chip_id = 0;
-        std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];  // moved into the receiver at start()
+        std::unique_ptr<distributed::D2HSocket> sockets[kMaxSockets];  // moved into the receiver at start()
         uint32_t nl = 0;  // lanes = num_cores * NRISC (+ n_drisc * NRISC with self-profiling on)
         // Worker cores only, i.e. where the DRISC self-profiling lane block starts inside core_virt. 0 when
         // self-profiling is off, in which case core_virt holds nothing but workers.
@@ -93,17 +98,19 @@ private:
         // what makes a resident drainer possible at all -- a DRAM-only program touches none of the fast
         // dispatch worker grid or dispatch column, so it can sit there across every user workload. Going
         // through the CQ instead would deadlock the first Finish().
-        std::unique_ptr<Program> drain_program[kNFillers];
+        std::unique_ptr<Program> drain_program[kMaxFillers];
         IDevice* device = nullptr;
         // Per-DRISC. Each drainer owns a disjoint slice of the worker grid, its own socket and its own L1
         // window -- nothing is shared between them on the device side.
-        CoreCoord drisc_logical[kNFillers];
-        CoreCoord drisc_virtual[kNFillers];
-        uint64_t drisc_l1_noc[kNFillers] = {};  // NoC-addressable base of each DRISC L1 window
-        uint32_t drisc_l1_base[kNFillers] = {};
-        uint32_t stop_addr[kNFillers] = {};  // host writes 1 to quiesce, 2 to release the NIU
-        uint32_t done_addr[kNFillers] = {};  // drainer publishes 0xD09E**** once its last page is out
-        uint32_t n_drisc = kNFillers;
+        CoreCoord drisc_logical[kMaxFillers];
+        CoreCoord drisc_virtual[kMaxFillers];
+        uint64_t drisc_l1_noc[kMaxFillers] = {};  // NoC-addressable base of each DRISC L1 window
+        uint32_t drisc_l1_base[kMaxFillers] = {};
+        uint32_t stop_addr[kMaxFillers] = {};  // host writes 1 to quiesce, 2 to release the NIU
+        uint32_t done_addr[kMaxFillers] = {};  // drainer publishes 0xD09E**** once its last page is out
+        // Fillers (= sockets) actually in use on this device, [1, kMaxFillers]; every per-filler loop and the
+        // socket prefix handed to the receiver run to this. Set once by boot_device before any use.
+        uint32_t n_drisc = 0;
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
