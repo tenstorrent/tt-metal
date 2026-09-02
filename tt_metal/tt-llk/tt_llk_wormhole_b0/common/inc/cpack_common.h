@@ -331,7 +331,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
  *     Exp_section_size = (1 + num_faces + idx * datum_bytes) - (idx + 1) = num_faces + idx * (datum_bytes - 1)
  *
  * @param idx: Packer index 0..3 (SEC0_REG1 / SEC0_REG8 / SEC1_REG1 / SEC1_REG8). Only called with idx 1..3 —
- *             packer 0's value (EXP0 / the partial_face case) is written separately.
+ *             packer 0's value (EXP0 / sized from face_r_dim) is written separately.
  * @param datum_bytes: Per-face data size in 16B chunks (Bfp8 16, Bfp4 8, Bfp2 4; == 16 * the ISA DatumSizeBytes 1 / 0.5 / 0.25).
  * @param num_faces: Number of faces in the tile (1, 2, or 4).
  * @return Exp_section_size for packer `idx`, in 16-byte chunks.
@@ -387,8 +387,7 @@ constexpr std::uint32_t bfp2_row_bytes = 4;
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
 // performing these MMIOs.
 template <bool reconfiguring>
-inline void cache_exponential_section_sizes_in_gprs(
-    const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM, const bool partial_face = false)
+inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = bfp_exp_section_chunks(num_faces, face_r_dim) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -443,11 +442,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format)
 
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
@@ -581,7 +576,7 @@ inline void set_packer_config(
         }
     }
 
-    cache_exponential_section_sizes_in_gprs<false>(num_faces, face_r_dim, partial_face);
+    cache_exponential_section_sizes_in_gprs<false>(num_faces, face_r_dim);
 }
 
 inline void set_packer_l1_offset(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
@@ -665,8 +660,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t tile_size                   = 0,
     [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces                   = 4,
-    const std::uint32_t face_r_dim                  = FACE_R_DIM,
-    const bool partial_face                         = false)
+    const std::uint32_t face_r_dim                  = FACE_R_DIM)
 {
     // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -720,7 +714,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
-        cache_exponential_section_sizes_in_gprs<true>(num_faces, face_r_dim, partial_face);
+        cache_exponential_section_sizes_in_gprs<true>(num_faces, face_r_dim);
 
         // Wait till the MMIO is finished
         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::TRISC_CFG);
@@ -778,7 +772,6 @@ inline void configure_pack(
     const std::uint32_t tile_size           = 0,
     const std::uint32_t face_r_dim          = FACE_R_DIM,
     const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
     [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config         = 0)
 {
@@ -824,7 +817,7 @@ inline void configure_pack(
 
     t6_mutex_release(mutex::REG_RMW);
 
-    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face);
+    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
