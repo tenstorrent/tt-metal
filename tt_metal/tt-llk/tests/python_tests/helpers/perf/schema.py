@@ -107,26 +107,35 @@ STAT_KINDS = (MEAN, STD)
 # Non-sweep key columns present in a report.
 KEY_COLUMNS = (MARKER, TEST_NAME_COLUMN, LOOP_FACTOR_COLUMN, TILE_CNT_COLUMN)
 
-# Derived efficiency metric base names — mirror the ``*_pct`` keys that
-# helpers/metrics.py::compute_metrics exports (the only keys _exportable() keeps).
-METRIC_BASES = frozenset(
-    {
-        "fpu_utilization_pct",
-        "compute_utilization_pct",
-        "unpack_thread_stall_pct",
-        "math_thread_stall_pct",
-        "pack_thread_stall_pct",
-        "math_sem_wait_pct",
-        "pack_sem_wait_pct",
-        "unpack0_write_eff_pct",
-        "unpack1_write_eff_pct",
-        "unpack_write_eff_pct",
-        "unpack_to_math_flow0_pct",
-        "unpack_to_math_flow1_pct",
-        "unpack_to_math_flow_pct",
-        "pack_utilization_pct",
-        "pack_dest_eff_pct",
-        "fidelity_stall_pct",
-        "math_src_stall_pct",
-    }
-)
+
+def _load_perf_metrics_common():
+    """Import the shared metric module; fall back to the file in the surrounding tt-metal checkout
+    when the tracy package is not installed (the LLK CI container)."""
+    try:
+        from tracy import perf_metrics_common
+
+        return perf_metrics_common
+    except ImportError:
+        pass
+    import importlib.util
+    from pathlib import Path
+
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "tools" / "tracy" / "perf_metrics_common.py"
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "perf_metrics_common", candidate
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise RuntimeError(
+        "Could not locate tools/tracy/perf_metrics_common.py above this file"
+    )
+
+
+PERF_METRICS_COMMON = _load_perf_metrics_common()
+
+# Derived metric base names: exactly the keys compute_metrics emits (and _exportable() keeps),
+# taken from the shared module so this schema cannot drift from the formulas.
+METRIC_BASES = frozenset(PERF_METRICS_COMMON.METRIC_LABELS)

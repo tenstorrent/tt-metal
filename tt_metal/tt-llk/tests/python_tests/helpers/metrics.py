@@ -2,53 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Performance metrics derived from Wormhole hardware counters.
+Performance metrics from the LLK test counter dump.
 
-All metrics are bounded 0-100% unless noted otherwise.
-
-== Compute Utilization ==
-- fpu_utilization: FPU_INSTRUCTION / ref_cycles (FPU bank)
-    % of total time the FPU was executing matrix ops.
-- compute_utilization: FPU_OR_SFPU_INSTRN / ref_cycles (FPU bank)
-    % of total time either FPU or SFPU was active (combined).
-
-== Thread Stall Rates (INSTRN_THREAD bank, normalized by ref_cycles) ==
-- unpack_thread_stall_rate: THREAD_STALLS_0 / ref_cycles
-    % of time the unpack thread (T0) was stalled.
-- math_thread_stall_rate: THREAD_STALLS_1 / ref_cycles
-    % of time the math thread (T1) was stalled.
-- pack_thread_stall_rate: THREAD_STALLS_2 / ref_cycles
-    % of time the pack thread (T2) was stalled.
-
-== Semaphore Wait Rates (INSTRN_THREAD bank, normalized by ref_cycles) ==
-- math_sem_wait_rate: WAITING_FOR_NONZERO_SEM_1 / ref_cycles
-    % of time the math thread was waiting on a semaphore > 0 (data not ready).
-- pack_sem_wait_rate: WAITING_FOR_NONZERO_SEM_2 / ref_cycles
-    % of time the pack thread was waiting on a semaphore > 0.
-
-== Unpacker Metrics (TDMA_UNPACK bank) ==
-- unpack0_write_efficiency: SRCA_WRITE / UNPACK0_BUSY_THREAD0
-    Fraction of unpacker0 busy cycles actually writing to srcA.
-- unpack1_write_efficiency: SRCB_WRITE / UNPACK1_BUSY_THREAD0
-    Fraction of unpacker1 busy cycles actually writing to srcB.
-- unpack_write_efficiency: average of unpack0 + unpack1.
-- unpack_to_math_flow0: SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
-    srcA buffer availability during unpack — high = no backpressure from math.
-- unpack_to_math_flow1: SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
-    srcB buffer availability during unpack.
-- unpack_to_math_flow: average of flow0 + flow1.
-
-== Packer Metrics (TDMA_PACK bank) ==
-- pack_utilization: PACKER_BUSY / ref_cycles (TDMA_PACK bank)
-    % of total time any packer engine was busy.
-- pack_dest_eff: PACKER_DEST_READ_AVAILABLE_0 / PACKER_BUSY
-    Fraction of packer busy time where dest data was available to read.
-
-== Math Pipeline Stalls (TDMA_UNPACK bank — same bank, reliable) ==
-- fidelity_stall_rate: FIDELITY_PHASE_STALLS / MATH_INSTRN_AVAILABLE
-    % of math-available cycles stalled by HiFi fidelity phases. 0% at LoFi.
-- math_src_stall_rate: 1 - (MATH_NOT_BLOCKED_BY_SRC / MATH_INSTRN_AVAILABLE)
-    % of math-available cycles where source data was NOT ready.
+The metric formulas live in the shared module tools/tracy/perf_metrics_common.py (single source,
+also used by the Tracy tool). This file adapts the counters.py DataFrame to that module's
+CounterView, computes per (zone, run) metrics, and aggregates/exports them to CSV.
 """
 
 import pandas as pd
@@ -56,6 +14,9 @@ import pandas as pd
 from .perf.schema import (
     MARKER,
     MEAN,
+)
+from .perf.schema import PERF_METRICS_COMMON as _mc
+from .perf.schema import (
     STD,
     counter_base,
     cycles_of,
@@ -63,139 +24,40 @@ from .perf.schema import (
     stat_column,
 )
 
-# ── Helpers ──────────────────────────────────────────────────────────
 
+class _DfCounterView:
+    """Adapts the counters.py long-form DataFrame to perf_metrics_common.CounterView.
 
-def _avg_count(df: pd.DataFrame, bank: str, counter_name: str) -> float:
-    """Average count for a specific counter across all threads."""
-    mask = (df["bank"] == bank) & (df["counter_name"] == counter_name)
-    result = df.loc[mask, "count"]
-    return float(result.mean()) if len(result) > 0 else 0.0
+    Each counter reports one row per thread/core, so count/cycles average across those rows.
+    """
 
+    def __init__(self, df: pd.DataFrame):
+        self._df = df
+        self._names = set(df["counter_name"]) if not df.empty else set()
 
-def _avg_cycles(df: pd.DataFrame, bank: str) -> float:
-    """Average reference cycle count for a bank (from any counter in that bank)."""
-    mask = df["bank"] == bank
-    result = df.loc[mask, "cycles"]
-    return float(result.mean()) if len(result) > 0 else 0.0
+    def count(self, bank: str, counter_name: str) -> float:
+        mask = (self._df["bank"] == bank) & (self._df["counter_name"] == counter_name)
+        result = self._df.loc[mask, "count"]
+        return float(result.mean()) if len(result) > 0 else 0.0
 
+    def cycles(self, bank: str) -> float:
+        result = self._df.loc[self._df["bank"] == bank, "cycles"]
+        return float(result.mean()) if len(result) > 0 else 0.0
 
-def _safe_div(numerator: float, denominator: float) -> float | None:
-    """Safe division returning None if denominator is 0."""
-    return (numerator / denominator) if denominator > 0 else None
+    def has(self, counter_name: str) -> bool:
+        return counter_name in self._names
 
+    def is_blackhole(self) -> bool:
+        from ..chip_architecture import ChipArchitecture, get_chip_architecture
 
-def _pct(value: float | None) -> float | None:
-    """Convert ratio to percentage."""
-    return (value * 100.0) if value is not None else None
-
-
-def _one_minus(value: float | None) -> float | None:
-    """Compute 1.0 - value, for inverting 'not stalled' into 'stalled'."""
-    return (1.0 - value) if value is not None else None
-
-
-def _avg_pair(a: float | None, b: float | None) -> float | None:
-    """Average of two optional values."""
-    if a is not None and b is not None:
-        return (a + b) / 2.0
-    return a if a is not None else b
-
-
-# ── Compute ──────────────────────────────────────────────────────────
+        return get_chip_architecture() == ChipArchitecture.BLACKHOLE
 
 
 def _compute_single(df: pd.DataFrame) -> dict:
-    """
-    Compute derived efficiency metrics from a single (zone, run) slice of counter data.
-
-    Returns a flat dict of efficiency percentages (all bounded 0-100%).
-    """
+    """Compute derived metrics for one (zone, run) slice via the shared formula module."""
     if df.empty:
         return {}
-
-    # ── Reference cycles per bank ──
-    fpu_cycles = _avg_cycles(df, "FPU")
-    instrn_cycles = _avg_cycles(df, "INSTRN_THREAD")
-    pack_cycles = _avg_cycles(df, "TDMA_PACK")
-
-    # Compute Utilization (FPU bank). Counter names mirror tt-metal PerfCounterType.
-    fpu_instruction = _avg_count(df, "FPU", "FPU_COUNTER")
-    fpu_or_sfpu = _avg_count(df, "FPU", "MATH_COUNTER")
-    fpu_utilization = _safe_div(fpu_instruction, fpu_cycles)
-    compute_utilization = _safe_div(fpu_or_sfpu, fpu_cycles)
-
-    # ── Thread Stall Rates (INSTRN_THREAD bank) ──
-    stalls_0 = _avg_count(df, "INSTRN_THREAD", "THREAD_STALLS_0")
-    stalls_1 = _avg_count(df, "INSTRN_THREAD", "THREAD_STALLS_1")
-    stalls_2 = _avg_count(df, "INSTRN_THREAD", "THREAD_STALLS_2")
-    unpack_thread_stall = _safe_div(stalls_0, instrn_cycles)
-    math_thread_stall = _safe_div(stalls_1, instrn_cycles)
-    pack_thread_stall = _safe_div(stalls_2, instrn_cycles)
-
-    # ── Semaphore Wait Rates (INSTRN_THREAD bank) ──
-    sem_wait_1 = _avg_count(df, "INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_1")
-    sem_wait_2 = _avg_count(df, "INSTRN_THREAD", "WAITING_FOR_NONZERO_SEM_2")
-    math_sem_wait = _safe_div(sem_wait_1, instrn_cycles)
-    pack_sem_wait = _safe_div(sem_wait_2, instrn_cycles)
-
-    # ── Unpacker Write Efficiency (TDMA_UNPACK bank) ──
-    srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_ACTUAL")
-    srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_ACTUAL")
-    unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
-    unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
-    unpack0_eff = _safe_div(srca_write, unpack0_busy)
-    unpack1_eff = _safe_div(srcb_write, unpack1_busy)
-    unpack_eff = _avg_pair(unpack0_eff, unpack1_eff)
-
-    # ── Unpacker-to-Math Data Flow (TDMA_UNPACK bank) ──
-    srca_avail = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_AVAILABLE")
-    srcb_avail = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_AVAILABLE")
-    flow0 = _safe_div(srca_avail, unpack0_busy)
-    flow1 = _safe_div(srcb_avail, unpack1_busy)
-    flow_avg = _avg_pair(flow0, flow1)
-
-    # Packer Metrics — aggregate IDs work on both WH (per-engine also exposed) and BH (single packer).
-    packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
-    pack_utilization = _safe_div(packer_busy, pack_cycles)
-    dest_read = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
-    pack_dest_eff = _safe_div(dest_read, packer_busy)
-
-    # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
-    math_available = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
-    fidelity_stalls = _avg_count(df, "TDMA_UNPACK", "MATH_FIDELITY_STALL")
-    math_not_blocked = _avg_count(df, "TDMA_UNPACK", "MATH_SRC_DATA_READY")
-
-    fidelity_stall_rate = _safe_div(fidelity_stalls, math_available)
-    # Math src data stall: fraction of math-available cycles where src data was NOT ready
-    math_src_stall_rate = _one_minus(_safe_div(math_not_blocked, math_available))
-
-    return {
-        # Compute utilization
-        "fpu_utilization_pct": _pct(fpu_utilization),
-        "compute_utilization_pct": _pct(compute_utilization),
-        # Thread stall rates
-        "unpack_thread_stall_pct": _pct(unpack_thread_stall),
-        "math_thread_stall_pct": _pct(math_thread_stall),
-        "pack_thread_stall_pct": _pct(pack_thread_stall),
-        # Semaphore waits
-        "math_sem_wait_pct": _pct(math_sem_wait),
-        "pack_sem_wait_pct": _pct(pack_sem_wait),
-        # Unpacker write efficiency
-        "unpack0_write_eff_pct": _pct(unpack0_eff),
-        "unpack1_write_eff_pct": _pct(unpack1_eff),
-        "unpack_write_eff_pct": _pct(unpack_eff),
-        # Unpacker-to-math flow
-        "unpack_to_math_flow0_pct": _pct(flow0),
-        "unpack_to_math_flow1_pct": _pct(flow1),
-        "unpack_to_math_flow_pct": _pct(flow_avg),
-        # Packer metrics
-        "pack_utilization_pct": _pct(pack_utilization),
-        "pack_dest_eff_pct": _pct(pack_dest_eff),
-        # Math pipeline stalls
-        "fidelity_stall_pct": _pct(fidelity_stall_rate),
-        "math_src_stall_pct": _pct(math_src_stall_rate),
-    }
+    return _mc.compute_metrics(_DfCounterView(df))
 
 
 def compute_metrics(df: pd.DataFrame) -> list[dict]:
@@ -270,9 +132,9 @@ def export_metrics(
         marker_name = zone_to_marker.get(zone, zone)
         row = {MARKER: marker_name}
 
-        # Only export efficiency percentages to the main CSV
+        # Export both metric families: bounded percentages and unbounded ratios.
         def _exportable(key: str) -> bool:
-            return key.endswith("_pct")
+            return key.endswith("_pct") or key.endswith("_ratio")
 
         if len(zone_metrics) >= 2:
             metrics_df = pd.DataFrame(zone_metrics)
