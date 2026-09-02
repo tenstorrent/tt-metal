@@ -98,14 +98,19 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     // Staging CB: depth >= 2-3 chunks so receive(k+1) overlaps forward(k). Page = input aligned page.
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
-    // Chunk size: the requested chunk_size_tiles if set, else one fabric packet's worth of pages.
-    // Tuning knob for pipeline overlap (smaller) vs per-chunk sem overhead (larger).
-    const uint32_t fabric_packet_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t auto_chunk_pages = std::max<uint32_t>(1, fabric_packet_bytes / page_size);
-    const uint32_t chunk_num_pages =
-        operation_attributes.chunk_size_tiles > 0 ? operation_attributes.chunk_size_tiles : auto_chunk_pages;
+    // Chunk size: the requested chunk_size_tiles if set, else the largest chunk whose triple-buffered CB
+    // fits kChunkL1Budget, capped at kMaxChunkPages. Larger chunks amortize the per-chunk sem round-trip
+    // (a tiny one-packet chunk is ~3x slower); the cap bounds L1 use. Kernel clamps to the tile count.
+    constexpr uint32_t kCbDepthChunks = 3;
+    constexpr uint32_t kChunkL1Budget = 768 * 1024;  // bytes for the staging CB (validated at 128 bf16 tiles)
+    constexpr uint32_t kMaxChunkPages = 256;
+    const uint32_t budget_chunk = std::max<uint32_t>(1, kChunkL1Budget / (kCbDepthChunks * page_size));
+    const uint32_t auto_chunk_pages = std::min(budget_chunk, kMaxChunkPages);
+    const uint32_t chunk_num_pages = std::min(
+        input_num_pages,
+        operation_attributes.chunk_size_tiles > 0 ? operation_attributes.chunk_size_tiles : auto_chunk_pages);
     const uint32_t num_chunks = (input_num_pages + chunk_num_pages - 1) / chunk_num_pages;
-    const uint32_t cb_depth_pages = 3 * chunk_num_pages;
+    const uint32_t cb_depth_pages = kCbDepthChunks * chunk_num_pages;
 
     const uint32_t cb_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
