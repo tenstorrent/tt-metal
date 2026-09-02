@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import sys
+import textwrap
 from pathlib import Path
 
 # ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py. Loaded by path
@@ -904,6 +905,11 @@ def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
     except Exception:  # noqa: BLE001
         return None
 
+
+# The width every ruled section in this report is drawn to. Named because three places had their own
+# copy of the number and a fourth -- the tail sections -- had no rule at all, so the report ended in
+# unruled prose and a legend nearly twice the page width.
+_REPORT_W = 100
 
 _BAR_W = 20
 
@@ -1981,7 +1987,7 @@ def _roofline_tables(
     truth is that the value was computable and refused (a truncated window against a full-depth
     ceiling makes the ratio meaningless, not merely optimistic).
     """
-    W = 100
+    W = _REPORT_W
     rule = "\u2500" * W
     out = []
     # The unit word, derived ONCE from the declared unit. It used to be hardcoded "step" one column
@@ -2992,7 +2998,7 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     out.append(hdr)
     # Ruled to the same width as every other section in this report, rather than a length derived
     # from the header string -- which left this one table 99 wide against their 100.
-    out.append("\u2500" * 100)
+    out.append("\u2500" * _REPORT_W)
     for b in sorted(buckets, key=lambda x: -(x.get("device_ms") or 0.0)):
         if not isinstance(b, dict):
             continue
@@ -3008,7 +3014,7 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
         # rstrip: a bucket with no top_ops (host_overhead has none -- it is the op-gap bucket, not an
         # op) left an empty dominant-op cell and a trailing space on the row.
         out.append((f"{str(b.get('id', '?')):<15} {ms:>10.2f} {pct:>5.1f}% {cnt:>7} {bound:>6}  {dom[:52]}").rstrip())
-    out.append("\u2500" * 100)
+    out.append("\u2500" * _REPORT_W)
     out.append("")
     return out
 
@@ -3342,7 +3348,8 @@ def render_summary(
     _won_ops = {attempts[i].get("op_signature") for i in _wins}
     _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
     lines.append("")
-    lines.append("Limitations / suggested manual next steps:")
+    lines.append("Limitations / suggested manual next steps")
+    lines.append("─" * _REPORT_W)
     if _no_gain:
         shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
@@ -3368,7 +3375,8 @@ def render_summary(
 
     # --- Reproduce these numbers (#6) ---
     lines.append("")
-    lines.append("Reproduce:")
+    lines.append("Reproduce")
+    lines.append("─" * _REPORT_W)
     # CHECK THE PATH, DO NOT JUST PRINT IT. This node-id is carried from the manifest, and the perf test
     # is often GENERATED -- regenerating or renaming it leaves a command that cannot run. The demo and
     # PCC lines below already list their directory at render time, so they self-validate; this one did
@@ -3418,7 +3426,19 @@ def render_summary(
         lines.append(f"  per-op device report (tt-metal format): {report_csv}")
 
     lines.append("")
-    lines.append(
-        f"levels: {_levels_display(_dominant_bound_by(baseline_profile))}   |   ✓win = new best so far, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
-    )
+    lines.append("Legend")
+    lines.append("─" * _REPORT_W)
+    # WRAPPED TO THE PAGE. This was one 191-character line against a 100-wide report, so every
+    # terminal folded it at whatever width it happened to be and the report ended on a ragged
+    # paragraph. Split at its own two joints -- the climb order, then the marks -- so the fold is
+    # deliberate rather than wherever the window lands, and indented like every other section body.
+    lines.append("  levels:  %s" % _levels_display(_dominant_bound_by(baseline_profile)))
+    for _ln in textwrap.wrap(
+        "✓win = new best so far   ·try = measured no-gain   " "·wedge = wedged/crashed when tried   — = not attempted",
+        width=_REPORT_W - 2,
+        initial_indent="  marks:   ",
+        subsequent_indent="           ",
+        break_long_words=False,
+    ):
+        lines.append(_ln)
     return "\n".join(lines)
