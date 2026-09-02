@@ -135,7 +135,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 22
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -453,7 +453,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 5
+      timeout: 4
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -625,7 +625,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 45
+      timeout: 33
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -653,7 +653,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 40
+      timeout: 33
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -772,7 +772,7 @@
   skus:
     bh_sc1_high_power:
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
-      timeout: 35
+      timeout: 25
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
