@@ -112,6 +112,7 @@ jobs:
             eval "$CMD"
 
       - name: Prepare artifacts for upload
+        id: prepare-artifacts
         if: always()
         run: |
           # upload-artifact rejects ':' in paths (NTFS-safe). WAN/automapper dumps use ISO
@@ -132,6 +133,13 @@ jobs:
           if [ -d "$PIPELINE_DIR/ranklogs" ]; then
             cp -r "$PIPELINE_DIR/ranklogs" /home/user/tt-metal/generated/test_logs/ranklogs
           fi
+          # tt-train legs write their metrics to NFS because the mpirun rank runs on a worker whose
+          # tt-metal tree this container cannot see. Stage them where the SFTP batchfile expects them.
+          if compgen -G "$PIPELINE_DIR/tt-train-metrics/*.json" > /dev/null; then
+            mkdir -p /home/user/tt-metal/generated/tt-train-metrics
+            cp -f "$PIPELINE_DIR"/tt-train-metrics/*.json /home/user/tt-metal/generated/tt-train-metrics/
+            echo "has_tt_train_metrics=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload launch + per-rank logs and automapper outputs
         if: always()
@@ -141,6 +149,42 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
+
+      # Paths are relative to the tree the action cd's into, not $GITHUB_WORKSPACE, so the
+      # batchfile's generated/tt-train-metrics/*.json resolves under /home/user/tt-metal.
+      - name: Upload tt-train metrics data to AWS SFTP bucket
+        timeout-minutes: 5
+        if: >-
+          ${{ !cancelled() && matrix.test-group.team == 'train'
+          && steps.prepare-artifacts.outputs.has_tt_train_metrics == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
+          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+          path: /home/user/tt-metal
+
+      # Plots land on NFS next to the metrics. archive: false gives a direct link to the PNG, and
+      # run_models.py prefixes each filename with the model + card so matrix legs cannot collide.
+      - name: Upload loss plot
+        id: upload-loss-plot
+        if: ${{ !cancelled() && matrix.test-group.team == 'train' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: loss-plot-${{ matrix.test-group.name }}
+          path: ${{ env.PIPELINE_DIR }}/tt-train-metrics/plots/*losses.png
+          if-no-files-found: warn
+          retention-days: 30
+          archive: false
+
+      - name: Add loss plot to summary
+        if: ${{ !cancelled() && steps.upload-loss-plot.outputs.artifact-url != '' }}
+        run: |
+          {
+            cat "$PIPELINE_DIR"/tt-train-metrics/plots/*losses.md
+            echo "[Download full loss plot image](${{ steps.upload-loss-plot.outputs.artifact-url }})"
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()
