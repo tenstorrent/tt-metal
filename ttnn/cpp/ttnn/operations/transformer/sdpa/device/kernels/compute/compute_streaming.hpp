@@ -35,9 +35,9 @@ struct MaybeProfileScope {
 template <uint32_t timer_id>
 struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
 
-#define MaybeDeviceZoneScopedN(ENABLED, name)                                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define MaybeDeviceZoneScopedN(ENABLED, name)    \
+    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+    TT_ZONE_DEFINE_ID(hash, name);               \
     MaybeProfileScope<ENABLED, hash> zone;
 #else
 #define MaybeDeviceZoneScopedN(ENABLED, name)
