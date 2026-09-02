@@ -631,7 +631,7 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
  * next() is a warm solve on the same solver (reusing all learned clauses + phase saving) plus one blocking clause.
  * So enumerating N solutions this way costs the same as the batch path, but you get each solution as soon as it is
  * found and can stop at any time by simply not calling next() again. Selection of solutions is IDENTICAL to the
- * batch path (same session, constraints, unique_shapes, and full-assignment signature dedup).
+ * batch path (same session, constraints, and unique_shapes).
  *
  * Lifetime: the enumerator holds references to the graphs/config/rank maps passed to the constructor; the caller must
  * keep those alive for as long as the enumerator is used.
@@ -675,19 +675,17 @@ private:
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_;
 
     // One persistent incremental SAT session (same SAT path + shortcuts + minimal-host prime as the batch solve)
-    // plus the running exclusion / dedup bookkeeping.
+    // plus the running exclusion bookkeeping.
     ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session_;
     std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
-    std::set<std::string> seen_signatures_;
     std::size_t emitted_ = 0;
     // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
     // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
     bool host_cap_relaxed_ = false;
     // Intra-mesh forbid/retry state, mirroring the single-solve retry loop: when an inter-mesh placement's
     // intra-mesh completion fails, next() forbids that (logical, physical) pair via handle_forbidden_constraint
-    // and re-solves for a different orientation. intra_forbid_attempts_ bounds the retries so a genuinely
-    // infeasible instance still terminates; intra_failed_mesh_pairs_ is the cumulative forbidden-pair log.
-    std::size_t intra_forbid_attempts_ = 0;
+    // and re-solves for a different orientation. Enumeration ends when SAT is UNSAT or a forbid over-constrains
+    // a logical mesh (can_retry == false). intra_failed_mesh_pairs_ is the cumulative forbidden-pair log.
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
 };
 
