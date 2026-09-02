@@ -220,9 +220,49 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
   before this date used v1). kStreamDepth 14 -> 12: depth 14 fits an EMPTY L1 only; the model
   keeps ~69 KB of L1 live across the op (`l1_small_size=65536` + small buffers) -> static CB clash.
 - Untraced VSA transformer block at 15s/768p passes with the streaming kernel.
-- Traced block HANGS (all 32 devices; workers stuck in the lazy-emission wait, leaders at the slot
-  gate). The op ALONE replays fine under trace on 1 and 32 devices (test_vsa_sdpa_trace.py) ->
-  model-context specific; under investigation with the watcher.
+- Traced block HANG -- RESOLVED 2026-09-02 night (root cause at the end of this bullet). Facts: op alone replays fine on 1 and 32
+  devices, including with fresh input addresses; the block with the v1 kernel replays bit-exactly
+  (upstream is trace-safe); under the watcher the traced block hangs in minimal_matmul instead
+  (timing-dependent victim). Latent bugs found and fixed while hunting (real, but none was it):
+  (1) `override_runtime_arguments` indexed kernels as reader=0/writer=1 from before the role
+  split -> on a cache hit with NEW addresses the leaders' V/idx/counts were never patched (worker
+  writer args landed in the leader reader); now resolved by kernel name + which instance holds
+  args on the core; test_vsa_sdpa_trace captures with clones at different addresses. (2) leader
+  exit lacked `async_write_barrier()` for its non-posted multicasts. (3) READY handshake made
+  reset-independent (ackbox flag words). Next: trap functions on protocol-word corruption so the
+  hang's triage names the corrupted word instead of the waiter.
+  UPDATE (same evening): traps never fire -- no protocol word is corrupt. Post-mortem NIU/stream-reg
+  dump (ttexalens from the dispatch-timeout hook, scratch `dump_noc2.py`): on every hung worker all
+  read trids are landed, cb_kreq shows received=6/acked=3, kack=ctrl=0 (no window ever emitted),
+  and EVERY worker BRISC sits on the exact same PC -- the load-use after `lw` of cb_kreq's acked
+  stream register (writer.cpp:217, `cb_pages_available_at_front`): the BRISC is frozen on a stream
+  register read, not spinning (NCRISC/TRISC PCs on the same cores vary normally). Leaders wait at
+  the slot gate, compute at ctrl wait: all downstream of the frozen writers.
+  KEY REPRO FACT: trace is NOT the trigger. `VSA_REPEAT=2` on the UNTRACED block hangs on the first
+  program-cache-hit invocation (same signature); the op-alone untraced repeat and op-alone traced
+  replays (1 and 32 devices, fresh addresses) all pass. So: cache-hit invocation of vsa_sdpa with
+  other ops having run in between (block context) -> worker BRISC stream-register read freezes.
+  Next: minimal unit repro (`test_vsa_sdpa_trace_followed_by`: vsa_sdpa + matmuls, replayed).
+  ROOT CAUSE (2026-09-02 night). Single-device repro `test_vsa_sdpa_cache_hit_loop`: a cache-hit
+  run is fine after `between=none`/`add`/an L1 ZERO fill, garbage (PCC 0.2-0.7, sparse rows) after a
+  matmul, and HANGS after filling L1 with 1000.0/NaN -- i.e. the kernel reads L1 it never wrote,
+  benign only when that L1 is zero or holds this op's own previous run. Bisecting the fill by
+  address (top-down L1 buffer of N KiB) pinned it to [0x154000,0x158000) = vmask/ctrl/kreq/kack/free.
+  The bug: the worker reader's window-end K marker wrote {0xFFFFFFFF, half} into kreq words 0-1
+  while the writer reads the half from WORD 2 (pull-request layout {leader_slot, slot, half}).
+  Word 2 was whatever the page held: zero -> acks keyed to half 0 (an early ack => the reader could
+  emit a window before its K pulls landed: the "run-to-run nondeterminism"); previous run -> a
+  plausible half; other ops' data -> khalf garbage => `pull_idx[khalf] = 0` stack smash and
+  `khalf_landed()` polling NOC status registers at wild indices => the BRISC freezes on a register
+  read (un-haltable core, PC parked on the load-use after the stream-reg read), no kack ever, the
+  reader waits at try_emit, the leader at its slot gate, compute at ctrl wait: the observed hang.
+  Fix: marker writes all three words (`rq[2] = half`); writer ASSERTs khalf < 2. Also kept:
+  consumer-side `invalidate_l1_cache()` where a RISC reads NOC-landed / other-RISC-written L1.
+  Verified: single-device cache-hit loops (matmul / NaN / 1000.0 fills between runs) all pass with
+  repeat PCC 0.99998 (was 0.999 -- the "nondeterminism" was mostly this bug); galaxy traced block
+  15s/768p PASSES (PCC 99.9999% vs untraced) and the untraced block survives two cache-hit repeats.
+  Remaining run-to-run noise (PCC 0.99994-0.99998, not bit-exact) is the timing-dependent window
+  partitioning; the arrival-bin patch (scratch apply_det_windows.py) would make it exact if wanted.
 - Run-to-run NONDETERMINISM: untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:

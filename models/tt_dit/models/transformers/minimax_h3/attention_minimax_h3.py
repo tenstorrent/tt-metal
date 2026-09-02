@@ -554,12 +554,8 @@ class MiniMaxH3Attention(Module):
 
             # R2: gathered K/V equal the concatenation of all shards' local K/V.
             if self.parallel_config.sequence_parallel.factor > 1:
-                k_gathered = self.ccl_manager.all_gather_persistent_buffer(
-                    k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
-                )
-                v_gathered = self.ccl_manager.all_gather_persistent_buffer(
-                    v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
-                )
+                k_gathered = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
+                v_gathered = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
             else:
                 k_gathered, v_gathered = k_BHNE, v_BHNE
 
@@ -570,6 +566,7 @@ class MiniMaxH3Attention(Module):
                 vsa_indices,
                 self.vsa_stage.block_counts_tensor(),
                 k_chunk_blocks=self.vsa_config.k_chunk_blocks,
+                streaming=self.vsa_config.streaming,
             )
             ttnn.deallocate(vsa_indices)
 

@@ -47,7 +47,8 @@ class MiniMaxH3VSAConfig:
 
     sparsity: float
     placement: str = "identity"  # tile placement across SP shards: "identity" | "striped"
-    k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk
+    k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk (v1 kernel only)
+    streaming: bool = True  # vsa_sdpa kernel: streaming leader/worker (default) or the v1 per-row gather
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:
@@ -142,9 +143,7 @@ class MiniMaxH3VSACoarseStage:
         mesh_axes = [self.sp_axis, None, None, None]
 
         def upload(x: torch.Tensor, dtype, layout=ttnn.Layout.TILE) -> ttnn.Tensor:
-            return from_torch(
-                x.contiguous(), device=self.mesh_device, dtype=dtype, layout=layout, mesh_axes=mesh_axes
-            )
+            return from_torch(x.contiguous(), device=self.mesh_device, dtype=dtype, layout=layout, mesh_axes=mesh_axes)
 
         # [sp, H, rows, n_exempt] exempt prefix (identical content everywhere)
         prefix = (
@@ -222,9 +221,7 @@ class MiniMaxH3VSACoarseStage:
         topk_ids = ttnn.experimental.topk_large_indices(masked_rm, k=self.k_pad)  # [1,H,rows,k_pad] uint32
         ttnn.deallocate(masked_rm)
         if self.k != self.k_pad:
-            topk_ids = ttnn.slice(
-                topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k]
-            )
+            topk_ids = ttnn.slice(topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k])
 
         parts = [self.exempt_prefix, topk_ids] + ([self.sentinel_tail] if self.sentinel_tail is not None else [])
         sparse_rows = ttnn.concat(parts, dim=-1)  # [1, H, rows, W]

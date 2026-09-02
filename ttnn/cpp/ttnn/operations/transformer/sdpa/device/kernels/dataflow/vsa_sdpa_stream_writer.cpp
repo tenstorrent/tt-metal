@@ -122,6 +122,7 @@ void kernel_main() {
                 {
                     volatile tt_l1_ptr uint32_t* rq =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                    invalidate_l1_cache();  // page written by NCRISC: bypass this RISC's stale L1 read cache
                     b0 = rq[0];
                     s0 = rq[1];
                     b1 = rq[2];
@@ -220,12 +221,14 @@ void kernel_main() {
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                invalidate_l1_cache();  // page written by NCRISC: bypass this RISC's stale L1 read cache
                 leader_slot = rq[0];
                 slot = rq[1];
                 khalf = rq[2];
             }
             kreq_cb.pop_front(1);
             if (leader_slot == 0xFFFFFFFFu) {  // window end: queue the lazy ack
+                ASSERT(khalf < 2);             // indexes pull_idx[] and the per-half trid groups
                 ack_pending[ack_tail & 3] = khalf;
                 ++ack_tail;
                 pull_idx[khalf] = 0;

@@ -54,6 +54,11 @@ ALWI void stream_pack_to_unpack_sync() {
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 }
 
+__attribute__((noinline)) void vsa_trap_bad_ctrl() {
+    for (;;) {
+    }
+}
+
 constexpr uint32_t MSG_VISIT = 0;   // {type | n_blocks<<16, rowinfo, (slot | count<<8 | vmask<<15) x n}
 constexpr uint32_t MSG_FLUSH = 1;   // {type, row_slot, parity}
 constexpr uint32_t MSG_WINDOW = 2;  // {type, n_slots}: return the window's stream credits
@@ -636,6 +641,9 @@ void kernel_main() {
             continue;  // probe 1: delivery floor -- consume the visit without any math
 #else
             {
+                if (type != MSG_VISIT || vn >= kMaxVisits || (w0 >> 16) == 0 || (w0 >> 16) > stream_depth / 2) {
+                    vsa_trap_bad_ctrl();
+                }
                 Visit& v = vbuf[vn];
                 v.n = w0 >> 16;
                 const uint32_t info = ckernel::read_tile_value(cb_ctrl, 0, 1);

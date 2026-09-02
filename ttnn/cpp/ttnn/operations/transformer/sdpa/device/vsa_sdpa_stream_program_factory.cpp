@@ -15,6 +15,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <bit>
@@ -225,7 +226,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(counts_row_bytes, 1, bf);                               // cb_counts
     cb(bitmap_bytes, 1, bf);                                   // cb_bitmap
     cb(16, log_depth, bf);                                     // cb_log
-    cb(4 * kMaxWorkers, 1, bf);                                // cb_ackbox
+    cb(4 * 2 * kMaxWorkers, 1, bf);                            // cb_ackbox: [0,16) progress, [16,32) READY flags
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -483,21 +484,51 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     const VsaSdpaParams& attrs,
     const VsaSdpaInputs& t,
     Tensor& tensor_return_value) {
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kWriterKernelIdx = 1;
+    // The reader and writer are each instantiated per ROLE on disjoint core sets, so a core's
+    // buffer args live in whichever instance is placed on it. Resolve instances by kernel NAME
+    // (collect_kernel_meta) and by which instance actually holds args for the core, rather than
+    // trusting kernel indices -- an index assumption here silently corrupted the leaders' V/idx
+    // addresses on every program-cache hit (traced model hang).
+    const auto metas = tt::tt_metal::detail::collect_kernel_meta(program, nullptr);
+    std::vector<uint32_t> reader_ids, writer_ids;
+    for (uint32_t k = 0; k < metas.size(); ++k) {
+        const std::string_view name = metas[k].name;
+        if (name.find("vsa_sdpa_stream_reader") != std::string_view::npos) {
+            reader_ids.push_back(k);
+        } else if (name.find("vsa_sdpa_stream_writer") != std::string_view::npos) {
+            writer_ids.push_back(k);
+        }
+    }
+    TT_FATAL(reader_ids.size() == 2 && writer_ids.size() == 2, "vsa_sdpa stream: unexpected kernel set");
     const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = grid.x * grid.y;
     (void)attrs;
+    const uint32_t v_addr = t.v.buffer()->address();
+    const uint32_t idx_addr = t.indices.buffer()->address();
+    const uint32_t counts_addr = t.block_counts.buffer()->address();
+    const uint32_t out_addr = tensor_return_value.buffer()->address();
+    const uint32_t k_addr = t.k.buffer()->address();
+    const uint32_t q_addr = t.q.buffer()->address();
+    const auto patch = [&](const std::vector<uint32_t>& ids,
+                           const tt::tt_metal::CoreCoord& core,
+                           uint32_t a0,
+                           uint32_t a1,
+                           uint32_t a2) {
+        for (uint32_t id : ids) {
+            auto& args = tt::tt_metal::GetRuntimeArgs(program, id, core);
+            if (args.size() >= 3) {  // the instance placed on this core
+                args[0] = a0;
+                args[1] = a1;
+                args[2] = a2;
+                return;
+            }
+        }
+        TT_FATAL(false, "vsa_sdpa stream: no kernel instance holds runtime args on core {}", core.str());
+    };
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        auto& reader = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
-        reader[0] = t.v.buffer()->address();
-        reader[1] = t.indices.buffer()->address();
-        reader[2] = t.block_counts.buffer()->address();
-        auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
-        writer[0] = tensor_return_value.buffer()->address();
-        writer[1] = t.k.buffer()->address();
-        writer[2] = t.q.buffer()->address();
+        patch(reader_ids, core, v_addr, idx_addr, counts_addr);
+        patch(writer_ids, core, out_addr, k_addr, q_addr);
     }
 }
 

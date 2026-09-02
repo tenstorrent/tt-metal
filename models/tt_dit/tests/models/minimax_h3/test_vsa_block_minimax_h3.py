@@ -9,25 +9,23 @@ traced forward must capture and replay at 15 s / 768p with the full VSA graph --
 top-k selection, index assembly, vsa_sdpa, and the gate branch -- and produce finite output.
 """
 
-import math
+import os
 
 import pytest
 import torch
-from diffusers.models.transformers.transformer_minimax_h3 import (
-    MINIMAX_H3_MODALITY_NUM,
-    MiniMaxH3RotaryPosEmbed,
-    MiniMaxH3TransformerBlock as TorchMiniMaxH3Block,
-)
+from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
+from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3TransformerBlock as TorchMiniMaxH3Block
 from loguru import logger
 
 import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig, MiniMaxH3VSACoarseStage
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
+from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from ....utils.test import ring_params_8k_req_exact_devices, skip_if_unsupported_num_links
 from .common import (
@@ -62,9 +60,7 @@ GALAXY_4X8_TRACE = pytest.mark.parametrize(
 @GALAXY_4X8_TRACE
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
 @pytest.mark.timeout(2700)
-def test_vsa_block_15s_768p(
-    mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, traced, reset_seeds
-) -> None:
+def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, traced, reset_seeds) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -109,7 +105,10 @@ def test_vsa_block_15s_768p(
         sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
         cfg_parallel=None,
     )
-    vsa_config = MiniMaxH3VSAConfig(sparsity=0.9, k_chunk_blocks=2)
+    # VSA_KERNEL=v1 selects the per-row gather kernel (bisecting trace issues against the stream path)
+    vsa_config = MiniMaxH3VSAConfig(
+        sparsity=0.9, k_chunk_blocks=2, streaming=os.environ.get("VSA_KERNEL", "stream") != "v1"
+    )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,
         rotary_dim=2 * 3 * ROPE_FREQ_DIM,
@@ -160,6 +159,15 @@ def test_vsa_block_15s_768p(
     logger.info("compile run")
     tt_out = run_block()
     ttnn.synchronize_device(mesh_device)
+    untraced_local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+    # VSA_REPEAT=n: extra untraced runs exercise the program-cache-hit path (fresh tensor
+    # addresses, override_runtime_arguments) without trace in the picture.
+    for i in range(int(os.environ.get("VSA_REPEAT", "1")) - 1):
+        logger.info(f"untraced repeat {i + 1}")
+        tt_out = run_block()
+        ttnn.synchronize_device(mesh_device)
+        rep_local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+        assert_quality(untraced_local, rep_local, pcc=0.998)
 
     if traced:
         logger.info("capturing trace")
@@ -174,3 +182,6 @@ def test_vsa_block_15s_768p(
     local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    if traced:
+        # the replay must reproduce the untraced block (bf16 rounding-order noise only)
+        assert_quality(untraced_local, local, pcc=0.998)

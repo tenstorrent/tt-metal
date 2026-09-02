@@ -35,12 +35,27 @@
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
+// Diagnostic traps: a corrupt protocol word parks the RISC in a NAMED loop so a hang triage
+// points at the corruption instead of at whoever was waiting on it.
+__attribute__((noinline)) void vsa_trap_bad_log_entry() {
+    for (;;) {
+        invalidate_l1_cache();
+    }
+}
+__attribute__((noinline)) void vsa_trap_bad_progress() {
+    for (;;) {
+        invalidate_l1_cache();
+    }
+}
+
 constexpr uint32_t MSG_VISIT = 0;   // {type | n_blocks<<16, rowinfo, (slot | count<<8 | vmask<<15) x n}
 constexpr uint32_t MSG_FLUSH = 1;   // {type, row_slot, parity}
 constexpr uint32_t MSG_WINDOW = 2;  // {type, n_slots}: compute returns n_slots stream credits
 // rowinfo word: row_slot | parity << 8 | is_first << 9
 constexpr uint32_t ROW_PARITY = 1u << 8;
 constexpr uint32_t ROW_IS_FIRST = 1u << 9;
+constexpr uint32_t kAckboxReady = 16;          // ackbox words [16, 32): per-worker READY flags
+constexpr uint32_t kReadyMagic = 0x52454459u;  // "REDY"
 
 void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(0);            // index row width (entries)
@@ -115,10 +130,24 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* counts_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_cb.get_write_ptr());
     noc.async_read_barrier();
+    invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
 
     experimental::CB log_cb(cb_log);
     log_cb.reserve_back(1);
     const uint32_t log_l1 = log_cb.get_write_ptr();
+#if defined(VSA_PROBE) && VSA_PROBE == 7  // TT_VSA_PROBE=7: print the CB layout once per core
+    DPRINT(
+        "VSA_CB vmask={:x} ctrl={:x} kreq={:x} kack={:x} free={:x} log={:x} ackbox={:x} counts={:x} bitmap={:x}\n",
+        get_write_ptr(cb_vmask),
+        ctrl_cb.get_write_ptr(),
+        kreq_cb.get_write_ptr(),
+        kack_cb.get_write_ptr(),
+        free_cb.get_write_ptr(),
+        log_l1,
+        ackbox_l1,
+        counts_cb.get_write_ptr(),
+        experimental::CB(cb_bitmap).get_write_ptr());
+#endif
 
 #ifdef VSA_IS_LEADER
     if (is_leader) {
@@ -146,11 +175,15 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
         for (uint32_t w = 0; w < n_workers; ++w) {
             ackbox[w] = 0;
+            ackbox[kAckboxReady + w] = 0;
         }
         const auto wait_all_workers_at = [&](uint32_t target) {
             for (uint32_t w = 0; w < n_workers; ++w) {
                 while (ackbox[w] < target) {
                     invalidate_l1_cache();
+                }
+                if (ackbox[w] > target + stream_depth + 8) {  // posted > anything published
+                    vsa_trap_bad_progress();                  // more consumed than published
                 }
             }
         };
@@ -312,9 +345,16 @@ void kernel_main() {
         constexpr uint32_t kFetchLag = 4;  // blocks in flight (kFetchLag * 8 tiles <= 8 trids x reuse)
         constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
         static_assert(kFetchLag * 2 <= stream_depth, "prefetch must not outrun slot recycling");
-        // Workers zero their log rings then bump this (host-zeroed) semaphore; publishing before
-        // every ring is zeroed would race the zeroing.
-        arrivals_sem.wait_min(n_workers);
+        // Workers zero their log rings, then post a READY flag into their ackbox flag word (and
+        // keep re-posting it until their first entry arrives). Publishing before every ring is
+        // zeroed would race the zeroing. The flag words were zeroed above; a flag that landed
+        // before that zeroing is simply re-posted -- so this needs neither a host-reset semaphore
+        // nor any assumption about relaunch state (trace replays reuse L1 as-is).
+        for (uint32_t w = 0; w < n_workers; ++w) {
+            while (ackbox[kAckboxReady + w] != kReadyMagic) {
+                invalidate_l1_cache();
+            }
+        }
         // Stage `k` entries (each 16B: {b, slot, seq, pad}) into the ring and multicast them in
         // one write per strip (two per strip on a ring wrap). A worker's per-entry seq spin is
         // safe: a NoC write's bytes land in ascending address order, so entry k's seq is visible
@@ -412,6 +452,7 @@ void kernel_main() {
                 noc.async_read(
                     idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
                 noc.async_read_barrier();
+                invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
                 for (uint32_t e = 0; e < W; ++e) {
                     const uint32_t bb = idx_ptr[e];
                     if (bb == sentinel) {
@@ -489,8 +530,12 @@ void kernel_main() {
             }
         }
         // Drain: every arrival consumed before the program ends (so no worker still reads our
-        // L1), and no arrivals-sem atomic may still be in flight when the next program resets it.
+        // L1), and NO NoC transaction may still be in flight: the multicast publishes are
+        // non-posted (ack-counted) writes, and outstanding acks arriving after this kernel ends
+        // corrupt the NEXT kernel's write-barrier accounting on this core -- untraced runs hide
+        // it behind host gaps between ops, trace replays run ops back-to-back and hang.
         wait_all_workers_at(arrival);
+        noc.async_write_barrier();
         noc_async_atomic_barrier(noc.get_noc_id());
         return;
     }
@@ -515,7 +560,15 @@ void kernel_main() {
     for (uint32_t e = 0; e < log_depth; ++e) {
         log_ptr[e * log_entry_words + 2] = 0;
     }
-    arrivals_sem.up(noc, leader_x, leader_y, 1);
+    // READY flag: staged at our own flag word (same 16-byte phase as the leader's), posted now and
+    // re-posted while we wait for the first entry -- a post that lands before the leader zeroes
+    // its flag words is harmlessly repeated.
+    const uint32_t ready_local = ackbox_l1 + (kAckboxReady + worker_index) * 4;
+    const uint64_t ready_remote =
+        get_noc_addr(leader_x, leader_y, ackbox_l1 + (kAckboxReady + worker_index) * 4, noc.get_noc_id());
+    ackbox[kAckboxReady + worker_index] = kReadyMagic;
+    const auto post_ready = [&]() { noc_async_write(ready_local, ready_remote, 4, noc.get_noc_id()); };
+    post_ready();
 
     // Per-row running state parity (bit) and first-visit flag, tracked across a pass, plus the
     // per-half window-pending block lists: blocks pulled within one window are freed together
@@ -601,8 +654,12 @@ void kernel_main() {
         kreq_cb.reserve_back(1);
         {
             volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+            // Same layout as a pull request {leader_slot, slot, half}: the writer reads the half from
+            // word 2. (It used to be written to word 1, leaving word 2 as whatever the page held --
+            // benign only when L1 was zero or held this op's own previous run.)
             rq[0] = 0xFFFFFFFFu;
-            rq[1] = half;
+            rq[1] = 0;
+            rq[2] = half;
         }
         kreq_cb.push_back(1);
         pendq[pend_tail & 1] = {half, window_slots, window_first_listed};
@@ -690,6 +747,7 @@ void kernel_main() {
             const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
+            invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
             for (uint32_t e = 0; e < W; ++e) {
                 const uint32_t b = idx_ptr[e];
                 if (b == sentinel) {
@@ -718,6 +776,9 @@ void kernel_main() {
             if (log_ptr[entry_off + 2] != log_n + 1) {
                 close_window();
                 do {
+                    if (log_n == 0) {
+                        post_ready();  // see READY above
+                    }
                     try_emit();
                     post_progress_now();
                     invalidate_l1_cache();
@@ -729,6 +790,9 @@ void kernel_main() {
             if (b == sentinel) {
                 close_window();
                 break;
+            }
+            if (b >= n_kv_blocks || leader_slot >= stream_depth) {
+                vsa_trap_bad_log_entry();
             }
 
             uint32_t listing[32];
