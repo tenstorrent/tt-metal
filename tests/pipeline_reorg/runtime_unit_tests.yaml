@@ -245,8 +245,7 @@
 - name: runtime_sd_api
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_range_lockstep_allocation
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_hybrid_allocator
   skus:
     wh_n150_civ2:
       timeout: 20

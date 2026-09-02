@@ -78,43 +78,26 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
-# The hybrid-allocator suites need their own binaries so TT_METAL_ALLOCATOR_MODE_HYBRID
-# env var is set before the RunTimeOptions singleton caches it.
+# One binary for every suite that needs TT_METAL_ALLOCATOR_MODE_HYBRID set before the
+# RunTimeOptions singleton caches it, so they can all be run in one go.
 add_executable(
-    unit_tests_range_lockstep_allocation
+    unit_tests_hybrid_allocator
+    allocator/test_per_core_allocation.cpp
     allocator/test_range_lockstep_allocation.cpp
     allocator/test_range_lockstep_allocation_host.cpp
 )
 target_include_directories(
-    unit_tests_range_lockstep_allocation
+    unit_tests_hybrid_allocator
     BEFORE
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${PROJECT_SOURCE_DIR}
 )
-target_link_libraries(unit_tests_range_lockstep_allocation PRIVATE test_metal_common_libs)
-target_precompile_headers(unit_tests_range_lockstep_allocation REUSE_FROM metal_test_pch)
+target_link_libraries(unit_tests_hybrid_allocator PRIVATE test_metal_common_libs)
+target_precompile_headers(unit_tests_hybrid_allocator REUSE_FROM metal_test_pch)
 set_target_properties(
-    unit_tests_range_lockstep_allocation
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal
-)
-
-add_executable(unit_tests_per_core_allocation allocator/test_per_core_allocation.cpp)
-target_include_directories(
-    unit_tests_per_core_allocation
-    BEFORE
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-        ${PROJECT_SOURCE_DIR}
-)
-target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
-target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_test_pch)
-set_target_properties(
-    unit_tests_per_core_allocation
+    unit_tests_hybrid_allocator
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
