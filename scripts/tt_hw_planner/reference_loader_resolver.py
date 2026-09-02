@@ -33,6 +33,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import math
 import os
 import re
 import subprocess
@@ -49,6 +50,11 @@ _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
 # could be scored against a reference unrelated to the shipped weights with no trace in the result.
 _RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
 
+_WEIGHT_GLOB = "*.safetensors"
+# Config numbers are copied verbatim, so anything but float round-trip noise is a real divergence.
+_CONSTANT_REL_TOL = 1e-9
+# What a non-transformers checkpoint calls its config; the case this whole module exists for.
+_NATIVE_CONFIG_FILE = "params.json"
 # Long enough that a causal model has a past to respect, short enough to stay cheap on CPU.
 _PROBE_SEQ = 8
 # The invariants are exact statements, so this is float noise from reordered reductions only.
@@ -285,20 +291,22 @@ def verify(demo_dir: Path, model_id: str) -> dict:
     if not any(True for _ in ref.parameters()):
         return {"ok": False, "status": "broken", "reason": "reference module has no parameters"}
     invariants = check_invariants(ref)
-    if invariants.get("status") == "violated":
-        return {
-            "ok": False,
-            "status": "broken",
-            "reason": invariants["reason"],
-            "invariants": invariants,
-            "provenance": weight_provenance(model_id, ref),
-        }
+    constants = config_fidelity(model_id, ref)
+    detail = {
+        "invariants": invariants,
+        "constants": constants,
+        "provenance": weight_provenance(model_id, ref),
+    }
+    # `absent` stays out of this: it is a value that did not turn up, which has innocent
+    # explanations, whereas these two are the reference contradicting itself or its own checkpoint.
+    for verdict in (invariants, constants):
+        if verdict.get("status") in ("violated", "diverges"):
+            return {"ok": False, "status": "broken", "reason": verdict["reason"], **detail}
     return {
         "ok": True,
         "status": "verified",
         "reason": "loader returned an nn.Module with parameters",
-        "provenance": weight_provenance(model_id, ref),
-        "invariants": invariants,
+        **detail,
     }
 
 
@@ -334,6 +342,123 @@ def _close(a, b) -> bool:
     if a.shape != b.shape:
         return False
     return torch.allclose(a, b, rtol=0, atol=_INVARIANT_ATOL * max(1.0, float(b.abs().max())))
+
+
+def _declared_constants(model_id: str) -> dict:
+    """Numbers the checkpoint itself declares, read from the config it ships.
+
+    These are the values a generated loader is most likely to get quietly wrong: they are typed
+    into the loader by hand rather than read out of the weights, so nothing else in this gate can
+    see them. The weights can be provably authentic while the constants applied to them are not.
+    """
+    from .probe import ROOT_CONFIG_FILE
+
+    for name in (ROOT_CONFIG_FILE, _NATIVE_CONFIG_FILE):
+        for path in _checkpoint_files(model_id, name):
+            try:
+                declared = json.loads(path.read_text())
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(declared, dict):
+                # bool is an int subclass, and a flag flipped is a different kind of claim than a
+                # constant mistyped -- these are the scalars arithmetic is done with.
+                found = {k: v for k, v in declared.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                if found:
+                    return found
+    return {}
+
+
+def _reference_numbers(ref) -> set:
+    """Every number the reference actually carries, from its config and its modules.
+
+    Used when the checkpoint's key names do not line up with the reference's -- a native config
+    says `norm_eps` where the converted model says `rms_norm_eps`. Translating between them would
+    take exactly the hand-written name table that must not exist, so the values are compared as a
+    SET instead: a constant the checkpoint declares should turn up somewhere in the model built
+    from it, whatever that model chose to call it.
+    """
+    numbers = set()
+
+    def _collect(values):
+        for v in values:
+            if isinstance(v, float) and not isinstance(v, bool):
+                numbers.add(v)
+
+    cfg = getattr(ref, "config", None)
+    as_dict = getattr(cfg, "to_dict", None)
+    if callable(as_dict):
+        _collect(as_dict().values())
+    elif cfg is not None:
+        _collect(vars(cfg).values())
+    for _, module in ref.named_modules():
+        _collect(vars(module).values())
+    return numbers
+
+
+def config_fidelity(model_id: str, ref) -> dict:
+    """Does the reference actually USE the constants the checkpoint declares?
+
+    This is the failure the self-consistency checks are blind to. A wrong `rms_norm_eps` or a wrong
+    RoPE base is not a contradiction -- the model stays deterministic, batch-invariant and causal,
+    and every shape is identical. It is simply a different model, silently, and it becomes the
+    yardstick. Verified: perturbing either one leaves all three invariants passing.
+
+    There is no golden to catch it with, but there is something better -- the checkpoint states
+    these numbers itself, so the reference can be held against its own source rather than against
+    another implementation.
+    """
+    declared = _declared_constants(model_id)
+    if not declared:
+        return {"status": "unverified", "reason": "checkpoint ships no readable config"}
+    cfg = getattr(ref, "config", None)
+    mismatched = {}
+    compared = 0
+    for key, want in declared.items():
+        got = getattr(cfg, key, None)
+        if not isinstance(got, (int, float)) or isinstance(got, bool):
+            continue  # the reference does not carry this one; absence is not a contradiction
+        compared += 1
+        if not math.isclose(float(got), float(want), rel_tol=_CONSTANT_REL_TOL):
+            mismatched[key] = {"declared": want, "reference": got}
+
+    if mismatched:
+        return {
+            "status": "diverges",
+            "mismatched": mismatched,
+            "compared": compared,
+            "reason": (
+                "the reference contradicts the constants its own checkpoint declares ("
+                + ", ".join(f"{k}: declared {v['declared']}, reference {v['reference']}" for k, v in mismatched.items())
+                + ") -- shapes and weights are unaffected, so this is invisible to every other check"
+            ),
+        }
+    # Nothing lined up by name, which is the native-checkpoint case rather than a clean bill of
+    # health. Fall back to asking whether the declared values are present at all.
+    if not compared:
+        carried = _reference_numbers(ref)
+        # Whole numbers are excluded: a declared 2 or 4096 collides with any unrelated 2 or 4096 in
+        # the model, so its presence would prove nothing. Fractional constants are the eps-shaped
+        # ones, and are specific enough that turning up at all is meaningful.
+        scanned = {k: v for k, v in declared.items() if isinstance(v, float) and not float(v).is_integer()}
+        absent = {k: v for k, v in scanned.items() if v not in carried}
+        if absent:
+            return {
+                "status": "absent",
+                "mismatched": absent,
+                "reason": (
+                    "constants the checkpoint declares appear nowhere in the reference ("
+                    + ", ".join(f"{k}={v}" for k, v in absent.items())
+                    + ") -- advisory, since a value can be legitimately unused at inference"
+                ),
+            }
+        if scanned:
+            return {
+                "status": "present",
+                "compared": len(scanned),
+                "reason": f"{len(scanned)} declared constants appear in the reference, matched by value not name",
+            }
+        return {"status": "unverified", "reason": "no declared constant could be matched by name or value"}
+    return {"status": "matches", "compared": compared, "reason": f"{compared} declared constants agree"}
 
 
 def _first_tensor(out):
@@ -505,16 +630,20 @@ def check_invariants(ref) -> dict:
     return {"status": "holds", "checks": checks, "reason": "self-consistent under the checks that ran"}
 
 
-def _checkpoint_files(model_id: str) -> List[Path]:
-    """Shipped safetensors shards for `model_id`, local dir or hub cache, newest-first by size."""
+def _checkpoint_files(model_id: str, pattern: str = _WEIGHT_GLOB) -> List[Path]:
+    """Shipped files matching `pattern` for `model_id`, local dir or hub cache, largest first.
+
+    Takes the pattern so the config can be located the same way the weights are, rather than
+    growing a second copy of the local-dir-or-hub-cache resolution beside this one.
+    """
     if os.path.isdir(model_id):
-        found = list(Path(model_id).rglob("*.safetensors"))
+        found = list(Path(model_id).rglob(pattern))
     else:
         try:
             from huggingface_hub import snapshot_download
 
-            root = snapshot_download(model_id, allow_patterns=["*.safetensors"], local_files_only=True)
-            found = list(Path(root).rglob("*.safetensors"))
+            root = snapshot_download(model_id, allow_patterns=[pattern], local_files_only=True)
+            found = list(Path(root).rglob(pattern))
         except Exception:
             return []
     return sorted(found, key=lambda p: p.stat().st_size, reverse=True)

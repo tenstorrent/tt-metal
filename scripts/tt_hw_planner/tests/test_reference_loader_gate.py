@@ -9,6 +9,7 @@ leaves when it writes a TODO and stops) defined nothing, yet resolved=True and b
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -19,7 +20,9 @@ import pytest
 from scripts.tt_hw_planner.reference_loader_resolver import (
     _resolved,
     _validates,
+    _NATIVE_CONFIG_FILE,
     check_invariants,
+    config_fidelity,
     loader_path,
     uses_random_weights,
     verify,
@@ -391,3 +394,94 @@ def test_a_violated_invariant_fails_the_gate_and_says_why(tmp_path) -> None:
         rlr.load_reference = original
     assert out["ok"] is False and out["status"] == "broken", out
     assert "causality" in out["reason"], out
+
+
+# --------------------------------------------------------------------------------------------
+# Declared constants. The invariants above are blind here: a wrong epsilon or RoPE base keeps the
+# model deterministic, batch-invariant and causal, and every shape identical. It is simply a
+# different model, and it becomes the yardstick. The checkpoint states these numbers itself.
+# --------------------------------------------------------------------------------------------
+
+
+def _llama(**overrides):
+    import torch
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    torch.manual_seed(0)
+    cfg = LlamaConfig(
+        vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4, **overrides
+    )
+    return LlamaForCausalLM(cfg).eval()
+
+
+@requires_torch
+def test_a_wrong_constant_is_invisible_to_every_other_layer(tmp_path) -> None:
+    """The premise for this check existing, pinned so it cannot be quietly assumed away.
+
+    If a perturbed epsilon ever DID trip the invariants, this check would be redundant. It does
+    not, which is exactly why the constants have to be read from the checkpoint instead.
+    """
+    assert check_invariants(_llama(rms_norm_eps=9.0))["status"] == "holds"
+    assert check_invariants(_llama(rope_theta=2.0))["status"] == "holds"
+
+
+@requires_torch
+def test_a_reference_that_contradicts_its_checkpoint_is_caught(tmp_path) -> None:
+    shipped = _llama()
+    shipped.save_pretrained(tmp_path)
+    # Written explicitly because save_pretrained omits values left at their default.
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    cfg["rms_norm_eps"] = 1e-05
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+    assert config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-05))["status"] == "matches"
+    wrong = config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-03))
+    assert wrong["status"] == "diverges", wrong
+    assert "rms_norm_eps" in wrong["mismatched"], wrong
+
+
+@requires_torch
+def test_a_native_checkpoint_is_checked_by_value_since_its_names_differ(tmp_path) -> None:
+    """`params.json` says `norm_eps` where the converted model says `rms_norm_eps`.
+
+    Translating between the two would need the hand-written name table that must not exist, so the
+    declared values are looked for anywhere in the model instead.
+    """
+    (tmp_path / _NATIVE_CONFIG_FILE).write_text(json.dumps({"dim": 32, "n_layers": 2, "norm_eps": 1e-05}))
+    (tmp_path / "weights.safetensors").write_bytes(b"")
+
+    assert config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-05))["status"] == "present"
+    missing = config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-03))
+    assert missing["status"] == "absent", missing
+    assert "norm_eps" in missing["mismatched"], missing
+
+
+@requires_torch
+def test_a_checkpoint_with_no_readable_config_is_unverified(tmp_path) -> None:
+    assert config_fidelity(str(tmp_path), _llama())["status"] == "unverified"
+
+
+@requires_torch
+def test_a_contradicted_constant_fails_the_gate(tmp_path) -> None:
+    """As with the invariants, the verdict has to reach `verify` to mean anything."""
+    import scripts.tt_hw_planner.reference_loader_resolver as rlr
+
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    _llama().save_pretrained(ckpt)
+    cfg = json.loads((ckpt / "config.json").read_text())
+    cfg["rms_norm_eps"] = 1e-05
+    (ckpt / "config.json").write_text(json.dumps(cfg))
+
+    demo = tmp_path / "demo"
+    loader_path(demo).parent.mkdir(parents=True, exist_ok=True)
+    loader_path(demo).write_text("def load_reference_model(model_id):\n    raise AssertionError('patched')\n")
+
+    wrong = _llama(rms_norm_eps=1e-03)
+    original, rlr.load_reference = rlr.load_reference, lambda *a, **k: wrong
+    try:
+        out = verify(demo, str(ckpt))
+    finally:
+        rlr.load_reference = original
+    assert out["ok"] is False and out["status"] == "broken", out
+    assert "rms_norm_eps" in out["reason"], out
