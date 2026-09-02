@@ -8,7 +8,7 @@ Usage:
 
 Description:
     Reports per-device firmware component versions read from ARC telemetry:
-    ETH, Board Manager (app and bootloader), Flash Bundle and CM.
+    ETH, Device Manager (app and bootloader), Flash Bundle and CM.
     Requires ARC firmware >= 18.4.
 
 Owner:
