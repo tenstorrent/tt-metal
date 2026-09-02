@@ -1066,14 +1066,28 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
-    # Persistent, not /tmp: the converted-weight cache for FLUX.2-dev is ~105 GB and takes
-    # ~5 min to build from ~106 GB of source safetensors. A per-run cache dir pays that on
-    # every run and needs ~210 GB of scratch.
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # On the mount, not $HOME or /tmp: the converted-weight cache for FLUX.2-dev is ~105 GB
+    # and takes ~5 min to build from ~106 GB of source safetensors, so it has to survive
+    # between jobs. On this SKU it would not otherwise -- the container sets
+    # HOME=/github/home, mapped to the runner's _work/_temp/_github_home, which Actions
+    # wipes between jobs, and /tmp is per-job too. /mnt/MLPerf/huggingface is the
+    # yyz4-mnt-models mount (host /mnt/models/huggingface) and does persist; it is the same
+    # place HF_HUB_CACHE already puts the source weights. Named tt_dit_cache to stay out of
+    # the tt_cache/ namespace tt_transformers uses -- the two cache formats are unrelated.
+    # Read-only on a normal run, which is fine: cache.load_model only writes on a miss.
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
     # -rs everywhere: bh_quietbox_2 is 4 chips, so the 1x8 / 2x4 / 4x8 rows in these files
     # skip on device count. The skip report is what shows the 2x2 rows actually ran rather
     # than the job passing because it executed nothing.
-    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    #
+    # 1x1 is deselected, not skipped: opening a single-device submesh with FABRIC_1D on a
+    # 4-chip box has no ethernet partner to hand-shake with, and it dies in
+    # fabric_firmware_initializer.cpp:271 with a Fabric Router Sync timeout. That is #53331
+    # -- same file:line, same SKU, logged there as non-deterministic -- and it took the whole
+    # leg down with it under `bash -e` on run 33655962297. utils/test.py already carries a
+    # TODO about these 1x1 parametrizations. Deselecting here rather than adding
+    # require_exact_physical_num_devices to the test keeps 1x1 and 1x8 runnable locally.
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py -k "not 1x1"
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
     pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
