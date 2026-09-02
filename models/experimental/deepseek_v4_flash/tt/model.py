@@ -9,11 +9,10 @@ from loguru import logger
 from .attention import (
     _StaticLayerCache,
     build_static_layer_cache,
+    decode_sdpa_bounds,
     host_decode_mask,
     int32_pos_tensor,
     make_rope_table,
-    sdpa_causal_cur_pos,
-    sdpa_causal_ok,
 )
 from .decode_prefetch import make_decode_prefetch_buffers
 from .paged_cache import (
@@ -718,10 +717,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _SDPA_CAUSAL(self) -> bool:
         return self.system_config.attention.sdpa_causal
 
-    def _sdpa_causal_at(self, layer_type: str, pos: int) -> bool:
-        """Should ``layer_type`` at absolute ``pos`` use causal SDPA over the mask?"""
-        return self._SDPA_CAUSAL and sdpa_causal_ok(self.sliding_window, layer_type, pos)
-
     def _compressor_pool_due(self, layer_type: str, pos: int) -> bool:
         """Does the step at absolute ``pos`` close a window for ``layer_type``?"""
         if layer_type == "sliding_attention":
@@ -1268,11 +1263,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
                 rope, pos, layer_type, compress_rate, rope_cache, this_device
             )
-            causal = self._sdpa_causal_at(layer_type, pos)
-            mask = (
-                None
-                if causal
-                else host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
+            mask, sdpa_cur_pos = (
+                decode_sdpa_bounds(
+                    w, layer_type, compress_rate, pos, self._decode_max_seq, this_device, batch=self._decode_batch
+                )
+                if layer_type == "sliding_attention" or self._SDPA_CAUSAL
+                else (host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device), None)
             )
             win_slot = win_row = None
             if compress_rate is not None:
@@ -1294,9 +1290,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 pool_compressor=self._compressor_pool_due(layer_type, pos),
                 win_slot=win_slot,
                 win_row=win_row,
-                sdpa_cur_pos=(
-                    int32_pos_tensor(sdpa_causal_cur_pos(w, compress_rate, pos), this_device) if causal else None
-                ),
+                sdpa_cur_pos=sdpa_cur_pos,
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
@@ -1744,6 +1738,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_row_f, 1.0), 1.0 / cr))  # (pos+1)//cr
         return self._device_index(ttnn.add(thr, float(self.sliding_window - 1)))
 
+    def _device_sliding_cur_pos(self, pos_row_f: ttnn.Tensor) -> ttnn.Tensor:
+        """Dense sliding causal ``cur_pos``: ``min(pos, sliding_window - 1)`` as INT32 ``[batch]``."""
+        cap = float(self.sliding_window - 1)
+        return self._device_index(ttnn.minimum(pos_row_f, cap))
+
     def _device_compressor_indices(self, cr: int, pos_row_f: ttnn.Tensor, pos_f: ttnn.Tensor):
         """Device twins of :func:`_window_indices`, plus the closing window's position.
 
@@ -1854,11 +1853,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
             win_idx: dict = {}
             for lt, (a, b_tbl, cr) in sm["mask_gen"].items():
                 # Bound the KV axis by a position (causal) where the valid set is a
-                # contiguous prefix, else by the additive mask. Sliding layers take
-                # neither here (their ring is bounded inside the attention block).
-                use_causal = causal and lt != "sliding_attention"
-                masks[lt] = None if use_causal else self._device_mask(a, b_tbl, cr, pos_f)
-                curpos[lt] = self._device_causal_pos(cr, pos_row_f) if use_causal else None
+                # contiguous prefix, else by the additive mask. Sliding is causal at
+                # every pos (``min(pos, W-1)`` on the dense ring); paged sliding still
+                # ignores this and uses absolute pos + ``sliding_window_size``.
+                if lt == "sliding_attention":
+                    masks[lt] = None
+                    curpos[lt] = self._device_sliding_cur_pos(pos_row_f)
+                else:
+                    use_causal = causal
+                    masks[lt] = None if use_causal else self._device_mask(a, b_tbl, cr, pos_f)
+                    curpos[lt] = self._device_causal_pos(cr, pos_row_f) if use_causal else None
                 if lt != "sliding_attention":
                     # Incremental pooling emits one entry per closure, so generate just
                     # that entry's RoPE row (the "compress" family already in scope).

@@ -45,10 +45,20 @@ senders' 1 KB state zone, so two per layer overflows that zone at the third laye
 
 Tensor-parallel decode *could* attach two further GCBs on this mapping (sequential
 ``o_a`` at 32 receivers, TP gate/up at ``N/TP`` receivers) via :func:`ensure_named_gcb`.
-They are not used on the full decode path: even a 2-page ring on those cores sits
-on ``(0,0)`` next to the pipeline socket and collides with
-``fused_hyperconnection`` static CBs after the shared 24-page GCB is allocated.
-Those projections stay on the DRAM->L1 copy instead.
+They are not used on the full decode path, and it is worth being precise about why, because
+the obvious reason is not the operative one. Placement looks like the blocker: a GCB is a
+permanent L1 allocation, and on the default anchor a narrower ring lands inside the shared
+ring's rectangle and on ``(0,0)``, the pipeline socket whose ``fused_hyperconnection``
+static CBs it collides with once the shared 24-page GCB is allocated. That part is
+solvable -- ``matmul_decode`` takes its receiver grid from the buffer, so the rectangle can
+simply be anchored past the shared ring's last column, and sequential ``o_a`` on such a
+ring runs and is numerically correct.
+
+It is just slower. Streaming those weights measured a regression against the per-step
+DRAM->L1 copy it replaced, so they stay on the copy. The cause was not established; a
+32-receiver ring is half the width the senders fill on the shared ring, and its depth is
+capped at two pages because its page is a whole slab, but neither was measured to be the
+reason. Re-measure rather than re-derive before trying this again.
 """
 
 from typing import Optional
