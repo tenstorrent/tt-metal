@@ -231,20 +231,16 @@ void kernel_main() {
 
                         // Process received tiles from other core
                         //
-                        // Both cores of the pair run this same merge on the same two tiles and each
+                        // Both cores of the pair run same merge on the same two tiles and each
                         // keeps one half of the result, so the two runs must agree on which half is
                         // which. topk_merge only swaps DEST[0]/DEST[1] when the values are strictly
                         // out of order, so for tied values the halves are told apart purely by which
-                        // DEST slot each tile was loaded into. Loading "local" into DEST[0] would
-                        // make that slot mean tile i on one core and tile j on the other: on a tie
-                        // neither core swaps, the opposite `select_lower` values then select the
-                        // same physical tile on both, and that tile's indices are duplicated while
-                        // the partner's are lost (#54767).
+                        // DEST slot each tile was loaded into.
                         //
-                        // Ordering the slots by global tile id instead makes both cores build an
-                        // identical DEST, so a tie leaves each core holding a different tile. For
-                        // distinct values this is a no-op: a compare-exchange leaves min in DEST[0]
-                        // and max in DEST[1] whichever slot each operand arrived in.
+                        // Ordering the slots by global tile id makes both cores build an identical DEST,
+                        // so a tie leaves each core holding a different tile. For distinct values this is
+                        // a no-op: a compare-exchange leaves min in DEST[0] and max in DEST[1] whichever
+                        // slot each operand arrived in.
                         const bool local_tile_is_low = i < j;
                         const uint32_t local_value_dest = local_tile_is_low ? input_dest_start : input_dest_end;
                         const uint32_t local_index_dest = local_tile_is_low ? index_dest_start : index_dest_end;
