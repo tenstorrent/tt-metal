@@ -397,12 +397,7 @@ class TtHCACompressor(TtCompressorBase):
 
 
 class TtCSACompressor(TtCompressorBase):
-    """Temporary CSA compressor skeleton using only each current window's Cb series.
-
-    The complete CSA compressor pools the previous window's Ca series together with the current
-    window's Cb series. This skeleton intentionally omits the Ca overlap so the projection, ratio-4
-    pooling, normalization, compressed RoPE, and mesh paths can be validated independently.
-    """
+    """CSA compressor with Blaze-compatible overlap state."""
 
     def __init__(
         self,
@@ -468,10 +463,12 @@ class TtCSACompressor(TtCompressorBase):
     def forward(
         self,
         hidden_states,
+        initial_kv_state,
+        initial_score_state,
         seq_len_actual: int | None = None,
         first_window_position: int = 0,
     ):
-        """Compress the current-window Cb series and return no sparse block bias yet."""
+        """Compress one SP slab and return its decode-compatible outgoing state."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -489,23 +486,17 @@ class TtCSACompressor(TtCompressorBase):
             f"compress_rate {self.compress_rate}; run prepare_input on the hidden states first"
         )
 
-        projection_dim = 2 * self.head_dim
-        kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, projection_dim])
-        gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, projection_dim])
-        gate = ttnn.add(gate, self.position_bias)
-
-        # TODO: prepend the previous window's Ca half and pool over 2 * compress_rate slots.
-        kv_cb = ttnn.slice(
+        pooled, local_kv_state, local_score_state = ttnn.experimental.deepseek_prefill.csa_compressor(
             kv,
-            [0, 0, 0, self.head_dim],
-            [batch, n_windows, self.compress_rate, projection_dim],
-        )
-        gate_cb = ttnn.slice(
             gate,
-            [0, 0, 0, self.head_dim],
-            [batch, n_windows, self.compress_rate, projection_dim],
+            self.position_bias,
+            initial_kv_state,
+            initial_score_state,
+            seq_len_actual=seq_len_actual,
+            first_token_position=first_window_position,
+            cluster_axis=self.sp_axis,
+            topology=self.ccl_topology,
         )
-        weights = ttnn.softmax(gate_cb, dim=2, numeric_stable=True)
-        pooled = ttnn.sum(ttnn.multiply(kv_cb, weights), dim=2)
+        pooled = ttnn.reshape(pooled, [batch, n_windows, self.head_dim])
         compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position)
-        return compressed_kv, None
+        return compressed_kv, None, local_kv_state, local_score_state

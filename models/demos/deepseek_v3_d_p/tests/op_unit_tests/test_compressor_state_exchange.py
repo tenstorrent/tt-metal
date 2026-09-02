@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 _BATCH = 1
 _COMPRESS_RATE = 4
@@ -131,7 +132,13 @@ def test_compressor_state_exchange_single_device(mesh_device, device_params, rem
             (2, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="2x2",
+            id="fabric1d-2x2",
+        ),
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
