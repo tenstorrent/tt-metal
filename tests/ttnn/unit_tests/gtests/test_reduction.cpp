@@ -18,7 +18,6 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <map>
 #include <optional>
 #include <vector>
 
@@ -42,6 +41,7 @@
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -123,17 +123,19 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
              .fp32_mode = ReduceFp32Mode::Fast,
              .max_input_cb_bytes = 32 * tile_bytes}},
     };
-    const auto sequence =
-        make_reduce_plan(reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
+    const auto sequence = make_reduce_sequence_plan(
+        reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
     ASSERT_EQ(sequence.calls.size(), 2U);
     EXPECT_EQ(sequence.calls[0].input_cb_id, 0U);
     EXPECT_EQ(sequence.calls[0].output_cb_id, 4U);
     EXPECT_EQ(sequence.calls[0].accumulator_cb_id, 4U);
-    EXPECT_FALSE(sequence.calls[0].is_last);
+    EXPECT_EQ(sequence.calls[0].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Intermediate);
+    EXPECT_EQ(sequence.calls[0].accumulation_index, 0U);
     EXPECT_EQ(sequence.calls[1].input_cb_id, 1U);
     EXPECT_EQ(sequence.calls[1].output_cb_id, 3U);
     EXPECT_EQ(sequence.calls[1].accumulator_cb_id, 4U);
-    EXPECT_TRUE(sequence.calls[1].is_last);
+    EXPECT_EQ(sequence.calls[1].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Final);
+    EXPECT_EQ(sequence.calls[1].accumulation_index, 1U);
     for (const auto& call : sequence.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
         EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
@@ -160,19 +162,57 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
              .scalar = 1.0F,
              .fp32_mode = ReduceFp32Mode::Fast}},
     };
-    const auto partial_sequence = make_reduce_plan(
+    const auto partial_sequence = make_reduce_sequence_plan(
         partial_reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
     ASSERT_EQ(partial_sequence.calls.size(), 2U);
-    EXPECT_EQ(partial_sequence.calls[0].plan.auxiliary_kind, ReduceAuxiliaryKind::Mask);
+    EXPECT_EQ(partial_sequence.calls[0].plan.partial_mode, compute_kernel_lib::ReducePartialMode::Mask);
+    EXPECT_EQ(partial_sequence.calls[1].plan.partial_mode, compute_kernel_lib::ReducePartialMode::Mask);
+    ASSERT_EQ(partial_sequence.calls[0].plan.auxiliary_tiles.size(), 1U);
+    EXPECT_EQ(partial_sequence.calls[0].plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::FirstRow);
+    EXPECT_EQ(partial_sequence.calls[0].plan.auxiliary_tiles[0].num_valid_elements, 7U);
     EXPECT_EQ(partial_sequence.calls[1].plan.reload_mode, compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair);
-    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_kind, ReduceAuxiliaryKind::MaskAndZero);
-    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tile_count, 2U);
+    ASSERT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles.size(), 2U);
+    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::FirstRow);
+    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles[1].type, ReduceAuxiliaryTileType::Zero);
     ASSERT_NE(partial_sequence.calls[1].plan.find_cb(ReduceCbRole::Auxiliary), nullptr);
     EXPECT_EQ(partial_sequence.calls[1].plan.find_cb(ReduceCbRole::Auxiliary)->page_count, 2U);
-    std::map<std::string, std::string> partial_defines;
-    add_reduce_plan_defines(partial_defines, partial_sequence.calls[1].plan);
-    EXPECT_TRUE(partial_defines.contains("REDUCE_AUX_MASK"));
-    EXPECT_TRUE(partial_defines.contains("REDUCE_AUX_ZERO"));
+    const auto first_serialized = ReduceCallArgs(partial_sequence.calls[0]).get_compile_time_args();
+    const auto second_serialized = ReduceCallArgs(partial_sequence.calls[1]).get_compile_time_args();
+    constexpr std::uint32_t kernel_owned_arg = 17U;
+    std::vector<std::uint32_t> serialized{kernel_owned_arg};
+    partial_sequence.append_to(serialized);
+    namespace plan_args = ttnn::kernel_lib::reduce_plan_args;
+    ASSERT_EQ(
+        serialized.size(),
+        1 + plan_args::call_count_word_count + 2 * plan_args::call_word_count +
+            3 * plan_args::auxiliary_tile_word_count);
+    EXPECT_EQ(serialized[0], kernel_owned_arg);
+    EXPECT_EQ(serialized[1], 2U);
+    const std::uint32_t first_offset = 1 + plan_args::call_count_word_count;
+    const auto second_offset = first_offset + static_cast<std::uint32_t>(first_serialized.size());
+    const auto second_configuration =
+        serialized[plan_args::call_word_offset(second_offset, plan_args::CallWord::Configuration)];
+    EXPECT_EQ(
+        plan_args::extract(
+            second_configuration, plan_args::config::partial_mode_shift, plan_args::config::partial_mode_mask),
+        static_cast<std::uint32_t>(compute_kernel_lib::ReducePartialMode::Mask));
+    const auto second_cbs =
+        serialized[plan_args::call_word_offset(second_offset, plan_args::CallWord::CircularBuffers)];
+    EXPECT_EQ(
+        plan_args::extract(second_cbs, plan_args::circular_buffers::input_shift, plan_args::circular_buffers::id_mask),
+        1U);
+    EXPECT_EQ(
+        plan_args::extract(second_cbs, plan_args::circular_buffers::output_shift, plan_args::circular_buffers::id_mask),
+        3U);
+    const auto auxiliary_offset = plan_args::call_auxiliary_tiles_offset(second_offset);
+    const auto zero_config = serialized[plan_args::auxiliary_tile_word_offset(
+        auxiliary_offset, 1, plan_args::AuxiliaryTileWord::Configuration)];
+    EXPECT_EQ(
+        plan_args::extract(
+            zero_config,
+            plan_args::auxiliary_configuration::tile_type_shift,
+            plan_args::auxiliary_configuration::tile_type_mask),
+        static_cast<std::uint32_t>(ReduceAuxiliaryTileType::Zero));
 
     const CoreRangeSet shard_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
     const MemoryConfig sharded_l1(
