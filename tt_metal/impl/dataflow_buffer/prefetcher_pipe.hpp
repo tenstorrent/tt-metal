@@ -88,7 +88,7 @@ public:
     distributed::MeshDevice* get_device() const { return device_; }
 
     // Worker for a pipe built by CreatePrefetcherPipe, Dram for one whose sender is a
-    // programmable DRAM core (CreatePrefetcherPipeForTensorPrefetcher).
+    // programmable DRAM core (CreatePrefetcherPipesForTensorPrefetcher).
     SenderCoreType sender_core_type() const;
 
     // The single entry size a DRAM-sender pipe is stamped with. A DRAM sender never Attaches, so
@@ -98,7 +98,7 @@ public:
 
 private:
     // Tag selecting the DRAM-sender constructor. Private so the only way in is
-    // CreatePrefetcherPipeForTensorPrefetcher, which owns the bank -> sender-core mapping.
+    // CreatePrefetcherPipesForTensorPrefetcher, which owns the bank -> sender-core mapping.
     struct DramSenderTag {};
 
     friend struct prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals;

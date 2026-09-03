@@ -25,7 +25,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         .def("num_entries", [](const TensorPrefetcherPipes& p) { return p.num_entries; })
         .def("ring_size", &TensorPrefetcherPipes::ring_size)
         .def("receiver_cores", &TensorPrefetcherPipes::receiver_cores)
-        .def("num_pipes", [](const TensorPrefetcherPipes& p) { return p.pipes.size(); });
+        .def("num_banks", &TensorPrefetcherPipes::num_banks)
+        .def("num_pipes", &TensorPrefetcherPipes::num_pipes);
 
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,

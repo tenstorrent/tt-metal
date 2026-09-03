@@ -73,9 +73,12 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/da
 constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackhole)
 constexpr uint32_t kRingDepth = 4;
 
-// A Tensor-prefetcher delivery target: the pipes of every DRAM sender the mapping placed, in
-// mapping order. The same list-plus-geometry shape ttnn's TensorPrefetcherPipes wraps.
+// A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
+// bank-major flattening the rest of this file drives the senders through. The
+// TensorPrefetcherPipes wrapper one layer up derives the same flattening from the same groups.
 struct PipeSet {
+    std::vector<experimental::TensorPrefetcherBankPipes> banks;
+    // One entry per pipe, bank-major: that pipe's sender core and its receivers.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     std::vector<std::shared_ptr<experimental::PrefetcherPipe>> pipes;
 };
@@ -87,12 +90,19 @@ PipeSet make_pipe_set(
     uint32_t entry_size = kEntrySize,
     uint32_t num_entries = kRingDepth) {
     PipeSet set;
-    set.mapping =
-        experimental::BuildTensorPrefetcherSenderMapping(mesh_device, bank_to_receivers, dual_senders_per_bank);
-    set.pipes.reserve(set.mapping.size());
-    for (const auto& [sender, receivers] : set.mapping) {
-        set.pipes.push_back(experimental::CreatePrefetcherPipeForTensorPrefetcher(
-            mesh_device, sender, receivers, entry_size, num_entries));
+    set.banks = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        mesh_device,
+        bank_to_receivers,
+        entry_size,
+        num_entries,
+        BufferType::L1,
+        /*support_multi_receiver_shards=*/!dual_senders_per_bank);
+    for (const auto& bank : set.banks) {
+        for (const auto& pipe : bank.pipes) {
+            set.mapping.emplace_back(
+                experimental::prefetcher_pipe_sender_core(*pipe), experimental::prefetcher_pipe_receiver_cores(*pipe));
+            set.pipes.push_back(pipe);
+        }
     }
     return set;
 }
@@ -290,6 +300,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
     // off one DRISC core and the set collapses to one pipe.
     const PipeSet set =
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(set.banks.size(), 1u);
+    ASSERT_EQ(set.banks[0].bank_id, 0u);
     ASSERT_EQ(set.pipes.size(), 1u);
     ASSERT_EQ(experimental::prefetcher_pipe_sender_core_type(*set.pipes[0]), experimental::SenderCoreType::Dram);
 
@@ -343,9 +355,11 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
 
     const PipeSet set = make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/true);
-    ASSERT_EQ(set.mapping.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
+    ASSERT_EQ(set.banks.size(), 1u);
+    ASSERT_EQ(set.banks[0].pipes.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
     ASSERT_EQ(set.mapping.at(0).second.num_cores(), 2u);
     ASSERT_EQ(set.mapping.at(1).second.num_cores(), 2u);
+    ASSERT_NE(set.mapping.at(0).first, set.mapping.at(1).first);
 
     // Each sender addresses its own receivers as local indices 0..n-1, so the pattern is preloaded
     // per sender with labels restarting at 0.
@@ -405,8 +419,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffse
 TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
     const CoreRangeSet first(CoreRange({0, 0}, {0, 0}));
     const CoreRangeSet second(CoreRange({1, 0}, {1, 0}));
-    EXPECT_ANY_THROW(experimental::BuildTensorPrefetcherSenderMapping(
-        *mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
+    EXPECT_ANY_THROW(make_pipe_set(*mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsMismatchedEntrySize) {

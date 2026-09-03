@@ -7,11 +7,9 @@
 // delivery target the Tensor prefetcher streams into as an alternative to a DRAM-sender
 // GlobalCircularBuffer.
 //
-// A PrefetcherPipe has exactly one sender, so one prefetcher target is a list of them -- one per
-// DRISC sender core, built from the mapping BuildTensorPrefetcherSenderMapping returns. The list,
-// and whatever the caller wants to bundle with it, is the caller's own concept; this header
-// supplies the one-pipe pieces and the accessors a caller needs through the forward declaration
-// (ttnn includes no impl/ headers).
+// A PrefetcherPipe has exactly one sender, and a bank may be driven by two of them, so one
+// prefetcher target is a per-bank group of pipes. CreatePrefetcherPipesForTensorPrefetcher places
+// the senders and creates every pipe; the caller only says which receivers each bank feeds.
 //
 // Consumers are unchanged from an ordinary PrefetcherPipe: the consumer program calls
 // AttachPrefetcherPipe on each pipe's receiver cores and its kernels use the device-side
@@ -43,47 +41,48 @@ namespace experimental {
 
 class PrefetcherPipe;
 
-// Place the Tensor prefetcher's DRAM sender cores for a (bank id -> receivers) request, returning
-// one (DRAM-logical sender core, its receivers) pair per pipe to create.
-//
-// Placement, the receiver split, and slab numbering are the same ones
-// CreateGlobalCircularBufferForTensorPrefetcher uses, so a tensor laid out for one transport is
-// laid out for the other. With `dual_senders_per_bank`, a bank whose receiver set has more than
-// one core is driven by two DRISC senders that split it ceil/floor -- which requires a
-// receiver-contiguous layout, where no shard feeds more than one receiver.
-//
-// The returned order is semantic and must be preserved: a bank's senders are adjacent, and the
-// first of them owns the bank's leading receivers (bank-local slab index 0).
-std::vector<std::pair<CoreCoord, CoreRangeSet>> BuildTensorPrefetcherSenderMapping(
-    distributed::MeshDevice& mesh_device,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    bool dual_senders_per_bank);
+// The PrefetcherPipes driving one DRAM bank's receivers.
+struct TensorPrefetcherBankPipes {
+    uint32_t bank_id = 0;
+    // One pipe, or two when the bank is split across both of its DRISC sender cores. The split is
+    // ceil/floor over the bank's ordered receivers: pipes[0] owns the leading ceil(n/2) receivers
+    // (bank-local slab index 0), pipes[1] the rest. That order is what assigns each sender its
+    // bank-local slab base, so keep the pipes in it.
+    std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
+};
 
-// Create one PrefetcherPipe driven by the programmable DRAM core `dram_sender_logical`, holding
-// `num_entries` entries of `entry_size` bytes per receiver. Pass a (sender, receivers) pair from
-// BuildTensorPrefetcherSenderMapping.
+// Create the PrefetcherPipes that deliver one Tensor-prefetcher request, one group per
+// `bank_to_receivers` entry, in input order. Sender placement, the receiver split, and slab
+// numbering are the ones CreateGlobalCircularBufferForTensorPrefetcher uses, so a tensor laid out
+// for one transport is laid out for the other.
+//
+// With `support_multi_receiver_shards` a bank is driven by a single sender, which is what the
+// legacy interleaved layout (a shard feeding more than one receiver) requires. Without it — the
+// default, matching the receiver-contiguous layout — a bank with more than one receiver gets two
+// senders, each pushing roughly half of them.
 //
 // `entry_size` is the per-receiver push granularity and must equal the streamed tensor's
 // per-receiver page size: a DRAM sender is never dispatched to and so cannot answer a
-// receiver-side resize. The pipe is stamped with it, and both AttachPrefetcherPipe and
+// receiver-side resize. Every pipe is stamped with it, and both AttachPrefetcherPipe and
 // QueueTensorPrefetcherRequest reject any other size (with the offending values in the message).
+// Each receiver's ring holds `num_entries` of them.
 //
-// The ring comes from the persistent L1 arena, which refuses a core a live Program has sealed with
+// The rings come from the persistent L1 arena, which refuses a core a live Program has sealed with
 // its own local circular buffers. Create the pipes before running any op on the receiver cores --
 // under ttnn's program cache a cached op keeps its Program, and its seal, alive.
 //
-// Keep the returned pipe alive for as long as any program has Attached it or the prefetcher may
-// still deliver into it: an attached Program holds a non-owning pointer to it, and destroying it
-// frees the ring and config pages.
+// Keep the returned pipes alive for as long as any program has Attached them or the prefetcher may
+// still deliver into them: an attached Program holds a non-owning pointer to each pipe, and
+// destroying one frees its ring and config pages.
 //
-// MeshDevice-only: the DRISC L1 arena backing the sender config page lives on MeshDeviceImpl.
-std::shared_ptr<PrefetcherPipe> CreatePrefetcherPipeForTensorPrefetcher(
+// MeshDevice-only: the DRISC L1 arena backing the sender config pages lives on MeshDeviceImpl.
+std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
-    CoreCoord dram_sender_logical,
-    const CoreRangeSet& receivers,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t entry_size,
     uint32_t num_entries,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool support_multi_receiver_shards = false);
 
 // Accessors usable through the forward declaration above, for callers that hold pipes but do not
 // include the impl header. Each returns the same value as the member of the same name.

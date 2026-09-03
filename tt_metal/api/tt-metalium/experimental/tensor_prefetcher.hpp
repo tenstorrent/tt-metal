@@ -17,9 +17,10 @@
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <vector>
+
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal {
 
@@ -34,7 +35,6 @@ class MeshCoordinateRangeSet;
 namespace experimental {
 
 class GlobalCircularBuffer;
-class PrefetcherPipe;
 
 // Reserved for future prefetcher-wide options.
 struct TensorPrefetcherConfig {};
@@ -137,22 +137,19 @@ void QueueTensorPrefetcherRequest(
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
-// Queue one prefetch request against a list of PrefetcherPipes instead of a GlobalCircularBuffer.
-// The target object is what selects the delivery transport; everything else behaves as documented
-// above, and requests against a GCB and against PrefetcherPipes may be interleaved on one running
-// prefetcher.
+// Queue one prefetch request against PrefetcherPipes instead of a GlobalCircularBuffer. The target
+// object is what selects the delivery transport; everything else behaves as documented above, and
+// requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
 //
-// Every pipe must come from CreatePrefetcherPipeForTensorPrefetcher on the same mesh device.
+// `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned for the same
+// mesh device: each group's pipe order is what assigns its senders their bank-local slab bases.
 // Consumers of the delivered pages Attach each pipe on its own receivers and read through the
 // device-side experimental::PrefetcherPipe.
 //
-// The list order is semantic and must be the one BuildTensorPrefetcherSenderMapping returned: a
-// bank's pipes adjacent, and the first of them owning that bank's leading receivers. It is what
-// assigns each sender its bank-local slab base.
-//
 // Additional preconditions for this transport, all TT_FATAL with the offending values:
-//   - every pipe has a DRAM sender, and they share one entry size and ring size;
-//   - receiver sets are disjoint across the list;
+//   - every pipe has a DRAM sender on its group's bank, and they share one entry size and ring
+//     size;
+//   - banks appear once each, and receiver sets are disjoint across every pipe;
 //   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
 //     contiguous shard);
 //   - no streaming rotation (pass an empty `rotation`);
@@ -160,7 +157,7 @@ void QueueTensorPrefetcherRequest(
 //     transport does not resize mid-flight.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
