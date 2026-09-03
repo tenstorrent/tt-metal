@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
+#include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -14,6 +15,20 @@
 #include <vector>
 
 namespace ttnn::experimental::prim {
+
+// These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
+// lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
+namespace ring_attention_all_gather_async_dynamic {
+inline constexpr uint32_t kNumSendersPerLink = 2;
+inline constexpr uint32_t kReaderForwardKernelIdx = 0;
+inline constexpr uint32_t kWriterForwardKernelIdx = 1;
+inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
+inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
+inline constexpr uint32_t kReaderSemaphoreArg = 2;
+inline constexpr uint32_t kWriterSemaphoreArg = 4;
+inline constexpr uint32_t kForwardSemaphoreIdx = 1;
+inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+}  // namespace ring_attention_all_gather_async_dynamic
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -27,10 +42,24 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
+
+struct RingAttentionRankMapping {
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+};
 
 // Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
 // Each device sends one local tile-row range to its logical next device and
@@ -97,6 +126,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     int32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
+    // Communication-order rank. In full-mesh mode this must be the snake transport rank,
+    // never the canonical row-major tensor rank.
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
@@ -135,7 +166,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // consumer must implement the split-shard second-half wait (RingSDPAOpReceiver) to enable it.
     // The helper still applies the legacy even-ring topology/size gate on top, so standalone
     // callers retain their prior behavior with the default.
-    bool split_forwarding_enabled = true);
+    bool split_forwarding_enabled = true,
+    RingAttentionRankMapping rank_mapping = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
