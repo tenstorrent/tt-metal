@@ -326,7 +326,7 @@ llk:
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
-    sim_quasar_xl: 180
+    sim_quasar_xl: 360
 
 models:
   merge_gate:

@@ -18,6 +18,6 @@
     sim_bh_p150_xl:
       timeout: 240
     sim_quasar_xl:
-      timeout: 180
+      timeout: 360
   team: llk
   owner_id: U09UC143684 # Nemanja Divnic
