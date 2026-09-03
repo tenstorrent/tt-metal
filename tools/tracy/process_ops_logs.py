@@ -1056,7 +1056,7 @@ def _enrich_ops_from_device_logs(
                 for metric_name, metric_dict in per_op_stats.items():
                     if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
                         continue
-                    catch_all_suffix = "" if metric_name.endswith("Instrn Issue Rate") else " (%)"
+                    catch_all_suffix = "" if metric_name.endswith(("Instrn Issue Rate", "IPC While Active")) else " (%)"
                     assign_metric(metric_name, metric_dict, suffix=catch_all_suffix)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
