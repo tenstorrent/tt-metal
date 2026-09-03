@@ -199,6 +199,8 @@ void bind_pipeline_builder(nb::module_& mod) {
             exit_col:   Column of the exit chip in *src*'s submesh.
             entry_row:  Row of the entry chip in *dst*'s submesh.
             entry_col:  Column of the entry chip in *dst*'s submesh.
+            exit_core_slot: Abstract pipeline-core slot on the exit chip, or None in legacy mode.
+            entry_core_slot: Abstract pipeline-core slot on the entry chip, or None in legacy mode.
     )")
         .def_ro("src", &tt::tt_fabric::ResolvedEdge::src)
         .def_ro("dst", &tt::tt_fabric::ResolvedEdge::dst)
@@ -207,6 +209,8 @@ void bind_pipeline_builder(nb::module_& mod) {
         .def_ro("exit_col", &tt::tt_fabric::ResolvedEdge::exit_col)
         .def_ro("entry_row", &tt::tt_fabric::ResolvedEdge::entry_row)
         .def_ro("entry_col", &tt::tt_fabric::ResolvedEdge::entry_col)
+        .def_ro("exit_core_slot", &tt::tt_fabric::ResolvedEdge::exit_core_slot)
+        .def_ro("entry_core_slot", &tt::tt_fabric::ResolvedEdge::entry_core_slot)
         .def("__repr__", [](const tt::tt_fabric::ResolvedEdge& e) {
             return std::string("ResolvedEdge(") + e.src + " -> " + e.dst + (e.is_loopback ? " [loopback]" : "") +
                    " exit=(" + std::to_string(e.exit_row) + "," + std::to_string(e.exit_col) + ")" + " entry=(" +
@@ -222,29 +226,36 @@ void bind_pipeline_builder(nb::module_& mod) {
             resolved_edges:  One ResolvedEdge per input edge, with discovered physical coords.
             h2d_entry_row:   Row of the H2D entry chip in stage-0's submesh.
             h2d_entry_col:   Column of the H2D entry chip in stage-0's submesh.
+            h2d_core_slot:   Abstract pipeline-core slot for H2D, or None in legacy mode.
             d2h_exit_row:    Row of the D2H exit chip in stage-0's submesh.
             d2h_exit_col:    Column of the D2H exit chip in stage-0's submesh.
+            d2h_core_slot:   Abstract pipeline-core slot for D2H, or None in legacy mode.
     )")
         .def_ro("stage_order", &tt::tt_fabric::GraphLayoutResult::stage_order)
         .def_ro("node_to_submesh", &tt::tt_fabric::GraphLayoutResult::node_to_submesh)
         .def_ro("resolved_edges", &tt::tt_fabric::GraphLayoutResult::resolved_edges)
         .def_ro("h2d_entry_row", &tt::tt_fabric::GraphLayoutResult::h2d_entry_row)
         .def_ro("h2d_entry_col", &tt::tt_fabric::GraphLayoutResult::h2d_entry_col)
+        .def_ro("h2d_core_slot", &tt::tt_fabric::GraphLayoutResult::h2d_core_slot)
         .def_ro("d2h_exit_row", &tt::tt_fabric::GraphLayoutResult::d2h_exit_row)
-        .def_ro("d2h_exit_col", &tt::tt_fabric::GraphLayoutResult::d2h_exit_col);
+        .def_ro("d2h_exit_col", &tt::tt_fabric::GraphLayoutResult::d2h_exit_col)
+        .def_ro("d2h_core_slot", &tt::tt_fabric::GraphLayoutResult::d2h_core_slot);
 
     mod.def(
         "resolve_graph_layout",
         [](const std::vector<std::string>& nodes,
            const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
            const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
-           const std::map<std::string, uint32_t>& node_chip_counts) -> tt::tt_fabric::GraphLayoutResult {
-            return tt::tt_fabric::resolve_graph_layout(nodes, edges, submesh_chips, node_chip_counts);
+           const std::map<std::string, uint32_t>& node_chip_counts,
+           const std::map<std::string, uint32_t>& node_pipeline_core_counts) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(
+                nodes, edges, submesh_chips, node_chip_counts, node_pipeline_core_counts);
         },
         nb::arg("nodes") = std::vector<std::string>{},
         nb::arg("edges"),
         nb::arg("submesh_chips"),
         nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("node_pipeline_core_counts") = std::map<std::string, uint32_t>{},
         R"(
             Auto-discover the physical layout of a pipeline graph.
 
@@ -270,10 +281,15 @@ void bind_pipeline_builder(nb::module_& mod) {
                                so e.g. a 4x2 stage cannot land on a 1x2 submesh. Nodes
                                absent from the map are unconstrained; an empty map (default)
                                disables the shape filter.
+                node_pipeline_core_counts: Optional {node_name: cores_per_chip} map. When
+                               supplied, the resolver jointly assigns links and abstract
+                               endpoint slots while enforcing each node's per-chip capacity.
+                               Every graph node must be present. An empty map preserves the
+                               legacy behavior and leaves core-slot results unset.
 
             Returns:
-                GraphLayoutResult with physical coords for every edge and the H2D/D2H
-                chip coords in stage-0's submesh.
+                GraphLayoutResult with physical coordinates and, in capacity mode,
+                abstract core slots for every edge and H2D/D2H.
         )");
 
     mod.def(
