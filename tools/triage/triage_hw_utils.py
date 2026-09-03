@@ -56,10 +56,10 @@ def _eth_ports(v):
 
 TELEMETRY_DECODERS = {
     "ETH_FW_VERSION": _ver3,
-    "DDR_FW_VERSION": _ver3,
+    "GDDR_FW_VERSION": _ver3,
     "L2CPU_FW_VERSION": _ver3,
-    "BM_APP_FW_VERSION": _ver4,
-    "BM_BL_FW_VERSION": _ver4,
+    "DM_APP_FW_VERSION": _ver4,
+    "DM_BL_FW_VERSION": _ver4,
     "FLASH_BUNDLE_VERSION": _ver4,
     "CM_FW_VERSION": _ver4,
     "ASIC_TEMPERATURE": _temp,

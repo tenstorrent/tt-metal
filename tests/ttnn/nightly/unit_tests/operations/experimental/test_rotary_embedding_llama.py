@@ -7,10 +7,10 @@ from loguru import logger
 import torch
 import ttnn
 
-from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
+from models.common.reference_rope import apply_rotary_emb, precompute_freqs_cis
 from models.common.utility_functions import skip_for_blackhole, nearest_32, skip_for_wormhole_b0
 from models.tt_transformers.tt.common import (
     precompute_freqs,

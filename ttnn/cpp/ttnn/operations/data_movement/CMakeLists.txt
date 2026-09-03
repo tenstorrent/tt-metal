@@ -101,7 +101,6 @@ target_sources(
             clone/device/clone_device_operation.hpp
             # common/
             common/common.hpp
-            common/synthesize_output_shard_spec.hpp
             # concat/
             concat/concat_nanobind.hpp
             concat/device/concat_device_operation.hpp

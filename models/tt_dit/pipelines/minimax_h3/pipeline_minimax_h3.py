@@ -256,6 +256,8 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        audio_split_mode: str = "full",
+        audio_t_factor: int = 4,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -292,6 +294,27 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
+        # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
+        # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
+        # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
+        # With the default audio_t_factor=4, decode is 2.2 s (full) / 1.6 s (off) on a 4x8 mesh.
+        if audio_split_mode not in ("off", "weight", "full"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        self.audio_split_mode = audio_split_mode
+        # Audio decode T-sharding over the TP axis. Default 4 (~3x faster decode on a 4x8 mesh at
+        # the same fidelity); factor 4 is the tested max -- factor 8 leaves too few rows/shard for
+        # the depthwise resample conv1d. Falls back to unsharded when the TP axis can't be split
+        # that way (e.g. a single device), so the default is safe on any mesh. Pass
+        # audio_t_factor=1 to force unsharded.
+        if audio_t_factor > 1 and self.tp_factor % audio_t_factor == 0:
+            self.audio_t_factor = audio_t_factor
+        else:
+            if audio_t_factor > 1:
+                logger.info(
+                    f"audio_t_factor={audio_t_factor} does not divide TP-axis size {self.tp_factor}; "
+                    "decoding audio unsharded"
+                )
+            self.audio_t_factor = 1
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -359,6 +382,8 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        audio_split_mode: str = "full",
+        audio_t_factor: int = 4,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -379,6 +404,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            audio_split_mode=audio_split_mode,
+            audio_t_factor=audio_t_factor,
         )
 
     @staticmethod
@@ -1193,6 +1220,10 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
+            # Unsharded by default; T-shard over the TP axis when audio_t_factor > 1.
+            audio_parallel_config = (
+                ParallelFactor(factor=self.audio_t_factor, mesh_axis=self.tp_axis) if self.audio_t_factor > 1 else None
+            )
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1203,6 +1234,8 @@ class MiniMaxH3Pipeline:
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
+                parallel_config=audio_parallel_config,
+                split_mode=self.audio_split_mode,
             )
 
             def read_state() -> dict[str, torch.Tensor]:

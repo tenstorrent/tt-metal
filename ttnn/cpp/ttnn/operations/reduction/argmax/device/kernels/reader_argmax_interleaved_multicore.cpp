@@ -336,8 +336,8 @@ void kernel_main() {
         "Partial result buffer must use the same data format as values.");
 
     // Semaphores
-    Semaphore<> start_sem(sem::start);
-    Semaphore<> done_sem(sem::done);
+    Semaphore start_sem(sem::start);
+    Semaphore done_sem(sem::done);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
