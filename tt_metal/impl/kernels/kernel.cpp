@@ -320,10 +320,9 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          uint16_t logical_dfb_id,
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
-                                                         const LlkOperandFacts&)> callback) const {
+                                                         const std::optional<LLKMetadata>&)> callback) const {
     for (const auto& handle : this->dataflow_buffer_binding_handles_) {
-        callback(
-            handle.accessor_name, handle.slot, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_facts);
+        callback(handle.accessor_name, handle.slot, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
     }
 }
 
@@ -341,23 +340,24 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
                                                 uint32_t num_runtime_field_crta_words,
-                                                const LlkOperandFacts&)> callback) const {
+                                                const std::optional<LLKMetadata>&)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
             handle.cta_offset,
             handle.addr_crta_offset,
             handle.num_runtime_field_crta_words,
-            handle.llk_facts);
+            handle.llk_metadata);
     }
 }
 
-void Kernel::process_scratchpad_binding_handles(
-    const std::function<
-        void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&)>
-        callback) const {
+void Kernel::process_scratchpad_binding_handles(const std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>&)> callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_facts);
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
     }
 }
 
@@ -591,13 +591,16 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    auto hash_llk_facts = [&hasher](const LlkOperandFacts& facts) {
-        hasher.update(static_cast<uint64_t>(facts.present));
-        hasher.update(static_cast<uint64_t>(facts.hw_format));
-        hasher.update(static_cast<uint64_t>(facts.face_r_dim));
-        hasher.update(static_cast<uint64_t>(facts.face_c_dim));
-        hasher.update(static_cast<uint64_t>(facts.num_faces_r_dim));
-        hasher.update(static_cast<uint64_t>(facts.num_faces_c_dim));
+    auto hash_llk_metadata = [&hasher](const std::optional<LLKMetadata>& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.has_value()));
+        if (!metadata.has_value()) {
+            return;
+        }
+        hasher.update(static_cast<uint64_t>(metadata->format));
+        hasher.update(static_cast<uint64_t>(metadata->tile.get_height()));
+        hasher.update(static_cast<uint64_t>(metadata->tile.get_width()));
+        hasher.update(static_cast<uint64_t>(metadata->face_geometry.face_r_dim));
+        hasher.update(static_cast<uint64_t>(metadata->face_geometry.num_faces));
     };
     std::vector<const DataflowBufferBindingHandle*> dfb_sorted;
     dfb_sorted.reserve(this->dataflow_buffer_binding_handles_.size());
@@ -610,7 +613,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle->slot));
         hasher.update(static_cast<uint64_t>(handle->is_relay ? 1 : 0));
         hasher.update(static_cast<uint64_t>(handle->prefetcher_pipe_id));
-        hash_llk_facts(handle->llk_facts);
+        hash_llk_metadata(handle->llk_metadata);
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -630,7 +633,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
-        hash_llk_facts(handle.llk_facts);
+        hash_llk_metadata(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
@@ -641,7 +644,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
-        hash_llk_facts(handle.llk_facts);
+        hash_llk_metadata(handle.llk_metadata);
     }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));

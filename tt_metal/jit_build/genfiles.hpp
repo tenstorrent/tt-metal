@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace tt::tt_metal {
+struct LLKMetadata;
 struct KernelSource;
 }  // namespace tt::tt_metal
 
@@ -17,6 +18,8 @@ namespace tt::tt_metal {
 class JitBuildEnv;
 class JitBuildOptions;
 class JitBuildSettings;
+
+std::string format_llk_metadata(const LLKMetadata& metadata);
 
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);

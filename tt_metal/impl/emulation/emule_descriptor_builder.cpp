@@ -254,7 +254,12 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();
             k.process_dataflow_buffer_binding_handles(
-                [&kd](const std::string& name, uint16_t id, bool is_relay, uint8_t pipe, const LlkOperandFacts&) {
+                [&kd](
+                    const std::string& name,
+                    uint16_t id,
+                    bool is_relay,
+                    uint8_t pipe,
+                    const std::optional<LLKMetadata>&) {
                     // LLK facts are baked onto silicon tokens by genfiles. The tt-emule binding POD
                     // does not carry them yet, so the marshaller accepts and drops them.
                     kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
@@ -270,7 +275,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     uint32_t cta_off,
                     uint32_t addr_crta_off,
                     uint32_t num_rt,
-                    const LlkOperandFacts&) {
+                    const std::optional<LLKMetadata>&) {
                     // Emule doesn't yet model per-binding runtime CRTA words; the downstream
                     // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
                     // dynamic-shape case here (the sole binding reader) rather than in a consumer.
@@ -287,7 +292,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 });
             k.process_scratchpad_binding_handles(
                 [&kd](
-                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&) {
+                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
                     kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
                 });
             for (const auto& r : k.core_range_set().ranges()) {

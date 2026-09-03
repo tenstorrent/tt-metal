@@ -72,7 +72,7 @@ struct ScratchpadSpec {
 
     // These fields are identical as those in the DataflowBufferSpec.
 
-    // The data format is required if LLK metadata is needed to be extract at device side.
+    // The data format is required if LLK metadata will be extracted from the device code
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
     // Optional; if unspecified, the default tile format (32x32) is assumed
