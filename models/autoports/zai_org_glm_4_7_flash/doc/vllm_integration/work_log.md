@@ -583,3 +583,77 @@ mixed greedy/sampled workload does not recapture on each mode change). No code
 change. The two `reset_trace()` sites in `tt/generator.py` are the expected
 ones: the post-compile recapture in `_maybe_recapture_after_compile` (counted by
 `counters["trace_recaptures"]`) and the request-boundary reset.
+
+---
+
+## VS-009: the residual failures are cross-test contamination, not a seed defect
+
+**Correction to the VS-008 note.** VS-008 recorded that four seed-reproducibility
+tests "now fail in isolation" and inferred a distinct prefill-seed defect. That
+inference was wrong, and the method behind it was flawed: those runs used a fresh
+*pytest process* but a **server that had already served the full 74-test suite**.
+Isolating the client does not isolate the server.
+
+On a genuinely fresh server every one of them passes:
+
+```
+test_specific_seed_reproducible            4 passed
+test_uniform_seed_deterministic            6 passed
+test_seeding                               1 passed
+test_same_seeds_reproduce_across_batches   1 passed
+```
+
+and identical seeded requests reproduce exactly at the first token, which is the
+thing VS-008 was said to have broken:
+
+```
+seed=42  -> 'S'      seed=42  -> 'S'
+seed=123 -> 'Given'  seed=123 -> 'Given'
+```
+
+with the params genuinely sampling rather than greedy (temperature 2.0 arrives
+inverted as 0.5, top_k 32). **There is no separate prefill-seed defect, and
+VS-008 regressed nothing.**
+
+**What is real: server state accumulates and breaks later requests.**
+
+One trigger is bisected and canary-confirmed. Using `test_seeding` as a canary
+after each host-only-param test, on a fresh server:
+
+| step | canary |
+|---|---|
+| baseline | PASS |
+| after `test_min_p` | PASS |
+| **after `test_bad_words`** | **FAIL** |
+| after `test_logit_bias` / `test_allowed_token_ids` / `test_min_tokens` | FAIL (stays poisoned) |
+
+`bad_words` forces vLLM to sample on the host, so the adapter takes its
+`sampling_params is None` branch, which by design "does not touch the persistent
+per-slot decode state" and bypasses the seed manager entirely. Meanwhile
+`_seed_active` latches `True` after the first seeded request and never clears
+(instrumented: 12 `seed_active=False` prefills then 372 consecutive `True`),
+because `deactivate_slots_except` only runs on a decode `reset_batch`. The device
+is left holding the seeded path's non-SKIP reinit values, the exact hazard that
+method's own docstring warns about.
+
+**Not the only trigger.** Deselecting `test_bad_words` from the full suite moves
+it from 13 failed / 60 passed to **11 failed / 62 passed**, so at least one more
+contributor remains unidentified. Ruled out as triggers by direct test (each ran,
+then the canary still passed): `test_logprobs` (20 host-sampled requests),
+`test_request_isolation::test_mixed_params_batch`, `test_temperature_varied_in_batch`,
+`test_min_p`.
+
+**Scope.** Every residual failure is order-dependent state, not a wrong answer to
+a single request: a freshly started server serves seeded, unseeded, mixed-param
+and penalty requests correctly. The defect surfaces only after a long-lived
+server has served a particular mix. That makes it a real serving concern worth
+fixing, but not a blocker on this model's single-request correctness, and it is
+plausibly shared rather than GLM-specific (the SmolLM2/tt_transformers reference
+on this same chip also fails `test_mixed_params_batch`).
+
+**Not fixed here.** Remaining work: identify the second trigger the same way
+(canary bisection over the suite), then decide whether the fix belongs in this
+adapter's host-sampling branch (re-register seed-manager state after a
+host-sampled request) or upstream in the shared sampler's seeded/unseeded device
+handoff. Track as its own item; stage-7 evidence is collected on a fresh server
+per stage and this is recorded under the stage README's known limitations.
