@@ -133,15 +133,14 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 **Cluster health record:** after analyze, emit a portable JSON line (does not change analyze pass/fail):
 
 ```bash
+python3 tools/scaleout/exabox/analyze_validation_results.py "$OUTPUT_DIR"
 python3 tools/scaleout/exabox/report_cluster_health.py \
   --test-type physical \
-  --hosts <hosts> \
-  --analyzer-code "$ANALYSIS_RC" \
-  --artifact-dir validation_output/ \
+  --artifact-dir "$OUTPUT_DIR" \
   --dry-run
 ```
 
-Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, unless DIR itself is other-writable, in which case the date directory is `01777` (sticky + world rwx) so mixed uids can share a `0777` tree. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store (or a world-writable directory). Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
+`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, unless DIR itself is other-writable, in which case the date directory is `01777` (sticky + world rwx) so mixed uids can share a `0777` tree. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store (or a world-writable directory). Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
 
 Replay leftover dumps without re-running validation:
 
@@ -176,6 +175,11 @@ snapshot with `migrate_cluster_health_labels.py`. Dry-run is the default;
 `--apply` requires a new backup directory and atomically replaces only records
 whose hierarchy changes. Record IDs, timestamps, status, hosts, artifacts, and
 orchestrator IDs are preserved.
+
+Add inferred physical `pass_pct` to stored records with
+`migrate_cluster_health_pass_pct.py` (same dry-run / `--apply --backup-root`
+pattern). It re-grades `artifact_uri` logs and skips records that already have
+a rate or have no gradeable logs.
 
 ```bash
 python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
@@ -412,6 +416,8 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `analyze_fabric_results.py` | Parse fabric test logs |
 | `analyze_host_health_results.py` | Map `diag_report.json` to a host analyzer code |
 | `report_cluster_health.py` | Emit cluster health JSON after analyze |
+| `migrate_cluster_health_labels.py` | Reclassify stored JSON labels from a snapshot |
+| `migrate_cluster_health_pass_pct.py` | Add inferred physical `pass_pct` to stored JSON |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files

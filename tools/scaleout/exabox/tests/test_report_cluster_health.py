@@ -272,6 +272,77 @@ class TestDryRunCli(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("analyzer_code", err)
 
+    def _iteration_dir(self, texts: list[str]) -> str:
+        root = fixtures.temp_dir(self)
+        for index, text in enumerate(texts, start=1):
+            fixtures.write(root, f"cluster_validation_iteration_{index}.log", text)
+        return str(root)
+
+    def test_infers_pass_pct_from_iteration_logs(self):
+        artifact = self._iteration_dir(
+            [
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nAll Detected Links are healthy\n",
+                "Detected Hosts: bh-glx-110-c01u02, bh-glx-110-c01u08\nFound Unhealthy Links\n",
+            ]
+        )
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--artifact-dir",
+                artifact,
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 80.0)
+        self.assertEqual(record["analyzer_code"], 0)
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(
+            record["hosts"],
+            ["bh-glx-110-c01u02", "bh-glx-110-c01u08"],
+        )
+        validate_record(record, file_written=False)
+
+    def test_pass_pct_override_wins(self):
+        artifact = self._iteration_dir(
+            ["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"]
+        )
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                artifact,
+                "--pass-pct",
+                "12.5",
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["pass_pct"], 12.5)
+        self.assertEqual(record["hosts"], HOSTS.split(","))
+
+    def test_missing_logs_omit_pass_pct(self):
+        rc, out, err = _run(_base_argv())
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertNotIn("pass_pct", record)
+        self.assertEqual(record["status"], "failed")
+
     def test_rejects_topology_flag(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr), self.assertRaises(SystemExit):
