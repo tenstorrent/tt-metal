@@ -43,7 +43,7 @@ class TestMatmulBlockSharded1DGrid:
         ],
     )
     def test_matmul_block_sharded_1d_column_grid_batched_b(
-        self, device, batch_a, batch_b, M, K, N, grid_start, grid_end
+        self, device, batch_a, batch_b, M, K, N, grid_start, grid_end, expect_error
     ):
         """
         Test that BLOCK_SHARDED on 1D column grid with batched B tensor raises an error.
@@ -78,7 +78,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should raise RuntimeError with message about BLOCK_SHARDED on 1D grid
-        with pytest.raises(RuntimeError) as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         assert "BLOCK_SHARDED" in str(excinfo.value)
@@ -93,7 +93,9 @@ class TestMatmulBlockSharded1DGrid:
             (2, 2, 64, 64, 64, (0, 0), (1, 0)),
         ],
     )
-    def test_matmul_block_sharded_1d_row_grid_batched_b(self, device, batch_a, batch_b, M, K, N, grid_start, grid_end):
+    def test_matmul_block_sharded_1d_row_grid_batched_b(
+        self, device, batch_a, batch_b, M, K, N, grid_start, grid_end, expect_error
+    ):
         """
         Test that BLOCK_SHARDED on 1D row grid with batched B tensor raises an error.
 
@@ -126,7 +128,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should raise RuntimeError with message about BLOCK_SHARDED on 1D grid
-        with pytest.raises(RuntimeError) as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         assert "BLOCK_SHARDED" in str(excinfo.value)
@@ -299,7 +301,7 @@ class TestMatmulBlockSharded1DGrid:
 class TestMatmulBlockSharded1DGridOriginalIssue:
     """Tests that specifically reproduce the original issue #32306 scenario."""
 
-    def test_original_issue_exact_shapes(self, device):
+    def test_original_issue_exact_shapes(self, device, expect_error):
         """
         Reproduce the EXACT scenario from GitHub issue #32306.
 
@@ -334,7 +336,7 @@ class TestMatmulBlockSharded1DGridOriginalIssue:
         )
 
         # With the fix, this should raise RuntimeError instead of hanging
-        with pytest.raises(RuntimeError) as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(v2, v3, memory_config=memory_config)
 
         error_msg = str(excinfo.value)
@@ -343,7 +345,7 @@ class TestMatmulBlockSharded1DGridOriginalIssue:
         # Should suggest workarounds
         assert "HEIGHT_SHARDED" in error_msg or "WIDTH_SHARDED" in error_msg or "2D" in error_msg
 
-    def test_original_issue_shapes_batched_error(self, device):
+    def test_original_issue_shapes_batched_error(self, device, expect_error):
         """
         Reproduce the exact scenario from GitHub issue #32306 using torch tensors.
 
@@ -373,7 +375,7 @@ class TestMatmulBlockSharded1DGridOriginalIssue:
         )
 
         # With the fix, this should raise RuntimeError instead of hanging
-        with pytest.raises(RuntimeError) as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         error_msg = str(excinfo.value)

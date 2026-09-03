@@ -508,6 +508,21 @@ class CheckpointType(Enum):
 
 
 class TtModelArgs:
+    # Keep concurrent slots that share a request seed on salt 0 (see
+    # SeedManager.salt_duplicate_seeds). #53077 salts them apart to separate n>1
+    # completions of one prompt, but these models are served through vLLM v1, whose
+    # ParentRequest._get_child_sampling_params already hands child i `seed + i`
+    # (vllm/v1/engine/parallel_sampling.py) -- so n>1 children never arrive here
+    # sharing a seed. Every duplicate seed that does arrive is independent requests
+    # that must reproduce identically, which the vLLM TT sampling suite asserts
+    # (test_uniform_seed_deterministic and friends: 32 same-seed requests -> 32
+    # identical outputs, observed as 32 DIFFERENT outputs with salting on).
+    #
+    # CLASS attribute, not set in _set_params_from_dict: TtQwenModelArgs overrides that
+    # method without calling super(), so an instance assignment there reaches Llama only
+    # and Qwen3-32B silently keeps the salting default.
+    salt_duplicate_seeds = False
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",

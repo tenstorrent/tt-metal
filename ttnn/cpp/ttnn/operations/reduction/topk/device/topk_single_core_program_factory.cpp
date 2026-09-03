@@ -190,12 +190,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     });
 
     // Tensor Parameter Declarations:
-    // The optional input indices tensor is declared only when the caller supplies one, but no build
-    // reads it today: the reader's sole use sits behind `#if not GENERATE_INDICES` and that define is
-    // pinned on (GH issue #36329), so the host condition and the kernel condition do not track each
-    // other. The parameter, its binding and its run arg are provisioned for the fix rather than
-    // consumed, and the declared spec is still re-checked against the supplied tensor every
-    // dispatch.
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()});
     if (tensor_args.indices.has_value()) {
         spec.tensor_parameters.push_back(TensorParameter{
@@ -217,8 +211,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
         .compiler_options =
             {
-                .defines = {{"GENERATE_INDICES", "1"}},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue:
-                                                         // #36329
+                .defines = {{"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"}},
             },
         .dfb_bindings =
             {

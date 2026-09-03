@@ -64,6 +64,8 @@ it is classified differently on different systems.
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
+| TT-DiT encoders (shared) | WH LLMBox |
+| TT-Transformers (shared) | WH LLMBox |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
 ## Tier 2 Models
 | Model | Systems |

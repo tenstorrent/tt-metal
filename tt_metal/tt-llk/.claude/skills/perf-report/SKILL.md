@@ -91,9 +91,13 @@ Rules:
   `-n`, otherwise `master`. Look there for partial artifacts after an
   aborted run.
 - `pytest_sessionfinish` calls `combine_perf_reports()`, which merges the
-  per-worker files into `perf_data/<module>/<module>.csv`,
+  per-worker files into `perf_data/runs/<tag>/<module>/<module>.csv`,
   `<module>.post.csv`, and `<module>.counters.csv`, sorts them, and deletes
-  the per-worker files. Combined files are overwritten in place.
+  the per-worker files. Each run writes its own `runs/<tag>/` directory and
+  `perf_data/latest` is repointed at it, so a rerun neither overwrites an
+  earlier report nor leaves part of one behind. `PERF_KEEP_RUNS` (default 10)
+  bounds how many runs are retained. `PERF_RUN_TAG` sets the tag; off CI it
+  defaults to `local-<utc timestamp>`.
 - The producer phase writes no report and skips combining.
 - The raw CSV holds per-marker means. The `.post.csv` divides the `mean(...)`
   and `std(...)` columns of `TILE_LOOP` rows by `loop_factor * tile_cnt`,
@@ -110,7 +114,7 @@ finish, or every selected test was skipped.
    two ops share one module. Fix the test; do not work around it.
 2. **Row count.** Reconcile rather than assert equality. Start from
    `selected variants × markers`, then subtract skipped or deselected
-   variants and any rows merged by duplicate-key collapse. Markers are the
+   variants; duplicate keys are rejected, never merged. Markers are the
    zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
    plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
    A counter report has no profiler-derived rows, so expect only the counter
@@ -155,15 +159,13 @@ Report back, and keep alongside the CSV when it is archived:
 
 ## Refresh and compare
 
-- Move the existing `perf_data/<module>/` aside before rerunning — copy it out
-  and delete the original, rather than just copying. `combine_perf_reports()`
-  returns early when no worker files were produced and writes each output only
-  when that class has inputs, so a rerun that skips everything or dies before
-  the consumer phase leaves the previous CSV sitting there looking like the new
-  result. Deleting first makes a no-op rerun visibly empty. Confirm the output
-  timestamps are from the run you just did.
-- A counter run replaces the timing report for the same module, so move the
-  timing report out of the way first for the same reason.
+- Nothing needs moving aside. Each run lands in its own `perf_data/runs/<tag>/`
+  and the previous run is untouched, so a rerun that skips everything or dies
+  before the consumer phase cannot leave an earlier CSV looking like the new
+  result. Read the run you mean, not `latest`, when comparing two runs.
+- A counter run is still a separate report kind from a timing run, and the two
+  share no metric columns — but they now land in different run directories, so
+  one no longer replaces the other.
 - Compare like with like: same architecture, same speed-of-light setting, same
   `loop_factor` and marker, and the same report kind. Timing and counter
   reports measure different things and share no metric columns.
@@ -174,10 +176,10 @@ Report back, and keep alongside the CSV when it is archived:
 - [ ] Test, architecture, and intended scope confirmed.
 - [ ] Producer and consumer phases both completed without aborting.
 - [ ] Coverage off; speed-of-light setting deliberate and uniform.
-- [ ] Any previous `perf_data/<module>/` was moved aside and deleted before the
-      run, and the new files carry this run's timestamps.
-- [ ] `perf_data/<module>/` holds the raw and `.post.csv` files, plus counters
-      when requested.
+- [ ] The report read is the run you just did — `perf_data/latest`, or the
+      `runs/<tag>/` you intended.
+- [ ] `perf_data/runs/<tag>/<module>/` holds the raw and `.post.csv` files, plus
+      counters when requested.
 - [ ] Single schema, row count reconciled, duplicate warnings reviewed.
 - [ ] Column expectations applied for the report kind actually produced.
 - [ ] `TILE_LOOP` metrics inspected for plausibility.

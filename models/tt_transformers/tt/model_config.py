@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 import json
 import math
@@ -16,6 +17,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
+from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
+from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
+from models.common.weight_cache import marker_path as _wc_marker_path
+from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -101,6 +107,96 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     if num_devices < 1:
         raise ValueError(f"num_devices must be >= 1, got {num_devices}")
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
+
+
+def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Preserve Galaxy's 128K layout while accommodating larger vocabularies."""
+    return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
+
+
+def compute_galaxy_width_shard_cores(width: int, max_cores: int = 32) -> int:
+    """Use the largest core count that leaves a tile-aligned width shard."""
+    if width <= 0 or width % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"width must be a positive multiple of {ttnn.TILE_SIZE}, got {width}")
+    width_tiles = width // ttnn.TILE_SIZE
+    num_cores = min(max_cores, width_tiles)
+    while width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores
+
+
+# Silicon-validated Llama-70B 7x4 MLP reduce-scatter grid.
+_GALAXY_FF1_LEGACY_CORES = 28
+
+
+def create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim: int, mesh_rows: int, mesh_cols: int) -> ttnn.MemoryConfig:
+    """Create the Galaxy FF1 reduce-scatter *output* layout.
+
+    ``ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`` derives the
+    output shape itself as ``input_shape[dim] / ring_size``; this memory config only
+    supplies the layout for that shape, so it must describe the scattered width, not
+    the pre-scatter width.
+
+    w1/w3 are 2D-sharded ``dims=(-1, -2)`` (mlp.py), so ``hidden_dim`` splits across
+    ``mesh_rows`` and the per-device FF1 output is ``hidden_dim // mesh_rows``. The
+    collective then scatters that over ``cluster_axis=1``, i.e. ``mesh_cols`` devices.
+
+    The silicon-validated Galaxy demo agrees: its reduce-scatter input is 3840 wide
+    (``SHARDED_FF12_OUT_RING_MEMCFG`` / ``SHARDED_FF12_PRE_MUL_RING_REDUCE_MEMCFG``,
+    the 28672 // 8 = 3584 per-device width padded to a 30-core layout) and its output
+    ``REDUCE_SCATTER_OUT_MEMCFG`` is ``[32, 32]`` over 30 cores = 960 = 3840 // 4.
+
+    Keeps the legacy 7x4 grid wherever it tile-aligns the scattered width, which for
+    Llama-70B it does exactly: 28672 // 8 // 4 = 896 = 28 * 32.
+    """
+    per_device_width = hidden_dim // mesh_rows // mesh_cols
+    legacy_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))})
+    num_cores, core_grid = _GALAXY_FF1_LEGACY_CORES, legacy_grid
+
+    if per_device_width % (_GALAXY_FF1_LEGACY_CORES * ttnn.TILE_SIZE) != 0:
+        # The legacy 28-core grid cannot tile-align this width. Try a core count that
+        # can, but fall back to the legacy layout if no supported core grid exists --
+        # this config is only consumed on the Galaxy decode path (mlp.py, dim == 8192),
+        # so an unusable width here must stay harmless rather than raise during
+        # ModelArgs construction on every SKU.
+        if per_device_width % ttnn.TILE_SIZE == 0:
+            candidate_cores = compute_galaxy_width_shard_cores(per_device_width)
+            candidate_grid = num_to_coregrid(candidate_cores)
+            if candidate_grid is not None:
+                num_cores, core_grid = candidate_cores, candidate_grid
+        if core_grid is legacy_grid:
+            logger.warning(
+                f"Galaxy FF1 per-device width {per_device_width} is not tile-shardable across "
+                f"{_GALAXY_FF1_LEGACY_CORES} cores and has no supported alternative grid; keeping "
+                "the legacy layout. Only consumed on the Galaxy decode path."
+            )
+
+    # Round the shard up to a tile boundary. This is exact for every width a grid can
+    # cover evenly (Llama-70B 896 = 28 * 32, Qwen-72B 1024 = 32 * 32) and mirrors what
+    # the validated demo does otherwise -- its 30-core layout pads 896 up to 960.
+    shard_width = math.ceil(per_device_width / num_cores / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    # LAYOUT HISTORY -- start here if Galaxy decode perf or L1 usage regresses (PR #53838).
+    #
+    #   Llama-70B (hidden_dim 28672):  [32, 128] over 28 cores  ->  [32, 32] over 28 cores
+    #                                   3584 columns                 896 columns
+    #
+    # 3584 is the pre-scatter per-device width (28672 // 8); 896 is what
+    # reduce_scatter_minimal_async actually emits (28672 // 8 // 4). Same 7x4 grid,
+    # 4x less L1 for this buffer.
+    #
+    # The collective tolerates an over-provisioned output shard spec -- the old value
+    # was oversized, not wrong -- so a regression here would show up as perf or L1
+    # pressure, never as a failed assertion. If Galaxy decode slows down or starts
+    # hitting L1 limits, revert this shard width to `per_device_width // num_cores`
+    # with `per_device_width = hidden_dim // mesh_rows` and see if it recovers.
+    return ttnn.create_sharded_memory_config(
+        shape=(32, shard_width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
 
 def should_pad_sampling_logits_to_power_of_2(
@@ -930,13 +1026,12 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
-            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
+            # Sized to the reduce-scatter output width, not the pre-scatter width. See the
+            # LAYOUT HISTORY note in create_galaxy_ff1_out_reduce_scatter_memcfg if Galaxy
+            # decode perf or L1 usage regresses -- Llama-70B went [32, 128] -> [32, 32].
+            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = create_galaxy_ff1_out_reduce_scatter_memcfg(
+                self.hidden_dim, self.cluster_shape[0], self.cluster_shape[1]
+            )
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32 * 4, self.hidden_dim // 8 // 8),
@@ -1339,11 +1434,13 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                )
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(
+                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
+                    )
+                    if not self.is_galaxy
+                    else None
+                ),
             )
 
     @lru_cache(maxsize=None)
@@ -1399,9 +1496,11 @@ class ModelArgs:
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
                     grid_size=self.mlp2_grid(seq_len),
-                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                    if not self.is_galaxy
-                    else None,
+                    per_core_N=(
+                        math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                        if not self.is_galaxy
+                        else None
+                    ),
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1561,21 +1660,29 @@ class ModelArgs:
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -2035,9 +2142,9 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if dram_sharded_wo
-                else None,
+                per_core_N=(
+                    math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -2750,7 +2857,7 @@ class ModelArgs:
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
         if self.is_galaxy:
-            self.padded_vocab_size = 128 * 1024
+            self.padded_vocab_size = compute_galaxy_padded_vocab_size(self.vocab_size, self.num_devices)
         elif self.num_devices == 0:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
@@ -3126,6 +3233,161 @@ class ModelArgs:
                 self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
             )
 
+    # Name of the marker file dropped into a weight-cache directory once every weight for that
+    # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
+    # warm-cache detector (#48531) to every tt_transformers e2e model.
+    # Marker filename and schema version both come from models/common/weight_cache.py -- this
+    # class must not define its own, or the two writers diverge (they previously shared a filename
+    # and version number while encoding mesh_shape incompatibly). See that module for the version
+    # history and what each field guarantees.
+    WEIGHT_CACHE_MARKER = _WC_MARKER
+    WEIGHT_CACHE_FORMAT_VERSION = _WC_FORMAT_VERSION
+
+    def _weight_cache_build_variant(self):
+        """A signature of the build options that change an ``as_tensor`` cache *filename*.
+
+        The cache name is ``{name}_dtype_{dtype}_layout_{layout}.tensorbin``, so anything that moves
+        a weight to a different dtype -- or adds weights outright -- produces a different file set.
+        Two knobs do that here: the DRAM prefetcher (pins every layer to decoder 0's dtype and adds
+        the ring-matmul splits in lm_head) and the precision/optimizations config (per-decoder,
+        per-tensor-group dtypes). Recording them means a cache seeded under one variant is not
+        accepted for a build that needs a different one -- which matters because a filename this
+        build needs but the seed never wrote would otherwise be regenerated by as_tensor FROM the
+        placeholder. (#45400 review)"""
+        try:
+            # get_tensor_dtype lives on the DecodersPrecision held in self.optimizations, NOT on
+            # ModelArgs. The original self.get_tensor_dtype(...) raised AttributeError on every
+            # model -- unnoticed because the old except collapsed it to the match-anything
+            # "unknown", and no hardware run executed this method until the 0ec5959bade sweep,
+            # where the fail-closed sentinel surfaced it on the first cold build. (#45400 review)
+            dtypes = [
+                str(self.optimizations.get_tensor_dtype(decoder_id, group, prefetcher=bool(self.prefetcher)))
+                for decoder_id in range(self.n_layers)
+                for group in TensorGroup
+            ]
+            precision = hashlib.sha1("|".join(dtypes).encode()).hexdigest()[:12]
+        except Exception as e:
+            # A variant we cannot compute is a variant we cannot verify. Do NOT collapse to a
+            # match-anything constant (that silently reopened the placeholder-persistence hole for
+            # every precision variant); return an unverifiable sentinel that the completeness gate
+            # rejects and mark_weight_cache_complete refuses to write, so the build cold-loads --
+            # slow but correct -- and the log says why. (#45400 review, finding R3)
+            logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
+            return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
+        return {
+            "prefetcher": bool(self.prefetcher),
+            "precision": precision,
+            # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
+            "batch": int(getattr(self, "max_batch_size", 0) or 0),
+            # attention.py picks cache_name("wo_width_sharded_2d") vs cache_name("wo") off this.
+            "fused_ag": bool(getattr(self, "use_fused_all_gather_matmul", False)),
+            # load_state_dict permutes QKV differently per rope mode, so the SAME cache filename
+            # carries different content across modes. The Llama CI job runs both modes against one
+            # cache dir; keeping the mode in the variant stops a marker seeded under one mode from
+            # certifying the other. (#45400 review, finding R2)
+            "hf_rope": bool(getattr(self, "use_hf_rope", False)),
+        }
+
+    def _weight_cache_identity(self, components=None):
+        """Marker identity for this build. `components` names the parts being constructed, so a
+        text-only seed cannot certify a cache for a build that also needs the vision tower."""
+        return dict(
+            model_name=self.model_name,
+            n_layers=self.n_layers,
+            mesh_shape=tuple(self.mesh_device.shape),
+            components=components,
+            build_variant=self._weight_cache_build_variant(),
+        )
+
+    def weight_cache_is_complete(self, dtype, components=None):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape, components)
+        was fully built by a previous run and every tensorbin that build produced is still present.
+
+        When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
+        state_dict is never read, so the caller can skip the expensive from_pretrained host
+        load entirely (the load that OOMs/hangs during prefill, #48509). Set
+        TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh load (e.g. to regenerate the cache).
+
+        Delegates to models/common/weight_cache.py so there is a SINGLE marker reader/writer: the
+        two used to encode mesh_shape differently while sharing one filename and format_version,
+        so a model reachable from both (gemma3 inherits this class but its demos call the shared
+        helper) had each side reject the other's marker and cold-load forever. (#45400 review)"""
+        return _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
+
+    def mark_weight_cache_complete(self, dtype, state_dict=None, components=None):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape, components) was
+        fully built, so subsequent runs can skip the HF state_dict load.
+
+        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]} manifest
+        so a later warm run can reconstruct a dataless placeholder without touching HF. Must be
+        called AFTER the model is constructed, so the tensorbins exist to be recorded."""
+        if state_dict is None:
+            return
+        _mark_weight_cache_complete(
+            self.weight_cache_path(dtype),
+            state_dict,
+            is_moe=bool(getattr(self, "is_mixture_of_experts", False)),
+            **self._weight_cache_identity(components),
+        )
+
+    def placeholder_state_dict(self, dtype):
+        """Warm-cache build: return a lazy, dataless stand-in for the HF state_dict.
+
+        Every weight is served as an uninitialized CPU torch.empty of the shape/dtype recorded
+        in the marker manifest -- no from_pretrained, no weight bytes read from disk, so the
+        prefill host-OOM (#48509) is avoided. ttnn.as_tensor(cache_file_name=...) ignores this
+        placeholder on a cache hit (ttnn/operations/core.py) and loads the real weight from its
+        .tensorbin; the placeholder exists only to satisfy the host-side reshape ops
+        (permute/chunk/cat/transpose) the modules run before calling as_tensor. Guarded by
+        weight_cache_is_complete, so every as_tensor is guaranteed to hit and discard it.
+
+        The mapping is falsy (__bool__ -> False) so reference-building callers that test
+        `if not state_dict` (e.g. test_model_prefill) load real weights explicitly, while
+        modules that index it during construction still work."""
+        import collections.abc
+
+        marker = _wc_marker_path(self.weight_cache_path(dtype), self._weight_cache_build_variant())
+        meta = json.loads(marker.read_text())
+        manifest = meta["weights"]
+        self.is_mixture_of_experts = bool(meta.get("is_moe", False))
+        # Same reasoning as build_cached_state_dict: these are set by load_state_dict from the
+        # checkpoint keys, which the warm path never reads. The manifest has the same keys.
+        self.fuse_qkv = any("qkv" in k for k in manifest)
+        self.fuse_mlp = any("gate_up" in k for k in manifest)
+        if self.is_mixture_of_experts:
+            self.moe = True
+            expert_indices = [int(k[-11]) + 1 for k in manifest if "block_sparse_moe.experts" in k]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
+
+        dtype_cache = {}
+
+        def _to_dtype(s):
+            if s not in dtype_cache:
+                dtype_cache[s] = getattr(torch, s.rsplit(".", 1)[-1])
+            return dtype_cache[s]
+
+        class _PlaceholderStateDict(collections.abc.Mapping):
+            is_placeholder = True
+
+            def __init__(self, spec):
+                self._spec = spec  # key -> (shape, dtype_str)
+
+            def __bool__(self):
+                return False
+
+            def __getitem__(self, key):
+                shape, dt = self._spec[key]
+                return torch.empty(tuple(shape), dtype=_to_dtype(dt))
+
+            def __iter__(self):
+                return iter(self._spec)
+
+            def __len__(self):
+                return len(self._spec)
+
+        logger.info(f"Warm ttnn weight cache: built placeholder state_dict for {len(manifest)} weights (no HF load).")
+        return _PlaceholderStateDict(manifest)
+
     def get_model_config(self):
         return self.model_config
 
@@ -3194,7 +3456,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
+                local_files_only=os.getenv("CI") == "true",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
@@ -4159,16 +4421,33 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            # Prefer a tile-aligned width shard, but never hand num_to_coregrid a core
+            # count it cannot map -- it returns None, which create_sharded_memory_config
+            # rejects with "Invalid core_grid type". Fall back to the legacy expression
+            # in that case so dims that built a config before still build one.
+            self_out_width = self.dim // 4
+            self_out_cores = compute_galaxy_width_shard_cores(self_out_width)
+            if num_to_coregrid(self_out_cores) is None:
+                self_out_cores = min(32, self_out_width // ttnn.TILE_SIZE)
+            self_out_grid = num_to_coregrid(self_out_cores)
+
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, self_out_width // self_out_cores),
+                core_grid=self_out_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            # The gathered attention output is n_local_heads * head_dim wide, which is
+            # only equal to dim // cluster_shape[0] when n_heads * head_dim == dim.
+            # Qwen3-32B (dim 5120, 64 heads, 8 KV heads, head_dim 128) gathers 1024
+            # columns, while Qwen2.5-32B / QwQ-32B (40 heads) gather 640 -- so keying
+            # this off dim would break the latter. Derive it from the head geometry.
+            gather_users_cores = min(32, (self.n_heads // self.n_kv_heads) * self.head_dim // ttnn.TILE_SIZE)
             self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
                 shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                core_grid=num_to_coregrid(gather_users_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

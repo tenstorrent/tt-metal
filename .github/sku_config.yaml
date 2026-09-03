@@ -192,6 +192,12 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc4
 
+  # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
+  bh_sc4_high_power:
+    runs_on:
+      - exabox-multihost-ci-sc4-hp
+
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
@@ -201,6 +207,15 @@ skus:
     runs_on:
       - tt-ubuntu-2204-medium-stable
     merge_queue_sku: cpu_medium_prio
+
+  # GitHub-hosted CPU-only runner: no Tenstorrent device, no Harbor access.
+  # Used for host-only (CPU_-prefixed) subsets of device test binaries so scarce
+  # self-hosted device runners only execute tests that actually need silicon.
+  # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
+  # (same as the sim_* ubuntu-latest SKUs below).
+  github_hosted_cpu:
+    runs_on:
+      - ubuntu-latest
 
   # ---------------------------------------------------------------------------
   # Merge-queue prio SKUs (merge_group events only).
@@ -262,3 +277,24 @@ skus:
     runs_on:
       - tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_bh_x32.so
+  sim_quasar:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_qsr.so
+
+  # _xl variants: same simulator binary as their base SKU, but on a bigger runner for
+  # pipelines whose suite is too large for ubuntu-latest (e.g. the full LLK regression,
+  # tens of thousands of collected tests under xdist + per-test forking — ubuntu-latest
+  # OOMs or fails to fork workers, see llk_ttsim_weekly.yaml).
+  sim_wh_n150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_wh.so
+  sim_bh_p150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_bh.so
+  sim_quasar_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_qsr.so

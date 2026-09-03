@@ -185,29 +185,47 @@ class Attention(LightweightModule):
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
+            bias_num_devices = self.num_devices_per_group if self.TG else configuration.num_devices
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wq_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wk_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wv_str}.bias"], bias_num_devices)[i],
                         ],
                         dim=-1,
                     )
-                    for i in range(configuration.num_devices)
+                    for i in range(bias_num_devices)
                 ],
                 dim=-1,
             )
+            # Galaxy QKV matmuls shard the input dimension over mesh columns, so the
+            # column all-reduce sums one partial result from every column. The bias is
+            # replicated over those columns and added to each partial before the
+            # collective; divide it by the number of contributors so the reduced
+            # result contains exactly one copy of the model bias.
+            if self.TG:
+                qkv_bias = qkv_bias / configuration.cluster_shape[1]
+            bias_mesh_mapper = (
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(-1, None),
+                    mesh_shape=configuration.cluster_shape,
+                )
+                if self.TG
+                else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            )
+            bias_cache_suffix = f"sharded_2d_col_reduce_{configuration.cluster_shape[1]}" if self.TG else "sharded"
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=bias_mesh_mapper,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+                cache_file_name=cache_name(f"wqkv_bias_prefill_{bias_cache_suffix}"),
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
@@ -228,11 +246,11 @@ class Attention(LightweightModule):
                 bias_tensor = ttnn.as_tensor(
                     qkv_bias_decode,
                     device=self.mesh_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    mesh_mapper=bias_mesh_mapper,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
-                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                    cache_file_name=cache_name(f"wqkv_bias_decode_{bias_cache_suffix}_{batch_size}"),
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
@@ -714,16 +732,28 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
-            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
+        if self.TG and self.prefetcher is None:
+            x_interleaved = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            xqkv_fused_sharded = ttnn.linear(
+                x_interleaved,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=None,
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype,
+            )
+            ttnn.deallocate(x_interleaved)
+        else:
+            xqkv_fused_sharded = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
+                program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+            )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -743,7 +773,7 @@ class Attention(LightweightModule):
             memory_config=qkv_all_reduce_mem_cfg
             if qkv_all_reduce_mem_cfg is not None
             else xqkv_fused_sharded.memory_config(),
-            sharded=True,
+            sharded=not (self.TG and self.prefetcher is None),
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,

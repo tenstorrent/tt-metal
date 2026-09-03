@@ -47,14 +47,20 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 // SFPU MIN fold
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile_init();
+    } else {
+        binary_min_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile(a, b, out);
+    } else {
+        binary_min_tile(a, b, out);
+    }
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
@@ -68,7 +74,7 @@ ALWI void sfpu_reduce_sum_fold_init() {
 #ifndef ARCH_QUASAR
         add_binary_tile_init();
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
@@ -81,13 +87,13 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 #ifndef ARCH_QUASAR
         add_binary_tile(a, b, out);
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
 
 // Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
-// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 SUM/MAX.
+// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 reduces.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
@@ -232,7 +238,7 @@ ALWI void reload_accumulator_if_needed(
                 (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
             reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
-            copy_tile_to_dst_init_short(
+            copy_init(
                 accumulate.config.cb_accumulator,
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
@@ -245,7 +251,7 @@ ALWI void reload_accumulator_if_needed(
             if constexpr (is_sfpu) {
                 // Point SrcA back at the input for the next fold; the caller does the fold init.
                 reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
-                copy_tile_to_dst_init_short(input_dfb_id);
+                copy_init(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -297,7 +303,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32 MAX and Accurate fp32 SUM/MAX route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
+    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
@@ -312,7 +318,7 @@ ALWI void reduce(
 #ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN is only valid on the Int32 SFPU reduce path; the FPU path implements MIN as -MAX(-x)");
+        "MIN is only valid on an SFPU path (Int32 or Accurate fp32); FPU MIN arrives as PoolType::MAX via -MAX(-x)");
 #endif
     static_assert(
         is_accumulation_type_v<AccumulateT>,
@@ -389,8 +395,10 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (is_sfpu) {
-        init_sfpu(input_dfb_id, output_dfb_id);
-        copy_tile_to_dst_init_short(input_dfb_id);
+        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
+        // reconfig above already established the HW config, so this only re-points the unpacker
+        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
+        copy_init(input_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }

@@ -399,6 +399,13 @@ OpConfig::OpConfig(
     }
 }
 
+// ADD/SUB/RSUB only reach the SFPU when the caller asked for the accurate path
+// (fast_and_approximate_mode = false), so the bf16 narrowing is always RNE, matching what
+// mul_binary_tile/div_binary_tile do. The LLK guards this on !is_fp32_dest_acc_en, and
+// binary_ng always enables fp32 dest accumulation for FLOAT32 operands, so the fp32 route
+// that already used the SFPU is unaffected.
+constexpr auto kRneDstRoundingMode = "ckernel::DstRoundingMode::NearestEven";
+
 std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
     using enum OpConfig::SfpuBinaryOp;
 
@@ -411,12 +418,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"add_binary_tile_init();", "add_binary_tile"};
+            return {"add_binary_tile_init();", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
         case SUB:
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"sub_binary_tile_init();", "sub_binary_tile"};
+            return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
                 return {
@@ -451,7 +458,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
@@ -762,9 +769,25 @@ bool is_native_L1_sharding(
         return false;
     }
 
+    // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
+    // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
+    // serves DRAM-sharded tensors.
+    const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
+    const bool c_is_l1 = c.buffer_type() == BufferType::L1;
+
+    // Distinct from a mismatch: an ND_SHARDED config carries nd_shard_spec instead of shard_spec, so
+    // there is nothing to compare and we decline rather than compare across representations. Checking
+    // this also keeps is_uneven() -- which dereferences shard_spec() after testing only is_sharded() --
+    // off an ND-sharded operand.
+    const bool shard_specs_comparable = a.memory_config().shard_spec().has_value() && c.shard_spec().has_value();
+    // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
+    // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
+    // unsupplied output config is derived from a's, so the common case still matches.
+    const bool c_shard_matches_a = shard_specs_comparable && *c.shard_spec() == *a.memory_config().shard_spec();
+
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
-        return !is_uneven(a);
+        return a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
     }
 
     if (!b.has_value()) {
@@ -776,10 +799,12 @@ bool is_native_L1_sharding(
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
     bool a_not_broadcast = (output_shape == a.logical_shape());
-    bool a_sharded_ok = a_is_sharded && a_not_broadcast && !is_uneven(a);
+    // Gates the subtile-broadcast branch below, its only consumer.
+    bool a_native_cb_eligible =
+        a_is_sharded && a_not_broadcast && a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
 
     // avoid complex case when a and b are both sharded
-    if (a_sharded_ok && !b_is_sharded) {
+    if (a_native_cb_eligible && !b_is_sharded) {
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;

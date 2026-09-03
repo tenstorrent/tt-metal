@@ -44,7 +44,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -52,7 +52,6 @@ void kernel_main() {
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
         reconfig_data_format(cb_bcast, cb_bcast);
-        pack_reconfig_data_format(cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();

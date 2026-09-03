@@ -298,10 +298,8 @@ class LogProbsCalculator:
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=tensor.memory_config(),
             cluster_axis=self._all_gather_cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def set_log_probs_mode(
@@ -511,6 +509,28 @@ class LogProbsCalculator:
         # Subtract and put result to self.output_tensor
         ttnn.subtract(out, log_global_exp_sum, output_tensor=self.output_tensor, **self.common_args)
 
+    def _release_global_stats(self) -> None:
+        """Free the per-call global stats so they do not outlive the call.
+
+        `_compute_global_stats` parks `global_max`/`global_exp_sum` on the instance so the
+        later log-softmax steps can read them, but they are CALL-SCOPED: every call
+        overwrites them and nothing reads them across calls. Left on the instance they keep
+        two device buffers alive indefinitely -- and prefill sampling is UNTRACED, so they are
+        allocated while the prefill/decode traces are live and are still alive at
+        execute_trace. That is the allocation-behind-a-live-trace hazard of #52176, and the
+        trace-allocation tracker (TT_METAL_TRACE_ALLOC_TRACKING=1) names exactly these two
+        buffers: "Found 2 device buffer(s) still alive before trace replay".
+        """
+        for name in ("global_max", "global_exp_sum"):
+            tensor = getattr(self, name, None)
+            if tensor is None:
+                continue
+            try:
+                ttnn.deallocate(tensor)
+            except BaseException as error:  # best-effort, mirrors release()
+                logger.debug(f"Failed to deallocate {name}: {error}")
+            setattr(self, name, None)
+
     def calculate_log_probs(
         self,
         logits_tensor: ttnn.Tensor,
@@ -539,6 +559,8 @@ class LogProbsCalculator:
 
         # Calculate log-probs for each user on each chip and stores in self.output_tensor
         self._calculate_log_probs(relevant_logits)
+
+        self._release_global_stats()
 
         return self.output_tensor
 
@@ -637,6 +659,8 @@ class LogProbsCalculator:
         # Single-pass logprob computation for all gathered top-k tokens
         self._calculate_topk_log_probs_from_values(topk_local_values)
         ttnn.deallocate(topk_local_values)
+
+        self._release_global_stats()
 
         return LogProbsResult(
             topk_logprobs=self.topk_logprobs_output,

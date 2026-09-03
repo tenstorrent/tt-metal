@@ -2546,16 +2546,25 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
 void add_inter_mesh_minimal_host_cover_from_hostname_map(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
-    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
     if (config.hostname_to_asics.empty()) {
         return;
     }
 
+    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
     std::set<MeshId> logical_target_set(
         mesh_logical_level_graph.get_nodes().begin(), mesh_logical_level_graph.get_nodes().end());
     if (logical_target_set.size() <= 1) {
         return;
+    }
+
+    // Total LOGICAL chips the MGD occupies (fabric nodes summed across all logical meshes). Taken from the logical
+    // multi-mesh graph, NOT the physical mesh regions, which can over-provision (a small logical mesh placed inside a
+    // larger physical region) and would inflate the host count.
+    std::size_t total_chips_used = 0;
+    for (const auto& [mesh_id, logical_mesh_adj] : logical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        total_chips_used += logical_mesh_adj.get_nodes().size();
     }
 
     // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
@@ -2601,20 +2610,37 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
 
-    // Ask the solver to minimize the number of distinct host partitions the mapping uses. The SAT backend turns
-    // this into an at-most-K host budget walked up from the capacity lower bound (finding the true minimum host
-    // count); the DFS backend approximates it via a host-affinity value-ordering bias. Both rely on the host
-    // partitions being registered as same-rank global groups (below).
-    inter_mesh_constraints.set_minimize_same_rank_groups_used(true);
-
-    // Register the host partitions as same-rank GLOBAL groups with NO target groups. This imposes no hard
-    // grouping (the same-rank constraint is inert when no target is bound to a group), but it exposes per-mesh
-    // host membership to the solver so the SAT host-budget loop / DFS host-affinity term can pack connected
-    // meshes onto the fewest hosts.
-    if (!inter_mesh_constraints.set_same_rank_groups_constraint(
-            /*target_groups=*/{}, global_mesh_groups)) {
+    // 1. DECLARE the host-partition groups. With no target groups this imposes no hard co-location; it only exposes
+    //    per-mesh host membership so the solver can reason about how many hosts a mapping occupies. Everything below
+    //    needs this partition registered.
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, global_mesh_groups)) {
         log_warning(
             tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
+    } else {
+        // 2. TRY A HARD CAP: fit the mapping within the minimum number of hosts,
+        //    k_min = ceil(chips used by the MGD / chips per host), rounded up to the next whole host. Count CHIPS
+        //    (ASICs), not meshes: meshes-per-host is lumpy (one host can own several small meshes while another owns a
+        //    single large one), but the per-host chip capacity is uniform, so the chip-based division is exact. The
+        //    solver picks WHICH k_min hosts -- never pinned to a specific, possibly-unroutable cover.
+        std::size_t chips_per_host = 0;
+        for (const auto& [hostname, asics] : config.hostname_to_asics) {
+            chips_per_host = std::max(chips_per_host, asics.size());
+        }
+        if (total_chips_used > 0 && chips_per_host > 0) {
+            const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
+            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts
+
+            // 3. SOFT fallback: if that hard cap is infeasible for this graph's connectivity, the solver reduces to
+            //    merely MINIMIZING the number of host groups used (best-effort) instead of failing the mapping.
+            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT
+
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: capping host-group usage at k_min={} (chips_used={}, chips_per_host={})",
+                k_min,
+                total_chips_used,
+                chips_per_host);
+        }
     }
 
     if (!preferred_globals.empty()) {
@@ -2654,9 +2680,10 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
-    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
 
     std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
     for (const auto& group : config.pinnings) {
@@ -2687,7 +2714,7 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     }
 
     add_inter_mesh_minimal_host_cover_from_hostname_map(
-        config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints);
+        config, physical_graph, logical_multi_mesh_graph, inter_mesh_constraints);
     return inter_mesh_constraints;
 }
 
@@ -3368,9 +3395,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
-    // Build inter-mesh constraints and determine validation mode
+    // Build inter-mesh constraints and determine validation mode. Pass the full logical multi-mesh graph so the
+    // host-cover cap can read the true logical chip count (fabric nodes per mesh) directly from it.
     auto inter_mesh_constraints =
-        build_inter_mesh_constraints(config, adjacency_map_physical, mesh_logical_graph, asic_id_to_mesh_rank);
+        build_inter_mesh_constraints(config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
 
     // Track statistics for error reporting
@@ -3447,6 +3475,21 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // Perform inter-mesh mapping (incremental: reuses prior SAT encoding across retries)
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
             mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
+
+        // Best-effort minimal-host cap. The cap is a HARD constraint the solver honors strictly (or fails); it is
+        // never silently dropped inside the solver. If it turns out to be infeasible for this instance's
+        // connectivity, relaxing it is an orchestration-level decision made HERE: drop the hard cap (the SOFT
+        // set_minimize_same_rank_groups_used bias stays on) and re-solve, so an infeasible cap never turns a solvable
+        // mapping UNSAT.
+        if (!solver_result.success && inter_mesh_constraints.max_same_rank_groups_used() > 0) {
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: hard host-group cap infeasible for this instance; retrying without it "
+                "(soft minimize stays on)");
+            inter_mesh_constraints.set_max_same_rank_groups_used(0);
+            solver_result = ::tt::tt_fabric::solve_topology_mapping(
+                mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
+        }
 
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {
@@ -3702,6 +3745,307 @@ std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_col
         hops.push_back(*hop);
     }
     return hops;
+}
+
+namespace {
+
+// Complete the intra-mesh (fabric-node -> ASIC) mapping for one fixed inter-mesh placement.
+//
+// Mirrors the per-mesh-pair intra-mesh solve inside map_multi_mesh_to_physical, minus the retry/forbid
+// machinery: if any mesh pair's intra-mesh mapping is infeasible, the whole placement is rejected
+// (returned result has success == false). Callers that enumerate placements simply skip rejected ones.
+TopologyMappingResult complete_intra_mesh_for_placement(
+    const std::unordered_map<MeshId, MeshId>& mesh_mappings,
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    using namespace ::tt::tt_fabric;
+
+    TopologyMappingResult result;
+
+    for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
+        const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
+        const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
+
+        // Exit-node graphs (use a shared empty graph when a mesh has none, as elsewhere in this file).
+        const AdjacencyGraph<LogicalExitNode>* logical_exit_node_graph_ptr = nullptr;
+        auto logical_exit_node_it = adjacency_map_logical.mesh_exit_node_graphs_.find(logical_mesh_id);
+        if (logical_exit_node_it != adjacency_map_logical.mesh_exit_node_graphs_.end()) {
+            logical_exit_node_graph_ptr = &logical_exit_node_it->second;
+        } else {
+            static const AdjacencyGraph<LogicalExitNode> empty_logical_exit_node_graph;
+            logical_exit_node_graph_ptr = &empty_logical_exit_node_graph;
+        }
+        const auto& logical_exit_node_graph = *logical_exit_node_graph_ptr;
+
+        const AdjacencyGraph<PhysicalExitNode>* physical_exit_node_graph_ptr = nullptr;
+        auto physical_exit_node_it = adjacency_map_physical.mesh_exit_node_graphs_.find(physical_mesh_id);
+        if (physical_exit_node_it != adjacency_map_physical.mesh_exit_node_graphs_.end()) {
+            physical_exit_node_graph_ptr = &physical_exit_node_it->second;
+        } else {
+            static const AdjacencyGraph<PhysicalExitNode> empty_physical_exit_node_graph;
+            physical_exit_node_graph_ptr = &empty_physical_exit_node_graph;
+        }
+        const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
+
+        ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
+
+        if (!config.disable_rank_bindings) {
+            add_rank_binding_constraints(
+                intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+        }
+
+        if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
+            const bool exit_node_constraints_success = add_exit_node_constraints(
+                intra_mesh_constraints,
+                mesh_mappings,
+                logical_graph,
+                logical_exit_node_graph,
+                physical_exit_node_graph,
+                inter_mesh_validation_mode);
+            if (!exit_node_constraints_success) {
+                result.success = false;
+                return result;
+            }
+        }
+
+        auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
+        auto pinning_constraint_failure =
+            add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+        if (pinning_constraint_failure.has_value()) {
+            result.success = false;
+            return result;
+        }
+
+        // Mirror the single-solution path: when the physical graph carries PGD-derived pinnings, bias the
+        // intra-mesh solve toward the PGD-chosen layout via PREFERRED (soft) constraints, added after the hard
+        // rank/exit/MGD-pin constraints so they only influence ASIC choice where hard constraints leave freedom.
+        if (!adjacency_map_physical.mesh_pgd_pinnings_.empty()) {
+            const auto& physical_mesh_nodes = physical_graph.get_nodes();
+            const std::unordered_set<tt::tt_metal::AsicID> physical_mesh_node_set(
+                physical_mesh_nodes.begin(), physical_mesh_nodes.end());
+            add_pgd_pinning_preferred_constraints(
+                intra_mesh_constraints,
+                adjacency_map_physical.mesh_pgd_pinnings_,
+                asic_positions_to_asic_ids,
+                physical_mesh_node_set,
+                logical_mesh_id,
+                physical_mesh_id);
+        }
+
+        auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
+
+        auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
+            logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
+        if (!sub_mapping.success) {
+            result.success = false;
+            return result;
+        }
+        for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
+            result.fabric_node_to_asic.insert({fabric_node, asic});
+            result.asic_to_fabric_node.insert({asic, fabric_node});
+        }
+    }
+
+    result.success = true;
+    return result;
+}
+
+// Canonical, order-independent signature of a full mapping (std::map iteration is sorted), used to
+// deduplicate solutions that come out of distinct inter-mesh placements but resolve to the same assignment.
+std::string full_mapping_signature(const TopologyMappingResult& result) {
+    std::string signature;
+    signature.reserve(result.fabric_node_to_asic.size() * 24);
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        signature += fmt::format("{}:{}->{};", *fabric_node.mesh_id, fabric_node.chip_id, *asic);
+    }
+    return signature;
+}
+
+// Count how many distinct same-rank global groups (host partitions) an inter-mesh placement occupies. Used to
+// enforce the hard host-group cap on EVERY enumerated multi-solution result: unlike the single-solve path, the
+// enumeration solver (solve_topology_mapping_n / the incremental session) does not apply the cap, so a placement it
+// returns can occupy more than max_same_rank_groups_used hosts. The multi-solution utils below drop such placements.
+std::size_t inter_mesh_placement_occupied_host_groups(
+    const ::tt::tt_fabric::MappingResult<MeshId, MeshId>& placement,
+    const ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& constraints) {
+    const auto& groups = constraints.get_same_rank_global_groups();
+    if (groups.empty()) {
+        return 0;
+    }
+    std::set<std::size_t> occupied;
+    for (const auto& [logical_mesh, physical_mesh] : placement.target_to_global) {
+        for (std::size_t i = 0; i < groups.size(); ++i) {
+            if (groups[i].contains(physical_mesh)) {
+                occupied.insert(i);
+                break;
+            }
+        }
+    }
+    return occupied.size();
+}
+
+}  // namespace
+
+std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    std::size_t max_solutions,
+    bool unique_shapes,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    using namespace ::tt::tt_fabric;
+
+    std::vector<TopologyMappingResult> solutions;
+
+    const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
+    const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
+
+    auto inter_mesh_constraints =
+        build_inter_mesh_constraints(config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank);
+    auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
+
+    // Enumerate distinct inter-mesh placements (which physical meshes / hosts host each logical mesh).
+    // max_solutions is passed straight through: 0 means "all up to the solver's internal safety cap".
+    // unique_shapes collapses placements that occupy the same physical-mesh set.
+    std::vector<MappingResult<MeshId, MeshId>> placements = ::tt::tt_fabric::solve_topology_mapping_n(
+        mesh_logical_graph,
+        mesh_physical_graph,
+        inter_mesh_constraints,
+        /*max_solutions=*/max_solutions,
+        inter_mesh_validation_mode,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Auto,
+        unique_shapes);
+
+    log_info(
+        tt::LogFabric,
+        "map_multi_mesh_to_physical_n: enumerated {} inter-mesh placement(s) (max_solutions={}, unique_shapes={})",
+        placements.size(),
+        max_solutions,
+        unique_shapes);
+
+    // Hard host-group cap applies to EVERY enumerated solution, not just the single-solve path: the enumeration
+    // solver does not honor set_max_same_rank_groups_used, so drop any placement that occupies more than the cap.
+    const std::size_t host_group_cap = inter_mesh_constraints.max_same_rank_groups_used();
+
+    std::set<std::string> seen_signatures;
+    for (const auto& placement : placements) {
+        if (!placement.success) {
+            continue;
+        }
+        if (host_group_cap > 0 &&
+            inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints) > host_group_cap) {
+            continue;  // enforce the hard host-group cap on this enumerated solution
+        }
+
+        std::unordered_map<MeshId, MeshId> mesh_mappings(
+            placement.target_to_global.begin(), placement.target_to_global.end());
+
+        TopologyMappingResult full = complete_intra_mesh_for_placement(
+            mesh_mappings,
+            adjacency_map_logical,
+            adjacency_map_physical,
+            config,
+            inter_mesh_validation_mode,
+            asic_id_to_mesh_rank,
+            fabric_node_id_to_mesh_rank);
+        if (!full.success) {
+            continue;
+        }
+
+        // Skip solutions whose full assignment we have already emitted.
+        if (!seen_signatures.insert(full_mapping_signature(full)).second) {
+            continue;
+        }
+
+        solutions.push_back(std::move(full));
+        if (max_solutions != 0 && solutions.size() >= max_solutions) {
+            break;
+        }
+    }
+
+    log_info(tt::LogFabric, "map_multi_mesh_to_physical_n: returning {} distinct solution(s)", solutions.size());
+    return solutions;
+}
+
+// ─────────────────────── MultiMeshSolutionEnumerator (streaming) ───────────────────────
+// Lazy counterpart of map_multi_mesh_to_physical_n: same session, constraints, unique_shapes, and
+// full-assignment signature dedup, but each next() yields one solution as soon as it is found rather
+// than collecting them all before returning. See the header for the pull contract.
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
+    adjacency_map_logical_(adjacency_map_logical),
+    adjacency_map_physical_(adjacency_map_physical),
+    config_(config),
+    asic_id_to_mesh_rank_(asic_id_to_mesh_rank),
+    fabric_node_id_to_mesh_rank_(fabric_node_id_to_mesh_rank),
+    unique_shapes_(unique_shapes),
+    inter_mesh_constraints_(build_inter_mesh_constraints(
+        config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank)),
+    inter_mesh_validation_mode_(determine_inter_mesh_validation_mode(config)) {}
+
+std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
+    using namespace ::tt::tt_fabric;
+    const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
+    const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
+    while (true) {
+        // One warm solve on the persistent session. On the first call this also encodes the hard CNF and
+        // primes the minimal-host cap. UNBOUNDED (no budget give-up): a failed result means a genuine UNSAT
+        // -> the enumeration is exhausted.
+        MappingResult<MeshId, MeshId> placement = session_.next(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints_,
+            excluded_,
+            inter_mesh_validation_mode_,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes_);
+        if (!placement.success) {
+            return std::nullopt;  // genuinely exhausted (real UNSAT) or a hard-encode failure
+        }
+
+        // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
+        excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+
+        // Hard host-group cap applies to every enumerated solution: the enumeration session does not honor
+        // set_max_same_rank_groups_used, so skip (but keep blocked, above) any placement over the cap and warm-solve
+        // for the next distinct one.
+        if (const std::size_t host_group_cap = inter_mesh_constraints_.max_same_rank_groups_used();
+            host_group_cap > 0 &&
+            inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints_) > host_group_cap) {
+            continue;
+        }
+
+        std::unordered_map<MeshId, MeshId> mesh_mappings(
+            placement.target_to_global.begin(), placement.target_to_global.end());
+        TopologyMappingResult full = complete_intra_mesh_for_placement(
+            mesh_mappings,
+            adjacency_map_logical_,
+            adjacency_map_physical_,
+            config_,
+            inter_mesh_validation_mode_,
+            asic_id_to_mesh_rank_,
+            fabric_node_id_to_mesh_rank_);
+        if (!full.success) {
+            continue;  // this placement has no valid intra-mesh completion; try the next warm solve
+        }
+        if (!seen_signatures_.insert(full_mapping_signature(full)).second) {
+            continue;  // duplicate full assignment already returned
+        }
+        ++emitted_;
+        return full;
+    }
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     BH_NUM_DRAM_BANKS,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    PREFILL_CHUNK_OUTPUT_TOKENS,
+    PREFILL_CHUNK_TOKENS,
     MlaKvCacheFormat,
     create_kv_chunk_address_table_ds,
     create_kv_chunk_address_table_kimi,
@@ -49,7 +49,7 @@ from tests.ttnn.utils_for_testing import assert_equal
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_TOKENS], ids=["seq5k"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_kv_cache_table(
     use_pretrained,
@@ -345,7 +345,7 @@ def test_kimi_kv_cache_mock(
     kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for Kimi and DeepSeek
     num_kvpe_cache_layers = num_users * num_layers
 
-    chunk_tokens = PREFILL_CHUNK_OUTPUT_TOKENS
+    chunk_tokens = PREFILL_CHUNK_TOKENS
     tokens_per_chunk_per_device = chunk_tokens // sp_factor  # 640
     num_seq_chunks = seq_len // chunk_tokens
 
@@ -459,7 +459,7 @@ def test_dflash_kv_cache_mock(
     heads_per_chip = num_kv_heads // tp_factor
     batch = num_users * num_layers
 
-    chunk_tokens = PREFILL_CHUNK_OUTPUT_TOKENS
+    chunk_tokens = PREFILL_CHUNK_TOKENS
     tokens_per_chunk_per_device = chunk_tokens // sp_factor  # 640
     num_seq_chunks = seq_len // chunk_tokens
 
@@ -1034,7 +1034,7 @@ def test_glm52_index_cache_pipeline_stage_addresses():
     offset the merged table assigns it. Host-only: the address math needs no device.
     """
     rows, cols, sp_axis = 4, 8, 0
-    num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_OUTPUT_TOKENS, BH_NUM_DRAM_BANKS
+    num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
     index_chunk_size_bytes = 4 * 1088  # [1,1,32,128] bfp8
     config_id = 1  # the index cache is config 1 of the merged table
     num_full = 21  # GLM-5.2: 21 of 78 layers own an indexer

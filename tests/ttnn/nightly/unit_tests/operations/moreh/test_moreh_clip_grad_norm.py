@@ -14,6 +14,9 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("num_iters_of_each_case", [2])
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]
@@ -96,7 +99,7 @@ def test_moreh_clip_grad_norm(
 
 
 @pytest.mark.parametrize("error_if_nonfinite", [True, False])
-def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device):
+def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device, expect_error):
     torch.manual_seed(2023)
 
     cpu_dtype = torch.bfloat16
@@ -123,14 +126,16 @@ def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device
         assert error_if_nonfinite
 
     # Check tt behavior
-    try:
+    def run_clip_grad_norm():
         ttnn.operations.moreh.clip_grad_norm(
             [ttnn.from_torch(param.grad.bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)],
             max_norm,
             norm_type,
             error_if_nonfinite,
         )
-        assert not error_if_nonfinite
-    except RuntimeError as actual_error_msg:
-        assert expected_error_msg in str(actual_error_msg)
-        assert error_if_nonfinite
+
+    if error_if_nonfinite:
+        with expect_error(RuntimeError, r"The total norm of order"):
+            run_clip_grad_norm()
+    else:
+        run_clip_grad_norm()

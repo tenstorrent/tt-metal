@@ -43,8 +43,6 @@ BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
 
 @dataclass
 class DumpWaitGlobalsData:
-    location: OnChipCoordinate = triage_field("Loc")
-    risc_name: str = triage_field("Proc")
     kernel_name: str = triage_field("Kernel Name")
     worker_type: str | None = triage_field("worker_type")
     cq_id: int | None = triage_field("cq_id")
@@ -285,8 +283,6 @@ def read_wait_globals(
     core_info = multi_info.get_info_for_kernel(dispatcher_core_data.kernel_name) if multi_info else None
 
     return DumpWaitGlobalsData(
-        location=location,
-        risc_name=risc_name,
         kernel_name=dispatcher_core_data.kernel_name,
         last_wait_count=last_wait_count,
         last_wait_stream=last_wait_stream,

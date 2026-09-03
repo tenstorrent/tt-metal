@@ -75,7 +75,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
@@ -84,7 +84,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
@@ -124,7 +124,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
@@ -133,7 +133,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
@@ -246,7 +246,10 @@ void kernel_main() {
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
-        unary_op_init_common(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
+        // The one-time compute_kernel_hw_startup already ran above; only re-point the packer at the
+        // ones-tile CB for this fill (reset to cb_s2c_in2_id after the block) instead of a second startup.
+        pack_reconfig_data_format(cb_c2c_ones_tile_id);
+        copy_init(cb_c2c_ones_tile_id);
         tile_regs_acquire();
         fill_tile_init();
         constexpr uint32_t dst0 = 0;

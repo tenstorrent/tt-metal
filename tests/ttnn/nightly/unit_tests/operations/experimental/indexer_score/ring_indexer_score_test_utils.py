@@ -16,9 +16,22 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
     QB_SQ,
 )
 
-# Ring of 4 on the LoudBox: full physical mesh, then a 1x4 submesh (SP axis = 1).
-LOUDBOX_MESH_SHAPE = (2, 4)
+# Ring of 4: open the FULL system mesh, then carve a 1x4 submesh (SP axis = 1).
+#
+# The parent shape is queried, not hardcoded: fabric only trains against the mesh the control plane
+# exposes, so a hardcoded (2, 4) on a bigger box dies in router sync ("Ethernet handshake likely failed")
+# before any op runs. Carving the ring out of the real shape works on LoudBox and galaxy alike.
 RING = 4
+
+
+def ring_parent_shape():
+    """The system mesh shape, as a (rows, cols) tuple. Raises if it cannot host the ring-of-4 carve."""
+    shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+    rows, cols = shape[0], shape[1]
+    assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
+    return rows, cols
+
+
 SP_AXIS = 1  # the length-4 axis of the (1, 4) submesh
 CHUNK_GLOBAL = RING * QB_SQ  # 2560 global prefill chunk = sp * per-shard slab (chunk_local = QB_SQ)
 T = QB_HISTORY + CHUNK_GLOBAL  # 28160 all-gathered keys (880 tiles); 11 global chunks of 2560
@@ -33,8 +46,8 @@ _BUF_DIMS = (1, None)
 
 
 def _open_ring4_ccl():
-    """Open the full 2x4 with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL semaphores
-    (the two ring directions, as ring_attention_all_gather_async needs). Returns
+    """Open the full system mesh with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL
+    semaphores (the two ring directions, as ring_attention_all_gather_async needs). Returns
     (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_2D,
@@ -46,7 +59,7 @@ def _open_ring4_ccl():
     )
     parent = None
     try:
-        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*LOUDBOX_MESH_SHAPE))
+        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*ring_parent_shape()))
         submesh = parent.create_submesh(ttnn.MeshShape(1, RING))
 
         grid = submesh.compute_with_storage_grid_size()

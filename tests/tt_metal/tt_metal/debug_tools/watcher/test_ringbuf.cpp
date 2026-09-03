@@ -37,8 +37,7 @@ constexpr uint32_t NUM_PUSHES_MULTI = 5;
 
 // Newest-first, limited to buffer capacity.
 std::vector<std::string> get_expected_single_processor(
-    HalProgrammableCoreType core_type, uint32_t thread_idx, uint32_t num_pushes) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const Hal& hal, HalProgrammableCoreType core_type, uint32_t thread_idx, uint32_t num_pushes) {
     bool is_mpsc = hal.has_mpsc_ring_buffer();
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t first_visible = (num_pushes > capacity) ? num_pushes - capacity : 0;
@@ -53,7 +52,7 @@ std::vector<std::string> get_expected_single_processor(
         thread_indices.assign(data.size(), thread_idx);
     }
     std::vector<std::string> result = {"debug_ring_buffer="};
-    auto lines = FormatRingBuffer(data, thread_indices, core_type);
+    auto lines = FormatRingBuffer(hal, data, thread_indices, core_type);
     result.insert(result.end(), lines.begin(), lines.end());
     return result;
 }
@@ -203,16 +202,15 @@ void RunTest(
     uint32_t thread_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     EXPECT_TRUE(FileContainsAllStringsInOrder(
-        fixture->log_file_name, get_expected_single_processor(processor.core_type, thread_idx, num_pushes)));
+        fixture->log_file_name, get_expected_single_processor(hal, processor.core_type, thread_idx, num_pushes)));
 }
 
 void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+    const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
     CoreCoord logical_core{0, 0};
     constexpr const char* kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
 

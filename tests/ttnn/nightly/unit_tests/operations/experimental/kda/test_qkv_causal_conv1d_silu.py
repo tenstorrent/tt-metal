@@ -24,7 +24,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 _SEQUENCE = 64
@@ -144,19 +144,26 @@ def _run(
 
 
 @pytest.mark.parametrize(
-    ("widths", "channel_chunk_size"),
-    [((512, 512, 512), 1536), ((1024, 1024, 1024), 768), ((512, 256, 128), 896)],
+    ("widths", "channel_chunk_size", "full_contract"),
+    [
+        pytest.param((512, 512, 512), 1536, False, id="single-block"),
+        pytest.param((1024, 1024, 1024), 768, False, id="multiple-blocks"),
+        pytest.param((512, 256, 128), 896, True, id="asymmetric-split-full-contract"),
+    ],
 )
 def test_qkv_causal_conv1d_silu_contract(
-    device: ttnn.Device, widths: tuple[int, int, int], channel_chunk_size: int
+    device: ttnn.Device,
+    widths: tuple[int, int, int],
+    channel_chunk_size: int,
+    full_contract: bool,
 ) -> None:
-    """Cover one/multiple channel blocks, split widths, tap order, and runtime gates."""
+    """Cover every geometry numerically and the invariant output/trace contract once."""
     host, device_inputs = _device_inputs(device, widths=widths)
     inputs, history, taps = host
     input_tt, history_tt, taps_tt = device_inputs
     expected = _reference(inputs, history, taps, widths)
     input_tensors = (input_tt, history_tt, *taps_tt)
-    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors)
+    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors) if full_contract else ()
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -164,30 +171,32 @@ def test_qkv_causal_conv1d_silu_contract(
 
     outputs = run()
     for output, width in zip(outputs, widths, strict=True):
-        assert output.dtype == ttnn.bfloat16
-        assert output.layout == ttnn.TILE_LAYOUT
-        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         assert tuple(ttnn.to_torch(output).shape) == (1, _SEQUENCE, width)
-        assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
+        if full_contract:
+            assert output.dtype == ttnn.bfloat16
+            assert output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced_outputs = run()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-
-    for name, golden, output, traced in zip(("q", "k", "v"), expected, outputs, traced_outputs, strict=True):
+    for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
         actual = ttnn.to_torch(output)
         assert_accurate(golden, actual, name=name, pcc_threshold=0.999)
-        assert_bit_identical(actual, ttnn.to_torch(traced), name=f"{name} trace replay")
 
-    for name, before, tensor in zip(
-        ("input", "history", "tap0", "tap1", "tap2", "tap3"), snapshots, input_tensors, strict=True
-    ):
-        assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
+    if full_contract:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        traced_outputs = run()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        for _ in range(2):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
 
-    ttnn.release_trace(device, trace_id)
+        for name, output, traced in zip(("q", "k", "v"), outputs, traced_outputs, strict=True):
+            assert_bit_identical(ttnn.to_torch(output), ttnn.to_torch(traced), name=f"{name} trace replay")
+        for name, before, tensor in zip(
+            ("input", "history", "tap0", "tap1", "tap2", "tap3"), snapshots, input_tensors, strict=True
+        ):
+            assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
+        ttnn.release_trace(device, trace_id)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
@@ -218,7 +227,9 @@ def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, cas
         ttnn.deallocate(output)
 
 
-def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     widths = (128, 128, 128)
     host_a, device_inputs_a = _device_inputs(device, widths=widths, sequence=32, seed=1911)
     host_b, device_inputs_b = _device_inputs(device, widths=widths, sequence=32, seed=1912)
@@ -253,7 +264,9 @@ def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Dev
         assert not torch.equal(actual_a, actual_b)
 
 
-def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=817)
     implicit = _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
     entries = device.num_program_cache_entries()
@@ -356,7 +369,9 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
     )
 
 
-def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=(128, 128, 128), sequence=32, seed=772)
     _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
     entries = device.num_program_cache_entries()
@@ -366,7 +381,9 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.D
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     widths = (128, 128, 128)
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=widths, sequence=32, seed=773)
     _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=384)

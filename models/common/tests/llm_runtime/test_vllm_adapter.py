@@ -300,17 +300,43 @@ def test_normalize_rejects_trace_hint_that_disagrees_with_static_policy(method_n
         getattr(adapter, method_name)(*args, enable_trace=hint)
 
 
-def test_eager_compile_trace_hint_is_allowed_with_static_trace_enabled():
+def test_normalize_accepts_unselected_operation_with_available_trace_target():
     adapter = _adapter(trace=TraceConfig(mode="all"))
 
-    _, enable_trace = adapter.normalize_decode(
-        torch.zeros(1),
-        torch.zeros(1),
+    _, enable_trace = adapter.normalize_prefill(
+        torch.zeros((1, 1)),
         torch.zeros((1, 1)),
         enable_trace=False,
     )
 
     assert enable_trace is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "prefill_enabled", "decode_enabled"),
+    [
+        ("none", False, False),
+        ("decode_only", False, True),
+        ("all", True, True),
+    ],
+)
+def test_normalize_accepts_operation_specific_static_trace_policy(mode, prefill_enabled, decode_enabled):
+    adapter = _adapter(trace=TraceConfig(mode=mode))
+
+    _, normalized_prefill_trace = adapter.normalize_prefill(
+        torch.zeros((1, 1)),
+        torch.zeros((1, 1)),
+        enable_trace=prefill_enabled,
+    )
+    _, normalized_decode_trace = adapter.normalize_decode(
+        torch.zeros(1),
+        torch.zeros(1),
+        torch.zeros((1, 1)),
+        enable_trace=decode_enabled,
+    )
+
+    assert normalized_prefill_trace is prefill_enabled
+    assert normalized_decode_trace is decode_enabled
 
 
 @pytest.mark.parametrize("hint", [None, "true", 1])
@@ -595,31 +621,22 @@ def test_registered_generator_compile_methods_normalize_and_select_execution():
         kv_cache=kv_cache,
         sampling_params=sampling_params,
     )
-    assert target.calls[0] == (
-        "can_trace_prefill",
-        {
-            "tokens": tokens,
-            "prompt_lens": prompt_lens,
-            "start_pos": start_pos,
-            "empty_slots": [0],
-        },
-    )
-    assert target.calls[1][0] == "compile_prefill"
-    assert target.calls[1][1]["execution"] is target.traced_prefill_execution
-    assert set(target.calls[1][1]) == set(NormalizedPrefillKwargs.__annotations__) | {"execution"}
+    assert target.calls[0][0] == "compile_prefill"
+    assert target.calls[0][1]["execution"] is target.traced_prefill_execution
+    assert set(target.calls[0][1]) == set(NormalizedPrefillKwargs.__annotations__) | {"execution"}
 
     generator.compile_decode(
         tokens[:, 0],
         start_pos,
         page_table,
-        enable_trace=False,
+        enable_trace=True,
         kv_cache=kv_cache,
         sampling_params=sampling_params,
         reset_batch=True,
     )
-    assert target.calls[2][0] == "compile_decode"
-    assert target.calls[2][1]["execution"] is target.eager_execution
-    assert set(target.calls[2][1]) == set(NormalizedDecodeKwargs.__annotations__) | {"execution"}
+    assert target.calls[1][0] == "compile_decode"
+    assert target.calls[1][1]["execution"] is target.traced_decode_execution
+    assert set(target.calls[1][1]) == set(NormalizedDecodeKwargs.__annotations__) | {"execution"}
 
 
 def test_registered_generator_discards_allowlisted_compatibility_and_limits_trace_classification():
@@ -646,25 +663,16 @@ def test_registered_generator_discards_allowlisted_compatibility_and_limits_trac
         )
         == "prefill"
     )
-    assert target.calls[0] == (
-        "can_trace_prefill",
-        {
-            "tokens": tokens,
-            "prompt_lens": prompt_lens,
-            "start_pos": start_pos,
-            "empty_slots": [0],
-        },
-    )
-    assert target.calls[1][0] == "prefill_forward"
-    assert target.calls[1][1]["execution"] is target.traced_prefill_execution
-    assert set(target.calls[1][1]) == set(NormalizedPrefillKwargs.__annotations__) | {"execution"}
+    assert target.calls[0][0] == "prefill_forward"
+    assert target.calls[0][1]["execution"] is target.traced_prefill_execution
+    assert set(target.calls[0][1]) == set(NormalizedPrefillKwargs.__annotations__) | {"execution"}
 
     assert (
         generator.decode_forward(
             tokens[:, 0],
             start_pos,
             page_table,
-            enable_trace=False,
+            enable_trace=True,
             kv_cache=kv_cache,
             sampling_params=sampling_params,
             reset_batch=True,
@@ -673,10 +681,10 @@ def test_registered_generator_discards_allowlisted_compatibility_and_limits_trac
         )
         == "decode"
     )
-    assert target.calls[2][0] == "decode_forward"
-    assert target.calls[2][1]["execution"] is target.eager_execution
-    assert target.calls[2][1]["read_from_device"] is False
-    assert set(target.calls[2][1]) == set(NormalizedDecodeKwargs.__annotations__) | {
+    assert target.calls[1][0] == "decode_forward"
+    assert target.calls[1][1]["execution"] is target.traced_decode_execution
+    assert target.calls[1][1]["read_from_device"] is False
+    assert set(target.calls[1][1]) == set(NormalizedDecodeKwargs.__annotations__) | {
         "read_from_device",
         "execution",
     }

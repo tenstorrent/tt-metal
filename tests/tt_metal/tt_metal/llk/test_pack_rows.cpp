@@ -27,6 +27,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -44,7 +45,7 @@ struct TestConfig {
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
     // Number of rows to pack from DEST (1-64):
-    uint32_t num_rows;
+    std::uint32_t num_rows;
 };
 
 void run_single_core_pack_rows_program(
@@ -56,37 +57,33 @@ void run_single_core_pack_rows_program(
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
     // Input: 1 tile (32x32 = 1024 bfloat16 = 2048 bytes)
-    uint32_t input_single_tile_size = 2 * 1024;
+    std::uint32_t input_single_tile_size = 2 * 1024;
     // Output: num_rows * 16 datums * 2 bytes each
-    uint32_t output_size = test_config.num_rows * 16 * 2;
+    std::uint32_t output_size = test_config.num_rows * 16 * 2;
 
-    tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
-        .size = input_single_tile_size,
-        .page_size = input_single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    auto src0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_single_tile_size},
+        {.page_size = input_single_tile_size, .buffer_type = tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    std::uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
-    tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device, .size = output_size, .page_size = output_size, .buffer_type = tt_metal::BufferType::DRAM};
+    auto dst_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = output_size},
+        {.page_size = output_size, .buffer_type = tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    std::shared_ptr<tt_metal::Buffer> src0_dram_buffer = CreateBuffer(input_dram_config);
-    uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-
-    std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(output_dram_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    std::uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(input_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, input_single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    std::uint32_t output_cb_index = tt::CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(output_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, output_size);
@@ -106,8 +103,8 @@ void run_single_core_pack_rows_program(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    vector<uint32_t> compute_kernel_args = {
-        uint(test_config.num_rows),
+    vector<std::uint32_t> compute_kernel_args = {
+        std::uint32_t(test_config.num_rows),
     };
 
     tt_metal::CreateKernel(
@@ -120,37 +117,38 @@ void run_single_core_pack_rows_program(
             .compile_args = compute_kernel_args});
 
     // Generate tilized input data with sequential values
-    std::vector<uint32_t> src0_vec;
-    for (uint32_t i = 0; i < input_single_tile_size / sizeof(uint32_t); i++) {
+    std::vector<std::uint32_t> src0_vec;
+    for (std::uint32_t i = 0; i < input_single_tile_size / sizeof(std::uint32_t); i++) {
         bfloat16 val1(static_cast<float>(i * 2));
         bfloat16 val2(static_cast<float>((i * 2) + 1));
         src0_vec.push_back(pack_two_bfloat16_into_uint32({val1, val2}));
     }
-    tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
         core,
         {dram_buffer_src0_addr,
-         (uint32_t)0,  // dram bank id
-         (uint32_t)1,  // num_tiles
+         (std::uint32_t)0,  // dram bank id
+         (std::uint32_t)1,  // num_tiles
          src0_cb_index,
-         (uint32_t)1,  // block_size
+         (std::uint32_t)1,  // block_size
          false});
 
-    tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, (uint32_t)1});
+    tt_metal::SetRuntimeArgs(
+        program_, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, (std::uint32_t)1});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     ::unit_tests::compute::PackRowsConfig golden_config = {
         .num_rows = static_cast<int>(test_config.num_rows),
     };
-    vector<uint32_t> golden = ::unit_tests::compute::gold_standard_pack_rows(src0_vec, golden_config);
+    vector<std::uint32_t> golden = ::unit_tests::compute::gold_standard_pack_rows(src0_vec, golden_config);
 
     EXPECT_EQ(golden.size(), result_vec.size());
     EXPECT_EQ(golden, result_vec);
@@ -205,5 +203,30 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<TensixComputePackRowsTest::ParamType>& info) {
         return fmt::format("NumRows_{}_DstSync_{}", info.param.num_rows, info.param.dst_full_sync_en ? "On" : "Off");
     });
+
+// ============================================================================
+// Id-free (2.0) pack_rows: copies one Float16_b tile into DST then row-packs the full tile (num_rows = 64)
+// row-major to c_16. Validated against the gold_standard_pack_rows host golden (exact). Runs on Blackhole
+// (BH-only API). num_rows == 64 writes the whole output tile, so no uninitialized bytes.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackRowsIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    constexpr int num_rows = 64;  // full tile (matches pack_rows_2_0.cpp)
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_rows_2_0.cpp");
+
+    vector<std::uint32_t> golden = ::unit_tests::compute::gold_standard_pack_rows(
+        src_vec, ::unit_tests::compute::PackRowsConfig{.num_rows = num_rows});
+    EXPECT_EQ(golden.size(), result.size());
+    EXPECT_EQ(golden, result);
+}
 
 }  // namespace tt::tt_metal

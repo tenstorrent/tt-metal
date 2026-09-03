@@ -438,7 +438,7 @@ def test_ds_lm_head(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    request,
 ):
     """Test lm_head fused op (vocabulary projection).
 
@@ -474,7 +474,7 @@ def test_ds_lm_head(
         use_real_weights,
         mode,
         seq_len,
-        state_dict if use_real_weights else None,
+        request.getfixturevalue("state_dict") if use_real_weights else None,
     )
 
     _run_ds_lm_head_test(
@@ -521,6 +521,9 @@ def test_ds_lm_head(
     ],
     indirect=True,
 )
+@pytest.mark.skip(
+    reason="Single-device lm_head produces only a per-device vocabulary shard; use the multi-device test."
+)
 def test_ds_lm_head_single_device(
     mode,
     seq_len,
@@ -536,7 +539,6 @@ def test_ds_lm_head_single_device(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
 ):
     """Single device test for lm_head.
 

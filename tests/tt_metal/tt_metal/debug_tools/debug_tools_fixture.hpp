@@ -18,7 +18,7 @@
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
-// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+// Access to internal API: BuildEnvManager, ProgramImpl, get_kernel
 #include "jit_build/build_env_manager.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -65,10 +65,9 @@ protected:
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
             for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
-                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
-                cluster.assert_risc_reset_at_core(
-                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+                CoreCoord virtual_core =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
             }
         }
 
@@ -346,6 +345,8 @@ public:
         SetSingleDmPrintArgs(program, runtime_args);
 
         auto* device = mesh_device->get_devices()[0];
+        program.impl().compile(mesh_device.get());
+
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         uint32_t tensix_core_type = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
         uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
