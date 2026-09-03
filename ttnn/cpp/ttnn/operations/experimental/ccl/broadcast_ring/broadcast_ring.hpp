@@ -27,6 +27,7 @@ ttnn::Tensor broadcast_ring(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     uint32_t chunk_size_tiles = 0,        // tiles per relay chunk; 0 = auto. Tuning knob.
     uint32_t broadcast_offset_tiles = 0,  // broadcast only [offset, +num) of the sender's shard; 0 num = whole.
-    uint32_t broadcast_num_tiles = 0);
+    uint32_t broadcast_num_tiles = 0,
+    bool use_l1_relay = false);  // relay through L1 (no per-hop DRAM read) via a credit protocol. Experimental.
 
 }  // namespace ttnn

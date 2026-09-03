@@ -54,7 +54,8 @@ Tensor broadcast_ring(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     uint32_t chunk_size_tiles,
     uint32_t broadcast_offset_tiles,
-    uint32_t broadcast_num_tiles) {
+    uint32_t broadcast_num_tiles,
+    bool use_l1_relay) {
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices > 1, "broadcast_ring needs >1 device along cluster_axis, got {}", num_devices);
 
@@ -69,7 +70,8 @@ Tensor broadcast_ring(
             sub_device_id,
             chunk_size_tiles,
             broadcast_offset_tiles,
-            broadcast_num_tiles),
+            broadcast_num_tiles,
+            use_l1_relay),
         BroadcastRingInputs{.input_tensor = input_tensor});
 }
 

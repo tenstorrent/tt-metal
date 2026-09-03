@@ -30,6 +30,9 @@ struct BroadcastRingParams {
     // output is left untouched. 0 num = whole shard. Cuts data moved when the caller needs a sub-range.
     uint32_t broadcast_offset_tiles = 0;
     uint32_t broadcast_num_tiles = 0;
+    // L1 relay: forward each chunk straight into the downstream's L1 recv buffer (no per-hop DRAM read),
+    // gated by a backward credit protocol. Default false keeps the DRAM-output relay. Experimental.
+    bool use_l1_relay = false;
 
     BroadcastRingParams(
         uint32_t sender_ring_index_,
@@ -41,7 +44,8 @@ struct BroadcastRingParams {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id_,
         uint32_t chunk_size_tiles_ = 0,
         uint32_t broadcast_offset_tiles_ = 0,
-        uint32_t broadcast_num_tiles_ = 0) :
+        uint32_t broadcast_num_tiles_ = 0,
+        bool use_l1_relay_ = false) :
         sender_ring_index(sender_ring_index_),
         cluster_axis(cluster_axis_),
         num_links(num_links_),
@@ -51,7 +55,8 @@ struct BroadcastRingParams {
         sub_device_id(sub_device_id_),
         chunk_size_tiles(chunk_size_tiles_),
         broadcast_offset_tiles(broadcast_offset_tiles_),
-        broadcast_num_tiles(broadcast_num_tiles_) {}
+        broadcast_num_tiles(broadcast_num_tiles_),
+        use_l1_relay(use_l1_relay_) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "sender_ring_index",
@@ -63,7 +68,8 @@ struct BroadcastRingParams {
         "sub_device_id",
         "chunk_size_tiles",
         "broadcast_offset_tiles",
-        "broadcast_num_tiles");
+        "broadcast_num_tiles",
+        "use_l1_relay");
     auto attribute_values() const {
         return std::make_tuple(
             sender_ring_index,
@@ -75,7 +81,8 @@ struct BroadcastRingParams {
             sub_device_id,
             chunk_size_tiles,
             broadcast_offset_tiles,
-            broadcast_num_tiles);
+            broadcast_num_tiles,
+            use_l1_relay);
     }
 };
 

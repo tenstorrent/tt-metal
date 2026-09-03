@@ -36,6 +36,7 @@ Tensor broadcast_ring(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     uint32_t chunk_size_tiles = 0,
     uint32_t broadcast_offset_tiles = 0,
-    uint32_t broadcast_num_tiles = 0);
+    uint32_t broadcast_num_tiles = 0,
+    bool use_l1_relay = false);
 
 }  // namespace ttnn::prim
