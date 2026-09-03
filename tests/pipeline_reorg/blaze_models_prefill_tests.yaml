@@ -512,7 +512,7 @@
     # GLM-5.2 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "torus-xy-8x4 and (pcc-device-glm-256 or perf-device-glm-256)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
     '
   test_type: glm_moe
   test_tags: [glm_5_2, moe]
