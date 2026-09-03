@@ -249,6 +249,33 @@ inline constexpr uint32_t dfb_tile_rows(uint32_t dfb) {
 inline constexpr uint32_t dfb_tile_cols(uint32_t dfb) {
     return static_cast<uint32_t>(unpack_num_faces_c_dim[dfb]) * static_cast<uint32_t>(ckernel::FACE_C_DIM);
 }
+
+// The same tables, packed into one comparable word: the four fields the UNPACKER's tile
+// descriptor is programmed from, which is what `llk_unpack_hw_configure` reads. Not the two
+// extents above -- those are the logical geometry a Shape is checked against, and a
+// comparison wants what the programming step consumes, so that nothing it reads can change
+// without this noticing.
+inline constexpr uint32_t unpack_tile_geometry(uint32_t dfb) {
+    return (static_cast<uint32_t>(unpack_tile_face_r_dim[dfb]) << 24) |
+           (static_cast<uint32_t>(unpack_tile_num_faces[dfb]) << 16) |
+           (static_cast<uint32_t>(unpack_partial_face[dfb]) << 8) |
+           static_cast<uint32_t>(unpack_narrow_tile[dfb]);
+}
+#endif
+
+// And the PACKER's, from its own set. The two sets are emitted under opposite guards
+// (`genfiles.cpp:989` against `:994`), so each is invisible where the other lives -- which is
+// why these are two accessors and not one, and why the re-configuration in math.hpp is per
+// RISC rather than a single decision made once.
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && defined(UCK_CHLKC_PACK)
+#define TT_U_HAVE_PACK_TILE_GEOMETRY 1
+
+inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) {
+    return (static_cast<uint32_t>(pack_tile_face_r_dim[dfb]) << 24) |
+           (static_cast<uint32_t>(pack_tile_num_faces[dfb]) << 16) |
+           (static_cast<uint32_t>(pack_partial_face[dfb]) << 8) |
+           static_cast<uint32_t>(pack_narrow_tile[dfb]);
+}
 #endif
 
 }  // namespace unified
