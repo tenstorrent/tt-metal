@@ -31,7 +31,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -76,9 +77,21 @@ void kernel_main() {
     auto stats_accessor = TensorAccessor(stats_args, stats_addr, stat_tile_bytes);
 
     size_t fabric_arg_idx = kReleaseRangeArgIdx + kWordsPerReleaseRange * num_release_ranges;
-    auto fabric_connection =
-        FabricConnectionManager::build_from_args<FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION>(
-            fabric_arg_idx);
+    const auto num_connections = get_arg_val<uint32_t>(fabric_arg_idx++);
+    auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(fabric_arg_idx, num_connections);
+
+    // One connection per distinct first-hop direction the peers need, so a peer is served
+    // by whichever connection its own route's first hop names. A direction the host opened
+    // nothing in is not a slot index and must never be used as one.
+    constexpr uint8_t kNoConnection = 0xFF;
+    uint8_t dir_to_slot[eth_chan_directions::COUNT];
+    for (uint32_t d = 0; d < static_cast<uint32_t>(eth_chan_directions::COUNT); ++d) {
+        dir_to_slot[d] = kNoConnection;
+    }
+    for (uint32_t i = 0; i < num_connections; ++i) {
+        dir_to_slot[fabric_connections.get_tag(i)] = static_cast<uint8_t>(i);
+    }
 
     // A peer's route follows the connection args, two words per peer in the order the
     // loop below takes them: the peer's mesh and chip, since the header type this kernel
@@ -100,8 +113,6 @@ void kernel_main() {
         if (p == my_rank) {
             continue;
         }
-        const bool forward = p > my_rank;
-
         payload_headers[slot] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_base + (2 * slot) * packet_header_size_bytes);
         inc_headers[slot] =
@@ -113,8 +124,16 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_unicast_route(payload_headers[slot], route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(inc_headers[slot], route_info);
 
-        peer_connections[slot] =
-            forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
+        // The direction the routing tables will take this route's first hop in. Rank
+        // order does not name it: on an axis that wraps, the shorter way round to a higher
+        // rank runs in the lower direction, and a payload injected against its own route
+        // sits on a router that will not carry it while the peer waits on an arrival that
+        // never comes.
+        const uint32_t first_hop =
+            static_cast<uint32_t>(get_next_hop_router_direction(route_info.dst_mesh_id, route_info.dst_chip_id));
+        ASSERT(first_hop < static_cast<uint32_t>(eth_chan_directions::COUNT));
+        ASSERT(dir_to_slot[first_hop] != kNoConnection);
+        peer_connections[slot] = &fabric_connections.get(dir_to_slot[first_hop]).sender;
         ++slot;
     }
 
@@ -182,7 +201,7 @@ void kernel_main() {
     noc_semaphore_wait_min(arrival_sem_ptr, kPeers);
     noc_semaphore_inc(get_noc_addr(arrival_sem_addr), uint32_t{0} - kPeers);
 
-    fabric_connection.close();
+    fabric_connections.close();
 
     // Release every fold core, whether or not it produced statistics. The fold takes
     // most of the grid, so this is a multicast per rectangle rather than an increment

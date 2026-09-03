@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -98,25 +99,14 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         devices.size(),
         cluster_axis);
 
-    // This chip's rank names the slot of the statistics tensor it fills, and every
-    // peer's direction follows from the difference of ranks.
-    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id;
-    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id;
+    // This chip's rank names the slot of the statistics tensor it fills. It says nothing
+    // about which way a peer lies: the routing tables answer that, and on an axis that
+    // wraps they disagree with rank order.
     uint32_t my_rank = 0;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) != target_device) {
-            continue;
-        }
-        my_rank = i;
-        if (i != 0) {
-            backward_fabric_node_id = fabric_node_ids.at(i - 1);
-        } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-            backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
-        }
-        if (i != ring_size - 1) {
-            forward_fabric_node_id = fabric_node_ids.at(i + 1);
-        } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-            forward_fabric_node_id = fabric_node_ids.at(0);
+        if (devices.at(i) == target_device) {
+            my_rank = i;
+            break;
         }
     }
 
@@ -393,7 +383,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         ring_size, Ht, static_cast<uint32_t>(num_stat_cores), ready_sem_id, done_sem_id, stage_tiles};
     TensorAccessorArgs(*stats.buffer()).append_to(gather_ct_args);
 
-    const auto gather_kernel_id = tt::tt_metal::CreateKernel(
+    auto gather_kernel_id = tt::tt_metal::CreateKernel(
         program,
         std::string(kKernelDir) + "dataflow/gather_attn_res_gather_softmax.cpp",
         gather_core_set,
@@ -473,19 +463,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         static_cast<uint32_t>(fold_ranges.size())};
     gather_rt_args.insert(gather_rt_args.end(), release_args.begin(), release_args.end());
 
-    // Forward then backward, each preceded by its presence flag: the order
-    // FabricConnectionManager::build_from_args reads them in.
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
-    gather_rt_args.push_back(forward_fabric_node_id.has_value());
-    if (forward_fabric_node_id.has_value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fabric_node_id, forward_fabric_node_id.value(), 0, program, gather_core, gather_rt_args);
-    }
-    gather_rt_args.push_back(backward_fabric_node_id.has_value());
-    if (backward_fabric_node_id.has_value()) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fabric_node_id, backward_fabric_node_id.value(), 0, program, gather_core, gather_rt_args);
-    }
 
     // A peer's route, in the order the gather kernel takes its peers: the peer's node
     // outright, so the connection above only chooses the first hop. The fabric config
@@ -497,6 +475,46 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         tt::tt_fabric::is_2d_fabric_config(fabric_config),
         "attn_res_gather_softmax needs a 2D fabric, got {}",
         fabric_config);
+
+    // One connection per distinct first-hop direction the peers need, and the routing
+    // tables name that direction. Rank order does not: on an axis that wraps, the shorter
+    // way round to a higher rank runs in the lower direction, and a connection opened
+    // against a peer's own route cannot carry its packets, so that peer waits forever on
+    // an arrival nothing will deliver. Peers sharing a first hop share the connection, so
+    // an axis of any width needs at most one connection per direction.
+    std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+    std::vector<uint32_t> per_connection_links;
+    std::unordered_set<tt::tt_fabric::eth_chan_directions> used_directions;
+    for (uint32_t p = 0; p < ring_size; ++p) {
+        if (p == my_rank) {
+            continue;
+        }
+        const auto peer_node = fabric_node_ids.at(p);
+        const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+        TT_FATAL(
+            direction.has_value(),
+            "No 2D fabric forwarding direction from attn_res_gather_softmax source {} to peer {}",
+            src_fabric_node_id,
+            peer_node);
+        if (!used_directions.insert(direction.value()).second) {
+            continue;
+        }
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, peer_node);
+        TT_FATAL(
+            !links.empty(),
+            "No forwarding links from attn_res_gather_softmax source {} to peer {}",
+            src_fabric_node_id,
+            peer_node);
+        dst_nodes.push_back(peer_node);
+        // One gather core per chip, so it takes the first link rather than striping.
+        per_connection_links.push_back(links.front());
+    }
+
+    // The count first: the kernel reads it before building the manager from what follows.
+    gather_rt_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
+    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id, dst_nodes, per_connection_links, program, gather_kernel_id, gather_core, gather_rt_args);
+
     for (uint32_t p = 0; p < ring_size; ++p) {
         if (p == my_rank) {
             continue;
