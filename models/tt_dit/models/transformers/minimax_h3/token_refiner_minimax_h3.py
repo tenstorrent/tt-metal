@@ -21,9 +21,11 @@ from .attention_minimax_h3 import MiniMaxH3Attention
 class MiniMaxH3TokenRefinerBlock(Module):
     """Plain pre-norm transformer block over the projected text stream.
 
-    Much simpler than `MiniMaxH3TransformerBlock`: no AdaLN modulation, no rotary
-    embedding and no attention mask. The residual updates are unconditional
-    (`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`).
+    Much simpler than `MiniMaxH3TransformerBlock`: no AdaLN modulation and no rotary embedding.
+    The residual updates are unconditional (`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`).
+    The only masking is the optional `cu_window_seqlens` window boundaries, which fence the true
+    tokens of a fixed-capacity text buffer off from its pad tail; an exactly-sized text stream
+    passes None.
 
     The text stream is replicated on the SP axis and only fractured on TP. The refiner runs before the
     packed sequence is assembled and fractured, so every SP device holds the whole text stream and
@@ -108,9 +110,11 @@ class MiniMaxH3TokenRefinerBlock(Module):
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
         rename_substate(state, "ff.net.2", "ff.ff2")
 
-    def forward(self, prompt_1BLP: ttnn.Tensor) -> ttnn.Tensor:
-        """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out."""
-        prompt_1BLP = ttnn.add(prompt_1BLP, self.attn(self.norm1(prompt_1BLP)))
+    def forward(self, prompt_1BLP: ttnn.Tensor, cu_window_seqlens: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out.
+        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail
+        (1-D integer device tensor, see `MiniMaxH3Attention.forward`); None when unpadded."""
+        prompt_1BLP = ttnn.add(prompt_1BLP, self.attn(self.norm1(prompt_1BLP), cu_window_seqlens=cu_window_seqlens))
 
         normed = self.norm2(prompt_1BLP)
         # ff1 folds the TP all-gather into its matmul when parallel_config is passed; ff2 is
@@ -175,8 +179,10 @@ class MiniMaxH3TokenRefiner(Module):
             ccl_manager=ccl_manager,
         )
 
-    def forward(self, prompt_1BLP: ttnn.Tensor) -> ttnn.Tensor:
-        """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out."""
+    def forward(self, prompt_1BLP: ttnn.Tensor, cu_window_seqlens: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out.
+        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail
+        (1-D integer device tensor, see `MiniMaxH3Attention.forward`); None when unpadded."""
         for block in self.refiner_blocks:
-            prompt_1BLP = block(prompt_1BLP)
+            prompt_1BLP = block(prompt_1BLP, cu_window_seqlens=cu_window_seqlens)
         return self.final_norm(prompt_1BLP)
