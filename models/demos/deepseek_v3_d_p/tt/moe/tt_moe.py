@@ -213,6 +213,7 @@ class TtMoe(LightweightModule):
         shared_expert_activation: str = ACTIVATION_SILU,
         shared_expert_situ_beta: float | None = None,
         shared_expert_situ_linear_beta: float | None = None,
+        shared_expert_clamped_silu_glu_limit: float | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
@@ -261,6 +262,8 @@ class TtMoe(LightweightModule):
                 sites run different ops (Python-composed vs fused kernel) at different widths.
             shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
                 when shared_expert_activation == "situ".
+            shared_expert_clamped_silu_glu_limit: clamp limit, required when
+                shared_expert_activation == "clamped_silu_glu".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
@@ -523,6 +526,7 @@ class TtMoe(LightweightModule):
             activation=shared_expert_activation,
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
+            clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
         )
 
         self.latent_projections = (
