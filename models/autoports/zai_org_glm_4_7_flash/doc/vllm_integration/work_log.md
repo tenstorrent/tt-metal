@@ -713,3 +713,44 @@ its slot, rather than broadcasting to all 32. That requires tracking the live
 per-lane params on the host so the untouched lanes can be preserved through
 `reset_params`' all-rows write. Strictly narrower than the current broadcast and
 removes the clobber window rather than racing the repair.
+
+### VS-009: #48222 ruled out, and the upstream filing
+
+**`ttnn.sampling` is correct at this model's shapes.** Issue #48222 reports
+`ttnn.sampling` disagreeing with argmax at `k=1` on a fraction of batch rows,
+with the error growing as the gathered candidate buffer widens. That is the
+closest existing match to the greedy-determinism symptom, so it was tested
+directly: vocab 154880 -> 4 vocab splits, `max_top_k=32` (a 128-wide candidate
+buffer), 32 lanes, greedy `k=1, p=0, temp=1`, each row given a distinct
+unambiguous peak.
+
+```
+TOTAL mismatched rows: 0 / 256   (8 trials, peak margins 2.0 and 0.25)
+```
+
+So #48222 does not reproduce single-chip; it appears TP-width dependent. #50512
+(batched paged-attention decode race) is likewise scoped to multi-device TP ops
+and the TP all-gather, which a 1x1 mesh does not have.
+
+**Filed upstream as tenstorrent/tt-metal#55408** with the canary bisection, both
+triggers, the fresh-vs-poisoned device-seed comparison, the SmolLM2 reference
+data, and the list of eliminated hypotheses.
+
+**Cumulative eliminations for this defect** (all checked on hardware): the
+shared sampler primitive and its per-row RNG; the vocab split; a prefill-seed
+defect; per-request seed state (device seeds identical fresh vs poisoned); the
+`force_argmax` trace thrash; a stale host position mirror; a stale plugin
+`reset_batch` flag; a `reset_params` skip-if-unchanged path; and `ttnn.sampling`
+greedy correctness (#48222).
+
+**Remaining suspect**, unproven and needing decode-time per-lane logging:
+`TTSampling.reset_params` rewrites all 32 lanes and ignores `empty_slots`, so a
+prefill rewrites every concurrently-decoding request's `k`/`p`/`temp`, and the
+adapter relies on the next `reset_batch` to repair it.
+
+**Stage-7 posture.** This is a pre-existing, upstream-tracked serving-state
+defect that also affects the `tt_transformers` reference on this chip (worse:
+it fails the same canary at baseline). It does not affect single-request
+correctness on a freshly started server, and it does not touch the runner-side
+stage gate (degenerate output + context contract). Recorded here as a known
+limitation rather than a blocker.
