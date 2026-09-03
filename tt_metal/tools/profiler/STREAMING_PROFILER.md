@@ -163,26 +163,46 @@ producer: sum zones (`DeviceZoneScopedSumN*`) and `DeviceRecordEvent` (both comp
 
 ### 1.2 Environment variables
 
-The master switch and its sub-options, as parsed by `tt_metal/llrt/rtoptions.cpp`. Everything below the
-first row applies in mode 3 only unless stated.
+Fourteen variables are new in `tt_metal/llrt/rtoptions.cpp`, all read once at `MetalContext` construction.
+Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 
-| variable | default | meaning |
+**Mode switches**
+
+| variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER` | off | Boots the streaming profiler (resident DRISC relays + host receiver) at `MeshDevice` bring-up and compiles kernels with the streaming producer (`-DPROFILE_STREAMING`). Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active; the real-time profiler is disabled (it reads the same L1 rings). |
-| `TT_METAL_STREAMING_PROFILER_TRACY` | off | Attach the built-in Tracy sink. Off by default because the primary consumers are the registered ones and Tracy is one more, expensive, consumer. |
-| `TT_METAL_STREAMING_PROFILER_NRELAYS` | 0 (auto) | Number of DRISC relays, one per DRAM view, in `[1, 8]`. 0 leaves it to bring-up, which takes `min(relay cap, DRAM views)`; a forced value above the view count is clamped there. |
+| `TT_METAL_STREAMING_PROFILER` | off | Boots the streaming profiler (resident DRISC relays + host receiver) at `MeshDevice` bring-up and compiles kernels with `-DPROFILE_STREAMING`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
+| `TT_METAL_DRISC_PROFILER` | off | Streaming sub-option: arm the streaming producers but do **not** boot the built-in relays/receiver; the caller supplies its own DRISC drainer. Ignored without `TT_METAL_STREAMING_PROFILER=1`. |
+| `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS` | off | Compiles the CB/semaphore sync-event hooks (`-DPROFILE_SYNC_EVENTS`) for the critical-path tool. Streaming only: in mode 2 the JIT define is never emitted. |
+
+**Streaming pipeline sizing**
+
+| variable | default | effect |
+|---|---|---|
+| `TT_METAL_STREAMING_PROFILER_NRELAYS` | 0 (auto) | Forces the number of DRISC relays, one per DRAM view, in `[1, 8]`. 0 leaves it to bring-up, which takes `min(relay cap, DRAM views)`; a forced value above the view count is clamped there. |
 | `TT_METAL_STREAMING_PROFILER_DRAM_MB` | 128 | Per-relay GDDR spool ring, MiB. Non-zero makes each relay DMA frames into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep interval. **0 selects direct push.** Capped at 4095 (32-bit ring arithmetic). |
 | `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 64 | Host FIFO per D2H socket, MiB, `[1, 3584]`. The pipeline's only elasticity in a direct-push run. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The 3.5 GiB cap is the socket's 32-bit byte size and the device's wrap-safe 32-bit credit arithmetic. |
 | `TT_METAL_STREAMING_PROFILER_RING_MB` | 512 | Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, MiB. The capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream. |
 | `TT_METAL_STREAMING_PROFILER_DECODE_THREADS` | 2 | Decode threads per device, clamped by bring-up to the number of relay streams. |
-| `TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S` | 120 | How long the receiver waits for a stalled consumer before reporting it, seconds. |
 | `TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT` | 25 | A relay defers shipping a live core until its fullest lane holds at least this percent of its own ring, unless the core aged out. 0 ships every live core every sweep; values past 50 are capped by the kernel's half-ring lane trigger. Per-lane, not per-span: the producer that blocks is always a lane. The measured stall-free band ends between 30 and 35. |
-| `TT_METAL_STREAMING_PROFILER_OPS_CSV` | unset | Path for the built-in ops CSV consumer (one row per op; see §1.7). |
-| `TT_METAL_STREAMING_PROFILER_ZONE_CSV` | unset | Path for the built-in zone CSV consumer (one row per zone). |
-| `TT_METAL_STREAMING_PROFILER_STALL_CSV` | unset | Path for the built-in stall CSV consumer (PRODUCER-STALL zone timeline). |
-| `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS` | off | Sync-event zones at CB/semaphore waits (`-DPROFILE_SYNC_EVENTS`) for the critical-path tool. Streaming only: with the DRAM profiler the JIT define is never emitted. |
-| `TT_METAL_DRISC_PROFILER` | off | Arm the streaming producers but do **not** boot the built-in relays/receiver — the caller supplies its own DRISC drainer. Only effective together with `TT_METAL_STREAMING_PROFILER=1`. |
-| `TT_METAL_DEVICE_PROFILER_DISPATCH`, `TT_METAL_DEVICE_PROFILER_NOC_EVENTS`, `TT_METAL_PROFILER_SYNC`, ... | — | mode 2 only: legacy DRAM-profiler options (ride on `profiler_enabled`). |
+| `TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S` | 120 | How long the receiver waits for a stalled consumer before reporting it, seconds. |
+
+**Consumers, all off unless set**
+
+| variable | effect |
+|---|---|
+| `TT_METAL_STREAMING_PROFILER_TRACY=1` | Attach the built-in Tracy sink. Off by default because the primary consumers are the registered ones and Tracy is one more, expensive, consumer. |
+| `TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>` | Per-op CSV consumer (one row per op; see §1.7). |
+| `TT_METAL_STREAMING_PROFILER_ZONE_CSV=<path>` | Per-zone CSV consumer (one row per zone). |
+| `TT_METAL_STREAMING_PROFILER_STALL_CSV=<path>` | Producer-stall timeline CSV consumer (PRODUCER-STALL zones). |
+
+A plain `TT_METAL_STREAMING_PROFILER=1` run therefore drains and decodes but writes nothing; that is the configuration the
+knee sweeps use, since every consumer adds host-side cost.
+
+**Outside rtoptions**: `TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC` is read by a raw `getenv` in
+`test_streaming_profiler_zones.cpp` only, to open the whole mesh for the test workload. It is not a profiler option.
+
+**Mode 2 only**: `TT_METAL_DEVICE_PROFILER_DISPATCH`, `TT_METAL_DEVICE_PROFILER_NOC_EVENTS`, `TT_METAL_PROFILER_SYNC` and
+the other legacy DRAM-profiler options ride on `profiler_enabled` and are unchanged from main.
 
 ### 1.3 Enable (Blackhole)
 
