@@ -96,18 +96,25 @@ def workflow_run_id_of(run_id):
     return run_id.split("-", 1)[0]
 
 
-def attempt_of(run_id, tag):
+def attempt_of(run_id, workflow_run_id):
     """The re-run attempt in a per-shard run_id, or "" for attempt 1.
 
-    Recovered by stripping the prefix the id must start with, never by looking
-    for a trailing number -- a shard index is a trailing number too.
+    A run_id is one of four shapes, across the two eras of the archive::
+
+        <wf>                        legacy, attempt 1
+        <wf>-<attempt>              legacy, re-run
+        <wf>-<arch>-<shard>         current, attempt 1
+        <wf>-<arch>-<shard>-<att>   current, re-run
+
+    So the attempt is the trailing component only when stripping the workflow
+    id leaves one or three parts. Two parts is ``<arch>-<shard>``, whose shard
+    index is a trailing number that is not an attempt -- which is what a
+    "trailing digits" rule gets wrong.
     """
-    for prefix in (tag, workflow_run_id_of(tag)):
-        if run_id.startswith(f"{prefix}-"):
-            attempt = run_id[len(prefix) + 1 :]
-            if attempt.isdigit():
-                return attempt
-    return ""
+    if not run_id.startswith(f"{workflow_run_id}-"):
+        return ""
+    parts = run_id[len(workflow_run_id) + 1 :].split("-")
+    return parts[-1] if len(parts) in (1, 3) and parts[-1].isdigit() else ""
 
 
 def group_by_arch(paths):
@@ -160,13 +167,13 @@ def merge_run(paths, out_dir, *, prefix="llk_perf_"):
         timestamps = [t for t in table.column("timestamp").to_pylist() if t]
         earliest = min(timestamps)
         shard_ids = table.column("run_id").to_pylist()
-        first_tag = os.path.basename(group[0])[: -len(".parquet")]
+        workflow_run_id = workflow_run_id_of(shard_ids[0])
         run_id = merged_run_id(
             pipeline=constant["pipeline"],
             timestamp=earliest,
-            workflow_run_id=workflow_run_id_of(shard_ids[0]),
+            workflow_run_id=workflow_run_id,
             arch=arch,
-            attempt=attempt_of(shard_ids[0], first_tag),
+            attempt=attempt_of(shard_ids[0], workflow_run_id),
         )
 
         for column, value in (("run_id", run_id), ("timestamp", earliest)):

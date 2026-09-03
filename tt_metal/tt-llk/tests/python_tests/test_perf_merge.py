@@ -184,10 +184,12 @@ def test_run_id_keeps_a_re_run_attempt():
 def test_attempt_and_workflow_id_come_from_the_shard_run_id():
     assert workflow_run_id_of("33465181016-wormhole-4") == "33465181016"
     assert workflow_run_id_of("33465181016") == "33465181016"
-    # A shard index is a trailing number; only the prefix rule can tell them apart.
-    assert attempt_of("33465181016-wormhole-4", "33465181016-wormhole-4") == ""
-    assert attempt_of("33465181016-2", "33465181016-blackhole-7") == "2"
-    assert attempt_of("42-wormhole-0-2", "42-wormhole-0") == "2"
+    # Four run_id shapes across the two eras of the archive. A shard index is a
+    # trailing number too, so only the component count separates them.
+    assert attempt_of("33465181016", "33465181016") == ""  # legacy, attempt 1
+    assert attempt_of("33465181016-2", "33465181016") == "2"  # legacy, re-run
+    assert attempt_of("33465181016-wormhole-4", "33465181016") == ""  # current
+    assert attempt_of("33465181016-wormhole-4-2", "33465181016") == "2"  # its re-run
 
 
 def test_cli_merges_and_reports(tmp_path, capsys):
