@@ -9,12 +9,12 @@ from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnaryBroadcastFpu(Fpu):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def get_headers(self) -> List[str]:
         return [

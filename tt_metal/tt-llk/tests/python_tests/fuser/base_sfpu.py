@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .sfpu_node import SfpuNode
 
 from .golden import Golden
+from .indexing import InvocationGranularity
 
 
 class Sfpu(Golden):
@@ -26,8 +27,8 @@ class Sfpu(Golden):
     by a prior FPU stage or loaded via datacopy. It has no unpacker — SfpuNode
     has no unpacker field at all.
 
-    The lifecycle called by SfpuNode.sfpu_run() is:
-        init() -> calculate() -> uninit()
+    The lifecycle called by the pipeline is:
+        init() -> planned calls to calculate() -> uninit()
 
     Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
 
@@ -38,6 +39,25 @@ class Sfpu(Golden):
         4. Override golden() to compute the expected SFPU result, calling
            self.unary_sfpu_golden() or self.binary_sfpu_golden() as needed
     """
+
+    granularity = InvocationGranularity.BLOCK
+
+    input_count = 1
+
+    per_call_golden: bool = False
+
+    def supports_per_call(self, node) -> bool:
+        return self.per_call_golden and self.granularity == InvocationGranularity.TILE
+
+    def golden_call(
+        self,
+        call,
+        dest,
+        compute_unit: "SfpuNode",
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> None:
+        raise NotImplementedError
 
     def init(
         self,

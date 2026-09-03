@@ -9,16 +9,19 @@ from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.quasar.unpacker.unpack_a import (
     _uses_upk_to_dest_semaphores,
     upk_to_dest_math_ack,
 )
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class DatacopyFpu(Fpu):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
+
+    per_call_golden = True
+
     per_block_init = True
 
     def get_headers(self) -> List[str]:

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 from .golden import Golden
-from .tile_loop import TileLoop
+from .indexing import InvocationGranularity
 
 
 class Fpu(Golden):
@@ -27,7 +27,7 @@ class Fpu(Golden):
     The lifecycle called by the pipeline is:
         init() -> loop.math_loop() [which calls calculate()] -> uninit()
 
-    Override `loop` with an appropriate TileLoop subclass to control
+    Set `granularity` to the number of tiles one call covers, to control
     the tile iteration pattern used by the math phase.
 
     Set `per_block_init = True` if init() needs block dimensions and must
@@ -35,7 +35,7 @@ class Fpu(Golden):
 
     To create a new FPU:
         1. Subclass Fpu
-        2. Set `loop` to the desired TileLoop variant
+        2. Set `granularity` to the tiles one call covers
         3. Override get_headers() with the required LLK header files
         4. Override init(), calculate(), uninit() to emit the C++ LLK calls
         5. Override golden() to compute the expected math result, calling
@@ -43,8 +43,41 @@ class Fpu(Golden):
     """
 
     # Controls the tile iteration pattern for the math loop.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.NONE
     per_block_init: bool = False
+
+    per_call_golden: bool = False
+
+    def supports_per_call(self, node) -> bool:
+        return self.per_call_golden and self.granularity == InvocationGranularity.TILE
+
+    def golden_call(
+        self,
+        call,
+        srcs,
+        dest,
+        compute_unit: "FpuNode",
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> None:
+        from .golden_state import tile_operation
+
+        tensor_a, tensor_b = srcs.pop()
+        single = tile_operation(operation)
+        dimensions = single.max_output_dimensions
+        if tensor_a is None:
+            tensor_a = torch.zeros(dimensions)
+        if tensor_b is None:
+            tensor_b = torch.zeros(dimensions)
+        _, _, result = self.golden(
+            tensor_a,
+            tensor_b,
+            dest.get(call.dest),
+            single,
+            config,
+            compute_unit,
+        )
+        dest.set(call.dest, result.reshape(dimensions))
 
     def init(
         self,
@@ -71,7 +104,7 @@ class Fpu(Golden):
     ) -> str:
         """Return C++ code that performs the math operation on a single tile.
 
-        Called inside the tile loop by TileLoop.math_loop(). Use block.tile_id_block
+        Called for each planned invocation. Use block.tile_id_block
         for the dest register index. Override to emit the _llk_math_*_<>() call
         that executes the FPU operation on data in the source register files.
         """

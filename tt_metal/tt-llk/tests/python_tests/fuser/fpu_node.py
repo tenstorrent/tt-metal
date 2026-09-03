@@ -18,6 +18,7 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
     MathFidelity,
+    PerfRunType,
     Transpose,
     UnpackToDest,
 )
@@ -25,6 +26,7 @@ from helpers.llk_params import (
 from .base_fpu import Fpu
 from .base_unpacker import Unpacker
 from .block_data import BlockData
+from .indexing import KernelInvocation
 from .operand import Operand
 
 
@@ -87,15 +89,21 @@ class FpuNode:
             return ""
         return self.unpacker.init(operation, config, self, block)
 
-    def unpack_run(
+    def unpack_call(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
-    ):
-        if self.unpacker is None:
+        call: KernelInvocation,
+    ) -> str:
+        if self.unpacker is None or config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return ""
-        return self.unpacker.loop.unpack_loop(operation, config, self, block)
+        block.tile_id_global = call.in0
+        block.tile_id_src_b = call.in1
+        block.tile_id_block = call.dest
+        if config.perf_run_type == PerfRunType.MATH_ISOLATE:
+            return self.unpacker.perf_set_valid(operation, config, self, block)
+        return self.unpacker.unpack(operation, config, self, block)
 
     def unpack_uninit(
         self,
@@ -117,13 +125,24 @@ class FpuNode:
             return ""
         return self.fpu.init(operation, config, self, block)
 
-    def fpu_run(
+    def fpu_call(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
-    ):
-        return self.fpu.loop.math_loop(operation, config, self, block)
+        call: KernelInvocation,
+    ) -> str:
+        if config.perf_run_type == PerfRunType.PACK_ISOLATE:
+            return ""
+        block.tile_id_global = call.in0
+        block.tile_id_src_b = call.in1
+        block.tile_id_block = call.dest
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        ):
+            return self.unpacker.perf_clear_valid(operation, config, self, block)
+        return self.fpu.calculate(operation, config, self, block)
 
     def fpu_uninit(
         self,

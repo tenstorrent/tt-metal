@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .pack_node import PackNode
 
 from .golden import Golden
-from .tile_loop import TileLoop
+from .indexing import InvocationGranularity
 
 
 class Packer(Golden):
@@ -22,7 +22,7 @@ class Packer(Golden):
     Subclasses override methods to emit the C++ LLK calls that configure and
     drive the Pack thread, plus a Python golden function for test validation.
 
-    The pack lifecycle is driven by TileLoop.pack_loop(), which iterates
+    The pack lifecycle is driven by the planned call nest, which iterates
     over tiles in the block and calls pack() for each one:
         init() -> pack_loop() [which calls pack()] -> uninit()
 
@@ -35,13 +35,36 @@ class Packer(Golden):
     """
 
     # Controls the tile iteration pattern for the pack loop.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.TILE
 
     # Set `per_block_init = True` if init() needs block dimensions and must
     # be called per-block inside the batch loop rather than hoisted out.
     per_block_init: bool = False
 
     pack_mode: str = "PackMode::Default"
+
+    per_call_golden: bool = False
+
+    def supports_per_call(self, node) -> bool:
+        return self.per_call_golden and self.granularity == InvocationGranularity.TILE
+
+    def golden_call(
+        self,
+        call,
+        dest,
+        output,
+        pack_node: "PackNode",
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> None:
+        from .golden_state import tile_operation
+
+        output.write(
+            call.out,
+            self.golden(
+                dest.get(call.dest), pack_node, tile_operation(operation), config
+            ),
+        )
 
     requires_dest_remap: bool = False
 
@@ -92,7 +115,7 @@ class Packer(Golden):
     ) -> str:
         """Return C++ code that packs a single tile from dest to L1.
 
-        Called inside the tile loop by TileLoop.pack_loop(). Use
+        Called for each planned invocation. Use
         block.tile_id_block for the dest register index and
         block.tile_id_global for the L1 output buffer index.
         Override to emit the _llk_pack_<>() call.

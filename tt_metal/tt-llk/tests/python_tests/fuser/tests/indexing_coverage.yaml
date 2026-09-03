@@ -1,0 +1,221 @@
+# Exercises every index and loop shape the planner can currently produce, in one
+# pipeline. Each operation targets one behaviour, named in its comment, so a
+# failure points at a single mechanism rather than at "the fuser".
+#
+# Granularity differs per architecture for some units (Quasar unpacks and copies
+# a block row at a time where Wormhole and Blackhole work tile by tile), so the
+# same file covers the row-granularity paths differently on each.
+#
+# Not covered, because no yaml surface exists for it yet: user-supplied index
+# arrays such as in0: [19, 43, 6, 63], and per-slot index specs.
+
+operands:
+  - name: "sweep_a"
+    dims: [64, 128]
+    format: "Float16_b"
+  - name: "sweep_b"
+    dims: [64, 128]
+    format: "Float16_b"
+  - name: "sweep_out"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "tail_in"
+    dims: [96, 96]
+    format: "Float16_b"
+  - name: "tail_out"
+    dims: [96, 96]
+    format: "Float16_b"
+
+  - name: "mm_a"
+    dims: [64, 128]
+    format: "Float16_b"
+  - name: "mm_b"
+    dims: [128, 64]
+    format: "Float16_b"
+  - name: "mm_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "pair_in"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "pair_b"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "pair_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ones"
+    dims: [64, 128]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "rowmax"
+    dims: [64, 128]
+    format: "Float16_b"
+  - name: "bcast_out"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "dual_plain"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "dual_acc"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "untilize_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "sfpu_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  # Both bank axes loop: a 2x4 tile grid swept by 1x2 tile blocks. The block is
+  # one tile tall, so the tile_y level is dropped rather than emitted as a
+  # one-trip loop.
+  - math:
+      - type: "Fpu"
+        in0: "sweep_a"
+        in1: "sweep_b"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "sweep_out"
+        packer: "Packer"
+
+  # A 3x3 tile grid does not divide by a 2x2 block, so the plan splits into all
+  # four regions - full, x tail, y tail, corner - each with its own block extent
+  # and its own Dest index arithmetic.
+  - math:
+      - type: "Fpu"
+        in0: "tail_in"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "tail_out"
+        packer: "Packer"
+
+  # Block granularity: one call covers the whole bank, so no call levels are
+  # emitted at all. The operand grids (2x4 and 4x2) differ from the output grid
+  # (2x2), which the block index must not assume.
+  - math:
+      - type: "Fpu"
+        in0: "mm_a"
+        in1: "mm_b"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "mm_out"
+        packer: "Packer"
+
+  # Two math nodes over single-tile blocks of a 2x2 grid. The bank index makes
+  # each operand index compound, so both nodes hoist a local named tile_id into
+  # the same enclosing scope - the redeclaration this must stay free of. The two
+  # nodes also use different unpackers, so a second index (tile_id_b) is hoisted
+  # alongside the pair.
+  - math:
+      - type: "Fpu"
+        in0: "pair_in"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+      - type: "Fpu"
+        in0: "pair_in"
+        in1: "pair_b"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "pair_out"
+        packer: "Packer"
+
+  # Dest pinned to tile zero: every call in the block writes Dest 0, so the
+  # level must survive even though no index depends on it.
+  - math:
+      - type: "Fpu"
+        in0: "sweep_out"
+        in1: "ones"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "MAX"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [32, 128]
+    pack:
+      - output: "rowmax"
+        packer: "Packer"
+
+  # Second operand pinned to one tile: in1 is a constant index while in0 sweeps.
+  - math:
+      - type: "Fpu"
+        in0: "sweep_out"
+        in1: "rowmax"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "bcast_out"
+        packer: "Packer"
+
+  # Two packs in one operation, again in a single-tile block with no scope of its
+  # own, so both hoist l1_tile_id and dest_tile_id side by side. The second pack
+  # accumulates in L1, whose output index deliberately drops the block origin so
+  # every bank lands on the same output tile.
+  - math:
+      - type: "Fpu"
+        in0: "mm_out"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "dual_plain"
+        packer: "Packer"
+      - output: "dual_acc"
+        packer: "Packer"
+        pack_l1_accumulation: 1
+
+  # Row granularity on the pack side: one call writes a whole block row, so the
+  # tile_x level disappears and the Dest index strides by the block width.
+  - math:
+      - type: "Fpu"
+        in0: "mm_out"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "untilize_out"
+        packer: "PackUntilize"
+
+  # SFPU indices are pinned per node rather than swept.
+  - math:
+      - type: "Fpu"
+        in0: "pair_out"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+    block_size: [32, 32]
+    pack:
+      - output: "sfpu_out"
+        packer: "Packer"

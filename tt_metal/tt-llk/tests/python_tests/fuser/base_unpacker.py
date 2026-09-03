@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .block_data import BlockData
 
 from .golden import Golden
-from .tile_loop import TileLoop
+from .indexing import InvocationGranularity
 
 
 class Unpacker(Golden):
@@ -26,7 +26,7 @@ class Unpacker(Golden):
     The lifecycle called by the pipeline is:
         init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
 
-    Override `loop` with an appropriate TileLoop subclass to control
+    Set `granularity` to the number of tiles one call covers, to control
     the tile iteration pattern used by the unpack phases.
 
     Set `per_block_init = True` if init() needs block dimensions and must
@@ -34,7 +34,7 @@ class Unpacker(Golden):
 
     To create a new unpacker:
         1. Subclass Unpacker
-        2. Set `loop` to the desired TileLoop variant
+        2. Set `granularity` to the tiles one call covers
         3. Override get_headers() with the required LLK header files
         4. Override init(), unpack(), uninit() to emit the C++ LLK calls
         5. Override golden() to compute the expected unpack transformation,
@@ -44,8 +44,27 @@ class Unpacker(Golden):
     """
 
     # Controls the tile iteration pattern for unpack and math loops.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.NONE
     per_block_init: bool = False
+
+    per_call_golden: bool = False
+
+    def supports_per_call(self, node) -> bool:
+        return self.per_call_golden and self.granularity == InvocationGranularity.TILE
+
+    def golden_call(
+        self,
+        call,
+        inputs,
+        srcs,
+        compute_unit: "FpuNode",
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> None:
+        srcs.push(
+            inputs.tile_a(call.in0),
+            inputs.tile_b(call.in1),
+        )
 
     def init(
         self,
@@ -72,7 +91,7 @@ class Unpacker(Golden):
     ) -> str:
         """Return C++ code that unpacks a single tile (or tile group).
 
-        Called inside the tile loop by TileLoop.unpack_loop(). Use block.tile_id_global
+        Called for each planned invocation. Use block.tile_id_global
         for the L1 buffer index and block.tile_id_block for the dest register index.
         Override to emit the _llk_unpack_*_<>() call that moves data from L1 into
         source register files.

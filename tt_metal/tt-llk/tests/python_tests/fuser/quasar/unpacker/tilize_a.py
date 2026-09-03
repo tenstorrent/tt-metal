@@ -9,13 +9,13 @@ from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import DestAccumulation
 
 
 class UnpackerTilizeA(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def perf_set_valid(
