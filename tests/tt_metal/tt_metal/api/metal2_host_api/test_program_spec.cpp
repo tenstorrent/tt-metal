@@ -395,22 +395,15 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
                 ::testing::HasSubstr("DFB accessor_name '" + bad_name + "' must be a valid C++ identifier")))
             << "Expected rejection for name: '" << bad_name << "'";
     }
-}
 
-TEST_F(ProgramSpecTestQuasar, CPU_TooLongLocalAccessorNameFails) {
-    // An accessor_name longer than MAX_ACCESSOR_NAME_LENGTH cannot be passed to the kernel-side
-    // by-name binding lookup, so a valid-but-too-long identifier must fail at Program construction
-    // rather than as a kernel JIT static_assert.
+    // A valid-but-too-long identifier cannot be passed to the kernel-side by-name binding lookup,
+    // so it must fail at Program construction rather than as a kernel JIT static_assert.
     const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
-    NodeCoord node{0, 0};
-
     ProgramSpec spec;
     spec.name = "test_program";
-
     auto kernel = MakeMinimalGen2DMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, too_long));
-
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -1521,8 +1514,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateScratchpadAccessorNameFails) {
 
 TEST_F(ProgramSpecTestQuasar, CPU_InvalidScratchpadAccessorNameFails) {
     // The accessor_name becomes a C++ identifier in the generated kernel_bindings header, so it must
-    // be a valid C++ identifier. (Mirrors InvalidLocalAccessorNameFails / the semaphore-accessor
-    // equivalent; here we just spot-check a couple of clearly-invalid names.)
+    // be a valid C++ identifier and fit in MAX_ACCESSOR_NAME_LENGTH. (Mirrors
+    // InvalidLocalAccessorNameFails / the semaphore-accessor equivalent; here we just spot-check a
+    // couple of clearly-invalid names plus the too-long case.)
     const std::vector<std::string> invalid_names = {
         "1bad",       // leading digit
         "has space",  // whitespace
@@ -1539,9 +1533,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidScratchpadAccessorNameFails) {
             ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be a valid C++ identifier")))
             << "Expected rejection for scratchpad accessor_name: '" << bad_name << "'";
     }
-}
 
-TEST_F(ProgramSpecTestQuasar, CPU_TooLongScratchpadAccessorNameFails) {
     const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
@@ -3923,9 +3915,9 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorAccessorNameWithinKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_InvalidTensorAccessorNameFails) {
-    // Smoke-tests the IsValidCppIdentifier check on tensor accessor names. The check is the
-    // same one DFB / Semaphore use; one bad name here is sufficient (full coverage lives in
-    // the DFB version of this test).
+    // Smoke-tests the IsValidCppIdentifier / length checks on tensor accessor names. The checks
+    // are the same ones DFB / Semaphore use; one bad name of each kind here is sufficient
+    // (full identifier coverage lives in the DFB version of this test).
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
@@ -3935,10 +3927,8 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidTensorAccessorNameFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
-}
 
-TEST_F(ProgramSpecTestGen1, CPU_TooLongTensorAccessorNameFails) {
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", std::string(MAX_ACCESSOR_NAME_LENGTH + 1, 'a'));
 
@@ -4026,35 +4016,8 @@ static_assert(tensor::get_token_if_present<"not_a_tensor">() == nullptr);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsJITSmoke) {
-    // The lookup is emitted even when a kernel has no bindings of a given kind, so a kernel can
-    // probe for an optional resource without the host having to inject a dummy token. This is the
-    // empty-namespace path (no DFB / tensor / scratchpad bindings at all); the
-    // present-plus-absent case is covered by the per-category JIT smokes above.
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "binding_lookup_empty";
-
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
-    dm_kernel.source = KernelSpec::SourceCode{R"(
-void kernel_main() {
-    static_assert(dfb::get_token_if_present<"missing">() == nullptr);
-    static_assert(tensor::get_token_if_present<"missing">() == nullptr);
-    static_assert(scratch::get_token_if_present<"missing">() == nullptr);
-}
-)"};
-
-    spec.kernels = {dm_kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
-}
-
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsComputeJITSmoke) {
-    // Same empty-namespace lookups as the DM smoke above, on a compute kernel with no bindings.
-    // Covers the TRISC compile of kernel_bindings_generated.h's unconditional token-header includes.
+    // The DM counterpart is CPU_GetTokenIfPresentConstructsWhenNoBindingsJITSmoke.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -4063,6 +4026,9 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsCom
     auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = KernelSpec::SourceCode{R"(
 #include "api/tensor/local_tensor_accessor.h"
+// Codegen omits these when the kernel has no DFB / scratchpad bindings.
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     static_assert(dfb::get_token_if_present<"missing">() == nullptr);
@@ -4093,9 +4059,7 @@ void kernel_main() {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsWhenNoBindingsJITSmoke) {
-    // Same empty ProgramSpec as the nullptr static_assert smoke above, but with the
-    // `if (const auto* token = get_token_if_present<...>())` shape so each absent lookup's
-    // false branch still type-checks constructing the resource from *token.
+    // The compute counterpart is CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsComputeJITSmoke.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -4104,6 +4068,9 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsWhenNoBindingsJITSmok
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 #include "api/tensor/local_tensor_accessor.h"
+// Codegen omits these when the kernel has no DFB / scratchpad bindings.
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     static_assert(dfb::get_token_if_present<"missing">() == nullptr);

@@ -270,11 +270,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
 
-    // Binding-token headers are included even when a kernel has no bindings of that kind.
-    // get_token_if_present() is always emitted, and its absent path names the token type as
-    // the return type, so those types must be in scope for any Metal 2.0 kernel.
+    // Emit Includes:
+    // Support get_token_if_present() helper.
     content << "#include \"internal/template_string.h\"\n";
-    content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+
+    if (!dfb_entries.empty()) {
+        content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    }
+
     if (!sem_entries.empty()) {
         // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
         // so it is safe on compute builds too.
@@ -287,12 +290,29 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "#include \"api/dataflow/dataflow_api.h\"\n";
         content << "#endif\n";
     }
+
+    // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
+    // definition of TensorBindingToken.
     content << "#include \"api/tensor/tensor_binding_token.h\"\n";
-    content << "#include \"api/scratchpad.h\"\n";
+
+    if (!scratch_entries.empty()) {
+        content << "#include \"api/scratchpad.h\"\n";
+    }
+
     if (!tensor_binding_sequence_entries.empty()) {
         content << "#include <tuple>\n";
     }
     content << "\n";
+
+    // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
+    // the headers that define those token types are omitted, but the empty getter still returns
+    // const BindingTokenType*{nullptr} and needs those types in scope.
+    if (dfb_entries.empty()) {
+        content << "struct DFBBindingToken;\n";
+    }
+    if (scratch_entries.empty()) {
+        content << "struct ScratchpadBindingToken;\n";
+    }
 
     // Emit DFB bindings
     content << "namespace dfb {\n";
