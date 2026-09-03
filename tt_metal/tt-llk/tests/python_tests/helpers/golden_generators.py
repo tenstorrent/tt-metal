@@ -2769,10 +2769,11 @@ class UnarySFPUGolden:
     def _vec_relu_max(self, t, threshold):
         """Vectorised ``sfpu_relu_max``: total-order min, then a sign-bit relu clamp.
 
-        Uses ``sfpu_order_key_elementwise`` -- the same remap the scalar
-        ``sfpu_total_order_key`` applies -- so a NaN outranks the threshold and is
-        replaced by it, and -0.0 clamps to +0.0. Both are properties of the kernel's
-        SFPSWAP/SFPSETCC pair, not of IEEE min/max, so torch.clamp is not a substitute.
+        The min goes through ``_vec_sfpu_min`` (i.e. ``sfpu_min_elementwise``) -- the
+        same total-order remap the scalar ``sfpu_total_order_key`` applies -- so a NaN
+        outranks the threshold and is replaced by it, and -0.0 clamps to +0.0. Both are
+        properties of the kernel's SFPSWAP/SFPSETCC pair, not of IEEE min/max, so
+        torch.clamp is not a substitute.
 
         The *values* stay in float64 while only the *keys* go through fp32, which is
         what the scalar pair does: sfpu_total_order_key struct-packs an fp32 to rank the
@@ -2780,38 +2781,28 @@ class UnarySFPUGolden:
         fp32 and carrying the value in fp32 too costs a last-bit divergence on
         Hardsigmoid, whose input is an affine expression evaluated in double.
         """
-        d = t.to(torch.float64)
-        thresh = torch.full_like(d, threshold)
-        clamped = torch.where(
-            sfpu_order_key_elementwise(d) <= sfpu_order_key_elementwise(thresh),
-            d,
-            thresh,
-        )
+        clamped = self._vec_sfpu_min(t.to(torch.float64), threshold)
         return torch.where(
             sfpu_order_key_elementwise(clamped) < 0, torch.zeros_like(clamped), clamped
         )
 
     @staticmethod
     def _vec_sfpu_min(d, scalar):
-        """``sfpu_min`` over a tile: rank under the SFPU total order, keep the value.
+        """``sfpu_min`` against a scalar over a tile -- ``sfpu_min_elementwise``, broadcast.
 
-        As in ``_vec_relu_max``, the comparison is on the fp32 order key while the
-        returned value stays in *d*'s dtype -- the scalar ``sfpu_min`` ranks via
+        Only the broadcast is new: the module-level ``sfpu_min_elementwise`` is already
+        the total-order min, and this is it against a filled tensor. The comparison
+        therefore happens on the fp32 order key while the returned value stays in *d*'s
+        dtype, which is what the scalar ``sfpu_min`` does -- it ranks via
         ``sfpu_total_order_key`` (which struct-packs an fp32) but returns its operand
         untouched.
         """
-        other = torch.full_like(d, scalar)
-        return torch.where(
-            sfpu_order_key_elementwise(d) <= sfpu_order_key_elementwise(other), d, other
-        )
+        return sfpu_min_elementwise(d, torch.full_like(d, scalar))
 
     @staticmethod
     def _vec_sfpu_max(d, scalar):
-        """``sfpu_max`` over a tile. See ``_vec_sfpu_min``."""
-        other = torch.full_like(d, scalar)
-        return torch.where(
-            sfpu_order_key_elementwise(d) >= sfpu_order_key_elementwise(other), d, other
-        )
+        """``sfpu_max`` against a scalar over a tile. See ``_vec_sfpu_min``."""
+        return sfpu_max_elementwise(d, torch.full_like(d, scalar))
 
     def _vec_sfpu_clamp(self, t, low, high):
         """``sfpu_clamp``: max-then-min under the total order, the kernel's order.
@@ -3622,8 +3613,9 @@ class UnarySFPUGolden:
         MathOperation.GreaterThanEqualZero: lambda self: (
             lambda d: (d >= 0.0).to(d.dtype)
         ),
-        # x if x >= 0 else slope * x -- the comparison keeps -0.0 on the negative arm,
-        # matching the scalar method.
+        # x if x >= 0 else slope * x. IEEE makes -0.0 >= 0.0 true, so -0.0 takes the
+        # *nonnegative* arm and is returned unchanged rather than scaled by the slope --
+        # the same arm, and the same -0.0, as the scalar _prelu.
         MathOperation.Prelu: lambda self: (
             lambda d: torch.where(d >= 0.0, d, self._PRELU_SLOPE * d)
         ),

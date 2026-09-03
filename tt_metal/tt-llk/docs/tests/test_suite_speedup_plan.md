@@ -161,9 +161,10 @@ The e2e lane does not — `tests/pipeline_reorg/llk_e2e_tests.yaml` runs plain
 `pytest -n auto`, so every worker interleaves `g++` with holding a Tensix core.
 
 **Why it helps even without A.** Compile is pure CPU with no device dependency, so the
-producer pass can run at a much higher `-n` than the device pass (the perf lane uses 10
-vs 15 for exactly this reason) and, better, on a CPU-only runner *before* the device
-runner is allocated. `_collapse_runtime_only_variants`
+producer pass's `-n` is not bounded by the device at all — the two passes are tuned
+independently (the perf lane happens to run 10 producer workers against 15 consumers) and,
+better, the producer can run on a CPU-only runner *before* the device runner is allocated.
+`_collapse_runtime_only_variants`
 ([`llk_pytest_plugin.py:565-593`](../../tests/python_tests/helpers/llk_pytest_plugin.py#L565-L593))
 already dedupes the producer pass down to one item per compile key.
 
@@ -215,12 +216,13 @@ fidelity-clear addrmod) and must stay fully covered.
 Python**:
 
 ```python
-# golden_generators.py:2582
+# golden_generators.py:2590 -- the per-element path, now the fallback for the 26 ops
+# with no whole-tile entry
 op_res = [self.ops[operation](x) for x in result.tolist()[window]]
 ```
 
 and 33 of those ops route through `_torch_unary`
-([`golden_generators.py:2702`](../../tests/python_tests/helpers/golden_generators.py#L2702)),
+([`golden_generators.py:2897`](../../tests/python_tests/helpers/golden_generators.py#L2897)),
 which builds a **0-d `torch.tensor` per element** and calls `.item()`. Over the sweep that
 is 28,958,720 `_torch_unary` calls, 51,174,704 `torch.tensor` constructions and 50,893,356
 `.item()` calls. `EltwiseBinaryGolden`, `MatmulGolden` and the
@@ -246,15 +248,16 @@ bits in all 14 combinations**. Speedups at 32,768 elements: 10× (exp/erf/tanh/l
 mechanically, the rest need case-by-case review (some are `math.*` predicates that
 vectorise trivially, a few are genuinely elementwise-irregular). **Risk** low: the
 existing scalar path is a perfect oracle, so each op can be proven bit-identical before
-the loop is deleted. Do it op-family at a time behind a shared helper.
+the caller is switched to the whole-tile path — and the loop then stays as that oracle
+(see step 4 of the landing pattern). Do it op-family at a time behind a shared helper.
 
 Also applies to `_call_integer`
-([`golden_generators.py:3026`](../../tests/python_tests/helpers/golden_generators.py#L3026)),
-the same pattern on the integer SFPU path.
+([`golden_generators.py:3208`](../../tests/python_tests/helpers/golden_generators.py#L3208)),
+the same pattern on the integer SFPU path — still per-element, so this one is outstanding.
 
 ### E — Vectorise the BFP pack/unpack helpers  ⭐ suite-wide
 
-**What.** `float_to_bfp8_block` ([`pack.py:150`](../../tests/python_tests/helpers/pack.py#L150))
+**What.** `float_to_bfp8_block` ([`pack.py:228`](../../tests/python_tests/helpers/pack.py#L228))
 does bit manipulation by formatting each value as a **binary string**:
 
 ```python
@@ -289,10 +292,12 @@ with a memo dict and takes the same treatment.
 
 ### F — Stop generating, packing and DMA-ing an operand the unary kernels never read
 
-**What.** Every unary SFPU test asks `generate_stimuli` for a full `src_B`
-([`test_eltwise_unary_sfpu.py:1140-1146`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L1140-L1146))
-and hands it to `StimuliConfig`, which unconditionally packs it and writes it to L1
-([`stimuli_config.py:664`](../../tests/python_tests/helpers/stimuli_config.py#L664)).
+**What.** Every unary SFPU test asked `generate_stimuli` for a full `src_B` and handed it
+to `StimuliConfig`, which packed it and wrote it to L1 unconditionally. Both are now gated:
+`generate_operand_B=False`
+([`test_eltwise_unary_sfpu.py:1424`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L1424))
+and the `buffer_B is not None` guards
+([`stimuli_config.py:671`](../../tests/python_tests/helpers/stimuli_config.py#L671)).
 `sources/eltwise_unary_sfpu_test.cpp` contains **zero references to `buffer_B`**. The
 profile shows `write_matrix` called 9,304 times for 4,652 tests — exactly 2× — so half of
 the stimuli-write stage is spent on an operand no kernel reads.
@@ -337,14 +342,16 @@ that is the first thing to do here.
 **What.** 1,140 of 5,792 unary-sweep cases (19.7%) skip on Blackhole. 248 of those skip
 *unconditionally on every arch*:
 
-- `ReluMin` — 168 cases, `pytest.skip` at
-  [`test_eltwise_unary_sfpu.py:437`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L437)
-  (blocked on tt-llk#1120), yet the op is listed in `BROAD_SWEEP_OPS` and generates its
-  whole matrix.
-- `Tanh` + `ApproximationMode.Yes` — 80 cases, skipped at line 441.
+- `ReluMin` — 168 cases, a `pytest.skip` in the test body (blocked on tt-llk#1120), yet
+  the op is listed in `BROAD_SWEEP_OPS` and generates its whole matrix.
+- `Tanh` + `ApproximationMode.Yes` — 80 cases, skipped the same way.
 
-The remaining ~890 are the Blackhole format guards (`_skip_bh_unless_fp32` /
-`_skip_bh_unsupported_float_combo`). Those are equally movable, because
+Both are now collection-time filters in `_unsupported_reason`
+([`test_eltwise_unary_sfpu.py:275`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L275)),
+tallied into `UNSWEPT_COMBINATIONS` so a filtered case is still recorded somewhere.
+
+The remaining ~890 are the Blackhole format guards (`_bh_unless_fp32` /
+`_bh_unsupported_float_combo`). Those were equally movable, because
 `TestConfig.CHIP_ARCH` is bound in `pytest_configure` — i.e. before collection — so the
 format lists can be filtered when the params are built rather than rejected per test.
 
@@ -488,7 +495,7 @@ caching path next to a correctness oracle is a trap.
 
 Tempting because `test_eltwise_unary_sfpu` looks huge, but it is 2.8% of the suite and the
 matrix is where the real bugs live — the broad/standard profile split
-([`test_eltwise_unary_sfpu.py:63-84`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L63-L84))
+([`test_eltwise_unary_sfpu.py:66-84`](../../tests/python_tests/test_eltwise_unary_sfpu.py#L66-L84))
 is already a deliberate cost/coverage tradeoff, and the file documents measured
 format-specific divergences (approximate exp's rtol overshoot, the signed-zero
 `unpack_to_dest` partition) that only exist because the matrix is wide. Spend the effort on
@@ -556,11 +563,16 @@ wipe described in §1 means it never is.
 
 ---
 
-## 8. Appendix — the validated prototypes
+## 8. Appendix — the prototypes the projections came from  *(historical)*
 
-Both are drop-in replacements for the current hot loops and were checked against the
-existing code as the oracle. Neither is committed anywhere; they are here so the
-projections in §4 can be re-derived rather than trusted.
+**Both have since landed**, as `_torch_unary_vec`
+([`golden_generators.py:2710`](../../tests/python_tests/helpers/golden_generators.py#L2710))
+and `_bfp_quantize_blocks`
+([`pack.py:156`](../../tests/python_tests/helpers/pack.py#L156)); the shipped versions are
+broader than these sketches (all three BFP widths, 88 ops, the Dest-dtype and float64
+families) and carry their own agreement tests. Read this section as the prototypes the §4
+projections were measured on, not as the implementation — for that, read the code. It is
+kept so those projections can be re-derived rather than trusted.
 
 ### D — `UnarySFPUGolden._torch_unary`, vectorised
 
@@ -614,7 +626,12 @@ produces different bytes.
 2. Add a test that asserts the two agree **bitwise** over a seeded population that includes
    the specials, parametrised over every op / format the scalar path supports.
 3. Switch the caller.
-4. Delete the scalar path in a follow-up, once the agreement test has run in nightly.
+4. **Keep the scalar path** as the oracle the agreement test runs against. It stops being
+   the production path but does not become dead code: it is the only per-element statement
+   of the format/op, and deleting it leaves nothing validating the fast path. Both landed
+   implementations say so at their definitions
+   ([`pack.py:131`](../../tests/python_tests/helpers/pack.py#L131),
+   [`golden_generators.py:2717`](../../tests/python_tests/helpers/golden_generators.py#L2717)).
 
-Step 2 is the deliverable that makes steps 3 and 4 safe, and it is reusable for the
+Step 2 is the deliverable that makes step 3 safe, and it is reusable for the
 `_call_integer` and `_bfp_to_float_block` follow-ups.

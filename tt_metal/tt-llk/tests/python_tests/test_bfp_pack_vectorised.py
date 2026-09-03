@@ -30,6 +30,7 @@ from helpers.pack import (
     pack_bfp4_b,
     pack_bfp8_b,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
 BLOCK_SIZE = 16
 
@@ -119,7 +120,18 @@ POPULATIONS = _populations()
 @pytest.mark.parametrize("magnitude_bits,reference_block_fn,packer", BFP_WIDTHS)
 @pytest.mark.parametrize("population", sorted(POPULATIONS), ids=lambda p: p)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-@pytest.mark.parametrize("num_faces,face_r_dim", [(4, 16), (2, 16), (1, 16), (4, 1)])
+# The full tile plus the partial-face layouts the packers support. Only the first is
+# the maximum layout, so only it gets the named constants -- the rest are deliberately
+# *not* MAX_NUM_FACES / MAX_FACE_R_DIM and reading them as literals is the point.
+@pytest.mark.parametrize(
+    "num_faces,face_r_dim",
+    [
+        (MAX_NUM_FACES, MAX_FACE_R_DIM),
+        (2, MAX_FACE_R_DIM),
+        (1, MAX_FACE_R_DIM),
+        (MAX_NUM_FACES, 1),
+    ],
+)
 def test_vectorised_matches_reference(
     magnitude_bits, reference_block_fn, packer, population, dtype, num_faces, face_r_dim
 ):
@@ -160,7 +172,7 @@ def test_public_packer_byte_stream_matches_reference(
     result, which the per-datum comparison above cannot.
     """
     tensor = POPULATIONS["wide_range+specials"].to(torch.float32)
-    flattened = _bfp_prepare_blocks(tensor, BLOCK_SIZE, 4, 16)
+    flattened = _bfp_prepare_blocks(tensor, BLOCK_SIZE, MAX_NUM_FACES, MAX_FACE_R_DIM)
     ref_exponents, ref_datums = _bfp_collect_blocks(
         flattened, BLOCK_SIZE, reference_block_fn
     )
@@ -191,7 +203,10 @@ def test_negative_zero_never_leaves_a_sign_only_mantissa():
         sign_only = 1 << magnitude_bits
         for population in ("zeros", "signed_zeros", "subnormal+specials"):
             flattened = _bfp_prepare_blocks(
-                POPULATIONS[population].to(torch.float32), BLOCK_SIZE, 4, 16
+                POPULATIONS[population].to(torch.float32),
+                BLOCK_SIZE,
+                MAX_NUM_FACES,
+                MAX_FACE_R_DIM,
             )
             _, mantissas = _bfp_quantize_blocks(flattened, BLOCK_SIZE, magnitude_bits)
             assert sign_only not in mantissas, (
@@ -210,7 +225,10 @@ def test_wide_delta_path_is_exercised():
     the populations keep providing it.
     """
     flattened = _bfp_prepare_blocks(
-        POPULATIONS["extreme_delta"].to(torch.float32), BLOCK_SIZE, 4, 16
+        POPULATIONS["extreme_delta"].to(torch.float32),
+        BLOCK_SIZE,
+        MAX_NUM_FACES,
+        MAX_FACE_R_DIM,
     )
     bf16 = (
         flattened.to(torch.float32).contiguous().numpy().view(np.uint32) >> 16

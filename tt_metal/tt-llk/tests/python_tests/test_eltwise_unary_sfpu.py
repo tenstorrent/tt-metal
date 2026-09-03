@@ -250,8 +250,26 @@ def _bh_unless_fp32(formats, dest_acc) -> bool:
 #
 # The reasons stay as strings on purpose. A filtered combination leaves no trace in the
 # report, so this is now the only place that records what is not tested and why;
-# test_unswept_combinations_are_accounted_for keeps the total visible.
+# test_unswept_combinations_are_accounted_for keeps the total visible and asserts each
+# reason is still filtering something.
 _RELU_MIN_ISSUE = "https://github.com/tenstorrent/tt-llk/issues/1120"
+_TANH_NO_APPROX = "Metal tanh does not support approximation mode"
+_BH_UNSUPPORTED = "not supported on BH architecture"
+_EXP_FAMILY_BFP8_APPROX = "exp-family ops do not support bf8_b in approximation mode"
+
+# Which of those must still be dropping at least one combination, and where.
+#
+# Per reason rather than "the tally is non-empty": with four reasons in play, any three
+# of them keep the tally non-empty while the fourth goes stale unnoticed -- which is
+# precisely the case _RELU_MIN_ISSUE exists for (the issue is fixed, the branch is left
+# behind, and ReluMin quietly stops being swept without a SKIPPED line anywhere).
+#
+# The first three are properties of the op/format matrix, not of the chip: ReluMin and
+# Tanh are both in BROAD_SWEEP_OPS, which sweeps ApproximationMode.Yes, and BROAD_FORMATS
+# pairs Bfp8_b with the exp family. Only the Blackhole dest_acc=No guards are
+# arch-dependent, and on Wormhole they correctly filter nothing.
+_ALWAYS_LIVE_REASONS = (_RELU_MIN_ISSUE, _TANH_NO_APPROX, _EXP_FAMILY_BFP8_APPROX)
+_BLACKHOLE_ONLY_REASONS = (_BH_UNSUPPORTED,)
 
 
 def _unsupported_reason(formats, approx_mode, mathop, dest_acc, broad):
@@ -260,16 +278,16 @@ def _unsupported_reason(formats, approx_mode, mathop, dest_acc, broad):
         return _RELU_MIN_ISSUE
 
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        return "Metal tanh does not support approximation mode"
+        return _TANH_NO_APPROX
 
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or
     # Float32->Float16, while the standard profile allows only Float32->Float32.
     if broad:
         if _bh_unsupported_float_combo(formats, dest_acc):
-            return "not supported on BH architecture"
+            return _BH_UNSUPPORTED
     elif _bh_unless_fp32(formats, dest_acc):
-        return "not supported on BH architecture"
+        return _BH_UNSUPPORTED
 
     # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
     # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
@@ -282,7 +300,7 @@ def _unsupported_reason(formats, approx_mode, mathop, dest_acc, broad):
             or formats.output_format == DataFormat.Bfp8_b
         )
     ):
-        return "exp-family ops do not support bf8_b in approximation mode"
+        return _EXP_FAMILY_BFP8_APPROX
 
     return None
 
@@ -297,6 +315,17 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions, broad):
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
     runs with FastMode.No only. dest_acc always sweeps both values.
+
+    Combinations `_unsupported_reason` rejects are dropped here rather than generated
+    and skipped in the test body, so *broad* has to be passed through: the two coverage
+    profiles have different Blackhole dest_acc=No guards, measured against their own
+    format sets.
+
+    Side effect, and the reason this is not a pure function: every dropped combination is
+    tallied into the module-level `UNSWEPT_COMBINATIONS` under its reason. A filtered case
+    leaves no SKIPPED line in the report, so that tally is the only remaining record of
+    what is not tested and why, and building it here is what keeps it from drifting from
+    what was actually filtered. `test_unswept_combinations_are_accounted_for` reads it.
     """
     dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
@@ -402,7 +431,13 @@ def test_unswept_combinations_are_accounted_for():
     Moving a skip out of the test body and into the parametrize filter buys speed at the
     cost of visibility: a filtered case leaves no SKIPPED line in the report, so the only
     remaining record of what is not tested is _unsupported_reason. This test prints the
-    tally and asserts the two properties worth asserting about it.
+    tally and asserts four things about it:
+
+    - every reason expected on this chip is still filtering something,
+    - no reason is filtering that has not been declared as expected, so a newly added
+      one cannot dodge the check above,
+    - no Blackhole-only reason fires elsewhere,
+    - the filter has not eaten most of the matrix.
 
     Not asserted: the *count*. It is arch-dependent (the Blackhole guards do most of the
     filtering) and changes legitimately whenever the format matrix does.
@@ -410,12 +445,38 @@ def test_unswept_combinations_are_accounted_for():
     filtered = sum(UNSWEPT_COMBINATIONS.values())
     total_candidates = len(UNARY_SWEEP_PARAMS) + filtered
 
-    # A filter that dropped nothing would mean the reasons had gone stale -- e.g. the
-    # ReluMin issue was fixed and the entry left behind, which would silently keep the
-    # op unswept.
-    assert UNSWEPT_COMBINATIONS, (
-        "no combination was filtered, so every reason in _unsupported_reason is now "
-        "unreachable -- delete the ones that no longer apply rather than leaving them"
+    # Every reason expected on this chip must still be dropping something. Asserted per
+    # reason, not on the tally as a whole: a reason that has gone stale -- the ReluMin
+    # issue fixed and the branch left behind -- keeps the op unswept with no SKIPPED line
+    # anywhere, and the other three reasons would keep a truthiness check green.
+    expected_live = list(_ALWAYS_LIVE_REASONS)
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        expected_live += list(_BLACKHOLE_ONLY_REASONS)
+    stale = [r for r in expected_live if UNSWEPT_COMBINATIONS.get(r, 0) == 0]
+    assert not stale, (
+        f"these reasons filtered nothing on {TestConfig.CHIP_ARCH}, so whatever they "
+        "were guarding is now either swept (delete the reason) or unreachable for a "
+        f"different cause (fix the reason): {stale}"
+    )
+
+    # The converse, so a newly added reason cannot skip the check above: everything in
+    # the tally has to be declared, in the arch group it actually applies to.
+    declared = set(_ALWAYS_LIVE_REASONS) | set(_BLACKHOLE_ONLY_REASONS)
+    undeclared = sorted(set(UNSWEPT_COMBINATIONS) - declared)
+    assert not undeclared, (
+        "these reasons filter combinations but are not declared in "
+        "_ALWAYS_LIVE_REASONS or _BLACKHOLE_ONLY_REASONS, so nothing checks that they "
+        f"stay live: {undeclared}"
+    )
+    unexpected_here = sorted(
+        r
+        for r in _BLACKHOLE_ONLY_REASONS
+        if UNSWEPT_COMBINATIONS.get(r, 0)
+        and TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
+    )
+    assert not unexpected_here, (
+        f"these Blackhole-only reasons filtered combinations on "
+        f"{TestConfig.CHIP_ARCH}: {unexpected_here}"
     )
 
     # And a filter that dropped most of the matrix would mean the sweep had quietly
