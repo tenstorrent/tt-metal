@@ -31,7 +31,6 @@ Note that the arch specification above overrides any ``-march=<xyz>`` that comes
 Further, the following options disable parts of the SFPI enabled compiler:
 
   * ``-mno-tt-tensix-warn``: disable sfpu specific warnings/errors
-  * ``-mno-tt-tensix-optimize-combine``: disable sfpu instruction combining
   * ``-mno-tt-tensix-optimize-cc``: disable sfpu CC optimizations
   * ``-mno-tt-tensix-optimize-replay``: disable sfpu REPLAY optimizations
 
