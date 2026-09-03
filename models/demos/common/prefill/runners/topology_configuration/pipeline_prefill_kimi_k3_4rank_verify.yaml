@@ -1,0 +1,35 @@
+# Kimi-K3 CORRECTNESS gate for the FOUR-rank pipeline: 48 layers as 12/12/12/12.
+#
+# The 93-layer production split (pipeline_prefill_kimi_k3_4rank.yaml) cannot be checked against a
+# golden -- the reference trace only covers the first 24 layers. This binding exists to check the
+# 4-rank MECHANISM at a depth the golden does cover.
+#
+# Why 12/12/12/12 and not 6/6/6/6: every boundary must be a multiple of ATTN_RES_BLOCK_SIZE=12, or
+# a rank inherits a partial sealed set and its local layer 0 fires a seal the architecture does not
+# have there. 12 is the smallest legal per-rank slice, so 48 is the smallest legal 4-rank model.
+#
+# What the golden actually reaches: KV goldens exist for MLA layers 3/7/11 (rank 0) and 15/19/23
+# (rank 1). Rank 1's KV is a function of hidden states computed against the sealed set it INHERITED
+# from rank 0, so scoring it tests the first cross-rank handoff end to end rather than smoke-testing
+# it. Ranks 2 and 3 (layers 24-47) run past the golden and are checked only for liveness -- they
+# still exercise the k=2 and k=3 handoffs, which is what distinguishes this from the 2-rank gate.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi_k3.json"
+  PREFILL_MODEL: "kimi_k3"
+  PREFILL_NUM_LAYERS: "48"
+  PREFILL_PP_LAYER_COUNTS: "12,12,12,12"
+  PREFILL_NUM_USERS: "1"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  PREFILL_LAYER_ACK_D2H: "1"
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_LAYER_ACK_FIFO_BYTES: "65536"
+  LOGURU_LEVEL: "INFO"
