@@ -242,6 +242,9 @@ fi
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
 export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
+# ttsim does not implement NOC API v2; default to using v1 unless caller set it.
+export TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION="${TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION:-1}"
+
 mkdir -p "$RESULTS_DIR"
 
 # ──────────────────────────────────────────────────────────────
@@ -356,6 +359,7 @@ echo " Marker expr    : ${MARKER_EXPR}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
 echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
+echo " NOC API version: ${TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
