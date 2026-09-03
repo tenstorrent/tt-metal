@@ -27,6 +27,15 @@ def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
     raise ValueError(f"Unsupported score_func '{score_func}'")
 
 
+def select_descending(scores, n, stable):
+    """Indices of the top ``n`` scores. ``stable`` breaks ties by lowest index, as torch documents
+    for ``sort(stable=True)`` and as ``moe_grouped_topk(stable_sort=True)`` promises; ``torch.topk``
+    itself is NOT stable, so the two cannot share one call."""
+    if stable:
+        return torch.argsort(scores, dim=-1, descending=True, stable=True)[..., :n]
+    return torch.topk(scores, n, dim=-1, sorted=True).indices
+
+
 def grouped_gate_golden_act(
     logits,
     bias,
@@ -37,28 +46,32 @@ def grouped_gate_golden_act(
     topk_groups,
     n_activated_experts,
     score_func="sigmoid",
+    stable=False,
 ):
     """Activation-parametrized port of MoEGate.grouped_gate_golden.
 
     Identical to the DeepSeek-V3 reference grouped gate (same top-k ordering convention as the
     moe_grouped_topk device op) except the router affinity activation is selectable. With
     ``n_groups == 1`` it collapses to a plain top-k, matching the single-group device path used by
-    Kimi and DeepSeek-V4. Returns ``(top_k_indices, scaled_weights)``.
+    Kimi and DeepSeek-V4. ``stable=True`` matches the device op's ``stable_sort=True`` contract:
+    equal keys are returned lowest-index first, in both the group and the expert selection.
+    Returns ``(top_k_indices, scaled_weights)``.
     """
     scores = score_activation(logits, score_func)
     biased_scores = scores + bias
 
     grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
+    # Order-independent: only the sum of the top-p group members is used, never their order.
     top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1, sorted=True)
     summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
 
-    _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1, sorted=True)
+    top_k_groups_indices = select_descending(summed_scores, topk_groups, stable)
     group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
     group_mask.scatter_(-1, top_k_groups_indices, False)
     masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
     masked_scores = masked_grouped_scores.reshape(scores.shape)
 
-    _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1, sorted=True)
+    top_k_experts_indices = select_descending(masked_scores, n_activated_experts, stable)
     chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
     normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
     scaled_scores = normalized_scores * route_scale
@@ -222,6 +235,64 @@ def assert_gate_output(
     )
     assert weights_passed, f"Weights PCC {weights_pcc:.4f} < {pcc_threshold}"
     return recall, weights_pcc
+
+
+def assert_index_domain(
+    tt_indices: torch.Tensor,
+    n_activated_experts: int,
+    total_experts: int,
+    num_real: int = 0,
+    apply_padding: bool = False,
+) -> None:
+    """Reference-free domain invariants for a gate's expert-index output.
+
+    Every real token must select ``n_activated_experts`` DISTINCT valid expert ids, and every
+    padded token must carry the out-of-range sentinel (== ``total_experts``). Unlike recall or
+    PCC this needs no golden reference, so it holds for any input.
+
+    Worth asserting separately from selection accuracy: a duplicate or out-of-range id does not
+    merely degrade the routed output, it makes the downstream dispatch address the wrong expert
+    (or nothing at all), which corrupts memory rather than the numerics.
+    """
+    idx = tt_indices.reshape(-1, n_activated_experts).long()
+
+    if apply_padding:
+        pad_rows = idx[num_real:]
+        assert torch.all(
+            pad_rows == total_experts
+        ), f"Padded rows must all be the sentinel {total_experts}; got {torch.unique(pad_rows).tolist()}"
+        idx = idx[:num_real]
+
+    out_of_range = ((idx < 0) | (idx >= total_experts)).any(dim=-1)
+    assert not out_of_range.any(), (
+        f"{int(out_of_range.sum())}/{out_of_range.numel()} tokens carry an expert id outside "
+        f"[0, {total_experts}); first at token {int(out_of_range.nonzero()[0])} -> "
+        f"{idx[out_of_range][0].tolist()}"
+    )
+
+    ordered = idx.sort(dim=-1).values
+    duplicated = (ordered[:, 1:] == ordered[:, :-1]).any(dim=-1)
+    assert not duplicated.any(), (
+        f"{int(duplicated.sum())}/{duplicated.numel()} tokens select the same expert twice; "
+        f"first at token {int(duplicated.nonzero()[0])} -> {idx[duplicated][0].tolist()}"
+    )
+
+
+def assert_indices_exact(tt_indices, ref_indices, n_activated_experts, context=""):
+    """Element-wise index parity, no tolerance. Unlike ``assert_gate_output``'s set recall this sees
+    ORDER, which is the whole content of the stable-sort contract."""
+    tt = tt_indices.reshape(-1, n_activated_experts).long()
+    ref = ref_indices.reshape(-1, n_activated_experts).long()
+    assert tt.shape == ref.shape, f"{context}shape {tuple(tt.shape)} != {tuple(ref.shape)}"
+
+    mismatched = (tt != ref).any(dim=-1)
+    if not mismatched.any():
+        return
+    first = int(mismatched.nonzero()[0])
+    raise AssertionError(
+        f"{context}{int(mismatched.sum())}/{mismatched.numel()} tokens differ; "
+        f"first at token {first}: got {tt[first].tolist()} want {ref[first].tolist()}"
+    )
 
 
 def trace_token_source(
