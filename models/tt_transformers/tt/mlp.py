@@ -307,7 +307,7 @@ class MLP(LightweightModule):
         # each on 64 cores and 63.3 on 8, while this multiply costs 3.3 us on 64 cores and 21.8
         # on 8 -- it is pure data movement with no arithmetic to hide latency, so it scales with
         # core count. Inheriting cost 1.99 ms/token when ff1/ff3 moved to 8 cores and wiped out
-        # their 2.35 ms gain (perf_report2.txt).
+        # their 2.35 ms gain -- a net regression, which is how this coupling was found.
         #
         # Producing directly into w2's layout decouples them and costs nothing extra: the
         # to_memory_config below wanted that layout anyway, so it becomes the no-op its comment

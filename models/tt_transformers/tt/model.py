@@ -950,7 +950,7 @@ class Transformer(LightweightModule):
                 # low-worker settings that looked best standalone cost +0.66 ms/token in the model
                 # -- their real cost (24 us) is smaller than the standalone harness's own overhead,
                 # so those sweep results were noise. Only this call is large enough to measure that
-                # way. See perf_report7.txt (before) and perf_report10.txt (after).
+                # way; the before/after profiles were taken with --tracy_decode on this benchmark.
                 #
                 # Read from SAMPLING_AG_CONFIG rather than hardcoded, so it is per-model like
                 # every other collective setting. Off Galaxy that table carries a Qwen3-8B

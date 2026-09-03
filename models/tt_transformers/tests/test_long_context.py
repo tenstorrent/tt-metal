@@ -50,10 +50,19 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 # Decode pads any batch up to a single 32-row tile (model_config.py:689,
 # tile_padded_batch_rows = TILE_SIZE * ceil(max_batch_size / TILE_SIZE)), so the weight
 # matmuls, the norms and the chip-to-chip collectives run identical work at 1, 2 and 4 users.
-# Measured at 32k, batch 1, per token: 19.96 of 27.81 ms is that fixed part; only attention
-# over the KV cache (7.56 ms) and the paged cache write (0.29 ms) are charged per user. So
-# the expectation is ~19.96 + 7.85*batch ms/token, i.e. 2.17x aggregate throughput at 4 users
-# for 54% of the per-user rate. Confirming that trade is the point of this sweep.
+# Only attention over the KV cache and the paged cache write are charged per user.
+#
+# MEASURED at 32k (wall clock, the figure this benchmark reports): 32.62 / 38.96 / 51.97
+# ms/token at 1 / 2 / 4 users, which fits 26.2 + 6.45*batch -- so 2.51x aggregate
+# throughput at 4 users for 62.5% of the per-user rate. 30.7 / 51.3 / 77.0 tokens per
+# second aggregate.
+#
+# The prediction this replaced was 19.96 + 7.85*batch, giving 2.17x at 54%. It was wrong
+# in two ways worth remembering. The obvious one: it underestimated how much of the cost
+# is fixed. The subtle one: 19.96 was DEVICE time (chip-busy, summed over operations) while
+# the fitted 26.2 is WALL CLOCK, so the two intercepts are not comparable and mixing them
+# in one formula is the exact conflation this file warns about elsewhere -- at 32k batch 1
+# the same run is 27.81 ms of device time and 32.62 ms of wall clock.
 BATCH_SIZES = [1, 2, 4]
 MAX_GENERATED_TOKENS = 256  # hard cap on the decode loop
 INSTRUCT = True  # wrap the prompt in the model's chat template
@@ -796,8 +805,9 @@ def test_text_demo(
         row["decode_ms"] = avg_decode * 1000
         row["tok_s_user"] = 1 / avg_decode
         # Aggregate across users. The whole point of the batch sweep is the gap between this
-        # column and the per-user one: the fixed 19.96 ms/token is paid once however many
-        # users are in flight, so tok/s should rise while tok/s/u falls.
+        # column and the per-user one: the fixed part of a token's cost (measured at 26.2 ms
+        # wall clock -- see the BATCH_SIZES note at the top of this file) is paid once however
+        # many users are in flight, so tok/s should rise while tok/s/u falls.
         row["tok_s_total"] = batch_size / avg_decode
 
     # In accuracy mode the "output" is the reference's own continuation (teacher forcing fed it

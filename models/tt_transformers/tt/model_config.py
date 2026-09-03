@@ -850,7 +850,7 @@ class ModelArgs:
             #
             # A first attempt at this regressed, because the grid also sets ff1/ff3's per_core_N
             # and the elementwise SiLU(ff1)*ff3 inherited that placement, costing more than the
-            # matmuls saved (perf_report2.txt). mlp.py now produces that multiply directly into
+            # matmuls saved, a net regression. mlp.py now produces that multiply directly into
             # w2's layout instead of inheriting, so the two are no longer coupled.
             # Same gate as attn_input_grid above, and the same trade: measured faster on
             # Qwen3-8B, but the constant does not carry the even-division guarantee that
@@ -3767,7 +3767,7 @@ class ModelArgs:
         reaches 8, versus 2 at 64 cores, which measured 95.8 -> 63.3 us per call on the ff1/ff3
         shape. But it also sets per_core_N, so a low count strands the result on few cores, and
         the elementwise op that consumes it is pure data movement -- it went 3.3 -> 21.8 us per
-        call, costing more than the matmul saved (perf_report2.txt). Splitting the two lets each
+        call, costing more than the matmul saved. Splitting the two lets each
         side take the count that suits it. The spreading itself is not extra work: compute always
         happens on the 12 DRAM-adjacent cores and is redistributed from there regardless, so a
         wider destination is the same step aimed differently.
