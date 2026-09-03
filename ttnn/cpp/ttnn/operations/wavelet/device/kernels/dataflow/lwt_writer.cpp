@@ -118,7 +118,6 @@ ALWI void write_dram_output_groups(
     }
 }
 
-template <bool UseNocLocalWrite>
 ALWI void write_local_half_block(
     const Noc& noc,
     const UnicastEndpoint& local_endpoint,
@@ -135,25 +134,16 @@ ALWI void write_local_half_block(
 
     const uint32_t source_index = row * ttnn::operations::wavelet::device_protocol::kLwtHalfStickElements;
     const uint32_t destination_index = output_offset + local_output_index;
-    if constexpr (UseNocLocalWrite) {
-        noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            CoreLocalMem<uint32_t>(tile_addr + source_index * static_cast<uint32_t>(sizeof(float))),
-            local_endpoint,
-            ttnn::operations::wavelet::device_protocol::kLwtHalfStickBytes,
-            {},
-            ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
-                local_coordinates, dst_addr + destination_index * static_cast<uint32_t>(sizeof(float))));
-    } else {
-        auto* dst = reinterpret_cast<volatile tt_l1_ptr float*>(dst_addr);
-        const auto* src = reinterpret_cast<volatile tt_l1_ptr float*>(tile_addr);
-#pragma GCC unroll 8
-        for (uint32_t lane = 0; lane < ttnn::operations::wavelet::device_protocol::kLwtHalfStickElements; ++lane) {
-            dst[destination_index + lane] = src[source_index + lane];
-        }
-    }
+    noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+        CoreLocalMem<uint32_t>(tile_addr + source_index * static_cast<uint32_t>(sizeof(float))),
+        local_endpoint,
+        ttnn::operations::wavelet::device_protocol::kLwtHalfStickBytes,
+        {},
+        ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
+            local_coordinates, dst_addr + destination_index * static_cast<uint32_t>(sizeof(float))));
 }
 
-template <bool UseNocLocalWrite, bool TileNative, bool HybridTileMirror>
+template <bool TileNative, bool HybridTileMirror>
 ALWI void write_local_output_groups(
     const uint32_t dst_addr,
     const uint32_t cb_output,
@@ -170,7 +160,7 @@ ALWI void write_local_output_groups(
     Noc noc;
     UnicastEndpoint local_endpoint;
     const auto local_coordinates = ttnn::operations::wavelet::kernels::primitives::local_noc_coordinates(noc);
-    if constexpr (UseNocLocalWrite && !HybridTileMirror) {
+    if constexpr (!HybridTileMirror) {
         const uint32_t write_bytes =
             TileNative ? tile_bytes : ttnn::operations::wavelet::device_protocol::kLwtHalfStickBytes;
         noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -183,7 +173,7 @@ ALWI void write_local_output_groups(
         output_buffer.wait_front(3);
         const uint32_t output_tiles = output_buffer.get_read_ptr();
         const uint32_t group_base = group * ttnn::operations::wavelet::device_protocol::kLwtGroupOutputElements;
-        if constexpr (UseNocLocalWrite && HybridTileMirror) {
+        if constexpr (HybridTileMirror) {
             const uint32_t write_bytes =
                 TileNative ? tile_bytes : ttnn::operations::wavelet::device_protocol::kLwtHalfStickBytes;
             noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -195,24 +185,15 @@ ALWI void write_local_output_groups(
             const uint32_t destination_index = output_offset + group_base;
             const uint32_t destination_group = destination_index / group_elements;
             const uint32_t destination_addr = dst_addr + destination_group * group_bytes;
-            if constexpr (UseNocLocalWrite) {
 #pragma GCC unroll 3
-                for (uint32_t block = 0; block < blocks_per_group; ++block) {
-                    noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                        CoreLocalMem<uint32_t>(output_tiles + block * tile_bytes),
-                        local_endpoint,
-                        tile_bytes,
-                        {},
-                        ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
-                            local_coordinates, destination_addr + block * tile_bytes));
-                }
-            } else {
-                auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(destination_addr);
-                const auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_tiles);
-#pragma GCC unroll 4
-                for (uint32_t word = 0; word < group_bytes / sizeof(uint32_t); ++word) {
-                    dst[word] = src[word];
-                }
+            for (uint32_t block = 0; block < blocks_per_group; ++block) {
+                noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    CoreLocalMem<uint32_t>(output_tiles + block * tile_bytes),
+                    local_endpoint,
+                    tile_bytes,
+                    {},
+                    ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
+                        local_coordinates, destination_addr + block * tile_bytes));
             }
         } else {
             for (uint32_t row = 0; row < ttnn::operations::wavelet::device_protocol::kLwtRowsPerGroup; ++row) {
@@ -220,7 +201,7 @@ ALWI void write_local_output_groups(
                     group_base +
                     row * blocks_per_group * ttnn::operations::wavelet::device_protocol::kLwtHalfStickElements;
                 for (uint32_t block = 0; block < blocks_per_group; ++block) {
-                    write_local_half_block<UseNocLocalWrite>(
+                    write_local_half_block(
                         noc,
                         local_endpoint,
                         local_coordinates,
@@ -238,35 +219,24 @@ ALWI void write_local_output_groups(
             if (write_tile_mirror && destination_index % group_elements == 0) {
                 const uint32_t destination_group = destination_index / group_elements;
                 const uint32_t destination_addr = dst_addr + tile_mirror_offset + destination_group * group_bytes;
-                if constexpr (UseNocLocalWrite) {
-                    noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    local_endpoint,
+                    tile_bytes,
+                    ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
+                        local_coordinates, destination_addr));
+#pragma GCC unroll 3
+                for (uint32_t block = 0; block < blocks_per_group; ++block) {
+                    noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        CoreLocalMem<uint32_t>(output_tiles + block * tile_bytes),
                         local_endpoint,
                         tile_bytes,
+                        {},
                         ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
-                            local_coordinates, destination_addr));
-#pragma GCC unroll 3
-                    for (uint32_t block = 0; block < blocks_per_group; ++block) {
-                        noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                            CoreLocalMem<uint32_t>(output_tiles + block * tile_bytes),
-                            local_endpoint,
-                            tile_bytes,
-                            {},
-                            ttnn::operations::wavelet::kernels::primitives::local_noc_destination(
-                                local_coordinates, destination_addr + block * tile_bytes));
-                    }
-                } else {
-                    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(destination_addr);
-                    const auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_tiles);
-#pragma GCC unroll 4
-                    for (uint32_t word = 0; word < group_bytes / sizeof(uint32_t); ++word) {
-                        dst[word] = src[word];
-                    }
+                            local_coordinates, destination_addr + block * tile_bytes));
                 }
             }
         }
-        if constexpr (UseNocLocalWrite) {
-            noc.async_writes_flushed();
-        }
+        noc.async_writes_flushed();
         output_buffer.pop_front(3);
     }
 }
@@ -282,18 +252,17 @@ void kernel_main() {
     constexpr uint32_t cb_config = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
     constexpr uint32_t cb_sync = get_compile_time_arg_val(2);
-    constexpr bool use_noc_local_write = get_compile_time_arg_val(3) != 0;
-    constexpr bool tile_native_workspace = get_compile_time_arg_val(4) != 0;
-    constexpr bool inverse = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t cb_interleave = get_compile_time_arg_val(6);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(7);
-    constexpr uint32_t interleave_batch_sticks = get_compile_time_arg_val(8);
-    constexpr bool hybrid_tile_mirror = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t cb_workspace_a = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_workspace_b = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_workspace_scratch = get_compile_time_arg_val(12);
+    constexpr bool tile_native_workspace = get_compile_time_arg_val(3) != 0;
+    constexpr bool inverse = get_compile_time_arg_val(4) != 0;
+    constexpr uint32_t cb_interleave = get_compile_time_arg_val(5);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
+    constexpr uint32_t interleave_batch_sticks = get_compile_time_arg_val(7);
+    constexpr bool hybrid_tile_mirror = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t cb_workspace_a = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_workspace_b = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_workspace_scratch = get_compile_time_arg_val(11);
     constexpr uint32_t tile_bytes = get_tile_size(cb_output);
-    constexpr auto config_args = TensorAccessorArgs<13>();
+    constexpr auto config_args = TensorAccessorArgs<12>();
     constexpr auto final_args = TensorAccessorArgs<config_args.next_compile_time_args_offset()>();
     CircularBuffer config_buffer(cb_config);
     CircularBuffer sync_buffer(cb_sync);
@@ -361,7 +330,7 @@ void kernel_main() {
                         chunk_words[config_word_index(LwtChunkConfigWord::kIlwtOutputLength)]);
                     direct_interleave_written = true;
                 } else {
-                    write_local_output_groups<use_noc_local_write, tile_native_workspace, hybrid_tile_mirror>(
+                    write_local_output_groups<tile_native_workspace, hybrid_tile_mirror>(
                         resolve_workspace_slot(
                             route[config_word_index(RouteConfigWord::kRouteOutputAddr)],
                             workspace_a_addr,
@@ -434,7 +403,7 @@ void kernel_main() {
                     write_dram_output_groups(
                         dst, cb_output, tile_bytes, output_page, output_offset, output_length, group_count);
                 } else {
-                    write_local_output_groups<use_noc_local_write, tile_native_workspace, hybrid_tile_mirror>(
+                    write_local_output_groups<tile_native_workspace, hybrid_tile_mirror>(
                         resolve_workspace_slot(output_addr, workspace_a_addr, workspace_b_addr, workspace_scratch_addr),
                         cb_output,
                         tile_bytes,

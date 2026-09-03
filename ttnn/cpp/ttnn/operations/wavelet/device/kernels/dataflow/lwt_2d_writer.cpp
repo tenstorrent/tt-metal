@@ -434,6 +434,17 @@ void kernel_main() {
     constexpr uint32_t plane_arg_count = 2 * ttnn::operations::wavelet::device_protocol::kLwt2DPlaneCount;
     const uint32_t route_config_addr = get_arg_val<uint32_t>(plane_arg_count);
     const uint32_t band_config_addr = get_arg_val<uint32_t>(plane_arg_count + 1);
+#ifdef ILWT_2D
+    const uint32_t output_addr = get_arg_val<uint32_t>(plane_arg_count + 2);
+    const uint32_t output_tile_columns = get_arg_val<uint32_t>(plane_arg_count + 3);
+    const uint32_t chunk_begin = get_arg_val<uint32_t>(plane_arg_count + 4);
+    const uint32_t chunk_count = get_arg_val<uint32_t>(plane_arg_count + 5);
+    const uint32_t route_count = get_arg_val<uint32_t>(plane_arg_count + 6);
+    const uint32_t pad_y = get_arg_val<uint32_t>(plane_arg_count + 7);
+    const uint32_t pad_x = get_arg_val<uint32_t>(plane_arg_count + 8);
+    const uint32_t chunks_per_sample = get_arg_val<uint32_t>(plane_arg_count + 9);
+    const uint32_t output_tiles_per_sample = get_arg_val<uint32_t>(plane_arg_count + 10);
+#else
     uint32_t output_addrs[ttnn::operations::wavelet::device_protocol::kLwt2DBandCount];
     for (uint32_t band = 0; band < ttnn::operations::wavelet::device_protocol::kLwt2DBandCount; ++band) {
         output_addrs[band] = get_arg_val<uint32_t>(plane_arg_count + 2 + band);
@@ -442,12 +453,6 @@ void kernel_main() {
     const uint32_t chunk_begin = get_arg_val<uint32_t>(plane_arg_count + 7);
     const uint32_t chunk_count = get_arg_val<uint32_t>(plane_arg_count + 8);
     const uint32_t route_count = get_arg_val<uint32_t>(plane_arg_count + 9);
-#ifdef ILWT_2D
-    const uint32_t pad_y = get_arg_val<uint32_t>(plane_arg_count + 10);
-    const uint32_t pad_x = get_arg_val<uint32_t>(plane_arg_count + 11);
-    const uint32_t chunks_per_sample = get_arg_val<uint32_t>(plane_arg_count + 12);
-    const uint32_t output_tiles_per_sample = get_arg_val<uint32_t>(plane_arg_count + 13);
-#else
     const uint32_t chunks_per_sample = get_arg_val<uint32_t>(plane_arg_count + 10);
     const uint32_t output_tiles_per_sample = get_arg_val<uint32_t>(plane_arg_count + 11);
 #endif
@@ -463,7 +468,6 @@ void kernel_main() {
     CircularBuffer output_buffer(cb_output);
     CircularBuffer sync_buffer(cb_sync);
     const uint32_t noc_scratch_addr = CircularBuffer(cb_noc_scratch).get_write_ptr();
-    constexpr uint32_t writer_config_capacity = split_scratch_bytes / 2;
     const uint32_t writer_config_addr = noc_scratch_addr + split_scratch_bytes / 2;
 
     for (uint32_t local_chunk = 0; local_chunk < chunk_count; ++local_chunk) {
@@ -472,9 +476,6 @@ void kernel_main() {
         const uint32_t global_chunk = global_work_item - batch_index * chunks_per_sample;
         const uint32_t output_tile_base = batch_index * output_tiles_per_sample;
         output_buffer.wait_front(1);
-        ASSERT(
-            route_count * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes <=
-            writer_config_capacity);
         preload_config_pages(
             route_args,
             route_config_addr,
@@ -530,7 +531,7 @@ void kernel_main() {
         }
         write_interleaved_output(
             output_args,
-            output_addrs[0],
+            output_addr,
             output_tile_columns,
             output_tile_base,
             plane_addrs,

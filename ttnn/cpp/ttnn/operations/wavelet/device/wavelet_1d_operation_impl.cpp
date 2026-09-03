@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <tt_stl/assert.hpp>
 #include <utility>
@@ -232,8 +231,6 @@ struct Logical1DShape {
     return checked_u32(std::min<uint64_t>(kDefaultL1SignalBudgetBytes, capacity_limited_budget), "LWT signal budget");
 }
 
-[[nodiscard]] std::optional<WorkspaceLayout> workspace_layout_override() { return std::nullopt; }
-
 [[nodiscard]] bool prefer_tile_native_workspace(const LwtExecutionPlan& plan, const tt::ARCH architecture) {
     TT_FATAL(!plan.chunks.empty(), "LWT workspace selection requires at least one chunk");
     if (architecture == tt::ARCH::BLACKHOLE) {
@@ -430,7 +427,7 @@ void add_narrow_tile_circular_buffer(
     const uint32_t chunks_per_sample,
     const uint32_t input_pages_per_sample) {
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.reserve(10);
+    args.reserve(13);
     args.push_back(const_cast<tt::tt_metal::Buffer*>(&input_buffer));
     args.push_back(checked_u32(plan.full_plan.preprocess_layout.input.length, "LWT input length"));
     args.push_back(plan.full_plan.preprocess_layout.pad_config.left);
@@ -454,7 +451,7 @@ void add_narrow_tile_circular_buffer(
     const uint32_t chunks_per_sample,
     const uint32_t output_pages_per_sample) {
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.reserve(6);
+    args.reserve(9);
     args.push_back(buffers.route_config->get_backing_buffer());
     args.push_back(work.chunk_begin);
     args.push_back(work.chunk_count);
@@ -537,7 +534,6 @@ void add_narrow_tile_circular_buffer(
         kWriterConfigCb,
         kOutputCb,
         kSyncCb,
-        1U,
         static_cast<uint32_t>(workspace_layout == WorkspaceLayout::kTileNative),
         0U,
         kInterleaveCb,
@@ -713,7 +709,7 @@ void add_narrow_tile_circular_buffer(
     const uint32_t chunks_per_sample,
     const uint32_t input_pages_per_sample) {
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.reserve(10);
+    args.reserve(13);
     args.push_back(const_cast<tt::tt_metal::Buffer*>(&approximation_buffer));
     args.push_back(const_cast<tt::tt_metal::Buffer*>(&detail_buffer));
     args.push_back(checked_u32(plan.full_plan.coefficient_length, "ILWT coefficient length"));
@@ -737,7 +733,7 @@ void add_narrow_tile_circular_buffer(
     const uint32_t chunks_per_sample,
     const uint32_t output_pages_per_sample) {
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.reserve(7);
+    args.reserve(10);
     args.push_back(buffers.route_config->get_backing_buffer());
     args.push_back(work.chunk_begin);
     args.push_back(work.chunk_count);
@@ -822,7 +818,6 @@ void add_narrow_tile_circular_buffer(
         kWriterConfigCb,
         kOutputCb,
         kSyncCb,
-        1U,
         static_cast<uint32_t>(workspace_layout == WorkspaceLayout::kTileNative),
         1U,
         kInterleaveCb,
@@ -975,8 +970,7 @@ template <typename Scheme>
     const uint32_t max_cores =
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
-    const std::optional<WorkspaceLayout> workspace_override = workspace_layout_override();
-    const WorkspaceLayout initial_layout = workspace_override.value_or(WorkspaceLayout::kRowMajor);
+    constexpr WorkspaceLayout initial_layout = WorkspaceLayout::kRowMajor;
     const bool initial_hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, initial_layout);
     const uint32_t signal_budget_bytes =
@@ -985,8 +979,7 @@ template <typename Scheme>
         make_lwt_execution_plan(std::move(full_plan), max_cores, signal_budget_bytes, initial_layout);
     const bool tile_native_preferred = prefer_tile_native_workspace(plan, architecture_policy.architecture);
     const bool hybrid_has_steady_state = plan.groups_per_chunk >= kAlignedNocMinGroupsPerChunk;
-    if (!workspace_override.has_value() && tile_native_preferred &&
-        (!initial_hybrid_tile_mirror || !hybrid_has_steady_state)) {
+    if (tile_native_preferred && (!initial_hybrid_tile_mirror || !hybrid_has_steady_state)) {
         plan = make_lwt_execution_plan(
             std::move(plan.full_plan), max_cores, signal_budget_bytes, WorkspaceLayout::kTileNative);
     }
@@ -1009,8 +1002,7 @@ template <typename Scheme>
     const size_t coefficient_length,
     const BoundaryMode boundary_mode,
     const uint32_t available_l1_bytes) {
-    const std::optional<WorkspaceLayout> workspace_override = workspace_layout_override();
-    const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch(), workspace_override);
+    const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     const uint32_t interleave_batch_sticks = ilwt_interleave_batch_sticks(architecture_policy.architecture);
     const bool initial_hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, architecture_policy.ilwt_layout);
@@ -1028,7 +1020,7 @@ template <typename Scheme>
     const WorkspaceLayout preferred_layout =
         prefer_tile_native_inverse_workspace(plan, architecture_policy.architecture) ? WorkspaceLayout::kTileNative
                                                                                      : WorkspaceLayout::kRowMajor;
-    if (!workspace_override.has_value() && plan.workspace_layout != preferred_layout) {
+    if (plan.workspace_layout != preferred_layout) {
         const ArchitecturePolicy preferred_policy =
             make_architecture_policy(architecture_policy.architecture, preferred_layout);
         plan = make_ilwt_execution_plan(

@@ -1205,14 +1205,13 @@ void kernel_main() {
     constexpr auto chunk_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 #endif
     constexpr auto route_args = TensorAccessorArgs<chunk_args.next_compile_time_args_offset()>();
+#ifndef ILWT_2D
     constexpr uint32_t boundary_mode_arg_offset = route_args.next_compile_time_args_offset();
     constexpr auto boundary_mode =
         static_cast<ttnn::operations::wavelet::BoundaryMode>(get_compile_time_arg_val(boundary_mode_arg_offset));
-    constexpr uint32_t split_scratch_bytes = get_compile_time_arg_val(boundary_mode_arg_offset + 1);
     static_assert(
         ttnn::operations::wavelet::is_supported_lwt_boundary_mode(boundary_mode),
         "Unsupported 2D signal-extension mode");
-#ifndef ILWT_2D
     const auto input = TensorAccessor(input_args, input_addr, kTileBytes);
 #endif
     CircularBuffer sync_buffer(cb_sync);
@@ -1224,7 +1223,6 @@ void kernel_main() {
         zero_tile[word] = 0;
     }
     const uint32_t noc_scratch_addr = CircularBuffer(cb_noc_scratch).get_write_ptr();
-    constexpr uint32_t reader_config_capacity = split_scratch_bytes / 2;
     const uint32_t reader_config_addr = noc_scratch_addr;
 
     for (uint32_t local_chunk = 0; local_chunk < chunk_count; ++local_chunk) {
@@ -1282,9 +1280,6 @@ void kernel_main() {
             plane_tile_columns,
             noc_scratch_addr);
 #endif
-        ASSERT(
-            route_count * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes <=
-            reader_config_capacity);
         preload_config_pages(
             route_args,
             route_config_addr,

@@ -37,12 +37,6 @@ constexpr bool kInverse = true;
 constexpr bool kInverse = false;
 #endif
 
-#if defined(ILWT_2D)
-constexpr bool kCompactInverseCodegen = true;
-#else
-constexpr bool kCompactInverseCodegen = false;
-#endif
-
 #define WAVELET_2D_STENCIL_ATTRIBUTES __attribute__((noinline, noclone, optimize("Os")))
 #define WAVELET_2D_AXIS_ATTRIBUTES __attribute__((noinline, noclone, optimize("Os")))
 
@@ -276,7 +270,7 @@ inline void run_step(
             run_scale(tile_count, cb_source0, cb_output, Step::coeff_bits[0]);
         }
     } else {
-        if constexpr (kCompactInverseCodegen) {
+        if constexpr (kInverse) {
             run_stencil<Step::k, Vertical, InlineTerminalScale>(
                 tile_count,
                 cb_source0,
