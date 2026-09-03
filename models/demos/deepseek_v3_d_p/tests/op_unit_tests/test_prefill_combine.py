@@ -360,14 +360,24 @@ def run_combine(
             tt_expert_offsets,
         )
 
-    # One capture, then _PERF_ITERATIONS replays. Timing and checking now share a single test case, so
-    # they must share a single execution path: what the PCC check validates is the very trace the numbers
-    # come from, not a separate eager launch that could differ from it.
+    # One eager launch, then one capture and _PERF_ITERATIONS replays. Timing and checking share a
+    # single test case, so they must share a single execution path: what the PCC check validates is
+    # the very trace the numbers come from, not the eager launch below.
     #
-    # Capture does NOT execute -- the op first runs on the replays below, and `tt_output` ends up holding
-    # the LAST replay's result, which is what the check further down reads. Checking the last launch
-    # rather than the first is deliberate: it proves a launch leaves the op's counters fit for the next
-    # one, which a check placed between capture and replays would silently stop testing.
+    # That eager launch is not a warmup for the numbers' sake, it is what makes the capture legal.
+    # On a program cache miss combine allocates its two cross-device GlobalSemaphores and zeroes
+    # them, and a trace capture rejects writes -- so capturing a cold op dies with "Writes are not
+    # supported during trace capture". Launching once takes the miss; the captured launch is a hit.
+    # Its output is dropped: nothing reads it, and at 8x4 it is 2.3 GB that the phases after this
+    # one need back.
+    warmup_output = tt_combine(*combine_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warmup_output)
+
+    # Capture does NOT execute -- the op runs again on the replays below, and `tt_output` ends up
+    # holding the LAST replay's result, which is what the check further down reads. Checking the last
+    # launch rather than the first is deliberate: it proves a launch leaves the op's counters fit for
+    # the next one, which a check placed between capture and replays would silently stop testing.
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     tt_output = tt_combine(*combine_inputs)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
