@@ -137,7 +137,7 @@ This is the simplest correctness oracle and the most expensive movement option.
 
 `mla_to_temporal_sp` performs three operations:
 
-1. `all_gather` all eight `[1,640,7168]` physical shards across the SP axis;
+1. `high_bw_all_gather` all eight `[1,640,7168]` physical shards across the SP axis into a preallocated DRAM output;
 2. slice and concatenate the logical segments in chronological order;
 3. `mesh_partition` the chronological `[1,5120,7168]` tensor into eight new
    640-row shards.
@@ -154,7 +154,7 @@ flowchart LR
       PX[...]
       P7[SP7: 4480..5119]
     end
-    Physical --> AG[SP all-gather: full hidden width]
+    Physical --> AG[High-bandwidth SP all-gather: full hidden width]
     AG --> Chrono[Concatenate 960..6079]
     Chrono --> MP[Partition into 8 equal temporal shards]
     MP --> T0[T0: 960..1599]
@@ -199,7 +199,7 @@ existing convolution and recurrence paths
 KDA produces chronological temporal shards, but the next layer expects the MLA
 physical layout. `temporal_to_mla_sp` therefore:
 
-1. all-gathers the chronological output across SP;
+1. high-bandwidth all-gathers the chronological output across SP into a preallocated DRAM output;
 2. walks the same logical segments and assigns slices back to their physical
    owners;
 3. concatenates SP1 head and tail into its original 640 local rows;
@@ -230,7 +230,7 @@ The offset-specific cost is two full-SP exchanges:
 | After KDA | `[1,640,1792]` BF16 | TP-sharded hidden output |
 
 This is in addition to KDA's normal convolution, recurrence, and TP collectives.
-It is deliberately retained as a correctness and performance reference.
+The prototype opts into two layer-owned persistent gather outputs at construction and uses the SP-axis link count reported by `TT_CCL` (two links on Galaxy). It is deliberately retained as a correctness and performance reference.
 
 ## Prototype 2: sequential tail
 
@@ -503,19 +503,33 @@ compared both states on every SP rank against the no-offset device result.
 
 ### Performance
 
-On the available eight-chip Blackhole host, a production-dimension SP2×TP4
-trace benchmark measured T=5120 and offset 960:
+On the available eight-chip Blackhole host, the reproducible synthetic
+production-dimension SP2×TP4 benchmark measured T=5120 and offset 960 with
+Fabric 1D:
 
-| Path | Median warm trace latency | Relative to no offset |
-| --- | ---: | ---: |
-| No-offset baseline | 9.541 ms | 1.000× |
-| Full reshard | 11.562 ms | 1.212× |
-| Sequential tail | 12.304 ms | 1.290× |
+| Path | Median warm trace latency | Offset overhead | Relative to no offset |
+| --- | ---: | ---: | ---: |
+| No-offset baseline | 9.531 ms | — | 1.000× |
+| Full reshard, `high_bw_all_gather` | 12.268 ms | 2.737 ms | 1.287× |
+| Sequential tail | 13.658 ms | 4.127 ms | 1.433× |
 
-Each number is the median of five samples of ten synchronized trace replays;
-compilation and host validation are excluded. Sequential tail was 6.4% slower
-than full reshard in that topology. Output PCC rounded to 1.0 and both returned
-states had PCC 1.0 against the no-offset device result on both SP ranks.
+These are medians across five independent sessions. Each session reports the
+median of five samples of ten synchronized trace replays; compilation and host
+validation are excluded. The five session medians in milliseconds were:
+
+- no offset: `[9.536, 9.531, 9.533, 9.527, 9.531]` (range 9.527–9.536);
+- high-bandwidth full reshard:
+  `[12.329, 12.268, 12.281, 12.216, 12.213]` (range 12.213–12.329);
+- sequential tail: `[13.806, 13.792, 13.658, 13.577, 13.544]`
+  (range 13.544–13.806).
+
+The benchmark is
+[`test_synthetic_kimi_k3_offset_prototype_perf`](tests/kda/perf/test_layer_perf.py).
+On this SP2 topology, switching from the earlier generic-gather measurement
+(11.562 ms) to the high-bandwidth implementation did not reduce end-to-end
+latency: the new calibrated median is 0.706 ms higher. High-bandwidth full
+reshard remains 1.391 ms faster than the current sequential-tail proof on this
+box.
 
 This is **not** a Galaxy SP8×TP4 performance result. The host exposes eight
 chips, so the 32-chip mesh was skipped. Production-dimension SP8×TP1 reached

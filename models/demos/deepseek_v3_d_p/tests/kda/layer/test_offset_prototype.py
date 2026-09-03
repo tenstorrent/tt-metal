@@ -175,7 +175,8 @@ def test_offset_full_reshard_matches_natural_kda(
         weights,
         sp_axis=sequence_parallel_axis,
         tp_axis=tensor_parallel_axis,
-        tt_ccl=None if tuple(mesh_device.shape)[tensor_parallel_axis] == 1 else TT_CCL(mesh_device),
+        tt_ccl=TT_CCL(mesh_device),
+        enable_full_reshard_offset_prototype=offset_prototype == "full_reshard",
         program_config=KDAProgramConfig(
             recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
             gated_rms_output_dtype=ttnn.bfloat16,

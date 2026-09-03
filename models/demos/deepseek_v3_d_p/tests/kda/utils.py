@@ -311,6 +311,7 @@ def make_kimi_k3_device_case(
     program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
     cache_weights: bool = True,
+    enable_full_reshard_offset_prototype: bool = False,
 ) -> tuple[ttKDA, ttnn.Tensor]:
     """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
     sequence_parallel_axis = 1 - tensor_parallel_axis
@@ -353,6 +354,7 @@ def make_kimi_k3_device_case(
         sp_axis=sequence_parallel_axis,
         tp_axis=tensor_parallel_axis,
         program_config=selected_program_config,
+        enable_full_reshard_offset_prototype=enable_full_reshard_offset_prototype,
     )
     return layer, hidden
 

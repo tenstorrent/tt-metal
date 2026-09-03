@@ -46,6 +46,8 @@ def mla_to_temporal_sp(
     *,
     actual_start: int,
     sequence_parallel_axis: int,
+    gather_output: ttnn.Tensor,
+    num_links: int,
 ) -> ttnn.Tensor:
     """Reshard MLA physical rows into equal chronological SP partitions."""
     mesh_device = tensor.device()
@@ -60,11 +62,12 @@ def mla_to_temporal_sp(
     if actual_start % _PROTOTYPE_GLOBAL_SEQUENCE == 0:
         return tensor
 
-    physical = ttnn.all_gather(
+    physical = ttnn.experimental.high_bw_all_gather(
         tensor,
         dim=1,
+        output_tensor=gather_output,
         cluster_axis=sequence_parallel_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=num_links,
     )
     chronological_parts = [
         _slice_sequence(physical, rank * local_sequence + begin, rank * local_sequence + end)
@@ -84,6 +87,8 @@ def temporal_to_mla_sp(
     *,
     actual_start: int,
     sequence_parallel_axis: int,
+    gather_output: ttnn.Tensor,
+    num_links: int,
 ) -> ttnn.Tensor:
     """Restore chronological KDA output to MLA's physical SP row placement."""
     mesh_device = tensor.device()
@@ -98,11 +103,12 @@ def temporal_to_mla_sp(
     if actual_start % _PROTOTYPE_GLOBAL_SEQUENCE == 0:
         return tensor
 
-    chronological = ttnn.all_gather(
+    chronological = ttnn.experimental.high_bw_all_gather(
         tensor,
         dim=1,
+        output_tensor=gather_output,
         cluster_axis=sequence_parallel_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=num_links,
     )
     rank_parts: list[list[ttnn.Tensor]] = [[] for _ in range(sp_size)]
     cursor = 0

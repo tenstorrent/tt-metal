@@ -11,7 +11,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 pytestmark = [
@@ -330,7 +331,9 @@ def _trace_wall_samples_ms(
     hidden: ttnn.Tensor,
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+    forward_kwargs: dict[str, Any] | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
+    forward_kwargs = forward_kwargs or {}
     state = None
     warm_output = None
     warm_state = None
@@ -339,7 +342,7 @@ def _trace_wall_samples_ms(
     next_state = None
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state)
+        warm_output, warm_state = layer.forward(hidden, state, **forward_kwargs)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -347,7 +350,7 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state)
+        output, next_state = layer.forward(hidden, state, **forward_kwargs)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -495,6 +498,90 @@ def test_kimi_k3_layer_1_perf(
         f"{layout} median trace wall {median_wall_ms:.3f} ms is outside LoudBox range "
         f"[{min_wall_ms:.3f}, {max_wall_ms:.3f}] ms (reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis",
+    [pytest.param((2, 4), 1, id="SP2xTP4")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="fabric_1d")],
+    indirect=True,
+)
+def test_synthetic_kimi_k3_offset_prototype_perf(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+) -> None:
+    """Compare offset prototypes at production shape with the standard warm-trace protocol."""
+    actual_start = 960
+    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    sequence_parallel_axis = 1 - tensor_parallel_axis
+    sequence_parallel_size = tuple(mesh_device.shape)[sequence_parallel_axis]
+    local_sequence = _SEQUENCE // sequence_parallel_size
+    positions = rotated_chip_positions(actual_start, sequence_parallel_size, local_sequence)
+    relative_positions = torch.tensor(positions, dtype=torch.int64).flatten() - actual_start
+    physical_case = replace(case, hidden=case.hidden.index_select(1, relative_positions))
+
+    baseline_layer, baseline_hidden = make_kimi_k3_device_case(
+        mesh_device,
+        case,
+        tensor_parallel_axis=tensor_parallel_axis,
+        cache_weights=False,
+    )
+    offset_layer, physical_hidden = make_kimi_k3_device_case(
+        mesh_device,
+        physical_case,
+        tensor_parallel_axis=tensor_parallel_axis,
+        weights=baseline_layer.weights,
+        cache_weights=False,
+        enable_full_reshard_offset_prototype=True,
+    )
+
+    paths = {
+        "no_offset": (baseline_layer, baseline_hidden, {}),
+        "full_reshard_high_bw": (
+            offset_layer,
+            physical_hidden,
+            {"actual_start": actual_start, "offset_prototype": "full_reshard"},
+        ),
+        "sequential_tail": (
+            offset_layer,
+            physical_hidden,
+            {"actual_start": actual_start, "offset_prototype": "sequential_tail"},
+        ),
+    }
+    samples_by_path = {}
+    medians_ms = {}
+    for name, (layer, hidden, forward_kwargs) in paths.items():
+        samples_ms, _ = _trace_wall_samples_ms(
+            mesh_device,
+            layer,
+            hidden,
+            _REPETITIONS,
+            forward_kwargs=forward_kwargs,
+        )
+        samples_by_path[name] = samples_ms
+        medians_ms[name] = statistics.median(samples_ms)
+
+    baseline_ms = medians_ms["no_offset"]
+    result = {
+        "fabric_config": ttnn.get_fabric_config().name,
+        "layout": "SP2xTP4",
+        "sequence": _SEQUENCE,
+        "offset": actual_start,
+        "weights": "deterministic synthetic",
+        "repetitions": _REPETITIONS,
+        "timing_sample_count": _TIMING_SAMPLES,
+        "trace_wall_samples_ms": samples_by_path,
+        "median_trace_wall_ms": medians_ms,
+        "offset_overhead_ms": {
+            name: median_ms - baseline_ms for name, median_ms in medians_ms.items() if name != "no_offset"
+        },
+        "relative_to_no_offset": {name: median_ms / baseline_ms for name, median_ms in medians_ms.items()},
+    }
+    print("KDA_OFFSET_PROTOTYPE_PERF=" + json.dumps(result, sort_keys=True))
 
 
 @pytest.mark.parametrize(

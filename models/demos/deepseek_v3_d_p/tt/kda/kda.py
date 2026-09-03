@@ -92,6 +92,7 @@ class ttKDA:
         tp_axis: int = 1,
         program_config: KDAProgramConfig | None = None,
         weights: KDAWeights | None = None,
+        enable_full_reshard_offset_prototype: bool = False,
     ) -> None:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
@@ -139,6 +140,40 @@ class ttKDA:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
+        self._full_reshard_input_gather_output = None
+        self._full_reshard_output_gather_output = None
+        if enable_full_reshard_offset_prototype:
+            if self.sequence_parallel_size == 1:
+                raise ValueError("full-reshard offset prototype requires sequence parallelism")
+            if self.tt_ccl is None:
+                raise ValueError("full-reshard offset prototype requires tt_ccl")
+            self._full_reshard_input_gather_output = ttnn.from_torch(
+                torch.zeros(1, 5120, config.hidden_size),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            output_mesh_dims: list[int | None] = [None, None]
+            output_mesh_dims[self.tensor_parallel_axis] = 2 if self.tensor_parallel_size > 1 else None
+            output_mapper = (
+                ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=tuple(output_mesh_dims),
+                    mesh_shape=tuple(mesh_device.shape),
+                )
+                if self.tensor_parallel_size > 1
+                else ttnn.ReplicateTensorToMesh(mesh_device)
+            )
+            self._full_reshard_output_gather_output = ttnn.from_torch(
+                torch.zeros(1, 5120, config.hidden_size),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=output_mapper,
+            )
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -479,10 +514,17 @@ class ttKDA:
                 local_sequence=hidden_states.shape[1],
             )
         if offset_prototype == "full_reshard" and actual_start:
+            if self._full_reshard_input_gather_output is None:
+                raise ValueError(
+                    "construct ttKDA with enable_full_reshard_offset_prototype=True "
+                    "before running a non-zero full-reshard offset"
+                )
             temporal_hidden = mla_to_temporal_sp(
                 hidden_states,
                 actual_start=actual_start,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                gather_output=self._full_reshard_input_gather_output,
+                num_links=self.tt_ccl.get_num_links(self.sequence_parallel_axis),
             )
         projected = self._project_inputs(temporal_hidden)
         if offset_prototype == "sequential_tail" and self.sequence_parallel_size > 1:
@@ -512,5 +554,7 @@ class ttKDA:
                 output,
                 actual_start=actual_start,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                gather_output=self._full_reshard_output_gather_output,
+                num_links=self.tt_ccl.get_num_links(self.sequence_parallel_axis),
             )
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
