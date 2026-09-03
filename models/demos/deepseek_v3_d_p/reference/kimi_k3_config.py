@@ -30,6 +30,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -208,3 +211,30 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """The HF JSON-shaped fields `KDAConfig` consumes, built from the pinned Kimi-K3 constants.
+
+    Kimi-K3's own config.json cannot be loaded here: its `model_type` is `kimi_linear` and the
+    checkpoint's remote code raises ImportError without `fla-core`. So the KDA half of the config is
+    assembled from the constants above rather than parsed.
+    """
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
