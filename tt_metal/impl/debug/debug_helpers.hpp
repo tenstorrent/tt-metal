@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "llrt/core_descriptor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
