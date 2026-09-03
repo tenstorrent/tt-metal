@@ -110,8 +110,7 @@ class TtSWA(LightweightModule):
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
 
         # Built by alloc_state, which every caller runs before forward.
-        self._mask = None
-        self._head_cols = None
+        self._masks = None
         self._halo_bounds = None
         self._halo_num_devices = None
         self._slab_rope = None
@@ -186,26 +185,30 @@ class TtSWA(LightweightModule):
         )
 
     def _build_masks(self, seq_local: int):
-        """Additive mask over the key layout ``[halo | own rows]``. Both are chip-local and the chip
-        offset cancels, so ``i < j <= i + sw`` is the whole band and one replicated mask serves every
-        chip. float32 because bfloat16 cannot hold the column index exactly."""
+        """Additive masks over the key layout ``[halo | own rows]``, keyed on whether the carry is empty.
+
+        Both halves of the layout are chip-local and the chip offset cancels, so ``i < j <= i + sw`` is
+        the whole band and one replicated mask serves every chip. float32 because bfloat16 cannot hold
+        the column index exactly.
+
+        The empty-carry variant sends the halo columns to -inf on chip 0 only: a zero key still enters
+        the softmax denominator, and on the first chunk chip 0's halo is the zeroed carry while every
+        other chip's lies inside this same chunk."""
         sw = self.sliding_window
         width = sw + seq_local
 
         ic = self.ops.from_torch(torch.arange(seq_local).float().view(1, 1, seq_local, 1), dtype=ttnn.float32)
         jc = self.ops.from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32)
         band = ttnn.typecast(ttnn.log(ttnn.multiply(ttnn.gt(jc, ic), ttnn.le(jc, ttnn.add(ic, float(sw))))), self.dtype)
-        self._mask = band
 
-        head = ttnn.slice(band, [0, 0, 0, 0], [1, 1, seq_local, sw])
         chip = self.ops.from_torch(
             torch.arange(self.sp_factor).float().view(1, 1, self.sp_factor, 1),
             self.ops.mesh_mapper(sp_dim=2),
             dtype=ttnn.float32,
         )
-        not_chip_0 = ttnn.typecast(ttnn.log(ttnn.nez(chip)), self.dtype)
-        # Second variant for the first chunk, where the carry is empty: only chip 0 reads it.
-        self._head_cols = {False: head, True: ttnn.add(head, not_chip_0)}
+        keep = ttnn.nez(ttnn.add(ttnn.nez(chip), ttnn.ge(jc, float(sw))))
+        empty_carry = ttnn.typecast(ttnn.log(keep), self.dtype)
+        self._masks = {False: band, True: ttnn.add(band, empty_carry)}
 
     def _build_halo_bounds(self, chunk: int, seq_local: int):
         """This chip's halo: rows ``[d*seq_local, d*seq_local + sw)`` of ``[carry | gathered chunk]``.
@@ -272,17 +275,11 @@ class TtSWA(LightweightModule):
         halo = ttnn.slice(hist, start, end, slice_dim=2, num_devices=self._halo_num_devices)
         kv = ttnn.concat([halo, sliding_kv], dim=2)
 
-        # Only the halo columns move between chunks, over a fixed range, so this patches in place.
-        head_cols = self._head_cols[kv_actual == 0]
-        ttnn.experimental.slice_write(
-            head_cols, self._mask, start=[0, 0, 0, 0], end=[1, 1, seq_local, sw], step=[1, 1, 1, 1]
-        )
-
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
             kv,
             kv,
-            attn_mask=self._mask,
+            attn_mask=self._masks[kv_actual == 0],
             is_causal=False,
             scale=self.scaling,
             attention_sink=self.sinks_sdpa,
