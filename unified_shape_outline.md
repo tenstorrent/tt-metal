@@ -10,6 +10,15 @@ SPDX-License-Identifier: Apache-2.0
 > shapes, and every stage kept the selftest traces byte-identical. Stage 1 came in at **+188/-158 lines** across
 > `api.h`, `impl.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
 > selftest traces byte-identical and all eight device tests passing.
+>
+> **The declaration has moved on since.** The two-column comparisons below are about what
+> `Shape` changed, so they are left as the record of that; but a buffer is no longer declared
+> `u::Storage<In0> in0_storage(kDfbIn0)`. It states its ENDPOINT --
+> `u::Input<0, kDfbIn0, In0> in0_storage;` -- which carries the same `Shape` plus the DM
+> thread at its data-movement end, and the buffer id as a template argument rather than a
+> constructor value. `u::Storage` is now the shape-only base those three types derive from,
+> and cannot be constructed on its own. See `unified_overview.md` §1.2-1.3. The `kCb` prefix
+> in these snippets is also stale twice over: buffers are `kDfb`/`dfb_` now.
 
 Outline for phase 5 of [unified_llama_prefill.md](unified_llama_prefill.md). Every
 code block below either compiles today (the `Shape` type and its metafunctions were

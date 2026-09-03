@@ -299,8 +299,8 @@ using In  = u::Shape<4, 6>;
 using Row = u::Shape<1, 6>;
 using Col = u::Shape<4, 1>;
 
-u::ComputeBlock x = u::noc_load<1>(x_storage, x_acc, b).wait();
-u::ComputeBlock v = u::noc_load<1>(row_storage, v_acc, 0).wait();   // v : Row
+u::ComputeBlock x = u::noc_load(x_storage, x_acc, b).wait();
+u::ComputeBlock v = u::noc_load(row_storage, v_acc, 0).wait();      // v : Row
 
 u::noc_store<0>(out_storage.store(x + u::bcast<u::Axis::Rows>(v)), out_acc, b);
 ```
@@ -325,14 +325,18 @@ is written once per direction:
 using In  = u::Shape<kHt, kWt>;
 using Vec = u::reduce_shape<In, u::Axis::Cols>;      // Shape<kHt, 1>
 
-u::Storage<In>  x_storage(kCbX),  e_storage(kCbE),  out_storage(kCbOut);
-u::Storage<Vec> m_storage(kCbM),  s_storage(kCbS),  r_storage(kCbR);
-u::Storage<u::Shape<1, 1>> one_storage(kCbOne);
+u::Input<1, kDfbX, In>  x_storage;                 // DM thread 1 fills it
+u::Output<0, kDfbOut, In> out_storage;             // DM thread 0 drains it
+u::Intermediate<kDfbE, In> e_storage;              // compute at both ends
+u::Intermediate<kDfbM, Vec> m_storage;
+u::Intermediate<kDfbS, Vec> s_storage;
+u::Intermediate<kDfbR, Vec> r_storage;
+u::Input<1, kDfbOne, u::Shape<1, 1>> one_storage;
 
-u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage);       // kernel scope
+u::ComputeBlock one = u::fill_reduce_scaler(one_storage);          // kernel scope
 
 for (uint32_t b = 0; b < num_blocks; ++b) {
-    u::ComputeBlock x = u::noc_load<1>(x_storage, in, b).wait();
+    u::ComputeBlock x = u::noc_load(x_storage, in, b).wait();
 
     u::ComputeBlock m = m_storage.store(u::reduce_max<u::Axis::Cols>(x, one));
     u::ComputeBlock e = e_storage.store((x - u::bcast<u::Axis::Cols>(m)).exp());
@@ -356,8 +360,8 @@ three buffers, so changing `kHt` moves everything together.
 ### The scalar case: attention's 1/sqrt(d)
 
 ```cpp
-u::Storage<u::Shape<1, 1>> scale_storage(kCbScale);
-u::ComputeBlock scale = u::fill_scalar<1>(scale_storage, u::bf16_pair(1.0f / std::sqrt(kHeadDim)));
+u::Input<1, kDfbScale, u::Shape<1, 1>> scale_storage;
+u::ComputeBlock scale = u::fill_scalar(scale_storage, u::bf16_pair(1.0f / std::sqrt(kHeadDim)));
 
 ... scores * u::bcast<u::Axis::Both>(scale) ...
 ```

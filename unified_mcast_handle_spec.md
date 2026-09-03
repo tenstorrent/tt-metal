@@ -63,12 +63,12 @@ two operands are already on different pairs, so this is legal under (a):
 
 ```cpp
 // now: each handshake completes before the next begins
-ComputeBlock a = noc_load<0, 0>(a_storage, row, a_acc, idx).wait();
-ComputeBlock w = noc_load<1, 1>(w_storage, col, b_acc, idx).wait();
+ComputeBlock a = noc_load(a_storage, row, a_acc, idx).wait();   // a_storage : Input<0, ...>
+ComputeBlock w = noc_load(w_storage, col, b_acc, idx).wait();   // w_storage : Input<1, ...>
 
 // after: A's flag wait overlaps B's entire handshake
-auto ta = noc_load<0, 0>(a_storage, row, a_acc, idx);
-auto tb = noc_load<1, 1>(w_storage, col, b_acc, idx);
+auto ta = noc_load(a_storage, row, a_acc, idx);
+auto tb = noc_load(w_storage, col, b_acc, idx);
 ComputeBlock a = ta.wait();
 ComputeBlock w = tb.wait();
 ```

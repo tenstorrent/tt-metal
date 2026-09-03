@@ -182,25 +182,25 @@ void kernel_main() {
 
     u::matmul_init<Q, Kt>(kDfbQ, kDfbK, kDfbOut);
 
-    u::Storage<Q> q_storage(kDfbQ);
-    u::Storage<Kt> k_storage(kDfbK);
-    u::Storage<V> v_storage(kDfbV);
-    u::Storage<Scores> mask_storage(kDfbMask);
-    u::Storage<One> one_storage(kDfbOne);
-    u::Storage<Kt1> colones_storage(kDfbColOnes);
-    u::Storage<Scores> masked_storage(kDfbMasked);
-    u::Storage<Vec> rowmax_storage(kDfbRowMax);
-    u::Storage<Scores> prob_storage(kDfbProb);
-    u::Storage<Vec> rowsum_storage(kDfbRowSum);
-    u::Storage<Out> pv_storage(kDfbPV);
-    u::Storage<Out> oscaled_storage(kDfbOScaled);
-    u::Storage<Vec> corrold_storage(kDfbCorrOld);
-    u::Storage<Vec> m_storage(kDfbM);
-    u::Storage<Vec> l_storage(kDfbL);
-    u::Storage<Out> o_storage(kDfbO);
-    u::Storage<Vec> recipl_storage(kDfbRecipL);
-    u::Storage<Vec> mnow_storage(kDfbMNow);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbQ, Q> q_storage;
+    u::Input<0, kDfbK, Kt> k_storage;
+    u::Input<0, kDfbV, V> v_storage;
+    u::Input<0, kDfbMask, Scores> mask_storage;
+    u::Input<1, kDfbOne, One> one_storage;
+    u::Input<0, kDfbColOnes, Kt1> colones_storage;
+    u::Intermediate<kDfbMasked, Scores> masked_storage;
+    u::Intermediate<kDfbRowMax, Vec> rowmax_storage;
+    u::Intermediate<kDfbProb, Scores> prob_storage;
+    u::Intermediate<kDfbRowSum, Vec> rowsum_storage;
+    u::Intermediate<kDfbPV, Out> pv_storage;
+    u::Intermediate<kDfbOScaled, Out> oscaled_storage;
+    u::Intermediate<kDfbCorrOld, Vec> corrold_storage;
+    u::Intermediate<kDfbM, Vec> m_storage;
+    u::Intermediate<kDfbL, Vec> l_storage;
+    u::Intermediate<kDfbO, Out> o_storage;
+    u::Intermediate<kDfbRecipL, Vec> recipl_storage;
+    u::Intermediate<kDfbMNow, Vec> mnow_storage;
+    u::Output<1, kDfbOut, Out> out_storage;
 
     const auto q_acc = TensorAccessor(tensor::q);
     const auto k_acc = TensorAccessor(tensor::k);
@@ -214,9 +214,9 @@ void kernel_main() {
     // matmul_init's hardware startup above. Measured, a separate launch per q-chunk cost
     // 13.1us of fixed work each; what remains per chunk below is only what genuinely
     // belongs to it -- its queries, its state, its tail.
-    u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
+    u::ComputeBlock one = u::fill_reduce_scaler(one_storage, u::kReduceScalerOne);
     // reduce_max keeps the scaler above: a maximum has no matmul form.
-    u::ComputeBlock col_ones = u::noc_load<0>(colones_storage, colones_acc, 0).wait();
+    u::ComputeBlock col_ones = u::noc_load(colones_storage, colones_acc, 0).wait();
 
     // One launch covers this core's whole slice of the heads, so everything above --
     // matmul_init's hardware startup, the reduce scaler, the column of ones -- is paid once
@@ -253,7 +253,7 @@ void kernel_main() {
         const uint32_t chunks = (k_offset + (i + 1) * sq) / sk;
 #endif
 
-        u::ComputeBlock q = u::noc_load<0>(q_storage, q_acc, q_base + i).wait();
+        u::ComputeBlock q = u::noc_load(q_storage, q_acc, q_base + i).wait();
 
         // The running state, per query chunk: fresh here, drained by the tail below.
         // ~RetainedBlock asserts on a slot that was pushed and never waited on, so a
@@ -263,9 +263,9 @@ void kernel_main() {
         u::RetainedBlock<Out> o_slot;
 
         for (uint32_t j = 0; j < chunks; ++j) {
-            u::ComputeBlock k = u::noc_load<0>(k_storage, k_acc, kv_base + j).wait();
-            u::ComputeBlock v = u::noc_load<0>(v_storage, v_acc, kv_base + j).wait();
-            u::ComputeBlock mask = u::noc_load<0>(mask_storage, mask_acc, mask_idx++).wait();
+            u::ComputeBlock k = u::noc_load(k_storage, k_acc, kv_base + j).wait();
+            u::ComputeBlock v = u::noc_load(v_storage, v_acc, kv_base + j).wait();
+            u::ComputeBlock mask = u::noc_load(mask_storage, mask_acc, mask_idx++).wait();
 
             // The mask rides along in the matmul: `add` puts it into the product while that is
             // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
@@ -330,7 +330,7 @@ void kernel_main() {
         // This costs NO extra NOC traffic. The built-in store already issues one write
         // per page, since consecutive pages of an interleaved tensor sit on different
         // banks, so all that changes is the destination page index each write is given.
-        u::noc_store<1>(out_storage, o_done * u::bcast<u::Axis::Cols>(rl), [&](u::L1Entries pages) {
+        u::noc_store(out_storage, o_done * u::bcast<u::Axis::Cols>(rl), [&](u::L1Entries pages) {
             for (uint32_t p = 0; p < pages.count; ++p) {
                 // The block is row-major in L1: page p is its tile (p / dt, p % dt).
                 const uint32_t row = i * sq + p / dt;

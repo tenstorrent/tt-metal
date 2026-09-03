@@ -43,14 +43,18 @@ void kernel_main() {
     u::compute_init(kDfbIn, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in_storage(kDfbIn);
-    u::Storage<Block1D> out_storage(kDfbOut);
+    // The buffers state their ENDPOINTS: `in` is filled by DM thread 0 and read by compute,
+    // `out` is filled by compute and drained by DM thread 1. That is what the host binds as
+    // the DFB's producer and consumer, and it is read off these two lines rather than
+    // inferred from the noc calls below -- so the thread is said once, here.
+    u::Input<0, kDfbIn, Block1D> in_storage;
+    u::Output<1, kDfbOut, Block1D> out_storage;
 
     const auto in = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        u::ComputeBlock a = u::noc_load<0>(in_storage, in, b).wait();
+        u::ComputeBlock a = u::noc_load(in_storage, in, b).wait();
         u::Block result = out_storage.store(UN_APPLY(a));
         u::noc_store<1>(std::move(result), out, b);
     }

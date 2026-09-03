@@ -67,20 +67,20 @@ void kernel_main() {
     // SrcOrder::Reverse is what matmul requires.
     u::matmul_init<Q, Kt>(kDfbQ, kDfbK, kDfbOut);
 
-    u::Storage<Q> q_storage(kDfbQ);
-    u::Storage<Kt> k_storage(kDfbK);
-    u::Storage<V> v_storage(kDfbV);
-    u::Storage<Scores> mask_storage(kDfbMask);
-    u::Storage<u::Shape<1, 1>> one_storage(kDfbOne);
-    u::Storage<u::Shape<1, 1>> scale_storage(kDfbScale);
-    u::Storage<Scores> scores_storage(kDfbScores);
-    u::Storage<Scores> scaled_storage(kDfbScaled);
-    u::Storage<Scores> masked_storage(kDfbMasked);
-    u::Storage<Vec> rowmax_storage(kDfbRowMax);
-    u::Storage<Scores> exp_storage(kDfbExp);
-    u::Storage<Vec> recip_storage(kDfbRecip);
-    u::Storage<Scores> prob_storage(kDfbProb);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbQ, Q> q_storage;
+    u::Input<0, kDfbK, Kt> k_storage;
+    u::Input<0, kDfbV, V> v_storage;
+    u::Input<0, kDfbMask, Scores> mask_storage;
+    u::Input<1, kDfbOne, u::Shape<1, 1>> one_storage;
+    u::Input<1, kDfbScale, u::Shape<1, 1>> scale_storage;
+    u::Intermediate<kDfbScores, Scores> scores_storage;
+    u::Intermediate<kDfbScaled, Scores> scaled_storage;
+    u::Intermediate<kDfbMasked, Scores> masked_storage;
+    u::Intermediate<kDfbRowMax, Vec> rowmax_storage;
+    u::Intermediate<kDfbExp, Scores> exp_storage;
+    u::Intermediate<kDfbRecip, Vec> recip_storage;
+    u::Intermediate<kDfbProb, Scores> prob_storage;
+    u::Output<1, kDfbOut, Out> out_storage;
 
     const auto q_acc = TensorAccessor(tensor::q);
     const auto k_acc = TensorAccessor(tensor::k);
@@ -90,15 +90,15 @@ void kernel_main() {
 
     // 1.0 for max and sum alike -- metal folds the scaler into every reduce_tile, and
     // neither of these reductions is an average.
-    u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
+    u::ComputeBlock one = u::fill_reduce_scaler(one_storage, u::kReduceScalerOne);
 
     // 1/sqrt(head dim), packed by the host.
-    u::ComputeBlock scale = u::fill_reduce_scaler<1>(scale_storage, scale_bits);
+    u::ComputeBlock scale = u::fill_reduce_scaler(scale_storage, scale_bits);
 
-    u::ComputeBlock q = u::noc_load<0>(q_storage, q_acc, 0).wait();
-    u::ComputeBlock k = u::noc_load<0>(k_storage, k_acc, 0).wait();
-    u::ComputeBlock v = u::noc_load<0>(v_storage, v_acc, 0).wait();
-    u::ComputeBlock mask = u::noc_load<0>(mask_storage, mask_acc, 0).wait();
+    u::ComputeBlock q = u::noc_load(q_storage, q_acc, 0).wait();
+    u::ComputeBlock k = u::noc_load(k_storage, k_acc, 0).wait();
+    u::ComputeBlock v = u::noc_load(v_storage, v_acc, 0).wait();
+    u::ComputeBlock mask = u::noc_load(mask_storage, mask_acc, 0).wait();
 
     // Q @ Kt. Single-shot: one k-block, so no Accumulator.
     u::ComputeBlock scores = scores_storage.store(u::matmul<u::TransposeB::Yes>(q, k));
@@ -122,5 +122,5 @@ void kernel_main() {
 
     u::ComputeBlock prob = prob_storage.store(e * u::bcast<u::Axis::Cols>(recip));
 
-    u::noc_store<1>(out_storage, u::matmul(prob, v), out, 0);
+    u::noc_store(out_storage, u::matmul(prob, v), out, 0);
 }

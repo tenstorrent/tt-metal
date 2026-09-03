@@ -778,6 +778,11 @@ Block<D> NocAsyncWriteCoreTx<thread, D, S>::wait(uint32_t num_writers) const {
 
 // --- Data movement ---
 
+template <int T, uint32_t Id, typename S>
+Block<S> fill_reduce_scaler(const Input<T, Id, S>& scaler, uint32_t value_bits) {
+    return fill_reduce_scaler<T>(static_cast<const Storage<S>&>(scaler), value_bits);
+}
+
 template <int thread, typename S>
 Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
     // One tile, and the body assumes it: it lays the pattern into a single page's four
@@ -864,6 +869,15 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& ac
     });
 }
 
+// The endpoint forms. Thin forwarders onto the Storage ones: the endpoint's whole job is to
+// SAY which thread and which end, so once the thread has been read off the type there is
+// nothing left for these to do. They become the real definitions -- and the Storage ones go
+// away -- when the last kernel has converted.
+template <int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, const Accessor& acc, uint32_t block_idx) {
+    return noc_load<T>(static_cast<const Storage<S>&>(storage), acc, block_idx);
+}
+
 namespace detail {
 
 // The producing half of a load: reserve the block, then let `fn` fill it. Extracted so
@@ -898,6 +912,11 @@ template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
     detail::issue_load<thread>(storage, fn);
     return NocAsyncReadTx<thread, S>(storage);
+}
+
+template <int T, uint32_t Id, typename S, typename Fn>
+NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, Fn fn) {
+    return noc_load<T>(static_cast<const Storage<S>&>(storage), fn);
 }
 
 // The built-in drain, written as a custom routine, so the harness half -- the
@@ -938,9 +957,20 @@ NocAsyncWriteTx<thread, S> noc_store(
     return noc_store<thread>(storage.store(node), acc, block_idx);
 }
 
+template <int T, uint32_t Id, typename S, typename Accessor, typename Node>
+NocAsyncWriteTx<T, S> noc_store(
+    const Output<T, Id, S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx) {
+    return noc_store<T>(static_cast<const Storage<S>&>(storage), node, acc, block_idx);
+}
+
 template <int thread, typename S, typename Node, typename Fn>
 NocAsyncWriteTx<thread, S> noc_store(const Storage<S>& storage, const Node& node, Fn fn) {
     return noc_store<thread>(storage.store(node), fn);
+}
+
+template <int T, uint32_t Id, typename S, typename Node, typename Fn>
+NocAsyncWriteTx<T, S> noc_store(const Output<T, Id, S>& storage, const Node& node, Fn fn) {
+    return noc_store<T>(static_cast<const Storage<S>&>(storage), node, fn);
 }
 
 template <int thread, typename S, typename Fn>
@@ -1106,10 +1136,26 @@ NocAsyncMcastTx<thread, S> noc_load(
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx);
 }
 
+template <int pair, int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncMcastTx<T, S> noc_load(
+    const Input<T, Id, S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
+    // An unnamed pair follows the endpoint's own thread, which is what the Storage form's
+    // `pair = thread` default did when the thread was written at the call site.
+    constexpr int p = (pair == kPairOfThread) ? T : pair;
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, acc, block_idx);
+}
+
 template <int thread, int pair, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
+}
+
+template <int pair, int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncMcastTx<T, S> noc_load(
+    const Input<T, Id, S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
+    constexpr int p = (pair == kPairOfThread) ? T : pair;
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, acc, block_idx);
 }
 
 template <int thread, int pair, typename S, typename Fn>
@@ -1132,9 +1178,21 @@ NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mca
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn);
 }
 
+template <int pair, int T, uint32_t Id, typename S, typename Fn>
+NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, PhysicalMcast mcast, Fn fn) {
+    constexpr int p = (pair == kPairOfThread) ? T : pair;
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, fn);
+}
+
 template <int thread, int pair, typename S, typename Fn>
 NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
     return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
+}
+
+template <int pair, int T, uint32_t Id, typename S, typename Fn>
+NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, LogicalMcast mcast, Fn fn) {
+    constexpr int p = (pair == kPairOfThread) ? T : pair;
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, fn);
 }
 
 // --- custom_compute ---
@@ -1369,6 +1427,14 @@ template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     const Storage<D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset) {
     return noc_core_write<thread>(dst, std::move(src), coord.to_physical(), write_predicate, byte_offset);
+}
+
+template <int T, uint32_t Id, typename D, typename S>
+NocAsyncWriteCoreTx<T, D, S> noc_core_write(
+    const Input<T, Id, D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate,
+    uint32_t byte_offset) {
+    return noc_core_write<T>(
+        static_cast<const Storage<D>&>(dst), std::move(src), coord, write_predicate, byte_offset);
 }
 
 template <int thread, typename D, typename S>

@@ -162,10 +162,11 @@ Metal spells it `uint8_t noc = noc_index`. **We cannot copy that spelling, and t
 concrete rather than stylistic: it breaks existing call sites.** Verified by compiling both
 shapes, not reasoned about -- see the probe in §5.1.
 
-Today, for one pair of `thread`/`pair` template arguments:
+Today, for one `pair` template argument (the thread comes off the buffer's endpoint type
+now, not the call site -- see the note at 2 below):
 
-    noc_load(const Storage<S>&, PhysicalMcast, const Accessor&, uint32_t block_idx);  // 4 args
-    noc_load(const Storage<S>&, PhysicalMcast, Fn fn);                                // 3 args
+    noc_load(const Input<T, Id, S>&, PhysicalMcast, const Accessor&, uint32_t block_idx);  // 4 args
+    noc_load(const Input<T, Id, S>&, PhysicalMcast, Fn fn);                                // 3 args
 
 Append `uint8_t noc = noc_index` to both and the `Fn` form becomes 4 arguments of shape
 `(Storage, Mcast, deduced, integral)` -- which is exactly the accessor form's shape. Both
@@ -198,7 +199,7 @@ inline constexpr NocTag<1> noc1{};
 At the call site:
 
 ```cpp
-auto tx = noc_load<0>(a_storage, row, a_acc, idx, u::noc0);
+auto tx = noc_load(a_storage, row, a_acc, idx, u::noc0);
 noc_store<1>(out_storage.store(blk), out, idx, u::noc1);
 ```
 
@@ -206,8 +207,17 @@ Three properties worth having, all of which a `uint8_t` lacks:
 
 1. **No ambiguity.** `NocTag<N>` is not constructible from an integer literal, so it can
    never be mistaken for a block index and a block index can never be mistaken for it.
-2. **Not transposable.** `noc_load<0, 1>(...)` today is thread 0 / pair 1 and reads
-   identically to thread 1 / pair 0. `u::noc1` cannot be confused with either.
+2. **Not transposable.** This argument has since been half granted by a different change:
+   the thread moved onto the buffer (`u::Input<0, kDfbA, A>`) and `noc_load` reads it off the
+   type, so the template list holds `pair` alone and there is no longer a `noc_load<0, 1>` to
+   transpose against `noc_load<1, 0>`. What survives is the reason a tag is still better than
+   an integer: `pair` and a NOC index are both small ints, and only one of them can be made
+   unmistakable. `u::noc1` cannot be confused with a pair, a thread, or a block index.
+
+   It also changes the shape of the ambiguity above in this spec's favour. The two mcast
+   overloads are now distinguished by an `Input` first parameter rather than a `Storage`, but
+   the `(deduced, integral)` tail is unchanged -- so a bare `uint8_t noc` is still ambiguous
+   and the tag is still what removes it.
 3. **The value is compile-time**, which is what makes §6 a build error instead of a hang.
 
 ### 5.1 Verified, not assumed

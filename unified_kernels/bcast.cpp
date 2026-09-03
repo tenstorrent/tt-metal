@@ -56,26 +56,26 @@ void kernel_main() {
     using In = u::Shape<ht, wt>;
     using Vec = u::reduce_shape<In, kAxis>;
 
-    u::Storage<In> block_storage(kDfbBlock);
-    u::Storage<Vec> vec_storage(kDfbVec);
-    u::Storage<In> out_storage(kDfbOut);
+    u::Input<0, kDfbBlock, In> block_storage;
+    u::Input<0, kDfbVec, Vec> vec_storage;
+    u::Output<1, kDfbOut, In> out_storage;
 
     const auto block_acc = TensorAccessor(tensor::block);
     const auto vec_acc = TensorAccessor(tensor::vec);
     const auto out = TensorAccessor(tensor::out);
 
-    u::ComputeBlock b = u::noc_load<0>(block_storage, block_acc, 0).wait();
-    u::ComputeBlock v = u::noc_load<0>(vec_storage, vec_acc, 0).wait();
+    u::ComputeBlock b = u::noc_load(block_storage, block_acc, 0).wait();
+    u::ComputeBlock v = u::noc_load(vec_storage, vec_acc, 0).wait();
 
 #if defined(BC_THEN_SFPU)
     // A broadcast leaves the unpacker in a BROADCAST mode. An SFPU op afterwards has to
     // put it back or it reads the broadcast operand's replication instead of whole tiles.
     // Phase 4 gave every SFPU leaf its own copy_tile_to_dst_init_short; this path is what
     // proves that covers it.
-    u::Storage<In> tmp_storage(kDfbTmp);
+    u::Intermediate<kDfbTmp, In> tmp_storage;
     u::ComputeBlock t = tmp_storage.store(BC_APPLY(b, v));
-    u::noc_store<1>(out_storage, u::relu(t + t), out, 0);
+    u::noc_store(out_storage, u::relu(t + t), out, 0);
 #else
-    u::noc_store<1>(out_storage, BC_APPLY(b, v), out, 0);
+    u::noc_store(out_storage, BC_APPLY(b, v), out, 0);
 #endif
 }
