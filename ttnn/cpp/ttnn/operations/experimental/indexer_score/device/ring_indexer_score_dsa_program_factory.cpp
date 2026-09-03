@@ -22,7 +22,8 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
-#include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
+#include "ttnn/operations/ccl/ccl_common.hpp"  // linearized index / neighbor / fwd-bwd config
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
 // the fused AG helper (the only Linear+fuse-capable all-gather):
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
@@ -148,7 +149,9 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t D = q.logical_shape()[3];
     const uint32_t T = k.logical_shape()[2];
 
-    const uint32_t device_index = device_index_for(args, coord, q);
+    const uint32_t transport_rank = transport_rank_for(args, coord, q);
+    // Enforce row-major order instead of relying on device_storage's implicit ordering.
+    const uint32_t tensor_rank = transport_to_tensor_rank(args, transport_rank);
     // 2D SP×TP: the K cache is SP-sharded + TP-replicated and the ring AG still gathers along the SP axis
     // (cluster_axis), so the reader's K sourcing is unchanged; TP only sub-shards the QUERY rows. tp_index is
     // this device's rank along seq_subshard_axis (the TP axis) -- device_causal_geometry adds its tp_index*Sq
@@ -156,7 +159,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
                                   ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
                                   : 0u;
-    const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
+    const auto geom = device_causal_geometry(args, tensor_rank, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
 
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
@@ -234,13 +237,13 @@ ProgramDescriptor build_ring_program_descriptor(
     // replay the RingIdSequencer on the HOST with the same seed as the reader. A band's readiness = max arrival-
     // iter over the shards its tiles land in.
     const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
-    const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
+    const auto rw = ring_writes_for(ring_size, transport_rank, fused.topology);
     std::vector<uint32_t> shard_order(ring_size, 0);
     {
-        RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
+        RingIdSequencer seq(transport_rank, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
         for (uint32_t i = 0; i < ring_size; ++i) {
             const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
-            shard_order[rid] = i;
+            shard_order[transport_to_tensor_rank(args, rid)] = i;
         }
     }
     const uint32_t sll_t = Tt / ring_size;  // tiles per SP shard in the gathered buffer (cl_t hoisted above)
@@ -394,7 +397,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
     // are computed above (hoisted for the readiness-balanced band assignment).
     ttnn::prim::RingSDPAFusedOpSignaler sdpa_sig;
-    sdpa_sig.init_all_gather(ring_size, device_index, rw.forward_writes_expected, rw.backward_writes_expected);
+    sdpa_sig.init_all_gather(ring_size, transport_rank, rw.forward_writes_expected, rw.backward_writes_expected);
     sdpa_sig.fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
     sdpa_sig.fused_op_receiver_cores_noc.clear();
     // Signal ONLY the cores that actually gate on the all-gather. The AG master worker's per-slab signal is a
@@ -460,13 +463,28 @@ ProgramDescriptor build_ring_program_descriptor(
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Full-mesh rank mapping first, then the metadata blocks: the reader reads them in exactly this
+    // order (bc_ct_base + 5..8, then meta_ct_base = bc_ct_base + 9), and every entry is fixed-width so
+    // one kernel binary serves both forms.
+    const RingAttentionRankMapping rank_mapping{
+        .full_mesh = fused.full_mesh,
+        .orientation = fused.snake_orientation,
+        .mesh_rows = fused.mesh_rows,
+        .mesh_cols = fused.mesh_cols};
+    reader_ct.push_back(rank_mapping.full_mesh ? 1u : 0u);
+    reader_ct.push_back(static_cast<uint32_t>(rank_mapping.orientation));
+    reader_ct.push_back(rank_mapping.mesh_rows);
+    reader_ct.push_back(rank_mapping.mesh_cols);
+
     // Fixed-width metadata block. sp / chunk_local already arrived via block_cyclic_ct above.
     reader_ct.push_back(has_meta ? 1u : 0u);
     reader_ct.push_back(rt_arg::reader_metadata_base);
     reader_ct.push_back(has_meta ? cb_meta_derived : 0u);
     reader_ct.push_back(has_meta ? cb_meta_writer : 0u);
     reader_ct.push_back(has_meta ? Sq : 0u);
-    reader_ct.push_back(has_meta && args.sp_axis().has_value() ? 1u : 0u);
+    // Same predicate the host uses in device_causal_geometry(), so the reader picks the same causal
+    // branch. NOT sp_axis alone: a fused full-mesh ring is rotation-exact without a named SP axis.
+    reader_ct.push_back(has_meta && program::rotation_exact_sp_geometry(args) ? 1u : 0u);
     tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
     // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both
@@ -628,7 +646,10 @@ ProgramDescriptor build_ring_program_descriptor(
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
             if (has_meta) {
                 reader_rt.push_back(tensors.chunk_start_idx_tensor->buffer());
-                reader_rt.push_back(device_index);
+                // TENSOR rank, matching what device_causal_geometry() is given above: on a full-mesh ring
+                // the transport rank differs by the snake mapping, and the reader recomputes the same
+                // causal geometry from this value.
+                reader_rt.push_back(tensor_rank);
                 reader_rt.push_back(tp_index);
             } else {
                 reader_rt.push_back(0u);
@@ -685,10 +706,31 @@ ProgramDescriptor build_ring_program_descriptor(
             sdpa_sig.fused_op_receiver_signal_semaphores,
             sdpa_sig.fused_op_signaler_mode);
 
-        const auto forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            q, coord, /*offset=*/1, fused.topology, args.sp_axis());
-        const auto backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            q, coord, /*offset=*/-1, fused.topology, args.sp_axis());
+        std::optional<ttnn::MeshCoordinate> forward_coord;
+        std::optional<ttnn::MeshCoordinate> backward_coord;
+        if (fused.full_mesh) {
+            const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
+                .cluster_axis = std::nullopt,
+                .full_mesh = true,
+                .orientation = fused.snake_orientation,
+                .mesh_rows = fused.mesh_rows,
+                .mesh_cols = fused.mesh_cols,
+                .ring_size = ring_size,
+                .num_links = fused.num_links,
+                .route_plan_hash = fused.route_plan_hash};
+            const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan);
+            TT_FATAL(
+                position.transport_rank == transport_rank && position.tensor_rank == tensor_rank,
+                "indexer_score fused full-mesh rank plan drift at coordinate {}",
+                coord);
+            forward_coord = position.forward_coord;
+            backward_coord = position.backward_coord;
+        } else {
+            forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                q, coord, /*offset=*/1, fused.topology, args.sp_axis());
+            backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                q, coord, /*offset=*/-1, fused.topology, args.sp_axis());
+        }
 
         // The helper's `input_batch_slice_idx` is a STRUCTURAL switch, not a value: nullopt selects a
         // FULL-BATCH gather (batch_head_size = every slot's heads), while any value selects the
@@ -715,7 +757,7 @@ ProgramDescriptor build_ring_program_descriptor(
             ag_seq_concat_dim,
             fused.num_links,
             ring_size,
-            device_index,
+            transport_rank,
             fused.topology,
             fused.ag_semaphore,
             fused.ag_sub_device_id,
@@ -741,16 +783,17 @@ ProgramDescriptor build_ring_program_descriptor(
             /*kv_cache_num_layers=*/args.index_cache_num_layers,
             /*kv_cache_layer_idx=*/args.index_cache_layer_idx,
             // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
-            /*split_forwarding_enabled=*/false);
+            /*split_forwarding_enabled=*/false,
+            rank_mapping);
     }
 
     log_debug(
         tt::LogOp,
-        "indexer_score FUSED coord=({}) ring_size={} ring_index={} fwd_exp={} bwd_exp={} grid={}x{}(+{} ag) "
+        "indexer_score FUSED tensor_rank={} ring_size={} transport_rank={} fwd_exp={} bwd_exp={} grid={}x{}(+{} ag) "
         "rows_used={} cols_used={} band_count={} k_mcast={} q_mcast={}",
-        device_index,
+        tensor_rank,
         ring_size,
-        device_index,
+        transport_rank,
         rw.forward_writes_expected,
         rw.backward_writes_expected,
         compute_cols_x,
@@ -825,7 +868,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         tensors.has_cache_slot_metadata() ? 0u : args.cache_batch_idx.value_or(0) * local_slot_pages;
 
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const uint32_t device_index = device_index_for(args, range.start_coord(), q);
+        // Must match the build path's rank, or a cache hit shifts the causal offset.
+        const uint32_t device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
         const uint32_t tp_index =
             (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
                 ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())

@@ -177,6 +177,9 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-pipeline-dir: "false"
+          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
+          triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
 
       - name: Configure TorusXY fabric profile
         if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}
@@ -184,49 +187,6 @@ jobs:
         run: |
           echo "TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" >> "$GITHUB_ENV"
           echo "PREFILL_TORUS_XY_CERTIFIED=1" >> "$GITHUB_ENV"
-
-      # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
-      # job, tests run under mpirun): on dispatch stall the runtime runs
-      # TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE inside the hung rank, then throws. Armed here
-      # rather than job-wide so setup-multihost-job's ttop-recovery step is unaffected.
-      - name: 🧯 Enable tt-triage on hang
-        if: ${{ inputs.hang-detection-timeout > 0 }}
-        timeout-minutes: 5
-        env:
-          TEST_NAME: ${{ matrix.test-group.name }}
-        run: |
-          mkdir -p "$TRIAGE_OUTPUT_DIR"
-
-          # Identity of the leg, written into the report dir when triage fires. A downloaded
-          # artifact otherwise says nothing about which job produced it, and the triage output does
-          # not always reach the step log — a hang inside a process the test spawned itself (e.g.
-          # the prefill producer) writes the files but its stderr never gets to the log.
-          echo "TT_TRIAGE_JOB_INFO=leg: $TEST_NAME | sku: ${{ matrix.test-group.sku }} | runner: ${RUNNER_NAME:-unknown} | run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}" >> $GITHUB_ENV
-
-          # Single-quoted: expanded by /bin/sh on the rank's node, not here. Sentinel keeps it to
-          # the first hang — cards aren't reset between tests, so later triage is misleading.
-          TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" 2>&1 | tee "$D/triage_output.txt" 1>&2; fi'
-
-          {
-            echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
-            echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}"
-            echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
-            echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
-          } >> $GITHUB_ENV
-
-          # Confirm per host that the hook actually reaches the ranks (env forwarding is done by
-          # ttop via PRTE_MCA_prte_fwd_environment, not by this workflow) and that triage can run
-          # there. Diagnostics only — never fails the leg.
-          export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"
-          mpirun --bind-to none --pernode --tag-output bash -lc '
-            ok=1
-            [ -n "$TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" ] || { echo "triage hook not forwarded to this rank"; ok=0; }
-            [ -w "${TRIAGE_OUTPUT_DIR:-/nonexistent}" ] || { echo "TRIAGE_OUTPUT_DIR not writable here: ${TRIAGE_OUTPUT_DIR:-<unset>}"; ok=0; }
-            /opt/venv/bin/python3 -c "import ttexalens" 2>/dev/null || { echo "ttexalens missing from /opt/venv"; ok=0; }
-            [ "$ok" = 1 ] && echo "triage armed"
-          ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
-
-          echo "Triage fires after ${{ inputs.hang-detection-timeout }}s without dispatch progress"
 
       - name: ${{ matrix.test-group.name }}
         id: run-test

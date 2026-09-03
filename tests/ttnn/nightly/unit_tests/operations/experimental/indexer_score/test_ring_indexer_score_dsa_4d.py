@@ -36,6 +36,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
     QB_CASES,
     QB_IDS,
 )
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_ring_indexer_score_dsa import (
+    _run_full_mesh_accuracy_case,
+)
 
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -94,6 +97,14 @@ RING4 = 4
 SP4_AXIS = 1  # the length-4 axis of the (1, 4) mesh == cluster_axis
 CHUNK4 = RING4 * QB_SQ  # 2560 global prefill chunk (chunk_local = QB_SQ per SP shard)
 T4 = QB_HISTORY + CHUNK4  # 28160 all-gathered keys
+
+
+@pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic_rotated"])
+def test_indexer_score_full_mesh_2x2_accuracy_placement_and_cache_reuse(block_cyclic):
+    """Run the complete physical 2x2 QuietBox as one four-rank direct-neighbor snake."""
+    if ttnn.get_num_devices() != 4:
+        pytest.skip("2x2 full-mesh indexer coverage requires an exact four-device physical mesh")
+    _run_full_mesh_accuracy_case((2, 2), block_cyclic=block_cyclic)
 
 
 @pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic"])

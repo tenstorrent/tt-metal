@@ -23,10 +23,17 @@ struct CausalGeometryTiles {
 
 // Block-cyclic cache writes rotate ownership when a chunk starts mid-slab. The boundary chip may also
 // cross a slab boundary, which moves its causal diagonal by chunk_global - chunk_local.
+//
+// `rotation_exact` selects the rotation-exact SP mapping over the flat both-axes approximation. It is NOT
+// simply "has a named SP axis": a fused FULL-MESH ring has no named SP axis, yet every canonical tensor
+// rank is an SP rank and ownership follows the same rotation. Sending that case down the flat path would
+// assign the causal diagonals to the wrong tensor ranks and could mark every rank as straddling. The
+// caller computes the predicate once -- host in device_causal_geometry(), device from a compile-time arg
+// the factory sets from the same expression -- so the two cannot disagree.
 inline CausalGeometryTiles causal_geometry_tiles(
     uint32_t chunk_start_idx,
     bool has_block_cyclic,
-    bool has_sp_axis,
+    bool rotation_exact,
     uint32_t sp,
     uint32_t chunk_local,
     uint32_t device_index,
@@ -45,7 +52,7 @@ inline CausalGeometryTiles causal_geometry_tiles(
 
     const uint32_t chunk_global = sp * chunk_local;
 
-    if (has_sp_axis) {
+    if (rotation_exact) {
         // device_index selects the SP slab and tp_index selects this device's row range within it.
         const uint32_t boundary_slab = chunk_start_idx / chunk_global;
         const uint32_t boundary_chip = (chunk_start_idx / chunk_local) % sp;

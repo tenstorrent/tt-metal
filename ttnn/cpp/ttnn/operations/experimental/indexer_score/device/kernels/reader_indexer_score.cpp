@@ -31,6 +31,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "indexer_score_metadata.hpp"
 #include "indexer_score_causal_geometry.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
@@ -67,14 +68,26 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
+constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
+constexpr auto snake_orientation =
+    static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
+constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
+constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
 
-constexpr uint32_t meta_ct_base = bc_ct_base + 5;
+FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
+    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+        transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
+}
+
+constexpr uint32_t meta_ct_base = bc_ct_base + 9;
 constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
 constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
 constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
 constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
-constexpr uint32_t meta_has_sp_axis = get_compile_time_arg_val(meta_ct_base + 5);
+// Rotation-exact SP geometry: sp_axis set, OR a fused full-mesh ring. The host computes the
+// same predicate in rotation_exact_sp_geometry(), so both sides pick the same branch.
+constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base + 5);
 constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 6>();
 // Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
 // factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
@@ -354,7 +367,7 @@ inline void read_k_chunk_fused(
  *  (edge-device empty directions are never required -- a band never lands in a shard the device does not
  *  receive). */
 struct FusedRingGate {
-    static constexpr uint32_t max_ring_size = 32;  // bounds the largest supported SP ring
+    static constexpr uint32_t max_ring_size = iscore::kMaxRingSize;
     using KLocalAcc = decltype(TensorAccessor(kl_args, uint32_t{}, uint32_t{}));
 
     uint32_t ring_index;
@@ -378,7 +391,9 @@ struct FusedRingGate {
     // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
     // replaces the runtime argument, which a replay would have frozen at the captured slot.
     FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx, uint32_t local_offset_override = 0) :
-        ring_index(recv.seq.ring_index),
+        // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
+        // and both the slot recomposition and the causal geometry are defined over tensor ranks.
+        ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
@@ -407,8 +422,9 @@ struct FusedRingGate {
                 cap_dir = d;
                 cap_val = v;
             });
-            shard_dir[rid] = cap_dir;
-            shard_val[rid] = cap_val;
+            const uint32_t tensor_rank = tensor_rank_from_transport_rank(rid);
+            shard_dir[tensor_rank] = cap_dir;
+            shard_val[tensor_rank] = cap_val;
         }
     }
 
@@ -619,7 +635,7 @@ void kernel_main() {
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
-            meta_has_sp_axis != 0,
+            meta_rotation_exact != 0,
             bc_sp,
             bc_chunk_local * 32,  // block_cyclic_ct carries chunk_local in TILES; the closed form takes elements
             get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index

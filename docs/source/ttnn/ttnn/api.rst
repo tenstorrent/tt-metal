@@ -636,6 +636,7 @@ KV Cache
    ttnn.kv_cache.update_cache_for_token_
    ttnn.fill_cache
    ttnn.update_cache
+   ttnn.experimental.indexed_fused_update_cache
 
 Backward operations
 ===================

@@ -590,6 +590,7 @@ class TtIndexer:
         cache_user_id=0,
         cache_layer_idx=0,
         index_kbuf=None,
+        actual_end=None,
         metadata=None,
     ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
@@ -598,7 +599,11 @@ class TtIndexer:
         runs there.) Always block-cyclic (single-shot is folded onto it as one full-seq chunk at
         start_pos=0): rope the PER-CHIP shard at its block-cyclic positions, then write it in place via
         update_padded_kv_cache (per-(user,layer) slot, pad-aware kv_actual_global offset) — no SP
-        all-gather, no O(n^2) concat; the cache stays SP-sharded."""
+        all-gather, no O(n^2) concat; the cache stays SP-sharded.
+
+        ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
+        the cache end needs only its real tokens to fit. forward() reads back the same prefix
+        (``valid_pos``)."""
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
@@ -636,6 +641,14 @@ class TtIndexer:
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
+            #
+            # No valid_global here: the metadata form has no on-device clamp yet, so this path writes the
+            # whole padded window and scores it (see the kv_len note in forward()). Consistent within
+            # itself; it just does not yet share the scalar path's real-token clamp.
+            assert actual_end is None, (
+                "indexer write_k: the metadata path has no valid_global clamp, so a host actual_end would "
+                "be silently ignored -- pass the real end through metadata[2] once the clamp lands on-device"
+            )
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 index_kbuf,
                 k,
@@ -654,6 +667,7 @@ class TtIndexer:
                 num_layers=self._index_cache_layers,
                 kv_actual_global=start_pos,
                 cluster_axis=self.sp_axis,
+                valid_global=actual_end,
             )
         ttnn.deallocate(k)
 
@@ -667,6 +681,7 @@ class TtIndexer:
         cache_user_id: int = 0,
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        actual_end: int = None,
         metadata=None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
@@ -691,6 +706,10 @@ class TtIndexer:
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
+        # Read bound matching write_k's clamp, on the 32-row write grid: scoring and transport follow the
+        # POPULATED prefix, not the padded window. Real query rows all sit below actual_end so their top-k
+        # is unchanged; the pad rows past it have no keys, which indexer_score allows.
+        valid_pos = end_pos if actual_end is None else min(end_pos, -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
         assert index_kv_cache is not None, (
             "block-cyclic indexer requires an externally-allocated index_kv_cache passed to forward() "
@@ -709,6 +728,7 @@ class TtIndexer:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
+            actual_end=actual_end,
             metadata=metadata,
         )
 
@@ -783,9 +803,11 @@ class TtIndexer:
         # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=224; larger OOMs).
         k_chunk = get_indexer_key_chunk(a.index_n_heads)
         # k_chunk_size feeds the HASHED program config, so a per-chunk value would compile a new program per
-        # chunk and defeat trace reuse entirely. min(k_chunk, end_pos) is already constant at every deployed
-        # config (end_pos >= chunk_global = seq_len*sp >> k_chunk), so assert that rather than rely on it: a
-        # future short-chunk config would otherwise silently recapture instead of failing.
+        # chunk and defeat trace reuse entirely. Keyed on neither valid_pos nor end_pos for that reason: the
+        # assert below makes min(k_chunk, end_pos) identically k_chunk at every deployed config
+        # (end_pos >= chunk_global = seq_len*sp >> k_chunk), so the constant is used directly and a future
+        # short-chunk config fails loudly instead of silently recapturing. The valid extent travels in the
+        # hash-excluded kv_len.
         assert k_chunk <= glob, (
             f"indexer k_chunk {k_chunk} exceeds the global chunk {glob}: k_chunk_size would vary per chunk and "
             "enter the program hash, so one captured trace could not serve every chunk"
@@ -797,13 +819,10 @@ class TtIndexer:
         # the former blocking all-gather with score compute. Per-device causality remains cluster_axis=SP
         # (chip r: chunk_start = start_pos + r*Sq). All H_idx heads are resident, so each logit is complete.
         #
-        # Bound the score to the real written prefix (kv_len=end_pos) rather than the full preallocated
-        # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows
-        # push the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len
-        # only WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the
-        # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
-        # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
-        # unchanged.
+        # Bound the score to the populated prefix (kv_len=valid_pos), not the full width T nor the padded
+        # window, which on the last chunk runs past what was written. kv_len only writes
+        # logits[..., :valid_pos] and leaves the tail STALE (not -inf); top-k is told the valid length so it
+        # never ranks that tail — which is future anyway, so the selection is unchanged.
         # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
         # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
         # by kv_len; the score reader addresses its own shard directly in the original ND cache.
@@ -840,10 +859,12 @@ class TtIndexer:
             cache_batch_idx=None if metadata is not None else cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,
-            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local -- exactly the
-            # end_pos passed here on the scalar path -- so both paths score the same prefix and the traced
-            # result is bit-identical, not merely accurate.
-            kv_len=None if metadata is not None else end_pos,
+            # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local, i.e. end_pos.
+            # That equals valid_pos whenever the chunk is full, which is the only shape the traced path
+            # currently produces (the runtime asserts actual_end is None above). A partial final chunk
+            # would need the reader to derive min(end_pos, ceil32(metadata[2])) on-device; until then the
+            # assert in write_k keeps the two from silently diverging.
+            kv_len=None if metadata is not None else valid_pos,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -854,16 +875,17 @@ class TtIndexer:
         # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
         # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
         # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
-        # Host-side end_pos is unknown under capture (start_pos is read on-device), so assert the invariant
-        # that actually has to hold: the per-chunk stride. actual_start's 16-alignment is already a
-        # precondition of update_padded_kv_cache, which writes the same cache.
+        # Host-side end_pos is unknown under capture (start_pos is read on-device), so the metadata path
+        # asserts the invariant that actually has to hold: the per-chunk stride. actual_start's
+        # 16-alignment is already a precondition of update_padded_kv_cache, which writes the same cache.
         if metadata is not None:
             assert glob % 16 == 0, f"indexer chunk stride must be 16-element aligned; got glob={glob}"
         else:
-            assert end_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got end_pos={end_pos}"
-        # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
-        # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
-        topk_valid_length = None if metadata is not None else end_pos
+            assert valid_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got valid_pos={valid_pos}"
+        # Block-cyclic logits are the full preallocated width T with a stale tail beyond the scored prefix
+        # (kv_len only wrote that prefix); valid_length bounds top-k to it so the tail is never ranked.
+        # topk_large_indices also requires valid_length <= T, which valid_pos satisfies.
+        topk_valid_length = None if metadata is not None else valid_pos
         # Metadata path: top-k's bound must MATCH the score's kv_len or it ranks a stale tail (kv_len too
         # small) or drops real keys (too large). Both are derived from the same metadata[1] word plus the
         # same structural chunk_global, so they cannot drift: valid_length = actual_start + glob = end_pos.

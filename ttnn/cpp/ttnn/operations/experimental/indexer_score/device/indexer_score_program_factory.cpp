@@ -337,13 +337,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Keep the shared reader's full-mesh rank-mapping CT tail canonical for the classic path.
+    reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
+    // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
+    // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
+    // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
+    // flag, then a placeholder accessor.
     reader_ct.push_back(0u);
     reader_ct.insert(reader_ct.end(), 5, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    // Cache-slot metadata is fused-ring only (validate rejects it here), but the SAME reader binary serves
-    // both factories, so this block must exist on this path too -- an absent compile arg is a hard build
-    // error in the kernel, not a default. Fixed width, mirroring the chunk-start block above: flag, rt
-    // base, pages-per-slot, mailbox CB, then a placeholder accessor.
+    // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
+    // pages-per-slot, mailbox CB, then a placeholder accessor.
     reader_ct.push_back(0u);
     reader_ct.insert(reader_ct.end(), 3, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);

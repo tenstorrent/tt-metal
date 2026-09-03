@@ -9,6 +9,8 @@
 
 - name: triage_hang_report
   cmd: pytest -v -s ./tools/tests/triage/test_hang_report.py
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 5
