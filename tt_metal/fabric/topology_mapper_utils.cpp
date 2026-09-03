@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <functional>
@@ -3609,6 +3610,17 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
     return solutions;
 }
 
+namespace {
+// Process-local: set once a capped solve is PROVEN infeasible (a full UNSAT proof, minutes on a large superpod).
+// Later solves then skip to the same uncapped solve the downgrade would run, instead of re-proving it. Coarse on
+// purpose (no per-instance key): a cap-feasible solve after an infeasible one in the same process is solved
+// uncapped (still near-minimal via the soft bias); the golden tests backstop that this never changes a mapping.
+std::atomic<bool>& host_cap_proven_infeasible() {
+    static std::atomic<bool> flag{false};
+    return flag;
+}
+}  // namespace
+
 // ─────────────────────── MultiMeshSolutionEnumerator (streaming) ───────────────────────
 // Lazy multi-solution enumerator: same session, constraints, and unique_shapes, but each next()
 // yields one solution as soon as it is found rather than collecting them all before returning.
@@ -3634,6 +3646,15 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     using namespace ::tt::tt_fabric;
     const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
+
+    // If a capped solve already proved UNSAT earlier in this process, skip re-paying that (multi-minute) proof and
+    // downgrade straight to the uncapped solve. See host_cap_proven_infeasible().
+    if (emitted_ == 0 && !host_cap_relaxed_ && inter_mesh_constraints_.max_same_rank_groups_used() > 0 &&
+        host_cap_proven_infeasible().load(std::memory_order_relaxed)) {
+        inter_mesh_constraints_.set_max_same_rank_groups_used(0);
+        host_cap_relaxed_ = true;
+    }
+
     while (true) {
         // One warm solve on the persistent session. On the first call this also encodes the hard CNF and
         // primes the minimal-host cap. UNBOUNDED (no budget give-up): a failed result means a genuine UNSAT
@@ -3667,6 +3688,7 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                     "placements may occupy more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
+                host_cap_proven_infeasible().store(true, std::memory_order_relaxed);  // later solves skip this proof
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
                 session_ = {};
                 host_cap_relaxed_ = true;
