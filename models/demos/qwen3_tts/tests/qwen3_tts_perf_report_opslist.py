@@ -165,6 +165,74 @@ def tensor_desc(row, prefix) -> str:
     return f"{s} {dt} {lo} {memcfg(row, prefix)}".strip()
 
 
+# Wormhole peak, matching tt_perf_report.perf_report.ArchitectureSpec("wormhole") so the
+# numbers are comparable with tt-perf-report's own columns.
+DRAM_BW_GB_S = 288.0
+TFLOPS_PER_CORE = {
+    "HiFi4": 74 / 72,
+    "HiFi2": 148 / 72,
+    "LoFi": 262 / 72,
+    # HiFi3 is absent from tt-perf-report's map, which is exactly why that tool dies with
+    # "Unknown math fidelity: HiFi3" on any CodePredictor window (the CP defaults to HiFi3
+    # since 98622104f8a). Fidelity costs one pass per level and HiFi2 is exactly 2x HiFi4
+    # in that table, so the implied 4-pass base is 296/72 and HiFi3 (3 passes) is 296/72/3.
+    "HiFi3": 296 / 72 / 3,
+}
+DTYPE_BYTES = {"BFLOAT16": 2, "FLOAT32": 4, "BFLOAT8_B": 1, "BFLOAT4_B": 0.5, "UINT32": 4, "INT32": 4, "UINT16": 2}
+
+
+def dtype_bytes(row, prefix) -> float:
+    dt = (row.get(f"{prefix}_DATATYPE") or "").replace("DataType::", "").upper()
+    return DTYPE_BYTES.get(dt, 2)
+
+
+def tensor_elems(row, prefix) -> int:
+    n = 1
+    for ax in ("W", "Z", "Y", "X"):
+        m = _DIM_RE.match(row.get(f"{prefix}_{ax}_PAD[LOGICAL]") or "")
+        if not m:
+            return 0
+        n *= int(m.group(1))
+    return n
+
+
+def matmul_efficiency(row, dev_ns):
+    """(dram_gb_s, dram_pct, tflops, flops_pct, cores) for one matmul row, or None.
+
+    Mirrors tt_perf_report.analyze_matmul: DRAM traffic counts only the operands that
+    actually live in DRAM plus the output if it lands there, and a DRAM-sharded matmul is
+    charged 12 cores (the Wormhole DRAM bank count) rather than its worker-core count.
+    """
+    if row["OP CODE"] != "MatmulDeviceOperation" or dev_ns <= 0:
+        return None
+    fid = (row.get("MATH FIDELITY") or "").strip()
+    if fid not in TFLOPS_PER_CORE:
+        return None
+    dur_s = dev_ns * 1e-9
+    dram_bytes = 0.0
+    for prefix in ("INPUT_0", "INPUT_1"):
+        if "DRAM" in (row.get(f"{prefix}_MEMORY") or ""):
+            dram_bytes += tensor_elems(row, prefix) * dtype_bytes(row, prefix)
+    if "DRAM" in (row.get("OUTPUT_0_MEMORY") or ""):
+        dram_bytes += tensor_elems(row, "OUTPUT_0") * dtype_bytes(row, "OUTPUT_0")
+
+    def d(prefix, ax):
+        m = _DIM_RE.match(row.get(f"{prefix}_{ax}_PAD[LOGICAL]") or "")
+        return int(m.group(1)) if m else 0
+
+    M, K, N = d("INPUT_0", "Y"), d("INPUT_0", "X"), d("INPUT_1", "X")
+    W, Z = d("INPUT_0", "W"), d("INPUT_0", "Z")
+    cores = int(float(row.get("CORE COUNT") or 0))
+    if "DRAMShardedProgramConfig" in (row.get("ATTRIBUTES") or ""):
+        cores = 12
+    if not cores:
+        return None
+    flops = (M * K * N * W * Z * 2) / dur_s
+    peak = TFLOPS_PER_CORE[fid] * 1e12 * cores
+    gb_s = (dram_bytes / dur_s) / 1e9
+    return gb_s, 100.0 * gb_s / DRAM_BW_GB_S, flops, 100.0 * flops / peak, cores
+
+
 def op_class(code: str) -> str:
     if code in DATA_MOVEMENT:
         return "data movement"
@@ -307,6 +375,58 @@ def main() -> int:
             ["---", "--:", "--:"],
         )
     )
+
+    # ── matmul efficiency ─────────────────────────────────────────────────────
+    mm = defaultdict(lambda: [0, 0.0, [], [], set(), set(), set()])
+    for r, dv in zip(win, dev):
+        eff = matmul_efficiency(r, dv)
+        if eff is None:
+            continue
+        gb_s, dram_pct, flops, flops_pct, cores = eff
+
+        def _d(prefix, ax):
+            m = _DIM_RE.match(r.get(f"{prefix}_{ax}_PAD[LOGICAL]") or "")
+            return m.group(1) if m else "?"
+
+        key = f"{_d('INPUT_0','Y')}x{_d('INPUT_0','X')}x{_d('INPUT_1','X')}"
+        e = mm[key]
+        e[0] += 1
+        e[1] += dv / 1e6
+        e[2].append(dram_pct)
+        e[3].append(flops_pct)
+        e[4].add(cores)
+        e[5].add((r.get("MATH FIDELITY") or "").strip())
+        e[6].add(memcfg(r, "INPUT_1") + ("+ds" if "DRAMShardedProgramConfig" in (r.get("ATTRIBUTES") or "") else ""))
+    if mm:
+        mm_total = sum(v[1] for v in mm.values())
+        o.append(f"\n## Matmul efficiency ({mm_total:.3f} ms over {sum(v[0] for v in mm.values())} calls)\n\n")
+        o.append(
+            "Peak is Wormhole: 288 GB/s DRAM, and per-core TFLOPs by fidelity from\n"
+            "`tt_perf_report`'s wormhole spec (HiFi3 derived — see `TFLOPS_PER_CORE`). A\n"
+            "DRAM-sharded matmul is charged 12 cores, the DRAM bank count, not its worker\n"
+            "cores. A decode matmul at M=1 tile is weight-bandwidth bound, so **DRAM % is the\n"
+            "number to drive**; FLOPs % only becomes meaningful once M is large.\n\n"
+        )
+        o.append(
+            table(
+                ["M x K x N", "n", "ms", "% mm", "cores", "fidelity", "in1", "DRAM %", "FLOPs %"],
+                [
+                    [
+                        k,
+                        v[0],
+                        f"{v[1]:.3f}",
+                        f"{100.0 * v[1] / mm_total:.1f}",
+                        ",".join(str(c) for c in sorted(v[4])),
+                        ",".join(sorted(v[5])),
+                        ",".join(sorted(v[6])),
+                        f"{sum(v[2]) / len(v[2]):.1f}",
+                        f"{sum(v[3]) / len(v[3]):.1f}",
+                    ]
+                    for k, v in sorted(mm.items(), key=lambda kv: -kv[1][1])
+                ],
+                ["---", "--:", "--:", "--:", "--:", "---", "---", "--:", "--:"],
+            )
+        )
 
     # ── ranked individual ops ─────────────────────────────────────────────────
     order = sorted(range(len(win)), key=lambda i: -dev[i])[: args.top]
