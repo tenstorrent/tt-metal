@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .model_output import result_tensor
-from .probe import MODEL_CONFIG_FILES, NATIVE_CONFIG_FILE
+from .probe import MODEL_CONFIG_FILES, NATIVE_CONFIG_FILE, ROOT_CONFIG_FILE, _declares, fetch_repo_json
 
 _LOADER_FILENAME = "_reference_loader.py"
 _LOADER_FUNC = "load_reference_model"
@@ -129,13 +129,28 @@ def _repo_meta(model_id: str) -> dict:
 
 
 def _config_summary(model_id: str) -> str:
-    try:
-        from transformers import AutoConfig
+    """The model's own config, as text for the prompt.
 
-        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
-        return str(cfg)[:2000]
-    except Exception as exc:  # noqa: BLE001
-        return f"(AutoConfig failed: {type(exc).__name__}: {exc})"
+    A checkpoint with no transformers config must not be described by AutoConfig, which answers such
+    a directory by matching registered model_type keys against the PATH STRING and returning that
+    architecture's defaults (see probe._maybe_fetch_config). Of everywhere that lands, here is the
+    worst: this text is handed to the LLM as "the model's config" while it writes a loader for the
+    model -- so a folder name would be choosing the architecture the loader is written against, for
+    exactly the non-transformers checkpoints this module exists to serve.
+    """
+    if not os.path.isdir(model_id) or _declares(model_id, ROOT_CONFIG_FILE):
+        try:
+            from transformers import AutoConfig
+
+            cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+            return str(cfg)[:2000]
+        except Exception as exc:  # noqa: BLE001
+            return f"(AutoConfig failed: {type(exc).__name__}: {exc})"
+    for name in MODEL_CONFIG_FILES:
+        declared = fetch_repo_json(model_id, name)
+        if declared:
+            return f"{name}:\n{json.dumps(declared, indent=2, default=str)}"[:2000]
+    return "(the checkpoint ships no config document)"
 
 
 def build_prompt(model_id: str, demo_dir: Path, failure_text: str) -> str:

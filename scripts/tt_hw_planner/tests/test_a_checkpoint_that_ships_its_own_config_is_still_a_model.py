@@ -142,6 +142,46 @@ def test_the_native_config_document_is_actually_fetched(native_checkpoint) -> No
     assert P._maybe_fetch_config(native_checkpoint) == _NATIVE_DIALECT
 
 
+@pytest.mark.parametrize("folder", ["native", "bert-checkpoints", "my-opt-run", "t5x_export", "llama-3-8b"])
+def test_the_folder_s_name_never_chooses_the_architecture(tmp_path, folder) -> None:
+    """Asking for the transformers config first was not merely useless here -- it ANSWERED.
+
+    Given a directory holding no config.json, AutoConfig does not fail: it matches every registered
+    model_type against the PATH STRING and returns that architecture's DEFAULTS. A checkpoint in a
+    folder called `native` came back a fully-populated NatConfig -- 512-wide, 4 layers, a vision
+    backbone's stage names -- and, that tier having "succeeded", the params.json lying beside the
+    weights was never opened. Not about one unlucky word: every one of these names hijacks it.
+    """
+    checkpoint = _checkpoint(tmp_path / folder, P.NATIVE_CONFIG_FILE, _NATIVE_DIALECT)
+
+    assert P._maybe_fetch_config(checkpoint) == _NATIVE_DIALECT
+
+
+@pytest.mark.parametrize("folder", ["native", "bert-checkpoints"])
+def test_and_the_loader_prompt_describes_the_checkpoint_it_was_given(tmp_path, folder) -> None:
+    """Where the substitution did the most damage: this text is handed to the LLM as "the model's
+    config" while it writes the loader, so the folder name was choosing the architecture the loader
+    got written against -- for precisely the non-transformers checkpoints that module serves."""
+    from scripts.tt_hw_planner import reference_loader_resolver as R
+
+    summary = R._config_summary(_checkpoint(tmp_path / folder, P.NATIVE_CONFIG_FILE, _NATIVE_DIALECT))
+
+    assert str(_NATIVE_DIALECT["dim"]) in summary
+    assert str(_NATIVE_DIALECT["n_layers"]) in summary
+    # The native dialect declares no model_type; every invented transformers config prints one.
+    assert "model_type" not in summary
+
+
+def test_a_transformers_checkpoint_is_still_read_by_transformers(hf_checkpoint) -> None:
+    """The other side of that gate. AutoConfig is still asked wherever it has a document to read,
+    and its answer carries the defaults the raw file leaves out -- which the sizing steps rely on."""
+    cfg = P._maybe_fetch_config(hf_checkpoint)
+
+    assert cfg["model_type"] == _HF_DIALECT["model_type"]
+    assert cfg["hidden_size"] == _HF_DIALECT["hidden_size"]
+    assert len(cfg) > len(_HF_DIALECT), "no longer the transformers-expanded config"
+
+
 def test_a_native_checkpoint_is_planned_like_a_named_one(native_checkpoint) -> None:
     """The end of the road: sized, fitted, and still called what it is."""
     with patch.object(P, "_agent_classify_category", return_value=None):

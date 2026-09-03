@@ -23,6 +23,13 @@ NATIVE_CONFIG_FILE = "params.json"
 MODEL_CONFIG_FILES = (ROOT_CONFIG_FILE, NATIVE_CONFIG_FILE)
 
 
+def _declares(model_id: str, *names: str) -> bool:
+    """Does this directory ship any of these config documents?"""
+    if not isinstance(model_id, str) or not os.path.isdir(model_id):
+        return False
+    return any(os.path.isfile(os.path.join(model_id, name)) for name in names)
+
+
 def _is_local_model_dir(model_id: str) -> bool:
     """Is this a directory with a model in it?
 
@@ -30,9 +37,7 @@ def _is_local_model_dir(model_id: str) -> bool:
     transformers one. Asking solely for ROOT_CONFIG_FILE refused a params.json-only checkpoint at
     `_validate_hf_id` as an "invalid HuggingFace model id", naming neither the real cause nor the
     thing it had actually been handed."""
-    if not isinstance(model_id, str) or not os.path.isdir(model_id):
-        return False
-    return any(os.path.isfile(os.path.join(model_id, name)) for name in MODEL_CONFIG_FILES)
+    return _declares(model_id, *MODEL_CONFIG_FILES)
 
 
 def _validate_hf_id(model_id: str) -> str:
@@ -778,13 +783,21 @@ def _bytes_per_param_from_local_safetensors(model_dir: str) -> Tuple[Optional[in
 
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     safe_id = _validate_hf_id(model_id)
-    try:
-        from transformers import AutoConfig
+    # ASK AutoConfig ONLY WHERE IT HAS A DOCUMENT TO READ. Handed a directory with no transformers
+    # config it does not fail -- it matches every registered model_type against the PATH STRING and
+    # builds that architecture's DEFAULT config from the first hit. A checkpoint dropped in a folder
+    # whose name happens to contain "nat" (or "bert", "opt", "t5" ...) therefore comes back fully
+    # populated and entirely invented: 512-wide, 4 layers, a vision backbone's stage names -- while
+    # the params.json sitting beside the weights is never opened, because this tier already
+    # "succeeded". A folder's NAME is not the model's identity; the document it ships is.
+    if not os.path.isdir(safe_id) or _declares(safe_id, ROOT_CONFIG_FILE):
+        try:
+            from transformers import AutoConfig
 
-        cfg = AutoConfig.from_pretrained(safe_id, trust_remote_code=True)
-        return cfg.to_dict()
-    except Exception:
-        pass
+            cfg = AutoConfig.from_pretrained(safe_id, trust_remote_code=True)
+            return cfg.to_dict()
+        except Exception:
+            pass
 
     try:
         from huggingface_hub import hf_hub_download

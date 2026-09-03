@@ -2902,7 +2902,14 @@ def _coverage_layers(
 
 
 def _print_scorecard(
-    devices: str, manifest: dict, pipe: dict, facts: dict, before_ms, after_ms, model_name: str = ""
+    devices: str,
+    manifest: dict,
+    pipe: dict,
+    facts: dict,
+    before_ms,
+    after_ms,
+    model_name: str = "",
+    model_id: str = "",
 ) -> None:
     """End-of-run scorecard. UNIVERSAL fields (hardware, TP/DP, fully-on-device, batch, users) print for
     ANY model; token-throughput fields (TTFT / T/S/U / T/S / ISL / OSL) are class-specific and print only
@@ -2978,7 +2985,14 @@ def _print_scorecard(
                     _meas[_k] = float(_v) if _k in ("TTFT_ms", "TSU", "TS") else int(float(_v))
                 except Exception:  # noqa: BLE001
                     _meas[_k] = _v
-            _mid = (manifest or {}).get("model_id") or model_name or pipe.get("task", "")
+            # THE ID, THEN THE FOLDER. scorecard_profiles matches this against model_targets.yaml by
+            # name, so it is a lookup key, not a caption: the published targets for the model only
+            # appear when it is the model's id. The manifest key is the run record's own statement and
+            # stays first; `model_id` is what the run resolved for itself. Falling to `model_name` --
+            # the demo DIRECTORY's name -- is last because it answers "where does this live", and a
+            # directory that is not also a model name matches nothing, printing "measured-only"
+            # against a model whose targets are sitting in the file.
+            _mid = (manifest or {}).get("model_id") or model_id or model_name or pipe.get("task", "")
             print("  (throughput card below is the BASELINE bookend — pre-optimization, not the run result)")
             print(_sp.render(_mid, _arch, _chips, _meas))
     except Exception as exc:  # noqa: BLE001
@@ -5027,6 +5041,7 @@ def optimize_pipeline(
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     hitl: bool = False,
     config_ref: str = "",
+    model_id: str = "",
 ) -> dict:
     """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds.
     hitl=True runs the human-in-the-loop gate: the agent proposes one lever at a time via hitl_gate and
@@ -5294,7 +5309,7 @@ def optimize_pipeline(
         _mf = json.loads(Path(manifest_path).read_text())
     except Exception:  # noqa: BLE001
         _mf = {}
-    _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name)
+    _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name, model_id)
     _emit_summary(
         repo_root,
         kernel_log,
@@ -5419,6 +5434,11 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
 
 
 _HF_ID_RE = __import__("re").compile(r"['\"]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)['\"]")
+# The bring-up record every scaffolded demo carries, and the keys in it that NAME the model. Written
+# by scaffold.py / bringup_plan.py, and already the id->directory index find_demo_dir() searches on;
+# commands/emit_e2e.py reads these same two keys in this order. Read-only here.
+_BRINGUP_RECORD = "bringup_status.json"
+_BRINGUP_ID_KEYS = ("new_model_id", "model_id")
 
 
 def _hf_hub_root() -> Path:
@@ -5471,8 +5491,26 @@ def _run_test_files(demo_dir, manifest=None) -> tuple:
     return tuple(dict.fromkeys(out))
 
 
+def _declared_model_id(demo_dir) -> str:
+    """The model this demo was BROUGHT UP FOR, as its own bring-up record states it, or "".
+
+    Identity, not location: the record says what the model IS, independently of which directory its
+    code was scaffolded into or where its weights happen to sit."""
+    try:
+        record = json.loads((Path(demo_dir) / _BRINGUP_RECORD).read_text())
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(record, dict):
+        return ""
+    for key in _BRINGUP_ID_KEYS:
+        stated = record.get(key)
+        if isinstance(stated, str) and stated.strip():
+            return stated.strip()
+    return ""
+
+
 def _resolve_model_id(demo_dir, hint=None, prefer_files=()) -> str | None:
-    """Which HF model this run is optimizing: hint, then HF_MODEL, then the directory scan.
+    """Which model this run is optimizing: hint, HF_MODEL, the demo's bring-up record, then the scan.
 
     The middle tier was missing. optimize.py passes `model_id_hint=(None if model_dir else
     args.target)`, so pointing at a DEMO DIRECTORY -- which is how every brought-up model is
@@ -5486,12 +5524,34 @@ def _resolve_model_id(demo_dir, hint=None, prefer_files=()) -> str | None:
     HF_MODEL, so execution never needs this id. Only the roofline arithmetic does -- and HF_MODEL was
     sitting in this process's own environment, correct, unread. before_loop.py:262 already reads it
     (`config.get("model_id") or os.environ.get("HF_MODEL")`); this gives the cc engine the same tier.
+
+    Both of those tiers still depend on the caller or the environment saying so, and neither is set
+    when a brought-up demo is optimized from a shell that did not export HF_MODEL. What is ALWAYS
+    present in that case is the demo's own bring-up record, so the tiers now run statements first
+    (asked for, configured, recorded) and inference second (the files under the directory).
     """
     if _is_cached_model_id(hint):
         return hint
     env_id = (os.environ.get("HF_MODEL") or "").strip()
     if _is_cached_model_id(env_id):
         return env_id
+    # WHAT THIS DEMO WAS BROUGHT UP FOR, BEFORE ANY FILE IS READ. Both tiers below infer the identity
+    # from what the directory CONTAINS -- an id quoted in some .py under it. Scaffold already recorded
+    # the answer when it generated the demo, and find_demo_dir() trusts that key hard enough to resolve
+    # an id back to this directory; this is the same fact read in the other direction. It is the only
+    # tier that stays right on a tree that names several models, and the only one a checkpoint brought
+    # up from a local directory has at all.
+    #
+    # NOT gated on _is_cached_model_id, unlike the two above. That gate is there to stop an unusable
+    # GUESS -- a stale env var, a decoy in a CI matrix -- from displacing a better one. This is not a
+    # guess; it is what the demo was created to be. Requiring it to be in the HF cache would send every
+    # locally-checkpointed model back to the scan, which then answers with whichever OTHER model the
+    # tree happens to mention and have downloaded: the model's identity replaced by its surroundings.
+    # A name that is not in the cache still carries its size (_params_from_model_id), and the cache
+    # lookups it feeds all return empty rather than wrong.
+    stated = _declared_model_id(demo_dir)
+    if stated:
+        return stated
     # THE RUN'S OWN TESTS, BEFORE THE TREE. This dropped straight to "first cached id in the first
     # .py rglob yields", and a model tree names more than one: gemma3's conftest, perf test, PCC test
     # and host-split test all pin google/gemma-3-12b-it, while test_ci_dispatch.py lists the 4b and
@@ -6399,7 +6459,11 @@ def run_cc_optimize(
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     os.environ.setdefault("PERF_MCP_MODEL_NAME", model_name or "model")
-    _cfg_ref = _resolve_model_id(demo_dir, model_id_hint, _run_test_files(demo_dir, manifest)) or str(demo_dir)
+    # RESOLVED ONCE, FOR EVERYTHING DOWNSTREAM. `config_ref` wants something to name the model by and
+    # settles for the directory when there is no id; the scorecard's model_targets lookup is keyed on
+    # the id ITSELF, and a directory standing in for one silently matches nothing. Keep them apart.
+    _model_id = _resolve_model_id(demo_dir, model_id_hint, _run_test_files(demo_dir, manifest))
+    _cfg_ref = _model_id or str(demo_dir)
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
@@ -6432,6 +6496,7 @@ def run_cc_optimize(
                     max_rounds,
                     hitl=hitl,
                     config_ref=_cfg_ref,
+                    model_id=_model_id or "",
                 )
             )
         except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
