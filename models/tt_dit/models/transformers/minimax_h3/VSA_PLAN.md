@@ -313,7 +313,10 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
     10s: dense 42.8 | VSA 41.0 ms (vsa_sdpa 8.9/9.1/9.4; identity 7.6 / 13.5)
     15s: dense 76.7 | VSA 66.8 ms (vsa_sdpa 17.0/17.5/20.2; identity 15.9 / 24.3)
   The block/perf tests now default VSA_PLACEMENT to the config default (DEFAULT_VSA_PLACEMENT).
-- Run-to-run NONDETERMINISM: untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
+- 2026-09-03: exact exp made the op default (`math_approx_mode=False`, as dense SDPA): +3% standalone.
+  Deterministic arrival-bin windows applied: untraced repeat and traced replay bit-exact (PCC 1.0);
+  standalone neutral to +6% (15s 17.1/16.0 ms; 10s 7.9; 5s 2.5). Details in VSA_STREAM_DESIGN.md 3b/3c.
+- Run-to-run NONDETERMINISM (resolved above): untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:
   deterministic windows (close on a fixed arrival stride, not on starvation).

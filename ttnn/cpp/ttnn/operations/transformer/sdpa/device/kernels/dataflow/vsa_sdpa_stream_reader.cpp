@@ -288,6 +288,9 @@ void kernel_main() {
             }
             if (nl == 0) {
                 ++own_consumed;
+                if (own_consumed % kOwnWin == 0) {
+                    own_close_window();  // arrival-bin boundary (deterministic partition)
+                }
                 own_advance();
                 return;
             }
@@ -305,8 +308,8 @@ void kernel_main() {
             own_busy[slot] = true;
             own_warr[own_wslots++] = own_consumed;
             ++own_consumed;
-            if (own_wslots == kOwnWin) {
-                own_close_window();
+            if (own_wslots == kOwnWin || own_consumed % kOwnWin == 0) {
+                own_close_window();  // arrival-bin boundary (deterministic partition)
                 own_poll_credits();
             }
         };
@@ -317,7 +320,6 @@ void kernel_main() {
             if (own_commit >= target) {
                 return;
             }
-            own_close_window();  // our own open window can be what pins the commit
             own_poll_credits();
             if (own_commit >= target) {
                 return;
@@ -767,14 +769,16 @@ void kernel_main() {
         cur_pass_rows = pass_rows;
 
         while (true) {
-            // Poll pending emissions every iteration; when about to block on the next arrival,
-            // close the open window first (the leader's next publish can be gated on our posted
-            // progress, which is bounded by un-emitted windows) and keep polling in the spin.
+            // Poll pending emissions every iteration and keep polling while spinning on the next
+            // arrival. Windows close on FIXED arrival bins (below), never on starvation: a
+            // timing-driven close would make the visit partition -- and so the bf16 rounding order
+            // of the online softmax -- differ run to run. Bins are deadlock-free against the
+            // leader's slot gate because fetch lag + bin width < stream depth: the leader always
+            // publishes past the bin end before it can be gated on this worker's progress.
             try_emit();
             const uint32_t entry_off = (log_n % log_depth) * log_entry_words;
             invalidate_l1_cache();
             if (log_ptr[entry_off + 2] != log_n + 1) {
-                close_window();
                 do {
                     if (log_n == 0) {
                         post_ready();  // see READY above
@@ -806,6 +810,9 @@ void kernel_main() {
             }
             if (n_listing == 0) {
                 ++consumed;
+                if (consumed % half_slots == 0) {
+                    close_window();  // arrival-bin boundary (deterministic partition)
+                }
                 if (consumed - posted >= 4) {
                     post_progress_now();
                 }
@@ -875,6 +882,9 @@ void kernel_main() {
                 pending[half][listing[i]][n_pending[half][listing[i]]++] = entry;
             }
             ++window_slots;
+            if (consumed % half_slots == 0) {
+                close_window();  // arrival-bin boundary (deterministic partition)
+            }
         }
 
         // Drain every pending window (the pass's FLUSH messages must follow all its visits).

@@ -126,27 +126,31 @@ wide enough to average 6 selected blocks per row (~50 slots) does not fit L1 nex
 at ~25%: block-sparse selection at 64 tokens buys a 9x reduction in math but makes every remaining
 unit of work 8x less amortised.
 
-**Exp mode note.** `vsa_sdpa`'s compute-kernel default is `math_approx_mode=True` (inherited from the
-op it was forked from) and the model does not override it, whereas the dense path passes
-`exp_approx_mode=False`. The floor measurements above were taken with the default. Switching to the
-exact exp is a one-line config change; it costs SFPU time on the pack thread (the current
-bottleneck) and has not been measured yet.
+**Exp mode.** `vsa_sdpa`'s compute-kernel default is now `math_approx_mode=False` (exact SFPU exp for
+both the probabilities and `corr = exp(dmax)`), matching the dense path's `exp_approx_mode=False`. It
+was inherited as `True` from the op this was forked from; the earlier floor measurements used the
+approximate exp. Cost of the exact exp, standalone 15 s median: 16.2 -> 16.7 ms topk order,
+16.0 -> 16.5 ms model order (+3%), util 24.5% -> 23.5-23.9%.
 
 ## 3c. Determinism
 
-The dense block is run-to-run deterministic. `vsa_sdpa` is **not bit-deterministic**: a worker's
-window boundaries are closed by a starvation check as well as by the half filling, so the
-partition of a row's blocks into visits -- and therefore the order in which bf16 partial results
-are combined by the online softmax -- depends on arrival timing. Repeats agree to PCC 0.99998 (it
-was 0.999 before the kreq-marker fix, which was the larger source). A drafted change closes windows
-on fixed arrival bins instead (deadlock-free because fetch lag + bin width < stream depth), which
-makes the partition, and so the result, a pure function of the inputs; it is not applied. The
-coarse stage (pooling, scores, top-k) is deterministic.
+The dense block is run-to-run deterministic, and so is `vsa_sdpa` since the arrival-bin change: a
+worker's (and the leader-as-worker's) windows close on fixed bins of `half_slots` arrivals, never on
+a starvation check, so the partition of a row's blocks into visits -- and with it the bf16 order in
+which the online softmax combines partial results -- is a pure function of the inputs. The bins are
+deadlock-free against the leader's slot gate because fetch lag (4) + bin width (6) < stream depth
+(12): the leader always publishes past a bin boundary before it can be gated on that worker's
+progress. Verified by `test_vsa_sdpa_trace_replay`: untraced repeat and traced replay are bit-exact
+(PCC 1.000000; before: 0.99998, and 0.999 before the kreq-marker fix). Cost, standalone medians vs
+timing-driven windows (both with exact exp): 15 s 16.7 -> 17.1 ms topk / 16.5 -> 16.0 ms model,
+10 s 7.4 -> 7.9 ms, 5 s 2.4 -> 2.5 ms -- neutral to +6%. The coarse stage is deterministic as well.
 
 ## 4. Performance and its ceiling
 
-Standalone, 15 s heaviest shard, median over runs: **16.2 ms topk / 16.0 ms model order, 24-25%
-of HiFi2 peak on the listed math** (v1: 81.9 ms, 4.8%). Delivery floor (probe: consume visits, no
+Standalone, 15 s heaviest shard, median over runs (approximate exp, timing-driven windows, the
+configuration the levers were measured in): **16.2 ms topk / 16.0 ms model order, 24-25% of HiFi2
+peak on the listed math** (v1: 81.9 ms, 4.8%). As shipped (exact exp, deterministic windows):
+17.1 / 16.0 ms, 23-25%. Delivery floor (probe: consume visits, no
 math) 10.7 / 7.1 ms; math floor (QK+PV, no softmax) ~10.7 ms; per-TRISC busy after the last
 levers: PACK 93%, MATH 89%, UNPACK 87%.
 
@@ -166,13 +170,15 @@ Why the 60% target is out of reach for this design, losslessly:
 ## 5. In the block (tracy, one transformer block period, 768p, sparsity 0.9, interleaved placement)
 
 Device 0 unless noted; "max" is the slowest device (the block waits for it). Measured as the ops
-between two consecutive attention ops (an exact block period).
+between two consecutive attention ops (an exact block period). The 15 s row is with exact exp and
+deterministic windows; 5/10 s with the earlier approx-exp / timing-window kernel (standalone deltas
++3% and -3..+6%).
 
 | duration | dense block (dev0 / max) | VSA block (dev0 / max) | dense attention | `vsa_sdpa` | VSA-only ops |
 |---|---|---|---|---|---|
 | 5 s  | 15.8 / 17.5 ms | 19.0 / 20.3 ms | 7.4 ms  | 3.3 ms  | 6.2 ms  |
 | 10 s | 39.5 / 41.2 ms | 37.4 / 39.0 ms | 24.7 ms | 9.0 ms  | 11.7 ms |
-| 15 s | 73.4 / 75.4 ms | 63.1 / 63.7 ms | 51.4 ms | 20.1 ms | 19.3 ms |
+| 15 s | 73.4 / 75.4 ms | 62.7 / 63.3 ms | 51.4 ms | 19.8 ms | 19.2 ms |
 
 Component breakdown (ms, device 0):
 

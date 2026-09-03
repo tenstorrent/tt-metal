@@ -27,7 +27,7 @@ ttnn::Tensor vsa_sdpa(
         tt::tt_metal::hal::get_arch(),
         compute_kernel_config,
         /*default_fidelity=*/MathFidelity::HiFi2,
-        /*default_approx_mode=*/true,
+        /*default_approx_mode=*/false,  // exact exp, as the dense SDPA path uses (lossless mandate)
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/false);
 
