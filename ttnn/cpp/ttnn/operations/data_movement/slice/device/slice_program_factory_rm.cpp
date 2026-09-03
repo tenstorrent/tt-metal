@@ -280,6 +280,32 @@ SliceCbSizing compute_cb_size(
     return s;
 }
 
+// Both RM kernels build their TensorAccessor from the two-arg form, so each takes the aligned page
+// size TensorAccessorArgs bakes into the compile-time args. That is interchangeable with the
+// per-shard page size they used to be handed only where the two agree: exactly, on a sharded buffer,
+// whose accessor strides by the value verbatim and whose `noc_async_*_sharded` splits pages by it;
+// and up to rounding on an interleaved one, where InterleavedAddrGen re-aligns internally. On a
+// block/width-sharded buffer that reduces to the shard row being a multiple of the buffer alignment,
+// which `has_subaligned_shard_row` guarantees for anything arriving via ttnn::slice -- but
+// MeshPartition builds these programs straight off select_program_factory and never sees that guard.
+void check_accessor_page_size(const Tensor& t, uint32_t row_bytes, const char* role) {
+    const auto* buffer = t.buffer();
+    const uint32_t alignment = buffer->alignment();
+    const uint32_t aligned_page_size = static_cast<uint32_t>(buffer->aligned_page_size());
+    const uint32_t per_shard = per_shard_page_size_bytes(t, row_bytes);
+    const uint32_t effective = t.memory_config().is_sharded() ? per_shard : tt::round_up(per_shard, alignment);
+    TT_FATAL(
+        effective == aligned_page_size,
+        "ttnn::slice: {} per-shard page size {} B disagrees with the accessor's aligned page size {} B "
+        "({} B is not a multiple of the {} B buffer alignment). Reach this op through ttnn::slice, which "
+        "reshards such tensors, rather than building the program factory directly.",
+        role,
+        effective,
+        aligned_page_size,
+        per_shard,
+        alignment);
+}
+
 }  // namespace
 
 }  // namespace ttnn::operations::data_movement
@@ -303,6 +329,14 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // The kernels take the accessor's compile-time page size rather than a runtime one, so pin the
+    // equivalence here: a route that skips slice.cpp's resharding guard fails loudly instead of
+    // striding by the wrong page.
+    ttnn::operations::data_movement::check_accessor_page_size(
+        input, input.padded_shape()[-1] * input.element_size(), "input");
+    ttnn::operations::data_movement::check_accessor_page_size(
+        output, output.padded_shape()[-1] * input.element_size(), "output");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
