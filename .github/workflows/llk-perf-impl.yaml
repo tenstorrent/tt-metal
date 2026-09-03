@@ -230,6 +230,10 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
+      # The LLK test image has the python env but no ssh client, and the
+      # upload action shells out to sftp.
+      - name: Install the SFTP client
+        run: apt-get update -qq && apt-get install -y -qq openssh-client
       - name: Upload perf data
         uses: ./.github/actions/upload-data-via-sftp
         with:
