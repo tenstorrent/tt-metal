@@ -91,16 +91,15 @@ string logfile_path = "generated/dprint/";
 
 string GetRiscName(
     tt_metal::MetalEnvImpl& env,
-    const tt::Cluster& cluster,
-    const tt_metal::Hal& hal,
     ChipId device_id,
     const umd::CoreDescriptor& logical_core,
     int risc_id,
     bool abbreviated = false) {
+    const auto& cluster = env.get_cluster();
     tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(env, device_id, virtual_core);
-    return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
+    return env.get_hal().get_processor_class_name(programmable_core_type, risc_id, abbreviated);
 }
 
 inline bool RiscEnabled(
@@ -507,7 +506,7 @@ void DPrintServer::Impl::print_buffer_data(
                                 const string& device_id_str = to_string(device_id);
                                 const string& core_coord_str = logical_core.coord.str();
                                 const string& risc_name =
-                                    GetRiscName(env_, cluster, hal, device_id, logical_core, header->risc_id, true);
+                                    GetRiscName(env_, device_id, logical_core, header->risc_id, true);
                                 line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
                             }
                             risc_data.line_prefix = line_prefix;
@@ -1385,8 +1384,6 @@ void DPrintServer::Impl::flush_output_streams() {
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
-    auto& cluster = env_.get_cluster();
-    const auto& hal = env_.get_hal();
     const auto& rtoptions = env_.get_rtoptions();
     if (rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
@@ -1400,7 +1397,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
                 tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
-                GetRiscName(env_, cluster, hal, chip_id, logical_core, risc_id));
+                GetRiscName(env_, chip_id, logical_core, risc_id));
             risc_to_file_stream_[risc_key] = new ofstream(filename);
         }
         output_stream = risc_to_file_stream_[risc_key];
