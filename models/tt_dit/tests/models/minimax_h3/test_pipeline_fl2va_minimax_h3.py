@@ -170,7 +170,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     expected_frames = align_num_frames(NUM_FRAMES)
     height, width = int(output.video.shape[-2]), int(output.video.shape[-1])
     log_quality(
-        f"fl2va[{case}] padded_len={pipeline.last_padded_len} canvas={width}x{height} "
+        f"fl2va[{case}] padded_len={pipeline.last_seq_len.padded} canvas={width}x{height} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
 
