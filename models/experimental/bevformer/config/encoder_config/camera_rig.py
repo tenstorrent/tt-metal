@@ -83,6 +83,35 @@ NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
 )
 
 
+# KITTI-360 rectified perspective intrinsics (P_rect_00), shared by both cameras
+# of the stereo pair. The 0.6 m baseline is the image_00 to image_01 separation.
+KITTI_FOCAL_PX = 552.554261
+KITTI_PRINCIPAL_PX = (682.049453, 238.769549)
+KITTI_IMAGE_SIZE = (1408, 376)
+KITTI_BASELINE_M = 0.6
+
+
+def _kitti(name: str, lateral_offset_m: float) -> CameraSpec:
+    return CameraSpec(
+        name=name,
+        yaw_deg=0.0,
+        focal_px=(KITTI_FOCAL_PX, KITTI_FOCAL_PX),
+        principal_px=KITTI_PRINCIPAL_PX,
+        reference_size=KITTI_IMAGE_SIZE,
+        translation_m=(0.0, lateral_offset_m, 0.0),
+    )
+
+
+# A forward-facing stereo pair, not a ring: both cameras share a yaw and are
+# separated only laterally, so the rig covers one frustum rather than 360 degrees.
+# Roughly half the BEV grid projects into no camera at all, which is the real
+# geometry of a stereo dataset and what bev_mask should reflect.
+KITTI_CAMERA_RIG: Tuple[CameraSpec, ...] = (
+    _kitti("CAM_LEFT", KITTI_BASELINE_M / 2.0),
+    _kitti("CAM_RIGHT", -KITTI_BASELINE_M / 2.0),
+)
+
+
 def ring_camera_rig(
     num_cams: int,
     input_size: Tuple[int, int],
@@ -167,6 +196,8 @@ def camera_rig_for_dataset(dataset_config) -> Tuple[CameraSpec, ...]:
     """Pick the rig recorded for a dataset, falling back to a synthetic ring."""
     if dataset_config.name.startswith("nuscenes") and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG):
         return NUSCENES_CAMERA_RIG
+    if dataset_config.name.startswith("kitti") and dataset_config.num_cams == len(KITTI_CAMERA_RIG):
+        return KITTI_CAMERA_RIG
     return ring_camera_rig(dataset_config.num_cams, dataset_config.input_size)
 
 
