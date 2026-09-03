@@ -92,8 +92,10 @@ public:
 
     // PrefetcherPipe delivery. Receiver-contiguous batched tensors only, all at the pipes' entry
     // size; the preconditions are checked here with the offending values in the message.
+    // `prefetcher_pipes` must be in BuildTensorPrefetcherSenderMapping order (see the public
+    // QueueTensorPrefetcherRequest overload for what that order fixes).
     void queue(
-        const experimental::TensorPrefetcherPipes& prefetcher_pipes,
+        const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
@@ -136,10 +138,10 @@ private:
     static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
-        // One logical socket page. For PREFETCH this is either one shared page or one page
-        // per entry in target_sender_indices (streaming rotations differ by sender).
-        // STOP / WAIT_CQ carry one shared page and leave target_sender_indices empty to
-        // broadcast to every provisioned sender.
+        // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
+        // the header names that sender's target state and slab base. STOP / WAIT_CQ carry one
+        // shared page and leave target_sender_indices empty to broadcast to every provisioned
+        // sender.
         std::vector<std::vector<uint8_t>> sender_pages;
         std::vector<MeshCoordinate> target_devices;
         std::vector<uint32_t> target_sender_indices;
@@ -147,12 +149,15 @@ private:
 
     // Everything the request path needs to know about a delivery target, so serialization does not
     // have to name the target's type. Built by target_for() from either a DRAM-sender
-    // GlobalCircularBuffer or a set of DRAM-sender PrefetcherPipes.
+    // GlobalCircularBuffer or a list of DRAM-sender PrefetcherPipes. Owns its mapping by value: a
+    // pipe list's mapping is assembled at queue time and has no home on the target object.
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>* mapping = nullptr;
-        // DRISC L1 base of the target's per-sender state (header field target_state_addr).
-        uint32_t state_addr = 0;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+        // DRISC L1 base of each sender's target state (header field target_state_addr), in mapping
+        // order. A GCB plants every sender's block at one uniform offset and so repeats it; a pipe
+        // list holds one address per pipe.
+        std::vector<uint32_t> state_addr_per_sender;
         // Transport for every tensor in the request.
         TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
@@ -165,15 +170,16 @@ private:
     void worker_loop();
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
-    RequestTarget target_for(const experimental::TensorPrefetcherPipes& prefetcher_pipes) const;
+    RequestTarget target_for(const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
-    // logical page; each entry is either one shared page or a vector in target sender-mapping
-    // order. The header/entry/geometry bytes are identical across senders, while a streaming
-    // page carries only that sender's slice of the per-receiver rotation table.
+    // logical page, each a vector in target sender-mapping order. The entry and geometry bytes
+    // are identical across senders, while the header carries that sender's state address and slab
+    // base, and a streaming page carries only that sender's slice of the per-receiver rotation
+    // table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const RequestTarget& target, const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
     // Shared body of the two public queue() overloads.

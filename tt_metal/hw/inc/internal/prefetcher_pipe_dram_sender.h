@@ -7,8 +7,8 @@
 // The device-side experimental::PrefetcherPipe class cannot be used here: its constructor reads the
 // launch message to find its config slot, and DRAM cores are never dispatched to, so they have no
 // launch message and never Attach. Instead the host stamps a complete PrefetcherPipe sender config
-// page into DRISC L1 (see impl/buffers/prefetcher_pipe_dram_sender_state.hpp) and this header works
-// directly against that page. Deliberately depends only on headers a DRISC kernel already builds
+// page into DRISC L1 (see impl/buffers/prefetcher_pipe.cpp, initialize_dram_sender_config_page) and
+// this header works directly against that page. Deliberately depends only on headers a DRISC kernel already builds
 // with -- notably NOT prefetcher_pipe.h or prefetcher_pipe_init.h.
 //
 // The wire protocol is identical to the worker-sender PrefetcherPipe, so an ordinary receiver
