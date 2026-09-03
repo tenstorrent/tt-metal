@@ -61,6 +61,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. A rank-4 tensor
                 ([d0, d1, M, K]) whose leading dims multiply to a batch > 1 selects the batched
                 program factory; the fold geometry is inferred from the operand shapes.
+                Full-width decode also accepts ROW_MAJOR HEIGHT_SHARDED A on B's core grid:
+                A is replicated on every core, M is the shard height, and compute treats each
+                row as a 1x32 tile.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied.
 
         Keyword Args:
@@ -131,6 +134,12 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 Full- and partial-width L1-resident paths only (plain or packed_weight).
                 Not supported with `global_cb` or the batched factory. Defaults to False.
 
+                When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated on
+                the same core grid as `input_tensor_b` (shard width = K, shard height = M).
+                That path is full-width hub-mode only: each core already holds the full A, so
+                the reader fills `full_in0` from the local shard (treated as 1x32 tiles) instead
+                of gathering K-slices. `ring_gather` is rejected.
+
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
@@ -170,7 +179,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight)
         .def_rw("all_gather", &ttnn::prim::MatmulDecodeParams::all_gather)
         .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size)
-        .def_rw("ring_gather", &ttnn::prim::MatmulDecodeParams::ring_gather);
+        .def_rw("ring_gather", &ttnn::prim::MatmulDecodeParams::ring_gather)
+        .def_rw("in0_row_major_height_sharded", &ttnn::prim::MatmulDecodeParams::in0_row_major_height_sharded);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(
