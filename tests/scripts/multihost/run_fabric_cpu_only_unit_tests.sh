@@ -179,8 +179,11 @@ run_test() {
   fi
   # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
   # deadlocks prterun forever; this turns that into a failed command instead of a hang.
+  # No --foreground: that signals only tt-run itself, and killing the launcher leaves its
+  # ranks orphaned and spinning in MPI finalize. The default puts the command in its own
+  # process group so the whole rank set is torn down.
   if [[ -n "${TT_FABRIC_TEST_TIMEOUT:-}" ]]; then
-    timeout --foreground --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@"
+    timeout --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@"
   else
     "$@"
   fi
