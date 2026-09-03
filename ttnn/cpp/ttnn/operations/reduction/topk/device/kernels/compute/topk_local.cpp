@@ -109,13 +109,9 @@ void kernel_main() {
     constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
-// Fused-key stable mode (factory-injected define): sort packed [bf16|u16] keys with the unstable
-// network instead of running the comparator-stable network on separate value/index tiles.
-#if defined(TOPK_FUSED_STABLE_KEYS) && TOPK_FUSED_STABLE_KEYS
-    constexpr bool fused_keys = true;
-#else
-    constexpr bool fused_keys = false;
-#endif
+    // Fused-key stable mode: sort packed [bf16|u16] keys with the unstable network instead of
+    // running the comparator-stable network on separate value/index tiles.
+    constexpr bool fused_keys = get_compile_time_arg_val(15) == 1;
     // The packed key IS the stable tie-break; the network itself runs unstable in fused mode.
     constexpr bool network_stable = stable_sort && !fused_keys;
 
