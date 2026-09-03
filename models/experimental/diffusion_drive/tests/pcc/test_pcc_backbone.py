@@ -61,7 +61,7 @@ def _make_backbone(latent: bool = True) -> TransfuserBackbone:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 def test_backbone_bev_upscale_pcc(device) -> None:
     """bev_upscale output: TtnnTransfuserBackbone vs reference PCC ≥ 0.99."""
     torch.manual_seed(42)
@@ -81,7 +81,7 @@ def test_backbone_bev_upscale_pcc(device) -> None:
     assert pcc_up >= 0.99, f"bev_upscale PCC {pcc_up:.6f} < 0.99"
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 def test_backbone_bev_feature_pcc(device) -> None:
     """bev_feature output: TtnnTransfuserBackbone vs reference PCC ≥ 0.99."""
     torch.manual_seed(7)
