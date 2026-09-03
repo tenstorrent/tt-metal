@@ -132,7 +132,7 @@ void kernel_main() {
                     for (uint32_t rr = r; g < W_COALESCE && rr < outer_dim_size; rr += NP_NUM_DRAM_BANKS) {
                         g++;
                     }
-                    cb_reserve_back(cb_output_id, g);
+                    cb_reserve_back(cb_output_id, 1);
                     const uint32_t base_l1 = get_write_ptr(cb_output_id);
                     for (uint32_t m = 0; m < g; m++) {
                         const uint32_t rel = r + m * NP_NUM_DRAM_BANKS;
@@ -156,7 +156,7 @@ void kernel_main() {
                         }
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_output_id, g);
+                    cb_push_back(cb_output_id, 1);
                     r += g * NP_NUM_DRAM_BANKS;  // next group start on this bank
                 }
             }

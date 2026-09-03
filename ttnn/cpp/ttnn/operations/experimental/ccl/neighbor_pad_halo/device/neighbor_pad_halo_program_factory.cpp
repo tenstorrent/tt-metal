@@ -390,11 +390,14 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         occ_w_workers = worker_crset;
         occ_wmux = mux_crset;
 
-        // Send CB (c_in0) on the mux WORKER cores — the base cb_w_sender_config was created only on the standard
+        // Send CB on mux WORKER cores. One CB page = one coalesced fabric packet (W_COALESCE sticks)
+        // so a g*stick NOC write stays inside a single page (watcher CB-bounds).
         {
-            const uint32_t w_mux_cb_pages = 16 * w_coalesce_n;
-            CircularBufferConfig cb_mux_w(w_mux_cb_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}});
-            cb_mux_w.set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+            const uint32_t w_packet_page =
+                (w_coalesce_n > 0) ? (w_coalesce_n * l1_scratch_cb_page_size_bytes) : l1_scratch_cb_page_size_bytes;
+            const uint32_t w_mux_cb_pages = 16;
+            CircularBufferConfig cb_mux_w(w_mux_cb_pages * w_packet_page, {{sender_cb_index, df}});
+            cb_mux_w.set_page_size(sender_cb_index, w_packet_page);
             CreateCircularBuffer(program, worker_crset, cb_mux_w);
         }
 
@@ -961,11 +964,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 w_coalesce_n = 0;
             }
         }
-        // W send CB (c_in0 on W cores): deep enough to double-buffer a coalesce group (per-stick uses 2).
-        uint32_t w_cb_num_pages = (w_coalesce_n > 0) ? (2 * w_coalesce_n) : np_cb_num_pages;
+        // W send CB: one page = one coalesced packet so g*stick NOC writes stay in-page.
+        const uint32_t w_packet_page = (w_coalesce_n > 0) ? (w_coalesce_n * l1_scratch_cb_page_size_bytes) : l1_scratch_cb_page_size_bytes;
+        uint32_t w_cb_num_pages = (w_coalesce_n > 0) ? 2u : np_cb_num_pages;
         CircularBufferConfig cb_w_sender_config =
-            CircularBufferConfig(w_cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
-                .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
+            CircularBufferConfig(w_cb_num_pages * w_packet_page, {{sender_cb_index, df}})
+                .set_page_size(sender_cb_index, w_packet_page);
         CreateCircularBuffer(program, w_fabric_core_range, cb_w_sender_config);
     }
 
@@ -1011,6 +1015,18 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         } else if (h_bytes_per_link > 4u * 1024u) {
             num_h_workers = 2;
         }
+    }
+    // Clamp H workers: the byte heuristic had no cap (unlike W), so H-mux over-split frames and
+    // walked off the compute grid at large T. Cap to frames-per-link and columns left after W-mux.
+    {
+        const bool w_mux_est = is_2d && (num_w_workers > 1) && (w_coalesce_n > 0);
+        const uint32_t h_mux_col_est = w_mux_est ? (2u + num_w_workers) : 1u;
+        const uint32_t first_h_wk_col = h_mux_col_est + 1u;
+        const uint32_t cols_avail =
+            (compute_grid_size.x > first_h_wk_col) ? (compute_grid_size.x - first_h_wk_col) : 0u;
+        const uint32_t frame_cap = std::max(1u, h_frames_per_link);
+        num_h_workers = std::max(
+            1u, std::min({num_h_workers, std::max(1u, cols_avail), frame_cap}));
     }
     const bool use_h_mux = is_2d && (h_coalesce_n > 0) && (num_h_workers > 1);
     std::vector<CoreCoord> hmux_worker_logical, hmux_worker_virtual, hmux_core_logical;
