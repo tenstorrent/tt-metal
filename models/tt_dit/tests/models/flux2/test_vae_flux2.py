@@ -99,31 +99,46 @@ def prep_data(
     return tt_latents
 
 
+# The Flux2 VAE uses conv2d, which needs L1_SMALL buffers on every mesh.
+_L1_SMALL = 65536
+
+# Multi-device rows: fabric, plus require_exact_physical_num_devices so each row self-skips
+# unless the mesh it asks for is exactly what the machine has. One command then picks 2x2 on a
+# 4-chip QuietBox and 4x8 on a galaxy, with no per-SKU -k filters in the CI legs.
+_MULTI_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "l1_small_size": _L1_SMALL,
+    "require_exact_physical_num_devices": True,
+}
+
+# The single-device row takes NO fabric, and deliberately no require_exact either, so it runs on
+# every machine rather than only on a literal one-chip host.
+#
+# No fabric because FABRIC_1D on a 1-device submesh of a multi-chip box cannot work: fabric is
+# scoped to the mesh ("Fabric initialized on 1 devices") but router sync still waits on a router
+# on another chip whose peer was never configured, so the handshake stays at STARTED and times
+# out in fabric_firmware_initializer.cpp. Seen on run 33655962297, where the 2x2 case a second
+# later initialized fabric on all 4 devices and passed -- the links were healthy, the 1-device
+# fabric was the problem.
+#
+# No fabric is also simply correct here: every CCL path this decoder can take is a no-op on a
+# 1-device axis -- CCLManager.all_gather returns early when shape[mesh_axis] == 1, _all_gather_hw
+# when both factors are 1, vae_all_gather when the cluster axis is 1 -- so no CCL op is ever
+# issued and fabric is dead weight. test_vae_ltx.py reaches the same conclusion for its own
+# single-chip row.
+_SINGLE_DEVICE_PARAMS = {"l1_small_size": _L1_SMALL}
+
+
 @pytest.mark.parametrize(
-    "mesh_device",
+    "mesh_device, device_params",
     [
-        pytest.param((1, 1), id="1x1"),
-        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp on axis 0, h on axis 1.
-        pytest.param((2, 2), id="2x2"),
-        pytest.param((1, 8), id="1x8"),
-        pytest.param((4, 8), id="4x8"),
+        [(1, 1), _SINGLE_DEVICE_PARAMS],
+        [(2, 2), _MULTI_DEVICE_PARAMS],
+        [(1, 8), _MULTI_DEVICE_PARAMS],
+        [(4, 8), _MULTI_DEVICE_PARAMS],
     ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    # require_exact_physical_num_devices: each mesh row self-skips unless it matches the machine
-    # exactly, so the same command picks 2x2 on a 4-chip QuietBox and 4x8 on a galaxy. It also
-    # keeps the 1x1 row off multi-chip hosts, where opening a single-device submesh under
-    # FABRIC_1D has no ethernet partner and times out in fabric router sync (#53331).
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "l1_small_size": 65536,
-            "require_exact_physical_num_devices": True,
-        }
-    ],
-    indirect=True,
+    ids=["1x1", "2x2", "1x8", "4x8"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),

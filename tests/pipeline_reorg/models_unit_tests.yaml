@@ -1082,11 +1082,11 @@
     # flaky 1x1 mesh open suppressed all three tests after it. Aggregating is what keeps one
     # expected red from hiding the state of everything else.
     status=0
-    # -rs everywhere: the flux2 device_params carry require_exact_physical_num_devices, so on
-    # this 4-chip SKU every row except 2x2 self-skips (including 1x1, which otherwise times out
-    # in fabric router sync -- #53331). The skip report is what shows the 2x2 rows actually ran
-    # rather than the job passing because it executed nothing.
-    pytest --timeout 600 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
+    # -rs everywhere: the flux2 multi-device rows carry require_exact_physical_num_devices, so on
+    # this 4-chip SKU every one of them except 2x2 self-skips. The skip report is what shows the
+    # 2x2 rows actually ran rather than the job passing because it executed nothing. The VAE's
+    # 1x1 row is the exception -- it takes no fabric and no require_exact, so it runs here too.
+    pytest --timeout 900 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || status=1
     # test_upsample is excluded: it asserts nothing and is an autoregressive generation loop
     # at temperature=0.15, so it is non-deterministic by construction.
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode || status=1
@@ -1101,7 +1101,7 @@
     # drops the attention residual off the non-Ring path in ColParallelLinear, giving noise
     # (PCC -3.71%, RMSE/sigma 179%, reproduced on runs 33667518970 and 33678382128). Fix is on
     # branch stisi/flux2-qb2, commit 92919ba7f5d.
-    pytest --timeout 3300 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks || status=1
+    pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks || status=1
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
     exit $status
   model: flux.2-dev
@@ -1145,7 +1145,7 @@
     # Cheapest first. The two transformer parametrizations get a process each: each loads the full
     # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
     # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
-    run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    run --timeout 900 models/tt_dit/tests/models/flux2/test_vae_flux2.py
     run --timeout 1200 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
     # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
     # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
@@ -1154,7 +1154,7 @@
     # single_blocks keeps only one double block and barely accumulates the error; all_blocks
     # runs every one of them. Both cases go green when that fix lands.
     run --timeout 1500 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
-    run --timeout 900 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    run --timeout 600 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
     exit $rc
   model: flux.2-dev
   model_family: Flux
