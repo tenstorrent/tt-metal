@@ -196,9 +196,10 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
             const auto& shape = cache->logical_shape();
             const auto& shard = nd->shard_shape;
             TT_FATAL(
-                shard.rank() == 4 && shard[0] == 1 && shard[1] == 1 && shard[2] == attrs.kv_cache_page_size &&
+                shard.rank() == 4 && shard[0] == 1 && shard[1] == 1 && shard[2] >= tt::constants::TILE_HEIGHT &&
+                    shard[2] % tt::constants::TILE_HEIGHT == 0 && attrs.kv_cache_page_size % shard[2] == 0 &&
                     shard[3] == shape[3],
-                "Each paged K/V ND shard must contain exactly one physical page (got {})",
+                "Paged K/V ND shard height must be tile-aligned and divide the physical page height (got {})",
                 shard);
         }
         TT_FATAL(vs[0] == ks[0], "Paged K and V pools must contain the same number of physical pages");
