@@ -73,5 +73,10 @@ void kernel_main() {
     }
 
     // Pop the scalar tile from RHS CB
+    // TEN-4746 (#48552): when num_tiles == 0 both chunk loops zero-trip, so nothing unpacks cb_post_rhs
+    // between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar unpacker
+    // (POP_TILES races past WAIT_TILES). dummy_unpack() orders POP after WAIT via an UNPACR_NOP; it reads
+    // nothing (harmless on the common path where the scalar was already unpacked), no-op on WH/BH.
+    dummy_unpack(cb_post_rhs.get_id());
     cb_post_rhs.pop_front(1);
 }

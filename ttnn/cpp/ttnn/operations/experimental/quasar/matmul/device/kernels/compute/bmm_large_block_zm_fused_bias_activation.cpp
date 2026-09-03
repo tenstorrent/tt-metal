@@ -442,6 +442,11 @@ void kernel_main() {
                         // increments on a given CB are identical.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            // TEN-4746 (#48552): a bare wait_front->pop_front traps the Quasar unpacker
+                            // (POP_TILES can retire before the WAIT_TILES it follows). dummy_unpack() orders
+                            // the POP after the WAIT via an UNPACR_NOP (required on Quasar, no-op on WH/BH);
+                            // it reads nothing, so PACKER_L1_ACC is undisturbed.
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -452,6 +457,9 @@ void kernel_main() {
                     if (block < num_blocks_inner_dim - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+                            // TEN-4746 (#48552): drain mm_partials without consuming it (see the FUSE_BIAS
+                            // drain above). dummy_unpack() orders POP after WAIT via an UNPACR_NOP.
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }

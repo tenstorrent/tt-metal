@@ -181,6 +181,9 @@ void kernel_main() {
             DataflowBuffer dfb_cur_pos_buf(dfb_cur_pos);
             dfb_cur_pos_buf.wait_front(1);
             cur_pos = dfb_cur_pos_buf.read_tile_value(0, cur_batch / q_heads_parallel_factor);
+            // TEN-4746 (#48552): read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_cur_pos);
             dfb_cur_pos_buf.pop_front(1);
 #endif
         }

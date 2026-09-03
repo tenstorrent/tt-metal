@@ -541,6 +541,10 @@ void kernel_main() {
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
+                    // TEN-4746 (#48552): on the skip_compute path nothing unpacks cb_mm_in0 between the
+                    // wait_front above and this pop_front. dummy_unpack() orders POP after WAIT via an
+                    // UNPACR_NOP; it reads nothing, no-op on WH/BH.
+                    dummy_unpack(mm_in0_cb_id);
                     cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
@@ -687,7 +691,11 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
+                            // TEN-4746 (#48552): a bare wait_front->pop_front traps the Quasar unpacker
+                            // (POP_TILES races past WAIT_TILES). dummy_unpack() orders POP after WAIT via an
+                            // UNPACR_NOP; it reads nothing, no-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
@@ -697,7 +705,10 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
+                            // TEN-4746 (#48552, see above): dummy_unpack() orders POP after WAIT via an
+                            // UNPACR_NOP. No-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));

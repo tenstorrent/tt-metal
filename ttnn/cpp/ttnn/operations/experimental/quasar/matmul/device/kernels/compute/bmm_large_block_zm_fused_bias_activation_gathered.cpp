@@ -455,6 +455,10 @@ void kernel_main() {
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
                 mm_partials_cb.wait_front(out_block_num_tiles);
+                // TEN-4746 (#48552): a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES can
+                // retire before the WAIT_TILES it follows). dummy_unpack() orders POP after WAIT via an
+                // UNPACR_NOP (required on Quasar, no-op on WH/BH); it reads nothing.
+                dummy_unpack(mm_partials_cb_id);
                 mm_partials_cb.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
