@@ -366,3 +366,31 @@ def test_argmax_reduce_all_sub_core_grids_idle_cores(device):
 
     got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
     assert got == int(torch.argmax(t.reshape(-1))), f"reduce_all mismatch: got {got}"
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize(
+    "row",
+    [
+        [3.0, float("nan")],
+        [float("nan"), 3.0],
+        [1.0, float("nan"), 3.0],
+        [-float("inf"), float("nan")],
+        [-0.0, 0.0],
+        [-0.0, 0.0, -1.0],
+        [0.0, -0.0],
+        [2.0, 2.0],
+    ],
+)
+def test_argmax_nan_and_signed_zero(device, dtype, row):
+    torch_tensor = torch.tensor(row, dtype=dtype)
+    expected_idx = int(torch.argmax(torch_tensor).item())
+
+    ttnn_dtype = ttnn.float32 if dtype == torch.float32 else ttnn.bfloat16
+    ttnn_tensor = ttnn.from_torch(torch_tensor, ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = ttnn.argmax(ttnn_tensor, dim=-1, keepdim=False)
+    actual_idx = int(ttnn.to_torch(ttnn.from_device(out)).item())
+
+    assert actual_idx == expected_idx, f"Row {row} ({dtype}): expected {expected_idx}, got {actual_idx}"
+

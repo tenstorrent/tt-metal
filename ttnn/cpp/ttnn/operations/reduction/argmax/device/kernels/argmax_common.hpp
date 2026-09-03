@@ -211,6 +211,21 @@ void compare_values(
  * @param max_idx Reference to the current maximum index
  * @param compare_func Function to compare two values of the data format
  */
+template <typename ValueType>
+inline bool values_equal(ValueType a, ValueType b) {
+    return a == b;
+}
+
+template <>
+inline bool values_equal<uint32_t>(uint32_t a, uint32_t b) {
+    return float32_equal(a, b);
+}
+
+template <>
+inline bool values_equal<uint16_t>(uint16_t a, uint16_t b) {
+    return bfloat16_equal(a, b);
+}
+
 template <DataFormat data_format, typename ValueType, typename CompareFunc>
 inline void process_core_data(
     const uint32_t inner_idx,
@@ -224,7 +239,7 @@ inline void process_core_data(
     if (compare_func(val, max_val)) {
         max_idx = i_red_idxs[inner_idx];
         max_val = val;
-    } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+    } else if (values_equal(val, max_val) && (i_red_idxs[inner_idx] < max_idx)) {
         max_idx = i_red_idxs[inner_idx];
     }
 }
@@ -265,7 +280,7 @@ inline void process_value_comparison(
         auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
         max_idx = reduce_all ? full_idx : i;
         max_val = val;
-    } else if (val == max_val) {
+    } else if (values_equal(val, max_val)) {
         auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
         max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
     }
