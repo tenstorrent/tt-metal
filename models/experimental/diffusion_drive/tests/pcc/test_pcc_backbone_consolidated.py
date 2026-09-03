@@ -82,7 +82,7 @@ def _install_prereqs(ttnn_bb: TtnnTransfuserBackbone, ref: TransfuserBackbone, d
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(300)
 def test_consolidated_matches_staged_and_reference(device) -> None:
     """consolidated == staged (identity) and both ≥ 0.99 vs the reference backbone."""
     torch.manual_seed(42)
@@ -120,7 +120,7 @@ def test_consolidated_matches_staged_and_reference(device) -> None:
     assert pccs["bev_feature  cons-vs-staged"] >= 0.999
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 def test_consolidated_enabled_by_default_and_escape_hatch(device, monkeypatch) -> None:
     """_maybe_enable_consolidated flips on when prereqs land; DD_CONSOLIDATE=0 opts out."""
     torch.manual_seed(0)
@@ -148,7 +148,7 @@ def test_consolidated_enabled_by_default_and_escape_hatch(device, monkeypatch) -
     assert bb2._consolidated is True
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 def test_model_build_enables_consolidated_by_default(device, model_config) -> None:
     """The documented build chain (build_stage2 → 3 → 3_6) auto-enables consolidation."""
     if model_config.plan_anchor_path is None:

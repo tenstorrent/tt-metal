@@ -49,7 +49,7 @@ def _make_model(anchor_path: str) -> DiffusionDriveModel:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(300)
 def test_stage2_trajectory_pcc(device, model_config) -> None:
     """Stage-2 trajectory output PCC ≥ 0.99 vs Stage-1 reference."""
     if model_config.plan_anchor_path is None:
@@ -81,7 +81,7 @@ def test_stage2_trajectory_pcc(device, model_config) -> None:
     assert pcc >= 0.99, f"trajectory PCC {pcc:.6f} < 0.99"
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(300)
 def test_stage2_scores_pcc(device, model_config) -> None:
     """Stage-2 scores output PCC ≥ 0.99 vs Stage-1 reference."""
     if model_config.plan_anchor_path is None:
