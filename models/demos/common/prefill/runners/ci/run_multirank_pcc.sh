@@ -50,6 +50,12 @@ case "${MODEL}" in
     # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
+    # Traced prefill, as the kimi27 leg above runs it. The sparse/DSA indexer ops read their per-chunk
+    # scalars (chunk start, cache slot, top-k bound, gather extent) on-device from the metadata tensors,
+    # so ONE captured forward replays for every chunk -- which is what makes this leg the end-to-end gate
+    # on that path: the KV write is metadata-driven either way, so a frozen host runtime argument would
+    # show up here as a wrong-slot or short-prefix READ, and the PCC gate below is what catches it.
+    RUNNER_ENV="export PREFILL_USE_TRACE=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
     # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.

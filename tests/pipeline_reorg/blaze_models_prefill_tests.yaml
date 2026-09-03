@@ -873,18 +873,21 @@
   # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
   # and validates gathered output exactly.
   #
-  # Both gates run in ONE pytest invocation: the traced case measures the same shapes through a captured
-  # ttnn trace, with the cache slot and active gather extent read from metadata tensors on-device rather
-  # than from host runtime arguments. Only the traced gate can catch a regression in that path -- a trace
-  # replay never re-runs the host runtime-arg patch the scalar form depends on. They share this job (and
-  # this timeout) instead of taking one each because the fabric bring-up dominates the step, so a second
-  # job would roughly double the cost of the same coverage.
+  # The traced gate measures the same shapes through a captured ttnn trace, with the cache slot and
+  # active gather extent read from metadata tensors on-device rather than from host runtime arguments.
+  # Only it can catch a regression in that path -- a trace replay never re-runs the host runtime-arg
+  # patch the scalar form depends on. Both share this job (and this timeout) instead of taking one each
+  # because the fabric bring-up dominates the step, so a second job would roughly double the cost of the
+  # same coverage.
   cmd: |
     export MESH_DEVICE=TG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q
+      rc=0
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      exit $rc
     '
   test_type: high_bw_all_gather_perf
   test_tags: [ccl]
