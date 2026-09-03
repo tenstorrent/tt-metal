@@ -127,10 +127,10 @@ void kernel_main() {
 
     u::matmul_init<A, W>(kDfbIn, kDfbWo, kDfbOut);
 
-    u::Storage<A> a_storage(kDfbIn);
-    u::Storage<W> w_storage(kDfbWo);
-    u::Storage<Out> acc_storage(kDfbAcc);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<MMB_IN0_THREAD, kDfbIn, A> a_storage;
+    u::Input<MMB_IN1_THREAD, kDfbWo, W> w_storage;
+    u::Intermediate<kDfbAcc, Out> acc_storage;
+    u::Intermediate<kDfbOut, Out> out_storage;
 
     const auto a_acc = TensorAccessor(tensor::attn);
     const auto b_acc = TensorAccessor(tensor::wo);
@@ -185,7 +185,7 @@ void kernel_main() {
         // operand movement costs, which is the question once fidelity has shown the math is
         // not on the critical path at all.
         u::ComputeBlock a_h =
-            u::noc_load<MMB_IN0_THREAD, 0>(a_storage, row, [&](u::L1Entries pages) {
+            u::noc_load<0>(a_storage, row, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = i * mt + p / kt;
                     const uint32_t cc = p % kt;
@@ -193,7 +193,7 @@ void kernel_main() {
                 }
             }).wait();
         u::ComputeBlock w_h =
-            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, [&](u::L1Entries pages) {
+            u::noc_load<1>(w_storage, col, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = p / nt;
                     const uint32_t cc = n * nt + p % nt;
@@ -215,7 +215,7 @@ void kernel_main() {
             const u::ComputeBlock<W>& w = w_h;
 #else
             u::ComputeBlock a =
-                u::noc_load<MMB_IN0_THREAD, /*pair=*/0>(a_storage, row, [&](u::L1Entries pages) {
+                u::noc_load</*pair=*/0>(a_storage, row, [&](u::L1Entries pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = i * mt + p / kt;
                         const uint32_t cc = b * kt + p % kt;
@@ -224,9 +224,9 @@ void kernel_main() {
                 }).wait();
             u::ComputeBlock w =
 #if defined(MMB_SHARE_PAIR)
-                u::noc_load<MMB_IN1_THREAD, /*pair=*/0>(w_storage, col, [&](u::L1Entries pages) {
+                u::noc_load</*pair=*/0>(w_storage, col, [&](u::L1Entries pages) {
 #else
-                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Entries pages) {
+                u::noc_load</*pair=*/1>(w_storage, col, [&](u::L1Entries pages) {
 #endif
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = b * kt + p / nt;
@@ -299,7 +299,7 @@ void kernel_main() {
                 // A's (m, k) tile: rows [i*mt, +mt) by columns [b*kt, +kt). Strided, because A's
                 // rows are what is contiguous.
                 u::ComputeBlock a =
-                    u::noc_load<MMB_IN0_THREAD>(a_storage, [&](u::L1Entries pages) {
+                    u::noc_load(a_storage, [&](u::L1Entries pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             // Row-major in L1: page p is tile (p / kt, p % kt).
                             const uint32_t row = i * mt + p / kt;
@@ -310,7 +310,7 @@ void kernel_main() {
 
                 // B's (k, n) tile: rows [b*kt, +kt) by columns [n*nt, +nt).
                 u::ComputeBlock w =
-                    u::noc_load<MMB_IN1_THREAD>(w_storage, [&](u::L1Entries pages) {
+                    u::noc_load(w_storage, [&](u::L1Entries pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             const uint32_t row = b * kt + p / nt;
                             const uint32_t col = n * nt + p % nt;

@@ -226,10 +226,31 @@ template <typename S>
 struct Storage {
     using shape = S;
 
-    // The compile-time form. Prefer it: the tile-geometry check below is a static_assert
-    // here and a runtime ASSERT in the other constructor.
+    // NOT CONSTRUCTIBLE, and that is the design rather than an inconvenience. A bare
+    // Storage says nothing about which projections stand at the buffer's two ends, so
+    // there is nothing for a noc call to check itself against and nothing for the host to
+    // read -- which is the state this API was in when unified_harness.py had to infer the
+    // roles by pattern-matching kernel source. Declare a buffer as u::Input, u::Output or
+    // u::Intermediate; those are the only callers of what follows. Storage remains the
+    // SHAPE-ONLY base the library takes wherever the endpoint is irrelevant -- Block,
+    // Accumulator, the Tx handles -- which is what keeps those signatures single-parameter.
+protected:
+    // The compile-time form, and the only one anything now uses: an Endpoint carries the
+    // buffer id as a template parameter, so the tile-geometry check below is a
+    // static_assert in every build rather than the runtime ASSERT the other form is left
+    // with. That other form has no callers at all any more -- it survives as the escape
+    // for an id that is not a constant expression, and nothing in tree needs one.
     template <uint32_t DfbId>
     explicit Storage(DfbTag<DfbId>) : dfb_id(DfbId) {
+        // The CAPACITY check, which cannot be static: the page count is a thing the host
+        // configured and the device reads back at runtime. Same check, same reason and same
+        // guard as the other constructor's -- see there. It is repeated rather than shared
+        // because this form had gone without it, and a buffer declared as an Endpoint (which
+        // arrives through here) would then have lost the one check that turns an undersized
+        // buffer from a hang needing a device reset into a stop at a source line.
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        ASSERT(dfb_num_entries(DfbId) >= S::num_entries);
+#endif
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
         static_assert(
             dfb_tile_rows(DfbId) == S::tile::rows,
@@ -286,6 +307,7 @@ struct Storage {
 #endif
     }
 
+public:
     Storage(Storage&&) = delete;
     Storage(const Storage&) = delete;
     Storage& operator=(Storage&&) = delete;
@@ -305,6 +327,93 @@ struct Storage {
     // Static now that the shape is: reading it off an instance still compiles, so
     // every `storage.num_entries` in the implementation is unchanged.
     static constexpr uint32_t num_entries = S::num_entries;
+};
+
+// ---------------------------------------------------------------------------
+// Endpoints -- a Storage that says which projections stand at its two ends
+// ---------------------------------------------------------------------------
+//
+// Metal 2.0 wants a producer and a consumer named per dataflow buffer, and the three
+// combinations a Tensix pipeline can use are the three columns of the api.h table above:
+// INPUT (data movement produces, compute consumes), OUTPUT (the other way round), and
+// INTERMEDIATE (compute at both ends, a self-loop DFB).
+//
+// WHY THE KERNEL SAYS IT. The host has to know the roles to build the ProgramSpec, and
+// it used to READ THEM OFF THIS FILE -- unified_harness.py matched the `thread` argument
+// of every noc_load / noc_store with a regex per spelling, so every new overload here was
+// a silent parser update over there. Declaring the endpoint makes it one line the host
+// reads at a fixed position, and makes the role a TYPE, so the API can hold to it:
+//
+//     u::Input<0, kDfbIn, Block1D>   in_storage;    // DM thread 0 fills it
+//     u::Output<1, kDfbOut, Block1D> out_storage;   // DM thread 1 drains it
+//     u::Intermediate<kDfbAcc, Out>  acc_storage;   // compute at both ends
+//
+// WHAT THAT BUYS, all of it structural rather than checked:
+//   * noc_load takes an Input, so filling a buffer whose other end is compute does not
+//     compile. That matters more than it looks: a wrong endpoint is SILENT on Gen1 --
+//     circular-buffer state is per core, so either DM thread can drive a buffer whatever
+//     the host declared -- and only becomes a hang on Gen2, where the role drives the
+//     tile-counter credit flow. See unified_metal2_spec.md 5.1.
+//   * The DM thread comes OUT of the type, so noc_load no longer takes it as a template
+//     argument. One statement of the fact, so there is nothing to disagree.
+//   * An Intermediate cannot name a thread: the type has no parameter for one.
+//   * An Input has no store(): a buffer filled by data movement is not one compute packs
+//     into, and the host has bound its producer to a DM kernel, so it could not work.
+//
+// STILL TO COME. The drain side is unconverted: the storage-leading noc_store forms take a
+// Storage, and the Block-leading one -- the commoner spelling -- carries no endpoint at all,
+// so it keeps its explicit <thread>. Tagging Block with the endpoint it came from is what
+// closes that, and it reaches Accumulator and RetainedBlock, so it is its own change.
+//
+// The buffer id is a template argument too, which is what makes the tile-geometry check
+// below a static_assert in every build rather than a runtime ASSERT -- the reason the
+// u::dfb<> tag form existed, now had by construction.
+
+enum class Role : uint8_t { Input, Output, Intermediate };
+
+// An Intermediate's data-movement thread: it has none.
+inline constexpr int kNoDmThread = -1;
+
+// noc_load's `pair` argument, left to follow the endpoint's own thread. A sentinel rather
+// than `pair = T`, because a template parameter cannot default to one declared after it and
+// the endpoint's thread only arrives with the argument.
+inline constexpr int kPairOfThread = -1;
+
+template <Role R, int DmThread, uint32_t DfbId, typename S>
+struct Endpoint : Storage<S> {
+    static constexpr Role role = R;
+    static constexpr int dm_thread = DmThread;
+    static constexpr uint32_t dfb_id_v = DfbId;
+
+protected:
+    // Only Input / Output / Intermediate construct one. Endpoint carries the role as a
+    // template parameter, so spelling it directly would let a fourth combination exist --
+    // an Intermediate with a thread, say -- that the three types cannot express.
+    Endpoint() : Storage<S>(dfb<DfbId>) {}
+};
+
+// Filled by DM thread `DmThread`, read by compute.
+template <int DmThread, uint32_t DfbId, typename S>
+struct Input : Endpoint<Role::Input, DmThread, DfbId, S> {
+    Input() = default;
+
+    // An Input is filled by DATA MOVEMENT. Compute packing into one would be writing to a
+    // buffer whose producer binding is on a DM kernel: wrong on Gen1 and unlowerable on
+    // Gen2. Deleted rather than absent so the error names the reason.
+    template <typename Node>
+    Block<S> store(const Node& node) const = delete;
+};
+
+// Filled by compute, drained by DM thread `DmThread`.
+template <int DmThread, uint32_t DfbId, typename S>
+struct Output : Endpoint<Role::Output, DmThread, DfbId, S> {
+    Output() = default;
+};
+
+// Compute at both ends: an accumulator, a retained value, a scratch block. No thread.
+template <uint32_t DfbId, typename S>
+struct Intermediate : Endpoint<Role::Intermediate, kNoDmThread, DfbId, S> {
+    Intermediate() = default;
 };
 
 // This core's own pages, handed to a custom load or store routine. The harness has
@@ -606,7 +715,13 @@ public:
 #endif
 
     template <typename Node, typename = std::enable_if_t<is_storable<Node>::value>>
-    ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Storage<S>(DfbId).store(node)) {}
+    // Through an Intermediate, not a bare Storage, because Storage is no longer
+    // constructible -- and because an Intermediate is what this buffer IS. The shim form
+    // has no Storage for a noc call to name, so compute stands at both of its ends, which
+    // is exactly the endpoint the host derives for it by elimination. The geometry
+    // static_asserts above are this form's own; the Intermediate adds the capacity ASSERT
+    // that the id-by-argument constructor used to contribute.
+    ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Intermediate<DfbId, S>().store(node)) {}
 
     // A Block is a pushed obligation waiting for its one consumer, not an expression.
     // is_storable does not exclude it (a Block has a `shape`), so without this the
@@ -810,7 +925,7 @@ inline constexpr uint32_t kMcastSemBase = 0;
 // Buffer slots
 //
 //     constexpr uint32_t kDfbIn = get_named_compile_time_arg_val("dfb_in");
-//     u::Storage<Block1D> in_storage(kDfbIn);
+//     u::Input<0, kDfbIn, Block1D> in_storage;
 //
 // A kernel cannot get its buffers' slot numbers from the `dfb::` binding tokens the way a
 // single-projection kernel would. A token is emitted only into the kernels that bind that
@@ -1305,6 +1420,15 @@ struct NocAsyncWriteCoreTx {
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx);
 
+// The ENDPOINT form, and the one to write: the buffer is an Input, so the thread comes out
+// of its declaration instead of being restated here. See Endpoint above for why the kernel
+// is where the endpoint is said, and why saying it twice was the hazard.
+//
+// The Storage form above stays until every kernel has converted; it takes a bare Storage,
+// which says nothing about either end, so it cannot check anything.
+template <int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, const Accessor& acc, uint32_t block_idx);
+
 // Custom load, for routines the built-in overload cannot express. The harness
 // keeps the dataflow-buffer protocol -- cb_reserve_back, the write pointer, and
 // (via the returned handle) the read barrier and cb_push_back -- and `fn` owns
@@ -1328,6 +1452,10 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& ac
 // everywhere; see tt/unified/adaptor.hpp.
 template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
+
+// The endpoint form.
+template <int T, uint32_t Id, typename S, typename Fn>
+NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, Fn fn);
 
 // Multicast load: one core in the rectangle reads the block from `acc` and
 // multicasts it into the SAME dataflow buffer on every core of the rectangle.
@@ -1375,6 +1503,13 @@ template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
+// The endpoint form. `pair` keeps its own template slot -- it is not the thread and must
+// stay nameable, since two broadcasts on ONE thread need different pairs (bmm_mcast does
+// exactly that) -- and defaults to the pair belonging to the endpoint's own thread.
+template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncMcastTx<T, S> noc_load(
+    const Input<T, Id, S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+
 // Multicast load with a CUSTOM fill, the same relationship the plain noc_load's Fn form has
 // to its accessor form. `fn` runs on the sender only and fills its copy however it likes;
 // the broadcast that follows does not care how the bytes arrived.
@@ -1385,12 +1520,25 @@ NocAsyncMcastTx<thread, S> noc_load(
 // extra traffic: the built-in read issues one request per page too.
 template <int thread, int pair = thread, typename S, typename Fn>
 NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
+
+// The endpoint forms of the custom multicast fill.
+template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Fn>
+NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, PhysicalMcast mcast, Fn fn);
 template <int thread, int pair = thread, typename S, typename Fn>
 NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn);
+template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Fn>
+NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, LogicalMcast mcast, Fn fn);
 
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+
+// The endpoint form. `pair` keeps its own template slot -- it is not the thread and must
+// stay nameable, since two broadcasts on ONE thread need different pairs (bmm_mcast does
+// exactly that) -- and defaults to the pair belonging to the endpoint's own thread.
+template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Accessor>
+NocAsyncMcastTx<T, S> noc_load(
+    const Input<T, Id, S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Fill a one-page Storage with the constant metal's reduce folds in: the value in
 // the first row of each of the tile's four 16x16 faces, zero everywhere else.
@@ -1407,6 +1555,11 @@ NocAsyncMcastTx<thread, S> noc_load(
 template <int thread, typename S>
 Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits = kReduceScalerOne);
 
+// The endpoint form. A scaler buffer is filled by data movement like any other Input; that
+// it is filled once and never popped is a property of the protocol, not of the endpoint.
+template <int T, uint32_t Id, typename S>
+Block<S> fill_reduce_scaler(const Input<T, Id, S>& scaler, uint32_t value_bits = kReduceScalerOne);
+
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx);
@@ -1417,6 +1570,12 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32
 template <int thread, typename S, typename Accessor, typename Node>
 NocAsyncWriteTx<thread, S> noc_store(
     const Storage<S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx);
+
+// The endpoint form: the buffer is an Output, so the DM thread that drains it comes out of
+// its declaration. Compute produces into it here and the returned handle pops.
+template <int T, uint32_t Id, typename S, typename Accessor, typename Node>
+NocAsyncWriteTx<T, S> noc_store(
+    const Output<T, Id, S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx);
 
 // Custom store: the mirror of the custom noc_load. `fn` is called as
 // fn(L1Entries pages) over `block`'s pages -- pages.count is the number the handle
@@ -1435,6 +1594,10 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn);
 // converts to the other, so exactly one candidate is ever viable.
 template <int thread, typename S, typename Node, typename Fn>
 NocAsyncWriteTx<thread, S> noc_store(const Storage<S>& storage, const Node& node, Fn fn);
+
+// The endpoint form of the custom store.
+template <int T, uint32_t Id, typename S, typename Node, typename Fn>
+NocAsyncWriteTx<T, S> noc_store(const Output<T, Id, S>& storage, const Node& node, Fn fn);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage
@@ -1499,6 +1662,14 @@ NocAsyncReadCoreTx<thread, D, S> noc_core_read(
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     const Storage<D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
+
+// The endpoint form. The DESTINATION is an Input: a core-to-core write fills a dataflow
+// buffer from data movement, which is the same endpoint a noc_load gives it -- the peer's
+// copy of that buffer is filled by this thread, and the DFB's producer binding says so.
+template <int T, uint32_t Id, typename D, typename S>
+NocAsyncWriteCoreTx<T, D, S> noc_core_write(
+    const Input<T, Id, D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate,
+    uint32_t byte_offset = 0);
 
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(

@@ -57,10 +57,10 @@ void kernel_main() {
 
     using Blk = u::Shape<1, tiles>;
 
-    u::Storage<Blk> a_storage(kDfbA);
-    u::Storage<Blk> b_storage(kDfbB);
-    u::Storage<Blk> out0_storage(kDfbOut0);
-    u::Storage<Blk> out1_storage(kDfbOut1);
+    u::Input<0, kDfbA, Blk> a_storage;
+    u::Input<0, kDfbB, Blk> b_storage;
+    u::Output<1, kDfbOut0, Blk> out0_storage;
+    u::Output<1, kDfbOut1, Blk> out1_storage;
 
     u::compute_init(kDfbA, kDfbOut0);
 
@@ -83,8 +83,8 @@ void kernel_main() {
     for (uint32_t r = 0; r < rounds; ++r) {
         // Round r broadcasts block r, so a corrupted round is visible rather than masked
         // by every round carrying the same bytes.
-        u::ComputeBlock a = u::noc_load<0, kPairA>(a_storage, whole, in, r).wait();
-        u::ComputeBlock b = u::noc_load<0, kPairB>(b_storage, whole, in, r).wait();
+        u::ComputeBlock a = u::noc_load<kPairA>(a_storage, whole, in, r).wait();
+        u::ComputeBlock b = u::noc_load<kPairB>(b_storage, whole, in, r).wait();
 
 #if defined(MS_SKEW)
         // AFTER the loads, so `a` and `b` are still live -- their pops are at the end of
@@ -97,7 +97,7 @@ void kernel_main() {
         }
 #endif
 
-        u::noc_store<1>(out0_storage, u::copy(a), out0, core * rounds + r);
-        u::noc_store<1>(out1_storage, u::copy(b), out1, core * rounds + r);
+        u::noc_store(out0_storage, u::copy(a), out0, core * rounds + r);
+        u::noc_store(out1_storage, u::copy(b), out1, core * rounds + r);
     }
 }

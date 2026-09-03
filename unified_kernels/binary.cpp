@@ -71,9 +71,9 @@ void kernel_main() {
     u::compute_init(kDfbIn0, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in0_storage(kDfbIn0);
-    u::Storage<Block1D> in1_storage(kDfbIn1);
-    u::Storage<Block1D> out_storage(kDfbOut);
+    u::Input<0, kDfbIn0, Block1D> in0_storage;
+    u::Input<0, kDfbIn1, Block1D> in1_storage;
+    u::Output<1, kDfbOut, Block1D> out_storage;
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);
@@ -81,8 +81,8 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < block_count; ++n) {
         const uint32_t b = block_begin + n;
-        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b).wait();
-        u::ComputeBlock c = u::noc_load<0>(in1_storage, in1, b).wait();
+        u::ComputeBlock a = u::noc_load(in0_storage, in0, b).wait();
+        u::ComputeBlock c = u::noc_load(in1_storage, in1, b).wait();
         u::Block result = out_storage.store(BN_APPLY(a, c));
         u::noc_store<1>(std::move(result), out, b);
     }

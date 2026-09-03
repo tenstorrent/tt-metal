@@ -115,50 +115,57 @@ void kernel_main() {
     using Vec = u::reduce_shape<S, u::Axis::Cols>;  // rows x 1
 #endif
 
-    u::Storage<S> in_storage(kDfbIn);
+    u::Input<1, kDfbIn, S> in_storage;
 #if defined(PC_REDUCE)
-    u::Storage<Vec> out_storage(kDfbOut);
+    u::Output<0, kDfbOut, Vec> out_storage;
 #else
-    u::Storage<S> out_storage(kDfbOut);
+    u::Output<0, kDfbOut, S> out_storage;
 #endif
 
     // One scratch buffer per intermediate pass. Named rather than numbered: the slots the
     // host assigns are its own business, and these used to be hardcoded 1..7 against a DFB
     // layout the launcher had to match by hand.
-    u::Storage<S> s1(get_arg(args::dfb_s1));
-    u::Storage<S> s2(get_arg(args::dfb_s2));
-    u::Storage<S> s3(get_arg(args::dfb_s3));
-    u::Storage<S> s4(get_arg(args::dfb_s4));
-    u::Storage<S> s5(get_arg(args::dfb_s5));
-    u::Storage<S> s6(get_arg(args::dfb_s6));
-    u::Storage<S> s7(get_arg(args::dfb_s7));
+    constexpr uint32_t kDfbS1 = get_arg(args::dfb_s1);
+    u::Intermediate<kDfbS1, S> s1;
+    constexpr uint32_t kDfbS2 = get_arg(args::dfb_s2);
+    u::Intermediate<kDfbS2, S> s2;
+    constexpr uint32_t kDfbS3 = get_arg(args::dfb_s3);
+    u::Intermediate<kDfbS3, S> s3;
+    constexpr uint32_t kDfbS4 = get_arg(args::dfb_s4);
+    u::Intermediate<kDfbS4, S> s4;
+    constexpr uint32_t kDfbS5 = get_arg(args::dfb_s5);
+    u::Intermediate<kDfbS5, S> s5;
+    constexpr uint32_t kDfbS6 = get_arg(args::dfb_s6);
+    u::Intermediate<kDfbS6, S> s6;
+    constexpr uint32_t kDfbS7 = get_arg(args::dfb_s7);
+    u::Intermediate<kDfbS7, S> s7;
 
     const auto in_acc = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);
 
-    u::ComputeBlock c0 = u::noc_load<1>(in_storage, in_acc, 0).wait();
+    u::ComputeBlock c0 = u::noc_load(in_storage, in_acc, 0).wait();
 
 #if defined(PC_BIN)
-    u::Storage<S> rhs_storage(kDfbVec);
+    u::Input<1, kDfbVec, S> rhs_storage;
     const auto rhs_acc = TensorAccessor(tensor::vec);
-    u::ComputeBlock rhs = u::noc_load<1>(rhs_storage, rhs_acc, 0).wait();
+    u::ComputeBlock rhs = u::noc_load(rhs_storage, rhs_acc, 0).wait();
 #endif
 #if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT)
     // Read once and used by every pass: a ComputeBlock is not consumed by being read,
     // which is what lets one operand feed the whole chain.
 #if defined(PC_MATMUL)
-    u::Storage<S> vec_storage(kDfbVec);
+    u::Input<1, kDfbVec, S> vec_storage;
 #else
-    u::Storage<Vec> vec_storage(kDfbVec);
+    u::Input<1, kDfbVec, Vec> vec_storage;
 #endif
     const auto vec_acc = TensorAccessor(tensor::vec);
-    u::ComputeBlock vec = u::noc_load<1>(vec_storage, vec_acc, 0).wait();
+    u::ComputeBlock vec = u::noc_load(vec_storage, vec_acc, 0).wait();
 #endif
 
 #if defined(PC_REDUCE)
-    u::Storage<u::Shape<1, 1>> one_storage(kDfbVec);
-    u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
-    u::noc_store<0>(out_storage, u::reduce_max<u::Axis::Cols>(c0, one), out, 0);
+    u::Input<1, kDfbVec, u::Shape<1, 1>> one_storage;
+    u::ComputeBlock one = u::fill_reduce_scaler(one_storage, u::kReduceScalerOne);
+    u::noc_store(out_storage, u::reduce_max<u::Axis::Cols>(c0, one), out, 0);
 #else
 #if defined(PC_ALT)
     // Odd passes broadcast, even passes copy, so every pass changes kind.
@@ -184,21 +191,21 @@ void kernel_main() {
     u::ComputeBlock c7 = s7.store(PC_ODD(c6));
 #endif
 #if PASSES == 1
-    u::noc_store<0>(out_storage, PC_ODD(c0), out, 0);
+    u::noc_store(out_storage, PC_ODD(c0), out, 0);
 #elif PASSES == 2
-    u::noc_store<0>(out_storage, PC_EVEN(c1), out, 0);
+    u::noc_store(out_storage, PC_EVEN(c1), out, 0);
 #elif PASSES == 3
-    u::noc_store<0>(out_storage, PC_ODD(c2), out, 0);
+    u::noc_store(out_storage, PC_ODD(c2), out, 0);
 #elif PASSES == 4
-    u::noc_store<0>(out_storage, PC_EVEN(c3), out, 0);
+    u::noc_store(out_storage, PC_EVEN(c3), out, 0);
 #elif PASSES == 5
-    u::noc_store<0>(out_storage, PC_ODD(c4), out, 0);
+    u::noc_store(out_storage, PC_ODD(c4), out, 0);
 #elif PASSES == 6
-    u::noc_store<0>(out_storage, PC_EVEN(c5), out, 0);
+    u::noc_store(out_storage, PC_EVEN(c5), out, 0);
 #elif PASSES == 7
-    u::noc_store<0>(out_storage, PC_ODD(c6), out, 0);
+    u::noc_store(out_storage, PC_ODD(c6), out, 0);
 #else
-    u::noc_store<0>(out_storage, PC_EVEN(c7), out, 0);
+    u::noc_store(out_storage, PC_EVEN(c7), out, 0);
 #endif
 #else
 #if PASSES >= 2
@@ -225,21 +232,21 @@ void kernel_main() {
 
     // The last pass writes the output DFB, so PASSES passes in total.
 #if PASSES == 1
-    u::noc_store<0>(out_storage, PC_PASS(c0), out, 0);
+    u::noc_store(out_storage, PC_PASS(c0), out, 0);
 #elif PASSES == 2
-    u::noc_store<0>(out_storage, PC_PASS(c1), out, 0);
+    u::noc_store(out_storage, PC_PASS(c1), out, 0);
 #elif PASSES == 3
-    u::noc_store<0>(out_storage, PC_PASS(c2), out, 0);
+    u::noc_store(out_storage, PC_PASS(c2), out, 0);
 #elif PASSES == 4
-    u::noc_store<0>(out_storage, PC_PASS(c3), out, 0);
+    u::noc_store(out_storage, PC_PASS(c3), out, 0);
 #elif PASSES == 5
-    u::noc_store<0>(out_storage, PC_PASS(c4), out, 0);
+    u::noc_store(out_storage, PC_PASS(c4), out, 0);
 #elif PASSES == 6
-    u::noc_store<0>(out_storage, PC_PASS(c5), out, 0);
+    u::noc_store(out_storage, PC_PASS(c5), out, 0);
 #elif PASSES == 7
-    u::noc_store<0>(out_storage, PC_PASS(c6), out, 0);
+    u::noc_store(out_storage, PC_PASS(c6), out, 0);
 #else
-    u::noc_store<0>(out_storage, PC_PASS(c7), out, 0);
+    u::noc_store(out_storage, PC_PASS(c7), out, 0);
 #endif
 #endif
 #endif

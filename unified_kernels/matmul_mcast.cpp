@@ -80,10 +80,10 @@ void kernel_main() {
 
     u::matmul_init<In0, In1>(kDfbIn0, kDfbIn1, kDfbOut);
 
-    u::Storage<In0> in0_storage(kDfbIn0);
-    u::Storage<In1> in1_storage(kDfbIn1);
-    u::Storage<Out> acc_storage(kDfbAcc);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbIn0, In0> in0_storage;
+    u::Input<MM_IN1_THREAD, kDfbIn1, In1> in1_storage;
+    u::Intermediate<kDfbAcc, Out> acc_storage;
+    u::Output<0, kDfbOut, Out> out_storage;
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);
@@ -109,9 +109,9 @@ void kernel_main() {
         // column; each takes its own reserved handshake pair, so the two never
         // collide. Both re-run every k step, feeding the next block while the
         // previous one is still being folded in.
-        u::ComputeBlock a = u::noc_load<0, /*pair=*/0>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k).wait();
+        u::ComputeBlock a = u::noc_load</*pair=*/0>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k).wait();
         u::ComputeBlock b =
-            u::noc_load<MM_IN1_THREAD, /*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
+            u::noc_load</*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
 
         u::Block result = acc.accumulate(u::matmul(a, b), finish);
         if (finish) {

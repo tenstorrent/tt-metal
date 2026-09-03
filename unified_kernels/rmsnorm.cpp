@@ -59,11 +59,11 @@ void kernel_main() {
     // noc_loads, the two scaler fills, and the noc_store. Every pure-compute intermediate
     // names its buffer in its own declaration -- u::ComputeBlock<Shape, dfb> -- so the
     // initialiser is nothing but the expression.
-    u::Storage<X> x_storage(kDfbX);
-    u::Storage<W> w_storage(kDfbW);
-    u::Storage<One> eps_storage(kDfbEps);
-    u::Storage<One> inv_n_storage(kDfbInvN);
-    u::Storage<X> out_storage(kDfbOut);
+    u::Input<0, kDfbX, X> x_storage;
+    u::Input<0, kDfbW, W> w_storage;
+    u::Input<1, kDfbEps, One> eps_storage;
+    u::Input<1, kDfbInvN, One> inv_n_storage;
+    u::Output<1, kDfbOut, X> out_storage;
 
     const auto x_acc = TensorAccessor(tensor::x);
     const auto w_acc = TensorAccessor(tensor::w);
@@ -75,13 +75,13 @@ void kernel_main() {
 
     // Both are kernel-scope residents: every reduce_tile re-reads the scaler, and the
     // epsilon is read by every tile of the broadcast below.
-    u::ComputeBlock inv_n = u::fill_reduce_scaler<1>(inv_n_storage, inv_n_bits);
-    u::ComputeBlock eps = u::fill_reduce_scaler<1>(eps_storage, eps_bits);
+    u::ComputeBlock inv_n = u::fill_reduce_scaler(inv_n_storage, inv_n_bits);
+    u::ComputeBlock eps = u::fill_reduce_scaler(eps_storage, eps_bits);
 
     // The weights are one row of wt tiles, the same for every chunk, so this is loaded ONCE
     // and stays resident -- a ComputeBlock declared inside the loop would be popped after a
     // single use and the next chunk would wait for a refill that never comes.
-    u::ComputeBlock w = u::noc_load<0>(w_storage, w_acc, 0).wait();
+    u::ComputeBlock w = u::noc_load(w_storage, w_acc, 0).wait();
 
     for (uint32_t c = 0; c < chunk_count; ++c) {
         const uint32_t i = chunk_begin + c;
@@ -89,7 +89,7 @@ void kernel_main() {
         // Chunk i is rows [i*ht, +ht), which in a row-major tile layout is contiguous pages
         // -- so an ordinary block load, no gather. That is the difference between chunking
         // the ROWS of a row-major tensor and slicing its columns.
-        u::ComputeBlock x = u::noc_load<0>(x_storage, x_acc, i).wait();
+        u::ComputeBlock x = u::noc_load(x_storage, x_acc, i).wait();
 
         // x^2, as an ordinary two-leaf SFPU tree whose leaves happen to be the same buffer.
         u::ComputeBlock<X, kDfbSq> sq = x * x;
@@ -105,6 +105,6 @@ void kernel_main() {
 
         // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
         // kernel, which is what makes this more than a second reduction test.
-        u::noc_store<1>(out_storage, normed * u::bcast<u::Axis::Rows>(w), out, i);
+        u::noc_store(out_storage, normed * u::bcast<u::Axis::Rows>(w), out, i);
     }
 }

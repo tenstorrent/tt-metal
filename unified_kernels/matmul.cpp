@@ -70,10 +70,10 @@ void kernel_main() {
     using In1 = u::Shape<MM_KT_DIM, MM_CT_DIM>;
     using Out = u::Shape<MM_RT_DIM, MM_CT_DIM>;
 
-    u::Storage<In0> in0_storage(kDfbIn0);
-    u::Storage<In1> in1_storage(kDfbIn1);
-    u::Storage<Out> acc_storage(kDfbAcc);  // running total -- must NOT be kDfbOut
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbIn0, In0> in0_storage;
+    u::Input<0, kDfbIn1, In1> in1_storage;
+    u::Intermediate<kDfbAcc, Out> acc_storage;  // running total -- must NOT be kDfbOut
+    u::Output<1, kDfbOut, Out> out_storage;
 
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
     // block dims. compute_init() (init_sfpu) would leave the ALU configured for
@@ -91,9 +91,9 @@ void kernel_main() {
     // would be popped after one use and the next block would hang waiting for a
     // refill that never comes. The DFB holds exactly ct tiles, so the one reserve
     // below is the only one it ever gets.
-    u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kDfbBias);
+    u::Input<0, kDfbBias, u::Shape<1, MM_CT_DIM>> bias_storage;
     const auto bias_acc = TensorAccessor(tensor::bias);
-    u::ComputeBlock bias = u::noc_load<0>(bias_storage, bias_acc, 0).wait();
+    u::ComputeBlock bias = u::noc_load(bias_storage, bias_acc, 0).wait();
 #endif
 
 #if defined(MM_SINGLE_SHOT)
@@ -115,8 +115,8 @@ void kernel_main() {
     for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
         const bool finish = (k == MM_K_BLOCKS - 1);
 
-        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, k).wait();
-        u::ComputeBlock b = u::noc_load<0>(in1_storage, in1, k).wait();
+        u::ComputeBlock a = u::noc_load(in0_storage, in0, k).wait();
+        u::ComputeBlock b = u::noc_load(in1_storage, in1, k).wait();
 
 #if defined(MM_SINGLE_SHOT)
         (void)finish;
