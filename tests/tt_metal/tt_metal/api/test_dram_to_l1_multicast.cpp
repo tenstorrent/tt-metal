@@ -20,6 +20,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
@@ -44,18 +45,11 @@ struct DRAMtoL1MulticastConfig {
 };
 
 bool dram_to_l1_multicast(
-    tt::tt_metal::MeshDispatchFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const DRAMtoL1MulticastConfig& cfg) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-
-    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
@@ -75,7 +69,6 @@ bool dram_to_l1_multicast(
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
     auto dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_addr = dram_buffer->address();
-
 
     CoreCoord core_start = {0, 0};
     CoreCoord grid_size = mesh_device->logical_grid_size();
@@ -111,7 +104,7 @@ bool dram_to_l1_multicast(
     log_debug(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
     log_debug(LogTest, "Exclude = {}, {}", core_exclude_physical.x, core_exclude_physical.y);
     auto mcast_reader_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         cfg.kernel_file,
         core,
         tt_metal::DataMovementConfig{
@@ -121,12 +114,12 @@ bool dram_to_l1_multicast(
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
-    fixture->WriteBuffer(mesh_device, dram_buffer, activations);
+    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, activations);
 
-    tt_metal::SetRuntimeArgs(program_, mcast_reader_kernel, core, mcast_reader_args);
+    tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
 
     log_debug(LogTest, "Launching kernels");
-    fixture->RunProgram(mesh_device, workload);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     log_debug(LogTest, "Kernels done");
 
     for (int i = 0; i < grid_size.y; i++) {
@@ -163,8 +156,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
     };
 
     for (const auto& mesh_device : devices_) {
-        ASSERT_TRUE(
-            unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, mesh_device, test_config));
+        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(mesh_device, test_config));
     }
 }
 TEST_F(MeshDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
@@ -175,8 +167,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
     };
 
     for (const auto& mesh_device : devices_) {
-        ASSERT_TRUE(
-            unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, mesh_device, test_config));
+        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(mesh_device, test_config));
     }
 }
 

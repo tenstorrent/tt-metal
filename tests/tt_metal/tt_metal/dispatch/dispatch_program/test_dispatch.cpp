@@ -50,10 +50,7 @@ using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
-static void test_sems_across_core_types(
-    tt::tt_metal::MeshDispatchFixture* fixture,
-    vector<std::shared_ptr<distributed::MeshDevice>>& devices,
-    bool active_eth) {
+static void test_sems_across_core_types(vector<std::shared_ptr<distributed::MeshDevice>>& devices, bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;
@@ -94,9 +91,6 @@ static void test_sems_across_core_types(
                 continue;
             }
 
-            distributed::MeshWorkload workload;
-            auto zero_coord = distributed::MeshCoordinate(0, 0);
-            auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
             auto program = tt::tt_metal::CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
@@ -150,8 +144,7 @@ static void test_sems_across_core_types(
                 tensix_sem_init_val,
             };
             SetRuntimeArgs(program, tensix_kernel, tensix_core, tensix_rtas);
-            workload.add_program(device_range, std::move(program));
-            fixture->RunProgram(mesh_device, workload);
+            LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
         }
     }
 }
@@ -272,14 +265,14 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this->devices_, true); }
 
 TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP();
     }
 
-    test_sems_across_core_types(this, this->devices_, false);
+    test_sems_across_core_types(this->devices_, false);
 }
 
 // This test was written to cover issue #12738 (CBs for workers showing up on

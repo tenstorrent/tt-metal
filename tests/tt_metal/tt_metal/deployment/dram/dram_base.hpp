@@ -71,7 +71,6 @@ struct DramMultiInstanceSummary {
 };
 
 DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& worker_cores,
     const std::vector<std::vector<DramWorkItem>>& jobs_per_core,
@@ -79,7 +78,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     DataMovementProcessor processor);
 
 DramMultiInstanceSummary run_dram_persistent_all_workers_dram_bank_sweep_test_verbose(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& worker_cores,
     const std::vector<DramWorkItem>& all_jobs,
@@ -87,7 +85,6 @@ DramMultiInstanceSummary run_dram_persistent_all_workers_dram_bank_sweep_test_ve
     DataMovementProcessor processor);
 
 DramRunSummary run_dram_base_test(
-    MeshDispatchFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const DramDeploymentConfig& cfg,
@@ -97,7 +94,6 @@ DramRunSummary run_dram_base_test(
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0);
 
 DramRunSummary run_dram_multi_core_single_controller_test(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     const DramDeploymentConfig& cfg,
@@ -107,7 +103,6 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0);
 
 DramRunSummary run_dram_multi_core_all_controllers_test(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     uint32_t total_bytes_per_controller,

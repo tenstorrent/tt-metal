@@ -27,6 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
@@ -68,7 +69,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 }
 
 void create_CBs_for_fused_matmul(
-    distributed::MeshWorkload& workload,
+    tt_metal::Program& program,
     const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     CoreCoord core,
     bool activations_rm,
@@ -91,10 +92,6 @@ void create_CBs_for_fused_matmul(
 
     uint32_t num_output_tiles = M * N;
     CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
-
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto& program = workload.get_programs().at(device_range);
 
     // Invariants
     uint32_t cb0_tiles = M * in0_block_w * 2;
@@ -206,19 +203,14 @@ void create_CBs_for_fused_matmul(
 }
 
 bool matmul_large_block(
-    tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool activations_rm,
     bool output_rm,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
     bool pass = true;
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
     uint32_t M = 4;
@@ -299,14 +291,14 @@ bool matmul_large_block(
     }
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program_,
+        program,
         writer_kernel,
         core,
         tt_metal::DataMovementConfig{
@@ -327,7 +319,7 @@ bool matmul_large_block(
     int in0_subblock_h = (in0_block_num_tiles / in0_num_subblocks) / in0_block_w;
 
     create_CBs_for_fused_matmul(
-        workload, mesh_device, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
+        program, mesh_device, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
 
     TT_FATAL(
         in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles,
@@ -361,7 +353,7 @@ bool matmul_large_block(
     std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
     tt_metal::CreateKernel(
-        program_,
+        program,
         compute_kernel,
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
@@ -382,23 +374,23 @@ bool matmul_large_block(
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
         activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     }
-    fixture->WriteBuffer(mesh_device, src0_dram_buffer, activations);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
     auto identity_tilized = tilize_swizzled<bfloat16>(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    fixture->WriteBuffer(mesh_device, src1_dram_buffer, weights);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, weights);
 
-    tt_metal::SetRuntimeArgs(program_, mm_reader_kernel, core, mm_reader_rt_args);
+    tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_rt_args);
 
-    tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, writer_rt_args);
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
     [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
-    fixture->RunProgram(mesh_device, workload);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     std::vector<uint32_t> result_vec;
-    fixture->ReadBuffer(mesh_device, dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -443,16 +435,16 @@ TEST_F(MeshDispatchFixture, TensixMatmulLargeBlock) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (const auto& device : devices_) {
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, device, false, false, MathFidelity(i)));
+                device, false, false, MathFidelity(i)));
             log_info(LogTest, "Tilized input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, device, true, false, MathFidelity(i)));
+                device, true, false, MathFidelity(i)));
             log_info(LogTest, "Row major input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, device, false, true, MathFidelity(i)));
+                device, false, true, MathFidelity(i)));
             log_info(LogTest, "Tilized input, Row major output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, device, true, true, MathFidelity(i)));
+                device, true, true, MathFidelity(i)));
             log_info(LogTest, "Row major input, Row major output Passed");
         }
     }

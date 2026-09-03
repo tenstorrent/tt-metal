@@ -8,15 +8,19 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <cstdint>
+#include <thread>
+#include <cstdlib>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "eth_test_common.hpp"
+#include "impl/program/program_impl.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_context.hpp"
 
 using namespace tt;
@@ -25,7 +29,6 @@ using namespace tt::test_utils;
 namespace unit_tests::erisc::direct_send {
 
 static void eth_direct_send_multi_txq_rxq(
-    tt_metal::MeshDispatchFixture* fixture,
     std::shared_ptr<tt_metal::distributed::MeshDevice> sender_mesh_device,
     std::shared_ptr<tt_metal::distributed::MeshDevice> receiver_mesh_device,
     const CoreCoord& eth_sender_core,
@@ -36,9 +39,6 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload sender_workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program sender_program = tt_metal::Program();
 
     constexpr size_t PAYLOAD_SIZE = 32;
@@ -72,7 +72,6 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
@@ -96,26 +95,28 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::thread t1;
-    std::thread t2;
-    if (fixture->IsSlowDispatch()) {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
-    } else {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        fixture->RunProgram(sender_mesh_device, sender_workload, true);
-        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
-    }
-
-    fixture->FinishCommands(sender_mesh_device);
-    fixture->FinishCommands(receiver_mesh_device);
-
-    if (fixture->IsSlowDispatch()) {
+    const bool slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+    if (slow_dispatch) {
+        std::thread t1([sender_mesh_device, p = std::move(sender_program)]() mutable {
+            LaunchProgram(*sender_mesh_device, std::move(p), /*wait_until_cores_done=*/true);
+        });
+        std::thread t2([receiver_mesh_device, p = std::move(receiver_program)]() mutable {
+            LaunchProgram(*receiver_mesh_device, std::move(p), /*wait_until_cores_done=*/true);
+        });
         t1.join();
         t2.join();
+    } else {
+        distributed::MeshWorkload sender_workload;
+        sender_workload.add_program(
+            distributed::MeshCoordinateRange(sender_mesh_device->shape()), std::move(sender_program));
+        distributed::MeshWorkload receiver_workload;
+        receiver_workload.add_program(
+            distributed::MeshCoordinateRange(receiver_mesh_device->shape()), std::move(receiver_program));
+        distributed::EnqueueMeshWorkload(sender_mesh_device->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        distributed::EnqueueMeshWorkload(
+            receiver_mesh_device->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        distributed::Finish(sender_mesh_device->mesh_command_queue());
+        distributed::Finish(receiver_mesh_device->mesh_command_queue());
     }
 }
 
@@ -124,7 +125,6 @@ static void eth_direct_send_multi_txq_rxq(
 namespace tt::tt_metal {
 
 static void run_multi_txq_rxq_test(
-    MeshDispatchFixture* fixture,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_0,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_1,
     uint32_t data_txq_id,
@@ -158,7 +158,6 @@ static void run_multi_txq_rxq_test(
         "No ethernet connection found between device_0 and device_1");
 
     unit_tests::erisc::direct_send::eth_direct_send_multi_txq_rxq(
-        fixture,
         mesh_device_0,
         mesh_device_1,
         sender_core_0.value(),
@@ -170,10 +169,10 @@ static void run_multi_txq_rxq_test(
 }  // namespace tt::tt_metal
 
 TEST_F(TwoDeviceBlackholeFixture, ActiveEthChipToChipMultiTxqRxq_Both0) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 0, 100000);
+    run_multi_txq_rxq_test(this->devices_.at(0), this->devices_.at(1), 0, 0, 100000);
 }
 TEST_F(TwoDeviceBlackholeFixture, ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 1, 100000);
+    run_multi_txq_rxq_test(this->devices_.at(0), this->devices_.at(1), 0, 1, 100000);
 }
 
 }  // namespace tt::tt_metal

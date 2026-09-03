@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -30,6 +31,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "eth_test_common.hpp"
+#include "impl/program/program_impl.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "hal.hpp"
@@ -62,8 +64,34 @@ struct BankedConfig {
 using namespace tt::tt_metal;
 namespace unit_tests::erisc::kernels {
 
+void launch_on_eth_pair(
+    distributed::MeshDevice& sender,
+    Program&& sender_program,
+    distributed::MeshDevice& receiver,
+    Program&& receiver_program) {
+    const bool slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+    if (slow_dispatch) {
+        std::thread t1([&sender, p = std::move(sender_program)]() mutable {
+            LaunchProgram(sender, std::move(p), /*wait_until_cores_done=*/true);
+        });
+        std::thread t2([&receiver, p = std::move(receiver_program)]() mutable {
+            LaunchProgram(receiver, std::move(p), /*wait_until_cores_done=*/true);
+        });
+        t1.join();
+        t2.join();
+    } else {
+        distributed::MeshWorkload sender_workload;
+        sender_workload.add_program(distributed::MeshCoordinateRange(sender.shape()), std::move(sender_program));
+        distributed::MeshWorkload receiver_workload;
+        receiver_workload.add_program(distributed::MeshCoordinateRange(receiver.shape()), std::move(receiver_program));
+        distributed::EnqueueMeshWorkload(sender.mesh_command_queue(), sender_workload, /*blocking=*/false);
+        distributed::EnqueueMeshWorkload(receiver.mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        distributed::Finish(sender.mesh_command_queue());
+        distributed::Finish(receiver.mesh_command_queue());
+    }
+}
+
 bool chip_to_chip_dram_buffer_transfer(
-    tt_metal::MeshDispatchFixture* fixture,
     std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
     std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
     const CoreCoord& eth_sender_core,
@@ -108,7 +136,7 @@ bool chip_to_chip_dram_buffer_transfer(
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
 
-    fixture->WriteBuffer(sender_mesh_device, input_dram_buffer, inputs);
+    distributed::EnqueueWriteMeshBuffer(sender_mesh_device->mesh_command_queue(), input_dram_buffer, inputs);
     uint32_t MAX_BUFFER = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
@@ -117,14 +145,11 @@ bool chip_to_chip_dram_buffer_transfer(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    fixture->WriteBuffer(receiver_mesh_device, output_dram_buffer, all_zeros);
+    distributed::EnqueueWriteMeshBuffer(receiver_mesh_device->mesh_command_queue(), output_dram_buffer, all_zeros);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
 
     auto sender_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = processor};
@@ -151,7 +176,6 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto receiver_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .processor = processor};
@@ -178,30 +202,11 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::thread t1;
-    std::thread t2;
-    if (fixture->IsSlowDispatch()) {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
-    } else {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        fixture->RunProgram(sender_mesh_device, sender_workload, true);
-        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
-    }
-
-    fixture->FinishCommands(sender_mesh_device);
-    fixture->FinishCommands(receiver_mesh_device);
-
-    if (fixture->IsSlowDispatch()) {
-        t1.join();
-        t2.join();
-    }
+    launch_on_eth_pair(
+        *sender_mesh_device, std::move(sender_program), *receiver_mesh_device, std::move(receiver_program));
 
     std::vector<uint32_t> dest_dram_data;
-    fixture->ReadBuffer(receiver_mesh_device, output_dram_buffer, dest_dram_data);
+    distributed::EnqueueReadMeshBuffer(receiver_mesh_device->mesh_command_queue(), dest_dram_data, output_dram_buffer);
     pass &= (dest_dram_data == inputs);
     if (not pass) {
         std::cout << "Mismatch" << std::endl;
@@ -211,7 +216,6 @@ bool chip_to_chip_dram_buffer_transfer(
 }
 
 bool chip_to_chip_interleaved_buffer_transfer(
-    tt_metal::MeshDispatchFixture* fixture,
     std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
     std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
     const CoreCoord& eth_sender_core,
@@ -236,9 +240,6 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
@@ -259,7 +260,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         distributed::MeshBuffer::create(sender_buffer_config, sender_dram_config, sender_mesh_device.get());
     bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
 
-    fixture->WriteBuffer(sender_mesh_device, input_buffer, input_packed);
+    distributed::EnqueueWriteMeshBuffer(sender_mesh_device->mesh_command_queue(), input_buffer, input_packed);
 
     const uint32_t max_buffer = round_down(max_transfer_size, cfg.page_size_bytes);
     uint32_t pages_per_loop = max_buffer / cfg.page_size_bytes;
@@ -295,7 +296,6 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto output_buffer =
@@ -303,7 +303,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     bool output_is_dram = cfg.output_buffer_type == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> all_zeros(cfg.size_bytes / sizeof(uint32_t), 0);
 
-    fixture->WriteBuffer(receiver_mesh_device, output_buffer, all_zeros);
+    distributed::EnqueueWriteMeshBuffer(receiver_mesh_device->mesh_command_queue(), output_buffer, all_zeros);
 
     std::vector<uint32_t> receiver_compile_args = {(uint32_t)output_is_dram};
     tt_metal::TensorAccessorArgs(output_buffer).append_to(receiver_compile_args);
@@ -335,30 +335,11 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-    std::thread t1;
-    std::thread t2;
-    if (fixture->IsSlowDispatch()) {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
-    } else {
-        sender_workload.add_program(device_range, std::move(sender_program));
-        receiver_workload.add_program(device_range, std::move(receiver_program));
-        fixture->RunProgram(sender_mesh_device, sender_workload, true);
-        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
-    }
-
-    fixture->FinishCommands(sender_mesh_device);
-    fixture->FinishCommands(receiver_mesh_device);
-
-    if (fixture->IsSlowDispatch()) {
-        t1.join();
-        t2.join();
-    }
+    launch_on_eth_pair(
+        *sender_mesh_device, std::move(sender_program), *receiver_mesh_device, std::move(receiver_program));
 
     std::vector<uint32_t> dest_buffer_data;
-    fixture->ReadBuffer(receiver_mesh_device, output_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(receiver_mesh_device->mesh_command_queue(), dest_buffer_data, output_buffer);
     pass &= input_packed == dest_buffer_data;
     return pass;
 }
@@ -382,7 +363,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -390,7 +370,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
             16,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -398,7 +377,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
             1024,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -406,7 +384,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
             16 * 1024,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -432,7 +409,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -440,7 +416,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
             16,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -448,7 +423,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
             1024,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -456,7 +430,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
             16 * 1024,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -495,7 +468,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
             receiver_eth_core.str());
         BankedConfig test_config;
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -506,7 +478,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
         test_config = BankedConfig{.num_pages = 200, .size_bytes = 200 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -515,7 +486,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
             test_config.page_size_bytes,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -530,7 +500,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
             .input_buffer_type = BufferType::DRAM,
             .output_buffer_type = BufferType::DRAM};
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -539,7 +508,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
             test_config.page_size_bytes,
             DataMovementProcessor::RISCV_0));
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            static_cast<MeshDispatchFixture*>(this),
             sender_mesh_device,
             receiver_mesh_device,
             sender_eth_core,
@@ -591,7 +559,6 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         .output_buffer_type = BufferType::DRAM};
 
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -600,7 +567,6 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         test_config.page_size_bytes,
                         processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -615,7 +581,6 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         .input_buffer_type = BufferType::DRAM,
                         .output_buffer_type = BufferType::L1};
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -624,7 +589,6 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         test_config.page_size_bytes,
                         processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -675,23 +639,10 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                         receiver_eth_core.str());
 
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        16,
-                        processor));
+                        sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core, 16, processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        1024,
-                        processor));
+                        sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core, 1024, processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -699,7 +650,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                         16 * 1024,
                         processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -757,7 +707,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         .output_buffer_type = BufferType::DRAM};
 
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -766,7 +715,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         test_config.page_size_bytes,
                         processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -781,7 +729,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         .input_buffer_type = BufferType::DRAM,
                         .output_buffer_type = BufferType::L1};
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,
@@ -790,7 +737,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         test_config.page_size_bytes,
                         processor));
                     ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
                         sender_mesh_device,
                         receiver_mesh_device,
                         sender_eth_core,

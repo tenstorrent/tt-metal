@@ -66,8 +66,7 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 
 namespace unit_tests_common::vecadd::test_vecadd_multi_core {
 
-bool vecadd_multi_core(
-    MeshDispatchFixture* /*fixture*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles) {
+bool vecadd_multi_core(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles) {
     const uint32_t num_core = 4;
     TT_FATAL(n_tiles >= num_core, "Parameter mismatch {} {}", n_tiles, num_core);
 
@@ -139,8 +138,8 @@ bool vecadd_multi_core(
         SetRuntimeArgs(program, compute, core, {tiles_per_core, i});
     }
 
-    distributed::WriteShard(cq, a, a_data, zero_coord);
-    distributed::WriteShard(cq, b, b_data, zero_coord);
+    distributed::EnqueueWriteMeshBuffer(cq, a, a_data);
+    distributed::EnqueueWriteMeshBuffer(cq, b, b_data);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -149,7 +148,7 @@ bool vecadd_multi_core(
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    distributed::ReadShard(cq, c_data, c, zero_coord);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c);
 
     size_t data_per_core = tile_size * tiles_per_core;
 
@@ -169,7 +168,7 @@ bool vecadd_multi_core(
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
     GTEST_SKIP();
     uint32_t num_tiles = 64;
-    ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(this, devices_.at(0), num_tiles));
+    ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(devices_.at(0), num_tiles));
 }
 
 }  // namespace tt::tt_metal

@@ -5,6 +5,8 @@
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 
 #include "dram_base.hpp"
+#include "impl/program/program_impl.hpp"
+#include <tt-metalium/distributed.hpp>
 
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
@@ -321,7 +323,6 @@ static inline const char* dram_watchdog_reason_name(uint32_t reason) {
 }
 
 DramRunSummary run_dram_base_test(
-    MeshDispatchFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const DramDeploymentConfig& cfg,
@@ -347,10 +348,6 @@ DramRunSummary run_dram_base_test(
     MetalContext::instance().get_cluster().write_core(
         device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto kernel_config = tt_metal::DataMovementConfig{
@@ -412,10 +409,7 @@ DramRunSummary run_dram_base_test(
             //            params.insert_read_errors,
         });
 
-    workload.add_program(device_range, std::move(program));
-
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     auto raw_result = MetalContext::instance().get_cluster().read_core(
         device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
@@ -439,7 +433,6 @@ DramRunSummary run_dram_base_test(
 }
 
 DramRunSummary run_dram_multi_core_single_controller_test(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     const DramDeploymentConfig& cfg,
@@ -479,10 +472,6 @@ DramRunSummary run_dram_multi_core_single_controller_test(
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto kernel_config = tt_metal::DataMovementConfig{
@@ -533,10 +522,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
             });
     }
 
-    workload.add_program(device_range, std::move(program));
-
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     DramRunSummary summary{};
     summary.pass = true;
@@ -562,7 +548,6 @@ DramRunSummary run_dram_multi_core_single_controller_test(
 }
 
 DramRunSummary run_dram_multi_core_all_controllers_test(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     uint32_t total_bytes_per_controller,
@@ -604,10 +589,6 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto kernel_config = tt_metal::DataMovementConfig{
@@ -684,10 +665,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
         core_begin += cores_in_this_controller;
     }
 
-    workload.add_program(device_range, std::move(program));
-
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     DramRunSummary summary{};
     summary.pass = true;
@@ -713,7 +691,6 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
 }
 
 DramRunSummary run_dram_eight_single_core_single_controller_test(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     uint64_t bank_offset,
@@ -766,10 +743,6 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto kernel_config = tt_metal::DataMovementConfig{
@@ -810,10 +783,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
             });
     }
 
-    workload.add_program(device_range, std::move(program));
-
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     DramRunSummary summary{};
     summary.pass = true;
@@ -840,7 +810,6 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
 
 [[maybe_unused]]
 DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbose(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& cores,
     uint64_t bank_offset,
@@ -892,10 +861,6 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto kernel_config = tt_metal::DataMovementConfig{
@@ -936,10 +901,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
             });
     }
 
-    workload.add_program(device_range, std::move(program));
-
-    fixture->RunProgram(mesh_device, workload, true);
-    fixture->FinishCommands(mesh_device);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     DramMultiInstanceSummary out{};
     out.summary.pass = true;
@@ -978,7 +940,6 @@ static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32
 
 [[maybe_unused]]
 DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
-    tt::tt_metal::MeshDispatchFixture* fixture,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const std::vector<CoreCoord>& worker_cores,
     const std::vector<std::vector<DramWorkItem>>& jobs_per_core,
@@ -1052,10 +1013,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     std::vector<PerCorePersistentResources> per_core;
     per_core.reserve(worker_cores.size());
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::Program();
 
     auto brisc_kernel_config = tt_metal::DataMovementConfig{
@@ -1231,8 +1188,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     },
             });
     }
-
-    workload.add_program(device_range, std::move(program));
 
     for (size_t core_idx = 0; core_idx < per_core.size(); core_idx++) {
         auto& r = per_core[core_idx];
@@ -1932,7 +1887,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
             total_jobs);
     }
 
-    fixture->RunProgram(mesh_device, workload, false);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     auto end_time = std::chrono::steady_clock::now();
     auto duration_sec = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
@@ -1949,7 +1904,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         refill_thread.join();
     }
 
-    fixture->FinishCommands(mesh_device);
+    distributed::Finish(mesh_device->mesh_command_queue());
 
     return out;
 }

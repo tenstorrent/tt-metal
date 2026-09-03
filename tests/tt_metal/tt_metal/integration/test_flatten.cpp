@@ -23,6 +23,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 #include <distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -84,16 +85,11 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
 }
 
 bool flatten(
-    tt_metal::MeshDispatchFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t num_tiles_r = 5,
-    uint32_t num_tiles_c = 5) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord core = {0, 0};
 
@@ -168,18 +164,17 @@ bool flatten(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    fixture->WriteBuffer(mesh_device, src_dram_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
         program, flatten_kernel, core, {dram_buffer_src_addr, 0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row});
 
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles * 32});
 
-    workload.add_program(device_range, std::move(program));
-    fixture->RunProgram(mesh_device, workload);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    fixture->ReadBuffer(mesh_device, dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -296,7 +291,7 @@ bool flatten_stress(
         distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord, true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer);
 
         // Validation of data
         TT_FATAL(
@@ -332,7 +327,7 @@ TEST_F(MeshDispatchFixture, TensixFlatten) {
         if (!this->IsSlowDispatch() && id > 0) {
             continue;
         }
-        ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
+        ASSERT_TRUE(test_flatten::flatten(this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
 }
 
