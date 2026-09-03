@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Streaming profiler — findings and benchmarks
 
-This is §6 of [`STREAMING_PROFILER.md`](STREAMING_PROFILER.md), kept as its own file only because the
+This is §6 of [`STREAMING_PROFILER_DETAILED.md`](STREAMING_PROFILER_DETAILED.md), kept as its own file only because the
 pre-commit large-file check caps a single file at 500 KB. Section numbers are unchanged (6.1, 6.2, 6.3) so
 references of the form §6.x in the main document point here.
 
