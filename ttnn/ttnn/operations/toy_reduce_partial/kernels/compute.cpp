@@ -5,9 +5,9 @@
 //
 // Handles both REDUCE_ROW (W) and REDUCE_COL (H) via REDUCE_ROW_MODE
 // compile-time arg. Supports MAX and SUM pool types via POOL_TYPE_SUM arg.
-// The partial scaler mechanism works identically for both:
-// the reduce helper selects scaler tile 1 for the last tile in the reduced
-// dimension (last W tile for REDUCE_ROW, last H tile for REDUCE_COL).
+// The partial-scaler mode works identically for both: the reduce helper applies
+// the reader-prepared partial scaler to the last tile in the reduced dimension
+// (last W tile for REDUCE_ROW, last H tile for REDUCE_COL).
 
 #include <cstdint>
 
@@ -28,8 +28,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
-    constexpr auto partial_scaler = has_partial ? compute_kernel_lib::ReducePartialScaler::with_partial()
-                                                : compute_kernel_lib::ReducePartialScaler::none();
+    constexpr auto partial_mode =
+        has_partial ? compute_kernel_lib::ReducePartialMode::Scaler : compute_kernel_lib::ReducePartialMode::None;
 
     constexpr auto block_shape = compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC);
 
@@ -47,7 +47,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 compute_kernel_lib::NoOp{},
-                partial_scaler);
+                partial_mode);
         } else {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
@@ -61,7 +61,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 compute_kernel_lib::NoOp{},
-                partial_scaler);
+                partial_mode);
         }
     } else {
         if constexpr (reduce_row_mode) {
@@ -77,7 +77,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 compute_kernel_lib::NoOp{},
-                partial_scaler);
+                partial_mode);
         } else {
             compute_kernel_lib::reduce<
                 PoolType::MAX,
@@ -91,7 +91,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 compute_kernel_lib::NoOp{},
-                partial_scaler);
+                partial_mode);
         }
     }
 

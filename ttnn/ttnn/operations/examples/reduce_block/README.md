@@ -22,7 +22,7 @@ A single-strip reduce that collapses a `1 × W` (or `H × 1`) row of tiles into 
 |---|---|---|
 | `reduce_tile` *(baseline)* | the reduce library, default datapath (`ReduceAlgorithm::ReduceTile`, FPU matmul-with-ones), AVG so the `1/N` is per dim | — |
 | `accumulate_via_add` | the reduce library with the opt-in `ReduceAlgorithm::AccumulateViaAdd` (accumulate + SFPU-finalize inside the library) | trades `N` matmul-reduce datapaths for `N` cheap adds + one SFPU finalize; pays a per-`reduce()`-call init |
-| `accumulate_via_add_inline` | the same algorithm as a standalone hand-written kernel, with the one-time init **hoisted out** of the perf loop | the init-hoisted reference — shows the algorithm's steady-state cost without the per-call init `accumulate_via_add` pays |
+| `accumulate_via_add_inline` | the same algorithm as a standalone hand-written kernel | a standalone-kernel reference for the library implementation |
 | `dispatch` | picks `accumulate_via_add` when the reduced tile-count per output (`row=Wt`, `col=Ht`, `scalar=Ht*Wt`) `≥` a **per-dim** threshold, else `reduce_tile` | so it is never slower than the library |
 
 ## CLI — measure your own shapes/params

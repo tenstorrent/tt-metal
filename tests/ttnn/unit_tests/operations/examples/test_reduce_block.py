@@ -195,7 +195,16 @@ def test_reduce_block_correctness(device):
             n_out = out_tile_count(dim, Ht, Wt, NC)
             for accum in ("fp32", "bf16"):
                 for variant in VARIANTS:
-                    out = run_op(x_dev, variant=variant, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum=accum, kernel_iters=2)
+                    out = run_op(
+                        x_dev,
+                        variant=variant,
+                        dim=dim,
+                        Ht=Ht,
+                        Wt=Wt,
+                        NC=NC,
+                        accum=accum,
+                        kernel_iters=2,
+                    )
                     assert list(out.shape) == list(output_shape(dim, Ht, Wt, NC))
                     label = f"{variant}/{dim}/{accum} Ht={Ht} Wt={Wt} NC={NC}"
                     ma, me, ul = _check(out, golden, dim, accum, label)
@@ -219,7 +228,7 @@ def test_reduce_block_device_perf(device):
     fidelity_name = os.environ.get("REDBLK_FIDELITY", "HiFi4")
     fidelity = _FIDELITY[fidelity_name]
     # reduce_tile = library default (matmul-reduce); accumulate_via_add = library opt-in AccumulateViaAdd;
-    # accumulate_via_add_inline = the hand-written standalone kernel (init hoisted out of the perf loop).
+    # accumulate_via_add_inline = the hand-written standalone-kernel label retained for comparison reports.
     _PERF_VARIANTS = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline")
     variants = [v for v in _csv("REDBLK_VARIANTS", _PERF_VARIANTS) if v in _PERF_VARIANTS]
     sel_dims = [d for d in _csv("REDBLK_DIMS", DIMS) if d in DIMS]
@@ -231,7 +240,7 @@ def test_reduce_block_device_perf(device):
         for shape in perf_shapes[dim]:
             inputs[(dim, shape)], goldens[(dim, shape)] = _make_input(device, dim, *shape)
 
-    # accuracy (both accum) + correctness gate at kernel_iters=1
+    # accuracy (both accumulation formats) and correctness gate at kernel_iters=1
     acc = {}  # (variant, dim, shape, accum) -> (max_abs, mean_abs, max_ulp)
     for dim in sel_dims:
         for shape in perf_shapes[dim]:
@@ -252,7 +261,7 @@ def test_reduce_block_device_perf(device):
                         out, goldens[(dim, shape)], dim, accum, f"{variant}/{dim}/{accum} {shape}"
                     )
 
-    # perf (fp32 accum, steady-state)
+    # perf (fp32 accumulation, steady-state iterations within one launch)
     runners = {
         (variant, dim, shape): (
             lambda v=variant, d=dim, s=shape: run_op(
@@ -558,7 +567,15 @@ def test_reduce_block_partial_perf(device):
             xx, variant="accumulate_via_add", dim=d, Ht=h, Wt=w, NC=1, accum="fp32", kernel_iters=ki
         )
         runners[("partial", dim)] = lambda xx=x, d=dim, h=Ht, w=Wt: run_op(
-            xx, variant="accumulate_via_add", dim=d, Ht=h, Wt=w, NC=1, accum="fp32", kernel_iters=ki, partial_elems=P
+            xx,
+            variant="accumulate_via_add",
+            dim=d,
+            Ht=h,
+            Wt=w,
+            NC=1,
+            accum="fp32",
+            kernel_iters=ki,
+            partial_elems=P,
         )
     samples = _measure(device, runners, trials, ki)
 
@@ -638,7 +655,16 @@ def test_reduce_block_reconfig_none(device):
     the INPUT_AND_OUTPUT-every-call result — no divergence from skipping the re-init."""
     for dim, Ht, Wt, NC in [("row", 2, 4, 1), ("col", 4, 2, 1), ("scalar", 2, 4, 1), ("row", 2, 3, 2)]:
         x, golden = _make_input(device, dim, Ht, Wt, NC)
-        base = run_op(x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=3)
+        base = run_op(
+            x,
+            variant="accumulate_via_add",
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=3,
+        )
         none = run_op(
             x,
             variant="accumulate_via_add",
@@ -700,7 +726,15 @@ def test_reduce_block_row_stride(device):
     for dim, Ht, Wt, NC, rs in cases:
         x, golden = _make_input_strided(device, dim, Ht, Wt, NC, rs)
         out = run_op(
-            x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2, row_stride=rs
+            x,
+            variant="accumulate_via_add",
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+            row_stride=rs,
         )
         got = _readout(out, dim)
         assert got.numel() == golden.numel(), f"{dim}: {got.numel()} values, expected {golden.numel()}"
@@ -725,7 +759,16 @@ def test_reduce_block_col_chunk_limit(device):
     for Ht, Wt, NC in [(2, 16, 1), (2, 17, 1), (3, 24, 1), (2, 32, 1), (4, 32, 1), (2, 16, 2)]:
         x, golden = _make_input(device, "col", Ht, Wt, NC)
         for accum in ("fp32", "bf16"):
-            out = run_op(x, variant="accumulate_via_add", dim="col", Ht=Ht, Wt=Wt, NC=NC, accum=accum, kernel_iters=2)
+            out = run_op(
+                x,
+                variant="accumulate_via_add",
+                dim="col",
+                Ht=Ht,
+                Wt=Wt,
+                NC=NC,
+                accum=accum,
+                kernel_iters=2,
+            )
             assert list(out.shape) == list(output_shape("col", Ht, Wt, NC))
             got = _readout(out, "col")
             assert got.numel() == golden.numel(), f"col Wt={Wt} NC={NC}: {got.numel()} vs {golden.numel()}"
@@ -783,7 +826,16 @@ def test_reduce_block_accumulate(device):
     failures = []
     for dim, Ht, Wt, NC, num_chunks in cases:
         x, golden = _make_input_sum(device, dim, Ht, Wt, NC, num_chunks)
-        out = run_accumulate(x, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2, num_chunks=num_chunks)
+        out = run_accumulate(
+            x,
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+            num_chunks=num_chunks,
+        )
         assert list(out.shape) == list(output_shape(dim, Ht, Wt, NC))
         got = _readout(out, dim)
         assert got.numel() == golden.numel(), f"{dim}: {got.numel()} values, expected {golden.numel()}"
@@ -840,7 +892,15 @@ def test_reduce_block_accumulate_mean(device):
     for dim, Ht, Wt, NC, num_chunks in cases:
         x, golden = _make_input_mean_bf16(device, dim, Ht, Wt, NC)
         out = run_accumulate(
-            x, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2, num_chunks=num_chunks, mean=True
+            x,
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+            num_chunks=num_chunks,
+            mean=True,
         )
         assert list(out.shape) == list(output_shape(dim, Ht, Wt, NC))
         got = _readout(out, dim)
@@ -1316,6 +1376,15 @@ def test_reduce_block_within_tile_skip(device):
 
         # Control: the SAME input under Collapse must be badly wrong (it folds the 31 garbage lanes in), so a
         # silently-ignored within_tile parameter cannot pass this test.
-        out_c = run_op(x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2)
+        out_c = run_op(
+            x,
+            variant="accumulate_via_add",
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+        )
         ma_c = (_readout(out_c, dim) - golden).abs().max().item()
         assert ma_c > 1.0, f"collapse control {dim} ({Ht},{Wt},{NC}) matched to {ma_c:.4f} — skip is a no-op?"

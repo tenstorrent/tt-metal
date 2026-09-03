@@ -6,9 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,7 +18,8 @@
 
 namespace ttnn::kernel_lib::host {
 
-enum class ReducePath : std::uint8_t { Tiled, DenseRowMajor };
+using ReducePath = ttnn::kernel_lib::ReducePath;
+using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
 
 enum class ReduceCbRole : std::uint8_t {
     Input,
@@ -33,15 +32,6 @@ enum class ReduceCbRole : std::uint8_t {
 };
 
 enum class ReduceCbAlias : std::uint8_t { None, InputTensor, OutputTensor };
-
-enum class ReduceAuxiliaryKind : std::uint8_t {
-    Scalar,
-    FullAndPartialScaler,
-    Mask,
-    Zero,
-    // AccumulateViaAdd partial + CopySeedZeroPair: mask at tile 0, zero at tile 1.
-    MaskAndZero,
-};
 
 struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -72,6 +62,15 @@ struct ReduceCbRequirement {
     bool owns_l1() const { return alias == ReduceCbAlias::None; }
 };
 
+// One concrete tile for the dataflow-side auxiliary recipe. The planner has
+// already resolved why the tile is needed; the reader only needs these three
+// physical properties to materialize it.
+struct ReduceAuxiliaryTileSpec {
+    float value = 0.0F;
+    ReduceAuxiliaryTileType type = ReduceAuxiliaryTileType::Zero;
+    std::uint32_t num_valid_elements = 0;
+};
+
 // Dense row-major geometry. This replaces the former factory-local RmPlan.
 struct DenseRowMajorPlan {
     std::uint32_t H_logical = 0;
@@ -91,22 +90,30 @@ struct DenseRowMajorPlan {
 
 struct ReducePlan {
     ReducePath path = ReducePath::Tiled;
+    tt::tt_metal::ReduceOpMath reduce_math = tt::tt_metal::ReduceOpMath::SUM;
+    tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast;
     compute_kernel_lib::ReduceAlgorithm algorithm = compute_kernel_lib::ReduceAlgorithm::ReduceTile;
     compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
     compute_kernel_lib::AccumulateReloadMode reload_mode = compute_kernel_lib::AccumulateReloadMode::CopySeedPairs;
+    compute_kernel_lib::ReduceDataFormatReconfigMode reconfig_mode =
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+    compute_kernel_lib::ReduceWithinTile within_tile = compute_kernel_lib::ReduceWithinTile::Collapse;
     ReduceChunkPlan chunk;
 
     std::uint32_t Ht = 0;
     std::uint32_t Wt = 0;
     std::uint32_t batches = 0;
+    // Zero means the ordinary contiguous Wt pitch.
+    std::uint32_t input_row_stride_tiles = 0;
     std::uint32_t reduce_factor = 1;
 
-    // The reader materializes reader_scaler in the auxiliary CB. post_scale is
-    // applied once, after reduction finalization and before any caller callback.
-    float reader_scaler = 1.0F;
+    // post_scale is applied once, after reduction finalization and before any
+    // caller callback. The auxiliary recipe is already lowered to physical tile
+    // specifications in the order consumed by compute.
     float post_scale = 1.0F;
-    ReduceAuxiliaryKind auxiliary_kind = ReduceAuxiliaryKind::Scalar;
-    std::uint32_t auxiliary_tile_count = 1;
+    compute_kernel_lib::ReducePartialMode partial_mode = compute_kernel_lib::ReducePartialMode::None;
+    std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
     std::uint32_t partial_reduce_axis_elements = 0;
 
     std::optional<DenseRowMajorPlan> row_major;
@@ -138,21 +145,49 @@ struct ReduceSequenceCbIds {
     std::uint32_t output_cb_id;
 };
 
-// One kernel reduce() invocation. For a sequence with more than one input, every call receives the shared
-// accumulator ID: the first call creates it, intermediate calls consume and recreate it, and the final call
-// consumes it and writes output_cb_id. `plan` is the complete existing single-CB plan for this input.
+// CB binding for serializing an existing single-call ReducePlan.
+struct ReduceCallCbIds {
+    std::uint32_t input_cb_id;
+    std::uint32_t auxiliary_cb_id;
+    std::uint32_t output_cb_id;
+};
+
+// One complete kernel reduce() invocation. Accumulation behavior and index are
+// explicit call properties; a kernel never derives them from this call's
+// position in a list. `plan` is the complete existing single-CB plan for this
+// input.
 struct ReduceCallPlan {
     std::uint32_t input_cb_id;
     std::uint32_t auxiliary_cb_id;
     std::uint32_t output_cb_id;
     std::optional<std::uint32_t> accumulator_cb_id;
-    std::uint32_t accumulation_index;
-    bool is_last;
+    ReduceAccumulationMode accumulation_mode = ReduceAccumulationMode::None;
+    std::uint32_t accumulation_index = 0;
     ReducePlan plan;
 };
 
 struct ReduceSequencePlan {
     std::vector<ReduceCallPlan> calls;
+
+    // Append the device wire-format suffix: call count followed by every
+    // complete call in execution order. Existing caller-owned kernel arguments
+    // remain untouched at the front of the vector.
+    void append_to(std::vector<std::uint32_t>& compile_time_args) const;
+    std::vector<std::uint32_t> get_compile_time_args() const;
+};
+
+// Host serializer for one independently decodable call. Its matching device
+// view is ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
+class ReduceCallArgs {
+public:
+    explicit ReduceCallArgs(const ReduceCallPlan& call);
+    ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids);
+
+    void append_to(std::vector<std::uint32_t>& compile_time_args) const;
+    std::vector<std::uint32_t> get_compile_time_args() const;
+
+private:
+    std::vector<std::uint32_t> compile_time_args_;
 };
 
 // Plan a concrete reduction. A missing input-CB cap means "use the available
@@ -170,13 +205,10 @@ ReducePlan make_reduce_plan(
     std::optional<std::size_t> max_input_cb_bytes = std::nullopt);
 
 // Plan a kernel-ordered sequence of reductions whose results are accumulated together. The returned vector has
-// exactly the same order and length as `reductions`; callers simply instantiate one reduce() call per record.
-ReduceSequencePlan make_reduce_plan(
+// exactly the same order and length as `reductions`; callers decide when to instantiate each reduce() call.
+ReduceSequencePlan make_reduce_sequence_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
     const ReduceHardwareConfig& hardware);
-
-// Add the concrete planner selections to an existing kernel define set.
-void add_reduce_plan_defines(std::map<std::string, std::string>& defines, const ReducePlan& plan);
 
 }  // namespace ttnn::kernel_lib::host
