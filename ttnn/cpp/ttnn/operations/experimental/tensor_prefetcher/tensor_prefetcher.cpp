@@ -15,10 +15,20 @@ namespace ttnn::operations::experimental {
 
 namespace metal_exp = tt::tt_metal::experimental;
 
+uint32_t TensorPrefetcherPipes::num_pipes() const {
+    uint32_t count = 0;
+    for (const auto& bank : banks) {
+        count += static_cast<uint32_t>(bank.pipes.size());
+    }
+    return count;
+}
+
 CoreRangeSet TensorPrefetcherPipes::receiver_cores() const {
     CoreRangeSet cores;
-    for (const auto& pipe : pipes) {
-        cores = cores.merge(pipe->receiver_cores());
+    for (const auto& bank : banks) {
+        for (const auto& pipe : bank.pipes) {
+            cores = cores.merge(pipe->receiver_cores());
+        }
     }
     return cores;
 }
@@ -26,18 +36,22 @@ CoreRangeSet TensorPrefetcherPipes::receiver_cores() const {
 std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> TensorPrefetcherPipes::sender_receiver_core_mapping()
     const {
     std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> mapping;
-    mapping.reserve(pipes.size());
-    for (const auto& pipe : pipes) {
-        mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+    mapping.reserve(num_pipes());
+    for (const auto& bank : banks) {
+        for (const auto& pipe : bank.pipes) {
+            mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+        }
     }
     return mapping;
 }
 
 std::vector<uint8_t> TensorPrefetcherPipes::attach(tt::tt_metal::Program& program) const {
     std::vector<uint8_t> pipe_ids;
-    pipe_ids.reserve(pipes.size());
-    for (const auto& pipe : pipes) {
-        pipe_ids.push_back(metal_exp::AttachPrefetcherPipe(program, *pipe, pipe->receiver_cores(), entry_size));
+    pipe_ids.reserve(num_pipes());
+    for (const auto& bank : banks) {
+        for (const auto& pipe : bank.pipes) {
+            pipe_ids.push_back(metal_exp::AttachPrefetcherPipe(program, *pipe, pipe->receiver_cores(), entry_size));
+        }
     }
     return pipe_ids;
 }
@@ -58,7 +72,7 @@ void queue_tensor_prefetcher_request(
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
     const bool has_gcb = global_cb.has_value();
-    const bool has_pipes = prefetcher_pipes.has_value() && !prefetcher_pipes->pipes.empty();
+    const bool has_pipes = prefetcher_pipes.has_value() && !prefetcher_pipes->banks.empty();
     TT_FATAL(
         has_gcb != has_pipes,
         "queue_tensor_prefetcher_request needs exactly one delivery target: global_cb {} supplied, "
@@ -87,7 +101,7 @@ void queue_tensor_prefetcher_request(
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, prefetcher_pipes->pipes, device_subset, inputs, trace_cq);
+            *mesh_device, prefetcher_pipes->banks, device_subset, inputs, trace_cq);
     } else {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, *global_cb, device_subset, inputs, trace_cq);
@@ -101,18 +115,11 @@ TensorPrefetcherPipes create_prefetcher_pipes_for_tensor_prefetcher(
     uint32_t num_entries,
     tt::tt_metal::BufferType buffer_type,
     bool support_multi_receiver_shards) {
-    // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
-    // receiver-contiguous layout that disallows them is what lets a bank use two senders.
-    const auto mapping = metal_exp::BuildTensorPrefetcherSenderMapping(
-        *mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
-
-    TensorPrefetcherPipes pipes{.pipes = {}, .entry_size = entry_size, .num_entries = num_entries};
-    pipes.pipes.reserve(mapping.size());
-    for (const auto& [sender, receivers] : mapping) {
-        pipes.pipes.push_back(metal_exp::CreatePrefetcherPipeForTensorPrefetcher(
-            *mesh_device, sender, receivers, entry_size, num_entries, buffer_type));
-    }
-    return pipes;
+    return TensorPrefetcherPipes{
+        .banks = metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
+            *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards),
+        .entry_size = entry_size,
+        .num_entries = num_entries};
 }
 
 void wait_for_cq_on_tensor_prefetcher(

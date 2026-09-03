@@ -92,10 +92,10 @@ public:
 
     // PrefetcherPipe delivery. Receiver-contiguous batched tensors only, all at the pipes' entry
     // size; the preconditions are checked here with the offending values in the message.
-    // `prefetcher_pipes` must be in BuildTensorPrefetcherSenderMapping order (see the public
-    // QueueTensorPrefetcherRequest overload for what that order fixes).
+    // `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned (see the
+    // public QueueTensorPrefetcherRequest overload for what a group's pipe order fixes).
     void queue(
-        const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
+        const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
@@ -149,14 +149,14 @@ private:
 
     // Everything the request path needs to know about a delivery target, so serialization does not
     // have to name the target's type. Built by target_for() from either a DRAM-sender
-    // GlobalCircularBuffer or a list of DRAM-sender PrefetcherPipes. Owns its mapping by value: a
-    // pipe list's mapping is assembled at queue time and has no home on the target object.
+    // GlobalCircularBuffer or the per-bank groups of DRAM-sender PrefetcherPipes. Owns its mapping
+    // by value: the pipes' mapping is assembled at queue time and has no home on the pipe objects.
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
         // DRISC L1 base of each sender's target state (header field target_state_addr), in mapping
-        // order. A GCB plants every sender's block at one uniform offset and so repeats it; a pipe
-        // list holds one address per pipe.
+        // order. A GCB plants every sender's block at one uniform offset and so repeats it; the
+        // pipes hold one address each.
         std::vector<uint32_t> state_addr_per_sender;
         // Transport for every tensor in the request.
         TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
@@ -170,7 +170,7 @@ private:
     void worker_loop();
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
-    RequestTarget target_for(const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const;
+    RequestTarget target_for(const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
