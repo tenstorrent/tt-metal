@@ -165,7 +165,10 @@ class TtAttnRes(LightweightModule):
         # Sized by the token count, which reaches the op and not the constructor.
         self._exchange_scratch = {}
         self._exchange_sem = None
-        self._tp_sems = None
+        # Creating a global semaphore resets it through a blocking mesh write, and a write
+        # inside a trace capture region is fatal. The set has to predate any capture, so it
+        # is made here rather than on first use.
+        self._tp_sems = None if tt_ccl is not None else self._new_tp_semaphores()
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -305,7 +308,7 @@ class TtAttnRes(LightweightModule):
         pools are double-buffered and handed out in turn, and that matters as soon as a
         second component has a collective in flight on the same axis: two collectives
         sharing one set of semaphores read each other's counts. A walk on its own is
-        serialized and cannot race itself, so the fallback below is a fixed set.
+        serialized and cannot race itself, so the constructor's fallback is one fixed set.
 
         Sizes are the op's contract, not a choice — two barriers, index 0 for the
         reduce-scatter and 1 for the all-gather, then the scatter's three and the
@@ -318,12 +321,13 @@ class TtAttnRes(LightweightModule):
                 self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
             )
-        if self._tp_sems is None:
-            grid = self.mesh_device.compute_with_storage_grid_size()
-            cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-            new_set = lambda count: [ttnn.create_global_semaphore(self.mesh_device, cores, 0) for _ in range(count)]
-            self._tp_sems = (new_set(2), new_set(3), new_set(2))
         return self._tp_sems
+
+    def _new_tp_semaphores(self):
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        new_set = lambda count: [ttnn.create_global_semaphore(self.mesh_device, cores, 0) for _ in range(count)]
+        return (new_set(2), new_set(3), new_set(2))
 
     def _all_reduce(self, tensor):
         """Sum `tensor` across the TP axis. Does not consume it."""

@@ -53,8 +53,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
 
 TP_AXIS = 1
+
+# The op's contract with the statistics all-reduce: two barriers, the reduce-scatter's
+# three, the all-gather's two.
+STATS_SEMAPHORES = 7
 
 # One full 12-layer block of read sites against the widest sealed set the walk reaches, so
 # the batch axis, the site-major permute and every candidate-axis kernel are all live.
@@ -201,3 +206,47 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
     ttnn.deallocate(traced)
     for tensor in (partials, shifts, masses, tt_prefix, tt_block, *tt_queries):
         ttnn.deallocate(tensor)
+
+
+@on_mesh
+def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_params):
+    """Construction is what allocates them, not the read that first needs them.
+
+    Creating a global semaphore resets it through a blocking mesh write, and a write
+    inside a trace capture region is fatal. A set built on first use would put that
+    write wherever the first read happened to be, so a caller that captures cold would
+    have to know to run a read eagerly first -- for a buffer whose size depends on
+    nothing a read carries.
+
+    Counting the calls rather than reading the attribute afterwards is deliberate: what
+    a capture cares about is when the allocation happens, not that one exists.
+    """
+    created = []
+    original = ttnn.create_global_semaphore
+
+    def counting(*args, **kwargs):
+        created.append(None)
+        return original(*args, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ttnn, "create_global_semaphore", counting)
+    try:
+        TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+        own = len(created)
+
+        pool = TT_CCL(mesh_device)
+        created.clear()
+        TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, tt_ccl=pool)
+        shared = len(created)
+    finally:
+        monkeypatch.undo()
+
+    assert own == STATS_SEMAPHORES, (
+        "constructing without a pool has to make the whole statistics set up front -- two "
+        f"barriers, the scatter's three and the gather's two: got {own}"
+    )
+    assert shared == 0, (
+        "a caller that brought its own pool has to be taken at its word; allocating anyway "
+        f"puts a mesh write back where a capture can reach it: got {shared}"
+    )
+    logger.info(f"semaphores at construction: {own} on its own, {shared} with a shared pool")

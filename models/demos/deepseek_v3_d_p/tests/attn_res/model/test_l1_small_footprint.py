@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
 
 PCC_GATE = 0.9999
 
@@ -91,7 +92,7 @@ def _first_line(error) -> str:
     return str(error).strip().splitlines()[0]
 
 
-def _walk_sampling_the_pool(mesh_device, op_class, samples=None):
+def _walk_sampling_the_pool(mesh_device, op_class, samples=None, **op_kwargs):
     """Walk `SEALS` depths, sampling the pool at each, and check the walk's own numbers.
 
     Returns the per-depth samples and the PCC. The accuracy check is part of the
@@ -101,7 +102,7 @@ def _walk_sampling_the_pool(mesh_device, op_class, samples=None):
     A caller that expects the walk to run the pool dry passes `samples` in, so that what
     was measured before the allocator gave up survives the exception.
     """
-    op = op_class(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = op_class(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, **op_kwargs)
 
     rng = generator(0)
     hidden_states = random_hidden(rng, PER_CHIP_TOKENS * op.sp_factor)
@@ -196,11 +197,11 @@ def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, devi
     longer where those semaphores land and the gate above has to be re-derived rather
     than trusted.
 
-    How far it gets before the pool runs out is the fabric's to decide, not the claim's.
-    A ring hands the all-gather more semaphores per call than a line does, so the walk
-    that climbs through every depth on an unwrapped fabric can exhaust the pool inside
-    the first seal on a wrapped one. Both are the pool being consumed and both pass; a
-    walk that reaches every depth for free is the only outcome that does not.
+    How far it gets before the pool runs out is the fabric's to decide, not the claim's:
+    measured here, an unwrapped fabric climbs through all eight depths at 128 B/bank each
+    while a wrapped one exhausts the same pool inside the first seal. Both are the pool
+    being consumed and both pass; a walk that reaches every depth for free is the only
+    outcome that does not.
     """
     samples = []
     try:
@@ -221,3 +222,23 @@ def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, devi
         f"flat footprint across depths means the depths collapsed onto one: got {footprints}"
     )
     logger.info(f"{SEALS} seals, {2 * SEALS} reads, L1_SMALL {footprints[0]} -> {footprints[-1]} B/bank")
+
+
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_a_shared_ccl_pool_costs_the_shared_l1_small_nothing_either(mesh_device, device_params):
+    """The same gate for the caller that hands the op the model's own semaphore pool.
+
+    A model that already has a `TT_CCL` should pass it rather than let the op keep a
+    private set, because that pool is double-buffered and a private set is not -- which
+    matters as soon as something else has a collective in flight on the same axis. That
+    is only advice worth giving if it costs the pool the same nothing, and the handles
+    reach a different code path to get there, so it is measured rather than assumed.
+    """
+    samples, pcc = _walk_sampling_the_pool(mesh_device, TtAttnRes, tt_ccl=TT_CCL(mesh_device))
+
+    footprints = sorted({footprint for _, footprint, _ in samples})
+    assert footprints == [0], (
+        "borrowing the model's pool has to cost the shared L1_SMALL the same nothing a "
+        f"private set does: got {footprints} B/bank"
+    )
+    logger.info(f"{SEALS} seals on a shared TT_CCL pool, 0 B/bank of L1_SMALL: PCC {pcc:.7f}")
