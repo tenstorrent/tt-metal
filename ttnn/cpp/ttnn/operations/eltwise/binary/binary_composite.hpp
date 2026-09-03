@@ -285,4 +285,14 @@ Tensor situ_glu(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// DeepSeek-V4's clamped SiLU-GLU: silu(min(gate, limit)) * clamp(up, -limit, limit). The gate is
+// bounded from above only; the asymmetry is the model's. gate and up are supplied pre-split.
+Tensor clamped_silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float limit,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
 }  // namespace ttnn

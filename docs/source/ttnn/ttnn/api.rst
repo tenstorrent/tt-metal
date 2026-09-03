@@ -289,6 +289,7 @@ Pointwise Binary
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.clamped_silu_glu
    ttnn.div
    ttnn.div_no_nan
    ttnn.divide
