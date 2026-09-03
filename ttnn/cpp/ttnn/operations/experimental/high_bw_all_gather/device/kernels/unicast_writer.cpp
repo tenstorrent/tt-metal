@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "unicast_common.hpp"
+#include "high_bw_all_gather_metadata.hpp"
 
 using address_t = uint32_t;
 
@@ -54,7 +55,7 @@ void kernel_main() {
     // Active-extent mailbox block, after the fixed 6-entry mux block.
     constexpr uint32_t ext_ct_base = mux_ct_base + 6;
     constexpr bool extent_from_metadata = get_compile_time_arg_val(ext_ct_base) != 0;
-    constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(extent_from_metadata ? ext_ct_base + 1 : 0);
+    constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_ct_base + 1);
 
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
@@ -134,13 +135,12 @@ void kernel_main() {
     if constexpr (extent_from_metadata) {
         CircularBuffer cb_writer_meta(cb_meta_writer_id);
         cb_writer_meta.wait_front(1);
-        volatile tt_l1_ptr uint32_t* mailbox =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_writer_meta.get_read_ptr());
-        eff_slice_start = mailbox[0];
-        eff_slice_count = mailbox[1];
-        eff_final_start = mailbox[2];
-        eff_final_count = mailbox[3];
-        data_valid_granularity = mailbox[4];
+        CoreLocalMem<HighBwAllGatherMetadataSchedule> mailbox(cb_writer_meta.get_read_ptr());
+        eff_slice_start = mailbox->slice_start;
+        eff_slice_count = mailbox->slice_count;
+        eff_final_start = mailbox->final_start;
+        eff_final_count = mailbox->final_count;
+        data_valid_granularity = mailbox->data_valid_granularity;
         cb_writer_meta.pop_front(1);
     }
 

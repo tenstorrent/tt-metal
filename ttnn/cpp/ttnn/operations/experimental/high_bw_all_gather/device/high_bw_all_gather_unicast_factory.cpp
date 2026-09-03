@@ -4,6 +4,7 @@
 
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
+#include "kernels/high_bw_all_gather_metadata.hpp"
 #include "high_bw_all_gather_partition.hpp"
 
 #include <array>
@@ -681,6 +682,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const bool batch_index_from_metadata = tensor_args.has_batch_index_metadata();
     const bool extent_from_metadata = tensor_args.has_gathered_prefix_metadata();
     constexpr uint32_t kMetaCbPageSize = 64;
+    static_assert(kMetaCbPageSize >= sizeof(HighBwAllGatherMetadataSchedule));
     uint32_t cb_meta_id = tt::CB::c_in1;
     uint32_t cb_meta_writer_id = tt::CB::c_in2;
     if (extent_from_metadata) {

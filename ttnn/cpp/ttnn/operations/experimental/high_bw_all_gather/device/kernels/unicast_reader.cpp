@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "unicast_common.hpp"
+#include "high_bw_all_gather_metadata.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/high_bw_all_gather_partition.hpp"
 
@@ -202,12 +203,13 @@ void kernel_main() {
         eff_page_start = sched.input_page_start;
         eff_page_end = sched.input_page_end;
 
-        volatile tt_l1_ptr uint32_t* mailbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_meta_l1);
-        mailbox[0] = sched.local_output_start;
-        mailbox[1] = sched.slice_count;
-        mailbox[2] = sched.final_start;
-        mailbox[3] = sched.final_count;
-        mailbox[4] = sched.data_valid_granularity;
+        CoreLocalMem<HighBwAllGatherMetadataSchedule> mailbox(writer_meta_l1);
+        mailbox->slice_start = sched.local_output_start;
+        mailbox->slice_count = sched.slice_count;
+        mailbox->final_start = sched.final_start;
+        mailbox->final_count = sched.final_count;
+        mailbox->data_valid_granularity = sched.data_valid_granularity;
+        clobber_all_memory();
         cb_writer_meta.push_back(1);
     }
 
