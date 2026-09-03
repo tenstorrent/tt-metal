@@ -265,12 +265,35 @@ jobs:
       checkout-source: true
       build-args: PROFILE=wheel
 
+  # source-ref would otherwise only ever be exercised through its github.sha
+  # fallback. Same commit as bake-env-full, spelled explicitly: the content must
+  # come out identical while the tag must differ, since source-ref feeds the
+  # recipe hash. A DIFFERENT ref would also work but would publish an image whose
+  # source and artifact disagree, which is the thing the input exists to prevent.
+  bake-env-source-ref:
+    name: "Bake env image / explicit source-ref"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      source-ref: ${{ github.sha }}
+
   # Payload shape is what breaks silently: a wrong one still builds and publishes.
   # Checking both costs no hardware, so only the full image needs a real leg below.
   verify-env-payloads:
     name: "Check both env images carry the right payload"
     # build-env too: the base ref is needed to tell payload layers from base ones.
-    needs: [build-env, bake-env-full, bake-env-wheel]
+    needs: [build-env, bake-env-full, bake-env-wheel, bake-env-source-ref]
     if: ${{ needs.bake-env-full.outputs.image != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -335,6 +358,31 @@ jobs:
             [ "$n" -eq 2 ] || { echo "::error::${name} adds ${n} layers, expected 2 (source + payload); a new COPY would do this"; exit 1; }
             [ "$mib" -le "$MAX_MIB" ] || { echo "::error::${name} payload is ${mib} MiB, over ${MAX_MIB}"; exit 1; }
           done
+
+      - name: Assert source-ref separates the tag without changing the content
+        env:
+          FULL: ${{ needs.bake-env-full.outputs.image }}
+          EXPLICIT: ${{ needs.bake-env-source-ref.outputs.image }}
+        run: |
+          set -euo pipefail
+          # Same commit, one defaulted and one passed explicitly.
+          [ "$FULL" != "$EXPLICIT" ] \
+            || { echo "::error::source-ref does not separate the tag: both are ${FULL}"; exit 1; }
+          # Only the recipe hash may differ; sha12, CONFIG and the base slug must not.
+          [ "${FULL%-*}" = "${EXPLICIT%-*}" ] \
+            || { echo "::error::tags differ outside the recipe hash: ${FULL} vs ${EXPLICIT}"; exit 1; }
+          # And the payload must be byte-identical, or the explicit ref checked out
+          # something other than the commit the default resolves to.
+          layers() {
+            local ref="$1" repo="${1%:*}" child
+            child=$(docker manifest inspect "$ref" \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest')
+            [ -n "$child" ] && ref="${repo}@${child}"
+            docker manifest inspect "$ref" | jq -r '.layers[].digest'
+          }
+          diff <(layers "$FULL") <(layers "$EXPLICIT") \
+            || { echo "::error::explicit source-ref produced different layers than the default"; exit 1; }
+          echo "source-ref separates the tag (${FULL##*-} vs ${EXPLICIT##*-}) with identical layers"
 
   verify-env:
     name: "Run a test from the env image"
