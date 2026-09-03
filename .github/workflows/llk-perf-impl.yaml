@@ -98,10 +98,6 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           ONLY_GROUP: ${{ inputs.only-group }}
         run: |
-          # One shard instead of ten. A change to this workflow can then be
-          # tested end to end without occupying every perf machine for two
-          # hours. Fails loud on a group number that matches nothing, so a typo
-          # cannot silently run no tests at all.
           FILTER='import json, os, sys
           rows = json.loads(os.environ["MATRIX"])
           group = os.environ["ONLY_GROUP"]
@@ -156,13 +152,6 @@ jobs:
             CHIP_ARCH=unknown
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-          # One name for everything this shard produces: the report directory
-          # perf_data/runs/<tag> and the Parquet inside it. Must be unique per
-          # job, because pytest-split divides by test item rather than by
-          # module, so one module's variants land in several shards and their
-          # reports would collide the moment the artefacts are brought together.
-          # It carries the workflow run id, so it is also unique across nights --
-          # which matters once these files are archived into one directory.
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
@@ -193,9 +182,6 @@ jobs:
         if: always()
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          # Match the merged report, the compile report, the BH per-slice
-          # `-<tname>-run` reports, and the WH `-run` report so that per-test
-          # reports are still uploaded even when a timeout prevents the merge.
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
@@ -206,11 +192,6 @@ jobs:
         uses: mikepenz/action-junit-report@v5
         if: always()
         with:
-          # Read the per-phase / per-slice result reports directly (compile +
-          # run for WH, per-slice run for BH) rather than only the merged
-          # report, so results are still published if a shard times out before
-          # the merge step. The three patterns are disjoint and exclude the
-          # merged report, so no test is counted twice.
           report_paths: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
@@ -245,11 +226,6 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          # The warehouse loader is "one file == one run": it replays by RUN_ID
-          # and RUNS carries a single ARCH and RUN_TS. CI produces ten shards on
-          # ten machines, so this is the first and only place one process holds
-          # them all. The same helper runs in helpers.perf.backfill, so a
-          # backfilled night and this one come out identical.
           python3 -m helpers.perf.merge \
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
