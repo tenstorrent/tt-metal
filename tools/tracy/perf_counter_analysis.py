@@ -216,7 +216,82 @@ COUNTER_TYPE_NAMES = {
     179: "L1_3_NOC_RING3_PORT_7_GRANT",
     # Cycles any thread is stalled (OR across threads).
     180: "ANY_THREAD_STALL",
+    # Quasar (A0): 4-thread INSTRN variants, new classes, OR-reduced stall reasons
+    181: "CFG_INSTRN_AVAILABLE_3",
+    182: "SYNC_INSTRN_AVAILABLE_3",
+    183: "THCON_INSTRN_AVAILABLE_3",
+    184: "FPU_INSTRN_AVAILABLE_3",
+    185: "UNPACK_INSTRN_AVAILABLE_3",
+    186: "PACK_INSTRN_AVAILABLE_3",
+    187: "THREAD_STALLS_3",
+    188: "THREAD_INSTRUCTIONS_3",
+    189: "XSEARCH_INSTRN_AVAILABLE_0",
+    190: "XSEARCH_INSTRN_AVAILABLE_1",
+    191: "XSEARCH_INSTRN_AVAILABLE_2",
+    192: "XSEARCH_INSTRN_AVAILABLE_3",
+    193: "INSTISSUE_INSTRN_AVAILABLE_0",
+    194: "INSTISSUE_INSTRN_AVAILABLE_1",
+    195: "INSTISSUE_INSTRN_AVAILABLE_2",
+    196: "INSTISSUE_INSTRN_AVAILABLE_3",
+    197: "TILE_COUNTER_STALL_PACK",
+    198: "TILE_COUNTER_STALL_UNPACK",
+    199: "SRCS_STALL_PACK",
+    200: "SRCS_STALL_SFPU",
+    201: "SRCS_STALL_UNPACK",
+    202: "DEST_STALL_PACK",
+    203: "DEST_STALL_SFPU",
+    204: "DEST_STALL_MATH",
+    205: "DEST_STALL_UNPACK",
+    206: "SFPU_DATA_HAZARD_STALL",
+    207: "FPU_DATA_HAZARD_STALL",
+    208: "SRCB_STALL_UNPACK",
+    209: "SRCA_STALL_UNPACK",
+    210: "DVALID_STALL_MATH",
+    211: "SRCA_STALL_MATH",
+    212: "QUASAR_L1_CLIENT_EVENT",
 }
+
+# Quasar (A0) INSTRN extras: stall reasons are OR-reduced across the 4 threads, and the
+# instruction-class availability map covers 4 threads including the XSEARCH/INSTISSUE classes.
+QUASAR_STALL_REASON_METRICS = {
+    "Tile Counter Stall Pack Rate": "TILE_COUNTER_STALL_PACK",
+    "Tile Counter Stall Unpack Rate": "TILE_COUNTER_STALL_UNPACK",
+    "Srcs Stall Pack Rate": "SRCS_STALL_PACK",
+    "Srcs Stall SFPU Rate": "SRCS_STALL_SFPU",
+    "Srcs Stall Unpack Rate": "SRCS_STALL_UNPACK",
+    "Dest Stall Pack Rate": "DEST_STALL_PACK",
+    "Dest Stall SFPU Rate": "DEST_STALL_SFPU",
+    "Dest Stall Math Rate": "DEST_STALL_MATH",
+    "Dest Stall Unpack Rate": "DEST_STALL_UNPACK",
+    "SFPU Data Hazard Stall Rate": "SFPU_DATA_HAZARD_STALL",
+    "FPU Data Hazard Stall Rate": "FPU_DATA_HAZARD_STALL",
+    "SrcB Stall Unpack Rate": "SRCB_STALL_UNPACK",
+    "SrcA Stall Unpack Rate": "SRCA_STALL_UNPACK",
+    "DValid Stall Math Rate": "DVALID_STALL_MATH",
+    "SrcA Stall Math Rate": "SRCA_STALL_MATH",
+}
+QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
+
+
+def quasar_l1_client_label(sel):
+    """Human label for the l1_client event counter selection (subport*8 + event).
+
+    Subport identities are RTL-confirmed; the 8 event-bit meanings are not, so events keep raw indices.
+    """
+    subport, event = divmod(int(sel), 8)
+    if subport < 4:
+        port = f"TRISC{subport}"
+    elif subport == 4:
+        port = "THCON"
+    elif subport < 25:
+        port = f"UNPACK{subport - 5}"
+    else:
+        port = f"PACK{subport - 25}"
+    return f"L1_CLIENT_{port}_EVENT{event}"
+
+
+# (class, thread) pairs already covered by the tt-1xx metric names above them.
+_QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("FPU", 1), ("UNPACK", 0), ("PACK", 2)}
 
 
 # Perf counter headers are only included in CSV output when perf counter data is available.
@@ -473,6 +548,37 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Median (%)",
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
+    # === Quasar (A0) ===
+    *[
+        f"{name} {stat} (%)"
+        for name in [
+            "Thread 3 Stall Rate",
+            "Tile Counter Stall Pack Rate",
+            "Tile Counter Stall Unpack Rate",
+            "Srcs Stall Pack Rate",
+            "Srcs Stall SFPU Rate",
+            "Srcs Stall Unpack Rate",
+            "Dest Stall Pack Rate",
+            "Dest Stall SFPU Rate",
+            "Dest Stall Math Rate",
+            "Dest Stall Unpack Rate",
+            "SFPU Data Hazard Stall Rate",
+            "FPU Data Hazard Stall Rate",
+            "SrcB Stall Unpack Rate",
+            "SrcA Stall Unpack Rate",
+            "DValid Stall Math Rate",
+            "SrcA Stall Math Rate",
+        ]
+        for stat in ("Min", "Median", "Max", "Avg")
+    ],
+    *[
+        f"{cls} Instrn Avail Rate T{thread} {stat} (%)"
+        for cls in ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
+        for thread in range(4)
+        if (cls, thread) not in {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("FPU", 1), ("UNPACK", 0), ("PACK", 2)}
+        for stat in ("Min", "Median", "Max", "Avg")
+    ],
+    *[f"T3 Instrn Issue Rate {stat}" for stat in ("Min", "Median", "Max", "Avg")],
     # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
@@ -609,6 +715,9 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
+                counter_sel = meta_dict.get("counter sel")
+                if counter_type_name == "QUASAR_L1_CLIENT_EVENT" and counter_sel is not None:
+                    counter_type_name = quasar_l1_client_label(counter_sel)
 
                 perf_counter_events.append(
                     {
@@ -705,6 +814,14 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Thread 0 Stall Rate",
         "Thread 1 Stall Rate",
         "Thread 2 Stall Rate",
+        "Thread 3 Stall Rate",
+        *QUASAR_STALL_REASON_METRICS,
+        *[
+            f"{cls} Instrn Avail Rate T{thread}"
+            for cls in QUASAR_INSTRN_CLASSES
+            for thread in range(4)
+            if (cls, thread) not in _QUASAR_CLASS_PAIRS_COVERED
+        ],
         "SrcA Valid Wait",
         "SrcB Valid Wait",
         "SrcA Clear Wait",
@@ -790,6 +907,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "T3 Instrn Issue Rate",
         "Avg HF Cycles Per Instrn",
     ]
 
@@ -1020,8 +1138,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     per_op_stats["Math-to-Pack Handoff Efficiency"] = _group_to_stat_dict(math_pack_eff)
     per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
 
-    # === Thread stall metrics ===
-    for t in range(3):
+    # === Thread stall metrics (threads 0-2 on tt-1xx, 0-3 on Quasar) ===
+    for t in range(4):
         name = f"THREAD_STALLS_{t}"
         if has_counter(name):
             per_op_stats[f"Thread {t} Stall Rate"] = compute_util_metric(name)
@@ -1148,6 +1266,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["T1 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_1", scale=1)
     if has_counter("THREAD_INSTRUCTIONS_2"):
         per_op_stats["T2 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_2", scale=1)
+    if has_counter("THREAD_INSTRUCTIONS_3"):
+        per_op_stats["T3 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_3", scale=1)
 
     # === L1 Bank 1 ===
     if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_1"):
@@ -1211,6 +1331,21 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["UNPACK Instrn Avail Rate T0"] = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
     if has_counter("PACK_INSTRN_AVAILABLE_2"):
         per_op_stats["PACK Instrn Avail Rate T2"] = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
+
+    # === Quasar (A0): flat stall reasons and the full 4-thread class grid ===
+    for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+        if has_counter(counter_name):
+            per_op_stats[metric_name] = compute_util_metric(counter_name)
+    for cls in QUASAR_INSTRN_CLASSES:
+        for thread in range(4):
+            if (cls, thread) in _QUASAR_CLASS_PAIRS_COVERED:
+                continue
+            counter_name = f"{cls}_INSTRN_AVAILABLE_{thread}"
+            if has_counter(counter_name):
+                per_op_stats[f"{cls} Instrn Avail Rate T{thread}"] = compute_util_metric(counter_name)
+    for name in perf_counter_df["counter type"].unique():
+        if str(name).startswith("L1_CLIENT_"):
+            per_op_stats[f"{name} Rate"] = compute_util_metric(name)
 
     if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
@@ -1487,10 +1622,12 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Thread stall rates
-    for t in range(3):
+    # Thread stall rates (threads 0-2 on tt-1xx, 0-3 on Quasar)
+    for t in range(4):
         stall_col = f"value_THREAD_STALLS_{t}"
         ref_col = f"ref_cnt_THREAD_STALLS_{t}"
+        if t == 3 and stall_col not in eff_pivot.columns:
+            continue
         eff_pivot[f"Thread {t} Stall Rate"] = eff_pivot.apply(
             lambda x, s=stall_col, r=ref_col: safe_div(x.get(s, 0), x.get(r, 0)),
             axis=1,
@@ -1815,6 +1952,36 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
+    if "value_THREAD_INSTRUCTIONS_3" in eff_pivot.columns:
+        eff_pivot["T3 Instrn Issue Rate"] = eff_pivot.apply(
+            lambda x: (
+                x.get("value_THREAD_INSTRUCTIONS_3", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_3", 1)
+                if x.get("ref_cnt_THREAD_INSTRUCTIONS_3", 0) > 0
+                else nan
+            ),
+            axis=1,
+        )
+
+    # Quasar (A0): flat stall reasons and the full 4-thread class grid.
+    for metric_name, counter_name in QUASAR_STALL_REASON_METRICS.items():
+        val_col = f"value_{counter_name}"
+        ref_col = f"ref_cnt_{counter_name}"
+        if val_col in eff_pivot.columns:
+            eff_pivot[metric_name] = eff_pivot.apply(safe_util(val_col, ref_col), axis=1)
+    for cls in QUASAR_INSTRN_CLASSES:
+        for thread in range(4):
+            if (cls, thread) in _QUASAR_CLASS_PAIRS_COVERED:
+                continue
+            val_col = f"value_{cls}_INSTRN_AVAILABLE_{thread}"
+            ref_col = f"ref_cnt_{cls}_INSTRN_AVAILABLE_{thread}"
+            if val_col in eff_pivot.columns:
+                eff_pivot[f"{cls} Instrn Avail Rate T{thread}"] = eff_pivot.apply(safe_util(val_col, ref_col), axis=1)
+    l1_client_rate_names = []
+    for col in list(eff_pivot.columns):
+        if str(col).startswith("value_L1_CLIENT_"):
+            name = str(col)[len("value_") :]
+            l1_client_rate_names.append(f"{name} Rate")
+            eff_pivot[f"{name} Rate"] = eff_pivot.apply(safe_util(col, f"ref_cnt_{name}"), axis=1)
 
     # Packer engine granularity (WH only)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
@@ -2026,6 +2193,15 @@ def compute_device_only_metrics(
         "Thread 0 Stall Rate",
         "Thread 1 Stall Rate",
         "Thread 2 Stall Rate",
+        "Thread 3 Stall Rate",
+        *QUASAR_STALL_REASON_METRICS,
+        *[
+            f"{cls} Instrn Avail Rate T{thread}"
+            for cls in QUASAR_INSTRN_CLASSES
+            for thread in range(4)
+            if (cls, thread) not in _QUASAR_CLASS_PAIRS_COVERED
+        ],
+        *l1_client_rate_names,
         "SrcA Valid Wait",
         "SrcB Valid Wait",
         "SrcA Clear Wait",
@@ -2099,6 +2275,7 @@ def compute_device_only_metrics(
         "T0 Instrn Issue Rate",
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
+        "T3 Instrn Issue Rate",
         "Avg HF Cycles Per Instrn",
     ]
 

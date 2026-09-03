@@ -1762,7 +1762,11 @@ def generate_reports(
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
-                        if header not in OPS_CSV_HEADER and header not in _PERF_COUNTER_CSV_HEADERS_SET:
+                        if (
+                            header not in OPS_CSV_HEADER
+                            and header not in _PERF_COUNTER_CSV_HEADERS_SET
+                            and not header.startswith("L1_CLIENT_")
+                        ):
                             continue
                         if value in (None, ""):
                             continue
@@ -1872,6 +1876,8 @@ def generate_reports(
         for row in csv_rows:
             all_row_keys.update(row.keys())
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
+        # Quasar l1_client selections produce dynamically named columns.
+        active_perf_headers += sorted(h for h in all_row_keys if str(h).startswith("L1_CLIENT_"))
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])
