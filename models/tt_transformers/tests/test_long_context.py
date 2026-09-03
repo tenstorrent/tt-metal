@@ -12,6 +12,12 @@ with every configuration knob resolved to a constant. Run it with:
 
     TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
     pytest models/tt_transformers/tests/test_long_context.py -s
+
+Every context length in CONTEXT_CONFIGS is run at every batch size in BATCH_SIZES, giving
+ids like `32k-b2`. Select a subset with -k:
+
+    -k 32k        every batch at 32k          -k b1     every context at batch 1
+    -k 32k-b4     one cell
 """
 
 import bz2
@@ -33,14 +39,29 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 # ---------------------------------------------------------------------------
-# One prefill/decode benchmark, run once per context length below.
+# One prefill/decode benchmark, run once per (context length, batch size) below.
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 1  # concurrent users
+# Concurrent users. 1 stays first: it is the baseline the others are read against, and the
+# only row with a prior measurement.
+#
+# Decode pads any batch up to a single 32-row tile (model_config.py:689,
+# tile_padded_batch_rows = TILE_SIZE * ceil(max_batch_size / TILE_SIZE)), so the weight
+# matmuls, the norms and the chip-to-chip collectives run identical work at 1, 2 and 4 users.
+# Measured at 32k, batch 1, per token: 19.96 of 27.81 ms is that fixed part; only attention
+# over the KV cache (7.56 ms) and the paged cache write (0.29 ms) are charged per user. So
+# the expectation is ~19.96 + 7.85*batch ms/token, i.e. 2.17x aggregate throughput at 4 users
+# for 54% of the per-user rate. Confirming that trade is the point of this sweep.
+BATCH_SIZES = [1, 2, 4]
 MAX_GENERATED_TOKENS = 256  # hard cap on the decode loop
 INSTRUCT = True  # wrap the prompt in the model's chat template
+# The precision policy under measurement. Hoisted to module scope because the KV-cache size
+# estimate below reads the cache dtype out of it while create_tt_model builds the model from
+# it; sourcing both from one name is what stops the estimate from describing a different
+# configuration than the one that runs.
+OPTIMIZATIONS = DecodersPrecision.performance
 # KV-cache tokens per block. Attention reads one tile row (32 positions x 128 head dims,
 # 4 tiles, 4352 bytes) then consults the page table for the next block's physical address,
 # so at 32 -- one tile row per block -- every single read is followed by a random jump.
@@ -60,19 +81,26 @@ INSTRUCT = True  # wrap the prompt in the model's chat template
 # long-context workloads on this hardware; it is not a change we can make on their behalf.
 PAGE_BLOCK_SIZE = 256
 
-# (label, max_seq_len, page_max_num_blocks)
+# (label, max_seq_len, page_blocks_per_user)
 #
 # max_seq_len - MAX_GENERATED_TOKENS is the prompt budget: preprocess_inputs_prefill
 # left-clips any longer prompt to exactly that (tt/common.py:283).
-# page_max_num_blocks * PAGE_BLOCK_SIZE must cover prompt + generated:
+# page_blocks_per_user * PAGE_BLOCK_SIZE must cover ONE user's prompt + generated:
 #   256 * 129 = 33024   and   256 * 257 = 65792
+#
+# The device pool is page_blocks_per_user * batch_size. PagedAttentionConfig sizes one
+# SHARED pool -- attention.py:396 allocates [max_num_blocks, kv_heads, block_size, head_dim],
+# with no batch dimension -- and the page table below hands each user max_num_blocks //
+# batch_size of it (the same split get_decode_mask assumes at tt/common.py:1015). A pool that
+# did not scale with the batch would therefore not fail; it would quietly give each user a
+# fraction of the context this row claims to measure.
 #
 # A length beyond the model's NATIVE window (Qwen3-8B: max_position_embeddings=40960)
 # is not skipped -- `_extend_context_with_yarn` below stretches the RoPE frequencies with
 # YaRN so it runs. The summary's `rope` column records which rows were extended.
 CONTEXT_CONFIGS = [
-    ("32k", 33024, 129),  # 33024 - 256 = 32768 prompt tokens
-    ("64k", 65792, 257),  # 65792 - 256 = 65536 prompt tokens
+    ("32k", 33024, 129),  # 33024 - 256 = 32768 prompt tokens per user
+    ("64k", 65792, 257),  # 65792 - 256 = 65536 prompt tokens per user
 ]
 
 # Each parametrization appends a dict here and fills it in as it progresses, so a run
@@ -80,13 +108,69 @@ CONTEXT_CONFIGS = [
 _RESULTS = []
 
 
-def _native_context_len():
-    """The model's trained context window, read from its HF config (no weights loaded)."""
+def _hf_text_config():
+    """The model's own config, read from HuggingFace (no weights loaded)."""
     from transformers import AutoConfig
 
     cfg = AutoConfig.from_pretrained(os.environ["HF_MODEL"])
-    cfg = getattr(cfg, "text_config", cfg)  # some configs nest the text params
-    return cfg.max_position_embeddings
+    return getattr(cfg, "text_config", cfg)  # some configs nest the text params
+
+
+def _native_context_len():
+    """The model's trained context window."""
+    return _hf_text_config().max_position_embeddings
+
+
+# Bytes per element on device. The block formats carry one shared exponent byte per 16
+# values on top of the mantissa, which is where the .0625 comes from: bfp8_b is 1 + 1/16,
+# bfp4_b is 0.5 + 1/16. A dtype of None means "keep the torch dtype", and init_kv_cache
+# builds the cache with torch.zeros -> float32; that never happens with the settings this
+# test uses (ModelOptimizations always merges over a default of BFP8 for the KV cache,
+# model_config.py:314) but costing it at 4 bytes keeps the estimate fail-safe rather than
+# fail-open if that ever changes.
+_BYTES_PER_ELEMENT = {ttnn.bfloat4_b: 0.5625, ttnn.bfloat8_b: 1.0625, ttnn.bfloat16: 2.0, None: 4.0}
+
+# Per-chip DRAM available to the KV cache, in bytes.
+#
+# A Wormhole chip has 12 GiB: dram_bank_size 2147483648 x 6 channels
+# (tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml). Qwen3-8B's weights take ~3.2 GiB of
+# that per chip on an N300 -- 4.10B parameters after the 2-way split, of which the 1.81B in
+# ff1/ff3 are bfp4_b at 0.5625 B and the rest bfp8_b at 1.0625 B -- and the runtime reserves
+# a further, unmeasured amount for command queues, trace buffers and program caches. 8 GiB
+# is what is left, rounded down.
+#
+# This is DERIVED, not measured: it is a pre-flight check that stops a hopeless row from
+# taking the whole pytest session down with a device OOM (which would lose the rows that did
+# fit), not a guarantee that everything under it succeeds. A row close to the line can still
+# fail on hardware.
+KV_CACHE_BUDGET_BYTES = 8 * 1024**3
+
+
+def _kv_cache_bytes(max_seq_len, batch_size, num_devices, optimizations):
+    """Bytes of KV cache one chip holds for `batch_size` users at `max_seq_len` positions.
+
+    The paged pool is replicated across the mesh and sharded over heads: attention.py:396
+    allocates [max_num_blocks, n_local_kv_heads, block_size, head_dim] per layer, twice (keys
+    and values), where n_local_kv_heads is the model's KV heads divided by the mesh width.
+    max_num_blocks * block_size is batch_size * max_seq_len positions, so the block size
+    itself drops out and only the total position count matters.
+    """
+    cfg = _hf_text_config()
+    n_kv_heads = cfg.num_key_value_heads
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+    n_local_kv_heads = max(1, n_kv_heads // num_devices)
+
+    # Read the dtype off the same optimizations callable the model is built with, rather than
+    # assuming bfp8_b: dropping the KV cache to bfp4_b costs 53% as much and changes which
+    # rows fit, so a hardcoded figure would keep refusing a row that had become runnable.
+    kv_dtype = optimizations(cfg.num_hidden_layers, os.environ["HF_MODEL"].strip("/").split("/")[-1]).get_tensor_dtype(
+        decoder_id=0, tensor=TensorGroup.KV_CACHE
+    )
+    bytes_per_element = _BYTES_PER_ELEMENT.get(kv_dtype, 4.0)
+
+    positions = batch_size * max_seq_len
+    elements = cfg.num_hidden_layers * 2 * n_local_kv_heads * positions * head_dim
+    return elements * bytes_per_element
 
 
 def _extend_context_with_yarn(monkeypatch, target_len, native_len):
@@ -145,8 +229,8 @@ def _benchmark_summary():
 
     show_acc = any("top1" in r for r in _RESULTS)
     header = (
-        f"{'ctx':<6}{'prompt tok':>11}{'build s':>9}{'TTFT ms':>11}"
-        f"{'compile ms':>12}{'decode ms':>11}{'tok/s/u':>9}"
+        f"{'ctx':<6}{'users':>6}{'prompt tok':>11}{'build s':>9}{'TTFT ms':>11}"
+        f"{'compile ms':>12}{'decode ms':>11}{'tok/s/u':>9}{'tok/s':>8}"
         + (f"{'scored':>8}{'top-1 %':>9}{'top-5 %':>9}" if show_acc else "")
         + f"  {'rope':<12}{'mode':<7}status"
     )
@@ -155,12 +239,14 @@ def _benchmark_summary():
         status = row["status"] if row["status"] == "ok" else f"FAILED at {row['stage']}"
         lines.append(
             f"{row['label']:<6}"
+            f"{cell(row, 'batch', 'd'):>6}"
             f"{cell(row, 'prompt_tokens', 'd'):>11}"
             f"{cell(row, 'build_s', '.1f'):>9}"
             f"{cell(row, 'ttft_ms', '.2f'):>11}"
             f"{cell(row, 'compile_ms', '.2f'):>12}"
             f"{cell(row, 'decode_ms', '.2f'):>11}"
             f"{cell(row, 'tok_s_user', '.1f'):>9}"
+            f"{cell(row, 'tok_s_total', '.1f'):>8}"
             + (
                 f"{cell(row, 'scored', 'd'):>8}{cell(row, 'top1', '.2f'):>9}{cell(row, 'top5', '.2f'):>9}"
                 if show_acc
@@ -264,8 +350,14 @@ class TokenAccuracy:
 # ~2 minutes plus a long prefill, well inside the performance-mode limit -- the headroom here
 # exists so raising that cap does not silently turn into a timeout that reads like a hang. The
 # marker is evaluated at collection, before any fixture can see the option, so read argv.
+#
+# The performance-mode limit is 4x what one user needs because prefill is sequential in the
+# batch (generator.py's prefill loop runs one user at a time) and this test prefills twice per
+# row -- once to compile and capture the trace, once timed. So the prefill phase costs
+# 2 * batch full passes, and BATCH_SIZES tops out at 4. Decode is unaffected: it is one traced
+# step per token whatever the batch.
 _ACCURACY_RUN = "--accuracy" in sys.argv
-TEST_TIMEOUT = 14400 if _ACCURACY_RUN else 1800
+TEST_TIMEOUT = 14400 if _ACCURACY_RUN else 1800 * max(BATCH_SIZES)
 
 
 @torch.no_grad()
@@ -286,19 +378,39 @@ TEST_TIMEOUT = 14400 if _ACCURACY_RUN else 1800
 )
 # Not indirect: these go straight to the test function, unlike mesh_device/device_params
 # which are consumed by fixtures.
+#
+# Stacked parametrize marks are applied bottom-up and the test id is assembled in that same
+# order, so the context mark stays innermost (closest to the function) to keep ids reading
+# "32k-b2" rather than "b2-32k". `-k 32k` still selects every batch at that context.
+@pytest.mark.parametrize("batch_size", BATCH_SIZES, ids=[f"b{b}" for b in BATCH_SIZES])
 @pytest.mark.parametrize(
-    "label, max_seq_len, page_max_num_blocks",
+    "label, max_seq_len, page_blocks_per_user",
     CONTEXT_CONFIGS,
     ids=[c[0] for c in CONTEXT_CONFIGS],
 )
-def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_seq_len, page_max_num_blocks):
+def test_text_demo(
+    mesh_device, reset_seeds, monkeypatch, request, label, max_seq_len, page_blocks_per_user, batch_size
+):
     assert os.getenv("HF_MODEL"), "Set HF_MODEL, e.g. export HF_MODEL=Qwen/Qwen3-8B"
     prompt_budget = max_seq_len - MAX_GENERATED_TOKENS
-    logger.info(f"[{label}] target prompt {prompt_budget} tokens, max_seq_len {max_seq_len}")
+    logger.info(f"[{label}-b{batch_size}] target prompt {prompt_budget} tokens, max_seq_len {max_seq_len}")
+
+    # Refuse a row whose KV cache cannot fit before building anything. Skipping is not
+    # squeamishness: a device-side out-of-memory failure here takes the whole pytest session
+    # down, so letting one hopeless row run would also lose the results of every row that fit.
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    kv_bytes = _kv_cache_bytes(max_seq_len, batch_size, num_devices, OPTIMIZATIONS)
+    if kv_bytes > KV_CACHE_BUDGET_BYTES:
+        pytest.skip(
+            f"[{label}-b{batch_size}] KV cache needs {kv_bytes / 1024**3:.1f} GiB per chip, over the "
+            f"{KV_CACHE_BUDGET_BYTES / 1024**3:.0f} GiB budget. {batch_size} users x {max_seq_len} positions "
+            f"across {num_devices} chips. Halving the cache dtype to bfp4_b would bring it to "
+            f"{kv_bytes * 0.5625 / 1.0625 / 1024**3:.1f} GiB."
+        )
 
     # Registered up front so a failure still shows up in the end-of-run summary.
     # `stage` advances through the test; if we raise, it names where we stopped.
-    row = {"label": label, "status": "FAILED", "stage": "setup"}
+    row = {"label": label, "batch": batch_size, "status": "FAILED", "stage": "setup"}
     _RESULTS.append(row)
 
     # --tracy_decode sets BOTH settings a profiling run needs. Half of it is worse than
@@ -312,6 +424,12 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # model is scored on is exactly the one the reference was built from.
     accuracy = request.config.getoption("--accuracy")
     assert not (accuracy and tracy_decode), "--accuracy and --tracy_decode are mutually exclusive"
+    # Teacher forcing reads and rewrites user 0's token only (see the decode loop), so at
+    # batch > 1 it would score one user while feeding the reference to all of them -- and
+    # report a plausible top-1 figure while doing it. Refuse rather than mislead.
+    assert (
+        not accuracy or batch_size == 1
+    ), f'--accuracy is single-user; got batch {batch_size}. Select one batch, e.g. -k "{label}-b1 and accuracy"'
 
     token_acc = None
     if accuracy:
@@ -354,7 +472,7 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # numbers that define the pool; nothing is allocated yet.
     paged_attention_config = PagedAttentionConfig(
         block_size=PAGE_BLOCK_SIZE,
-        max_num_blocks=page_max_num_blocks,
+        max_num_blocks=page_blocks_per_user * batch_size,
     )
 
     # -- Step 2: build the model on the device -------------------------------
@@ -369,8 +487,8 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     model_args, model, kv_cache, _state_dict = create_tt_model(
         mesh_device,
         instruct=INSTRUCT,
-        max_batch_size=BATCH_SIZE,
-        optimizations=lambda args: DecodersPrecision.performance(args.n_layers, args.model_name),
+        max_batch_size=batch_size,
+        optimizations=lambda args: OPTIMIZATIONS(args.n_layers, args.model_name),
         max_seq_len=max_seq_len,
         paged_attention_config=paged_attention_config,
         dtype=ttnn.bfloat8_b,
@@ -406,8 +524,10 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # Row b of the page table lists, in order, the physical block IDs that hold
     # user b's KV cache. The shuffle is deliberate: an identity mapping would
     # still pass even if the indirection were broken.
-    permutation = torch.randperm(page_max_num_blocks)
-    page_table = torch.argsort(permutation).reshape(BATCH_SIZE, page_max_num_blocks // BATCH_SIZE)
+    # Divides exactly: the pool is page_blocks_per_user * batch_size by construction, so
+    # every user gets page_blocks_per_user blocks and none are left over.
+    permutation = torch.randperm(page_blocks_per_user * batch_size)
+    page_table = torch.argsort(permutation).reshape(batch_size, page_blocks_per_user)
 
     # -- Step 4: wrap the model in the inference driver ----------------------
     # Generator owns prefill/decode orchestration and trace capture. It takes
@@ -426,8 +546,15 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # would shift every position relative to the reference and score a different sequence.
     prompt_text = token_acc.prompt_text(tokenizer) if accuracy else PROMPT
     instruct = False if accuracy else INSTRUCT
+    # One entry per user. Every user gets the SAME prompt, which is the measurement we want
+    # rather than a shortcut: sampling is greedy, so all users stay at an identical position
+    # and produce identical tokens, which puts every one of them at full context depth on
+    # every step. That is the worst case for the only part of decode that scales with the
+    # batch. It also has to be done -- preprocess_inputs_prefill returns one row per prompt,
+    # and reshaping a single row into `batch_size` rows SUCCEEDS, silently splitting one
+    # prompt into fragments and calling them users.
     input_tokens_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-        [prompt_text],
+        [prompt_text] * batch_size,
         tokenizer,
         [model_args],
         instruct,
@@ -439,7 +566,7 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
         MAX_GENERATED_TOKENS,
         max_prefill_len=max_seq_len,
     )
-    input_tokens = torch.stack(input_tokens_pt).view(BATCH_SIZE, -1)
+    input_tokens = torch.stack(input_tokens_pt).view(batch_size, -1)
     if accuracy:
         assert len(encoded_prompts[0]) == len(token_acc.input_prompt), (
             f"reference prompt is {len(token_acc.input_prompt)} tokens but re-encoded to "
@@ -454,6 +581,19 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     assert (
         max_generated_tokens + max(decoding_pos) <= max_seq_len
     ), f"prompt ({max(decoding_pos)}) + generated ({max_generated_tokens}) must fit in max_seq_len ({max_seq_len})"
+
+    # The same budget again, against the KV cache one user actually owns rather than against
+    # the declared context length. Redundant while page_blocks_per_user * PAGE_BLOCK_SIZE
+    # equals max_seq_len, and no longer redundant the moment the pool is a product: an error
+    # in that multiplication is exactly what this catches, and without it the failure is users
+    # overwriting one another's cache blocks and returning wrong tokens rather than raising.
+    # Mirrors simple_text_demo.py:1172-1178, which checks the same thing per user.
+    per_user_cache_tokens = PAGE_BLOCK_SIZE * page_blocks_per_user
+    assert max_generated_tokens + max(decoding_pos) <= per_user_cache_tokens, (
+        f"prompt ({max(decoding_pos)}) + generated ({max_generated_tokens}) exceeds the "
+        f"{per_user_cache_tokens} tokens of KV cache each of the {batch_size} user(s) owns "
+        f"({page_blocks_per_user} blocks x {PAGE_BLOCK_SIZE} tokens)"
+    )
 
     # -- Step 6: decide where sampling runs ----------------------------------
     # If the model can pick the next token on the device, we hand it the
@@ -570,6 +710,10 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     if steady_times:
         row["decode_ms"] = avg_decode * 1000
         row["tok_s_user"] = 1 / avg_decode
+        # Aggregate across users. The whole point of the batch sweep is the gap between this
+        # column and the per-user one: the fixed 19.96 ms/token is paid once however many
+        # users are in flight, so tok/s should rise while tok/s/u falls.
+        row["tok_s_total"] = batch_size / avg_decode
 
     # In accuracy mode the "output" is the reference's own continuation (teacher forcing fed it
     # back every step), so printing it as the model's output would be actively misleading -- and
@@ -587,7 +731,7 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     if steady_times:
         logger.info(
             f"[{label}] Decode steady state:    {avg_decode * 1000:.2f}ms "
-            f"@ {1 / avg_decode:.1f} tok/s/user ({BATCH_SIZE / avg_decode:.1f} tok/s)"
+            f"@ {1 / avg_decode:.1f} tok/s/user ({batch_size / avg_decode:.1f} tok/s)"
         )
     logger.info(f"[{label}] Tokens generated:       {len(new_tokens)} (1 prefill + {len(decode_times)} decode steps)")
 
@@ -608,6 +752,12 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # printed just as happily for a model emitting garbage. Mirrors the upstream
     # demo's special-token check (simple_text_demo.py:1443). `new_tokens` already
     # excludes the EOS token, which Step 8 drops rather than appends.
+    #
+    # Batch > 1 is still gated on user 0 alone, and that is sufficient rather than lazy:
+    # every user was handed the same prompt and sampling is greedy, so all users decode the
+    # same tokens from the same position. User 0 is the whole batch. The printed sample
+    # answer and the EOS break in Step 8 read user 0 for the same reason. Give users
+    # different prompts and all three of those need revisiting.
     if accuracy:
         # The generated sequence here is the reference's, not the model's, so the special-token
         # gate below would be testing the corpus. What matters instead is that every position
