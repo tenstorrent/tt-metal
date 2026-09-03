@@ -2030,6 +2030,34 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_RankMismatchFails) {
             ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (2)")));
 }
 
+// The same bind that CPU_DynamicTensorShape_RankMismatchFails rejects is ACCEPTED once
+// relax_logical_rank is added -- the two tests are a pair, and the pairing is the point: the rank
+// is the one shape term dynamic_tensor_shape still pins, and this flag is the only way to free it.
+TEST_F(ProgramRunArgsTestGen1, CPU_RelaxLogicalRank_RankMismatchAccepted) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // rank-2 shape {1, 32}
+    binding.relaxations = TensorSpecRelaxations{
+        .dynamic_tensor_shape = true,
+        .relax_logical_rank = true,
+    };
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Rank-3 tensor with same layout -- rejected without relax_logical_rank.
+    auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32}, binding.spec.tensor_layout());
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec);
+    ASSERT_NE(runtime_spec.logical_shape().rank(), binding.spec.logical_shape().rank());
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+}
+
 // Read the runtime field CRTA words (immediately after the address slot) for a tensor binding.
 // Returns the [rank] shape words in declaration order.
 inline std::vector<uint32_t> ReadBindingShapeFromCRTA(
