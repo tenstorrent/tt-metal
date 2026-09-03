@@ -197,6 +197,29 @@ def test_slot_levels_requires_present_roles(expect_error):
         p.slot_levels(("video", "audio", "condition_video"), video_timestep=0.1, audio_timestep=0.2)
 
 
+def test_slot_routing_pins_roles_across_presence():
+    """Pinned roles fix the slot set regardless of which roles have rows: a t2va layout (no condition
+    rows) routed with the 3-slot t2va pinning gets the same shape a keyframe request does, and no row
+    ever indexes the empty condition_video slot -- so one trace serves both."""
+    _, latent_height, latent_width, num_frames, _ = T2VA
+    layout = _layout(latent_height, latent_width, num_frames, ())  # no anchors: no condition rows
+    pinned = ("video", "audio", "condition_video")
+
+    row_slot, roles = p.build_slot_routing(layout, roles=pinned)
+    assert roles == pinned  # not the presence-filtered ("video", "audio")
+    assert row_slot.max().item() < len(pinned)
+    # The empty condition_video slot (index 2) is never indexed by any row.
+    assert (row_slot != 2).all()
+
+
+def test_slot_routing_rejects_a_role_it_would_drop(expect_error):
+    """A layout with rows for a role outside the pinned set is an error, not a silent mis-slot."""
+    _, latent_height, latent_width, num_frames, _ = CANONICAL
+    layout = _layout(latent_height, latent_width, num_frames, ("first",))  # has condition_video rows
+    with expect_error(ValueError, "rows for roles"):
+        p.build_slot_routing(layout, roles=("video", "audio"))
+
+
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
 def test_patchify_round_trip(case):
     _, latent_height, latent_width, num_frames, _ = case
