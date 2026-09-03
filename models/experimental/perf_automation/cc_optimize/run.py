@@ -120,7 +120,9 @@ LOOP:
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt. For a structural-decode/kv-cache target you may NOT record 'none'/'irreducible' and you may NOT point at an already-applied trace lever as the resolution — you MUST add the KV-cache and prove it by a measured per-token reduction; the gate will keep returning this target until a kv-cache attempt actually lowers the number.
 
-LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms."""
+FINISHING IS THE GATE'S CALL, NOT YOURS. termination_check() returns stages_short_of_achievable: every stack still measuring SLOWER than its own achievable band, each with the ms it must reach and how far over it is. While that list is non-empty can_stop is false and the round is NOT over -- go back to the top of the LOOP and take the next target, preferring ops in the stacks it names. Reaching the band is the minimum; beating it is fine and is not on the list. Do NOT wrap up because the last lever failed, because progress feels slow, or because the ops you were working are exhausted -- those are reasons to pick a different op, in a different stack, not to stop.
+
+ONLY when can_stop=true, or when every reachable rung on every stack named in stages_short_of_achievable has been measured and recorded and nothing is left to try: LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms -- and if any stack still owes its band, say WHICH and by how many ms, so the next round starts there."""
 
 
 _HITL_PROMPT = (
