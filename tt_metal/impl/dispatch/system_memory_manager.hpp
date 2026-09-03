@@ -121,7 +121,6 @@ private:
 
     ContextId context_id;
     ChipId device_id = 0;
-    std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
@@ -130,8 +129,9 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
+    std::vector<tt_cxy_pair> completion_queue_writer_cores;
+    std::vector<uint32_t> completion_q_rd_dev_addrs;
     std::vector<tt::umd::TlbWindow*> prefetch_q_windows;
-    std::vector<tt::umd::TlbWindow*> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 
