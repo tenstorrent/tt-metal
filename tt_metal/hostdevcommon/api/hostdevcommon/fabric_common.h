@@ -176,16 +176,22 @@ struct RoutingFieldsConstants {
 // its own coordinate.
 namespace detail {
 
+struct Routing2DRouteTableCapacity {
+    uint32_t action_vectors;
+    uint32_t mcast_trees;
+    uint32_t total;
+};
+
 // The packed-row footprint is largest at the longest representable axis. The orthogonal extent is
 // bounded by the total device count; both orientations have the same footprint.
-constexpr uint32_t derive_2d_route_table_capacity_bytes(
+constexpr Routing2DRouteTableCapacity derive_2d_route_table_capacity(
     uint32_t max_axis_size, uint32_t max_mesh_size, uint32_t actions_per_byte, uint32_t tree_edge_bytes) {
     const uint32_t orthogonal_axis_size = max_mesh_size / max_axis_size;
     const uint32_t vector_bytes =
         max_axis_size * ((max_axis_size + actions_per_byte - 1) / actions_per_byte) +
         orthogonal_axis_size * ((orthogonal_axis_size + actions_per_byte - 1) / actions_per_byte);
     const uint32_t tree_bytes = tree_edge_bytes * ((max_axis_size - 1) + (orthogonal_axis_size - 1));
-    return vector_bytes + tree_bytes;
+    return {vector_bytes, tree_bytes, vector_bytes + tree_bytes};
 }
 
 }  // namespace detail
@@ -269,13 +275,11 @@ struct Routing2DCodec {
     static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
     static_assert(MAX_MESH_SIZE % MAX_AXIS_SIZE == 0);
     static constexpr uint32_t MAX_ORTHOGONAL_AXIS_SIZE = MAX_MESH_SIZE / MAX_AXIS_SIZE;
-    static constexpr uint32_t ACTION_VECTOR_CAPACITY_BYTES =
-        table_bytes(MAX_AXIS_SIZE) + table_bytes(MAX_ORTHOGONAL_AXIS_SIZE);
-    static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES =
-        MCAST_TREE_EDGE_BYTES * ((MAX_AXIS_SIZE - 1) + (MAX_ORTHOGONAL_AXIS_SIZE - 1));
-    static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = detail::derive_2d_route_table_capacity_bytes(
-        MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
-    static_assert(ROUTE_TABLE_CAPACITY_BYTES == ACTION_VECTOR_CAPACITY_BYTES + MCAST_TREE_CAPACITY_BYTES);
+    static constexpr auto ROUTE_TABLE_CAPACITY =
+        detail::derive_2d_route_table_capacity(MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
+    static constexpr uint32_t ACTION_VECTOR_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.action_vectors;
+    static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.mcast_trees;
+    static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.total;
 
     // ---- Pack (host-side table generation) --------------------------------------
     // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
@@ -1028,7 +1032,7 @@ static_assert(
     offsetof(route_table_2d_t, mcast_trees) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES,
     "2D multicast trees must follow the fixed action-vector region");
 static_assert(
-    offsetof(route_table_2d_t, mcast_trees) % alignof(std::uint32_t) == 0,
+    Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES % alignof(std::uint32_t) == 0,
     "2D multicast-tree storage must be word aligned");
 
 struct routing_l1_info_t {
@@ -1043,7 +1047,7 @@ struct routing_l1_info_t {
 
     // Union overlaps the 1D and 2D routing tables at one offset; a build uses exactly one member.
     // The 2D member stores destination-major action vectors and per-chip multicast trees.
-    union __attribute__((packed)) {
+    union {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
         route_table_2d_t route_table_2d;                            // 1160 bytes
     };
