@@ -103,8 +103,11 @@ inline void _relu_max_(T threshold)
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
-template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, InstrModLoadStore sfpload_instr_mod)
+// The threshold is read from LREG2, NOT from a parameter: every caller must have loaded it
+// with _sfpu_load_imm32_ first. The dead `VecType threshold` argument this used to carry made
+// the dependency look satisfied when it was not -- see _relu_min_ below and tt-llk#1120.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_min_impl_(const int iterations, InstrModLoadStore sfpload_instr_mod)
 {
     for (int d = 0; d < iterations; d++)
     {
@@ -126,23 +129,31 @@ inline void _relu_min_(T threshold)
 {
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
-    VectorType v_threshold;
-    int scalar = threshold;
-    if (scalar < 0)
-    { // To convert from 2's complement to sign+magnitude
-        scalar  = -scalar;
-        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
-        scalar  = res;
-    }
+    // _relu_min_impl_ takes the threshold from LREG2, so every branch below has to load it.
+    // The T == float branch used to assign a local vector instead and leave LREG2 untouched,
+    // so relu_min ran against whatever the previously executed SFPU kernel had left there --
+    // order-dependent garbage, which is tt-llk#1120. Only the tt-llk test harness instantiates
+    // T == float; the Compute API passes uint32_t, which is why no shipping op ever saw it.
     InstrModLoadStore sfpload_instr_mod = InstrModLoadStore::DEFAULT;
     if constexpr (std::is_same_v<T, float>)
     {
-        v_threshold = threshold;
+        static_assert(std::is_same_v<VectorType, sfpi::vFloat>, "A float threshold requires VectorType == sfpi::vFloat");
+        _sfpu_load_imm32_(p_sfpu::LREG2, __builtin_bit_cast(std::uint32_t, threshold));
     }
     else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
+            // SFPSWAP orders sign+magnitude, so a 2's complement threshold is converted here.
+            // Scoped to this branch: it is meaningless for a float threshold, where the old
+            // unconditional `int scalar = threshold` merely truncated the value.
+            int scalar = static_cast<int>(threshold);
+            if (scalar < 0)
+            {
+                scalar  = -scalar;
+                int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+                scalar  = res;
+            }
             _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
             sfpload_instr_mod = InstrModLoadStore::INT32_2S_COMP;
         }
@@ -156,7 +167,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold, sfpload_instr_mod);
+    _relu_min_impl_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, sfpload_instr_mod);
 }
 
 } // namespace sfpu
