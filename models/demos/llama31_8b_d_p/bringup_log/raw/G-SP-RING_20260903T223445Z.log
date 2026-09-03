@@ -1,0 +1,85 @@
+2026-09-03 22:34:48.126 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items / 1 deselected / 1 selected
+
+models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8] 2026-09-03 22:34:50.571 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 22:34:50.571 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 22:34:50.588 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 22:34:50.588 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 22:34:50.679 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 22:34:50.684 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 22:34:52.124 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 22:34:52.124 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 22:34:52.124 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 22:34:52.124 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 22:34:52.143 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 22:34:52.819 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:34:53.393 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 22:34:57.216 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:34:57.218 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:34:57.240 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:34:57.240 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:34:57.241 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:34:57.242 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:34:57.242 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:34:57.242 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:34:57.259 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:34:57.259 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:34:57.259 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:34:57.261 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:34:57.278 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:34:57.278 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:34:57.279 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:34:57.280 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:34:57.280 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:34:57.280 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:34:57.283 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.283 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.283 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.283 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.886 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.886 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.886 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.886 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:34:57.988 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:34:58.196 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:34:58.196 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:34:59.388 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:35:00.796 | critical |          Always | TT_FATAL: kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_en=true is not supported. (assert.hpp:104)
+2026-09-03 22:35:00.863 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost:459 - [G-SP-RING] ring_joint SDPA alone on (4, 8): Q (1, 32, 256, 128) at offset 256, cache 512 tokens bf8_b, GQA 32/8. fp32_dest_acc_en=False (the package's ring config): PCC 0.999784; bf8_b K/V + bf16 Q noise floor 0.999973; err_ratio 7.98x. fp32_dest_acc_en=True REFUSED by the op: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:1308: !kv_pad_rotation_enabled || use_streaming_compute
+info:
+kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+9.02s setup    models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+1.48s call     models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+================= 1 passed, 1 deselected, 1 warning in 11.95s ==================
+2026-09-03 22:35:02.860 | info     |    BuildKernels | JIT cache stats: 158/168 hits (94.0%) [158 cached, 849 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 22:35:02.860 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 22:35:03.085 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 22:35:03.085 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 22:35:11.094 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 22:35:11.094 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 22:35:11.094 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,255 @@
+2026-09-03 22:38:14.821 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x2] 2026-09-03 22:38:18.724 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 22:38:18.724 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 22:38:18.741 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 22:38:18.741 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 22:38:18.830 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 22:38:18.835 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 22:38:20.257 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 22:38:20.257 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 22:38:20.257 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 22:38:20.257 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 22:38:20.276 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 22:38:20.445 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:38:21.418 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:38:21.506 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 22:38:25.319 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:38:25.321 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:38:25.342 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:38:25.342 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:38:25.344 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:38:25.345 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:38:25.345 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:38:25.345 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:38:25.362 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:38:25.362 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:38:25.362 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:38:25.363 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:38:25.380 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:38:25.380 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:38:25.381 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:38:25.382 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:38:25.382 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:38:25.382 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:38:25.385 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.385 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.385 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.385 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.993 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.993 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.993 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:25.993 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:26.096 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:38:26.290 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:38:26.290 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:38:27.498 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:38:28.674 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:38:36.959 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 2), tp=2) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:38:48.305 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x2 TP=2 num_links=1       rms_norm: single-device vs multi-device PCC = 1.000000 (threshold 0.999)
+2026-09-03 22:38:48.311 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x2 TP=2 num_links=1            mlp: single-device vs multi-device PCC = 0.999996 (threshold 0.999)
+2026-09-03 22:38:48.316 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x2 TP=2 num_links=1      attention: single-device vs multi-device PCC = 0.999996 (threshold 0.999)
+2026-09-03 22:38:48.321 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x2 TP=2 num_links=1  decoder_layer: single-device vs multi-device PCC = 0.999981 (threshold 0.999)
+2026-09-03 22:38:48.326 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:214 - [G-TP-PARITY] 1x2 negative control: reference rotated by one TP shard (2048 columns) scores -0.000261 (must be <= 0.95)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_a_sub_axis_tp_is_refused[blackhole-1x8] 2026-09-03 22:38:48.838 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:38:48.838 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:38:48.838 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:38:48.839 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:38:48.857 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:38:48.857 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:38:48.858 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:38:48.860 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:38:48.860 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:38:48.860 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:38:48.863 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:48.863 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:48.863 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:48.863 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:49.702 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:49.702 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:49.702 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:49.702 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:49.723 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:38:49.875 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:38:49.875 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:38:50.409 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:38:50.410 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sub-axis TP is unsupported"
+2026-09-03 22:38:50.410 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sub-axis TP is unsupported"
+2026-09-03 22:38:50.410 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_a_sub_axis_tp_is_refused:245 - [G-TP-PARITY] MeshConfig((1,8), tp=4) refuses: sub-axis TP is unsupported
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x4] 2026-09-03 22:38:50.803 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:38:50.803 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:38:50.803 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:38:50.805 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:38:50.822 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:38:50.823 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:38:50.824 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:38:50.825 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:38:50.825 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:38:50.825 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:38:50.829 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:50.829 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:50.829 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:50.829 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:51.653 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:51.653 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:51.653 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:51.653 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:38:51.675 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:38:51.821 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:38:51.821 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:38:52.345 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:38:53.431 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:38:57.035 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:08.092 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x4 TP=4 num_links=1       rms_norm: single-device vs multi-device PCC = 1.000000 (threshold 0.999)
+2026-09-03 22:39:08.099 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x4 TP=4 num_links=1            mlp: single-device vs multi-device PCC = 0.999994 (threshold 0.999)
+2026-09-03 22:39:08.105 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x4 TP=4 num_links=1      attention: single-device vs multi-device PCC = 0.999994 (threshold 0.999)
+2026-09-03 22:39:08.110 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x4 TP=4 num_links=1  decoder_layer: single-device vs multi-device PCC = 0.999975 (threshold 0.999)
+2026-09-03 22:39:08.114 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:214 - [G-TP-PARITY] 1x4 negative control: reference rotated by one TP shard (1024 columns) scores 0.001036 (must be <= 0.95)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x8] 2026-09-03 22:39:08.604 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:39:08.605 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:39:08.605 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:39:08.606 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:39:08.624 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:39:08.624 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:39:08.625 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:39:08.627 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:39:08.627 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:39:08.627 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:39:08.631 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:08.631 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:08.631 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:08.631 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:09.462 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:09.462 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:09.462 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:09.462 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:09.484 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:39:09.634 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:39:09.634 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:39:10.162 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:39:11.218 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:14.529 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:18.006 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x8 TP=8 num_links=1       rms_norm: single-device vs multi-device PCC = 1.000000 (threshold 0.999)
+2026-09-03 22:39:18.013 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x8 TP=8 num_links=1            mlp: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:18.018 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x8 TP=8 num_links=1      attention: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:18.023 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 1x8 TP=8 num_links=1  decoder_layer: single-device vs multi-device PCC = 0.999972 (threshold 0.999)
+2026-09-03 22:39:18.029 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:214 - [G-TP-PARITY] 1x8 negative control: reference rotated by one TP shard (512 columns) scores 0.001055 (must be <= 0.95)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-2x8] 2026-09-03 22:39:18.517 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:39:18.517 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:39:18.517 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:39:18.519 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:39:18.537 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:39:18.537 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:39:18.538 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:39:18.540 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:39:18.540 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:39:18.540 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:39:18.544 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:18.544 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:18.544 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:18.544 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:19.392 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:19.392 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:19.392 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:19.392 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:19.414 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:39:19.565 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:39:19.565 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:39:20.101 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:39:21.170 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:24.412 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(2, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:27.564 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 2x8 TP=8 num_links=2       rms_norm: single-device vs multi-device PCC = 1.000000 (threshold 0.999)
+2026-09-03 22:39:27.569 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 2x8 TP=8 num_links=2            mlp: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:27.574 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 2x8 TP=8 num_links=2      attention: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:27.578 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 2x8 TP=8 num_links=2  decoder_layer: single-device vs multi-device PCC = 0.999972 (threshold 0.999)
+2026-09-03 22:39:27.584 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:214 - [G-TP-PARITY] 2x8 negative control: reference rotated by one TP shard (512 columns) scores 0.001055 (must be <= 0.95)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-4x8] 2026-09-03 22:39:28.068 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:39:28.069 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:39:28.069 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:39:28.070 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:39:28.088 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:39:28.088 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:39:28.090 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:39:28.092 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:39:28.092 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:39:28.092 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:39:28.095 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.095 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.095 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.095 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.925 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.925 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.925 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.925 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:39:28.946 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:39:29.098 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:39:29.098 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:39:30.219 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:39:31.290 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:39:37.424 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 4x8 TP=8 num_links=2       rms_norm: single-device vs multi-device PCC = 1.000000 (threshold 0.999)
+2026-09-03 22:39:37.428 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 4x8 TP=8 num_links=2            mlp: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:37.433 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 4x8 TP=8 num_links=2      attention: single-device vs multi-device PCC = 0.999993 (threshold 0.999)
+2026-09-03 22:39:37.437 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:204 - [G-TP-PARITY] 4x8 TP=8 num_links=2  decoder_layer: single-device vs multi-device PCC = 0.999972 (threshold 0.999)
+2026-09-03 22:39:37.443 | INFO     | llama31_8b_d_p.tests.unit.test_tp_parity:test_module_outputs_match_single_device:214 - [G-TP-PARITY] 4x8 negative control: reference rotated by one TP shard (512 columns) scores 0.001055 (must be <= 0.95)
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+20.90s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x2]
+15.82s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x4]
+8.97s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x2]
+7.92s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x8]
+7.54s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-2x8]
+7.28s call     models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-4x8]
+2.38s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-4x8]
+1.82s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_a_sub_axis_tp_is_refused[blackhole-1x8]
+1.82s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-2x8]
+1.80s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x8]
+1.76s setup    models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x4]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x8]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x4]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-4x8]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-2x8]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x2]
+0.18s teardown models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_a_sub_axis_tp_is_refused[blackhole-1x8]
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x2]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_a_sub_axis_tp_is_refused[blackhole-1x8]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x4]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-1x8]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-2x8]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_tp_parity.py::test_module_outputs_match_single_device[blackhole-4x8]
+=================== 6 passed, 1 warning in 81.88s (0:01:21) ====================
+2026-09-03 22:39:39.517 | info     |    BuildKernels | JIT cache stats: 333/471 hits (70.7%) [333 cached, 5499 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 22:39:39.517 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 22:39:39.751 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 22:39:39.751 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 22:39:47.811 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 22:39:47.812 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 22:39:47.812 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

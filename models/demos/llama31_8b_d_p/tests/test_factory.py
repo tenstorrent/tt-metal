@@ -160,6 +160,55 @@ class TestFactory:
     ATTN_SEQ_LENS = (128, 512, 2048)
 
     @staticmethod
+    def setup_submesh(parent_mesh, submesh_shape, *, tp=None, weight_dtype=None, tensor_cache_path=None):
+        """`setup_test` on a **submesh** carved from the open galaxy (`DEC-080`, `DEC-081`).
+
+        `parent_mesh` is the full `(4, 8)` mesh the `mesh_device` fixture opened; `submesh_shape` is
+        the shape this case wants. A top-level partial mesh cannot bring the fabric up on this box
+        (measured: `tests/fabric_topology_matrix.py`), so every multi-device shape below the galaxy
+        is a submesh of it. The topology is **always** `Topology.Ring`: `Topology.Linear` hangs the
+        machine on the 8-wide logical row, which spans two physical rows of the `MeshShape([8, 4])`
+        system mesh (`DEC-081`, superseding `DEC-020`'s topology column).
+
+        Returns the same dict as `setup_test`, with `mesh_device` set to the **submesh** — hand that
+        to the module under test, never the parent. Submeshes are kept alive by the parent and closed
+        by the `mesh_device` fixture's `get_submeshes()` loop (repo `conftest.py:669`), so a caller
+        must not close them.
+        """
+        import ttnn
+        from models.demos.llama31_8b_d_p.tt.ccl import CCLManager
+        from models.demos.llama31_8b_d_p.tt.config import MeshConfig
+        from models.demos.llama31_8b_d_p.tt.model_config import llama_hf_config
+        from models.demos.llama31_8b_d_p.utils.general_utils import get_default_num_links
+
+        rows, cols = tuple(submesh_shape)
+        assert tuple(parent_mesh.shape) == TestFactory.TARGET_MESH_SHAPE, (
+            f"setup_submesh expects the full galaxy {TestFactory.TARGET_MESH_SHAPE} as the parent, "
+            f"got {tuple(parent_mesh.shape)}"
+        )
+        if (rows, cols) == TestFactory.TARGET_MESH_SHAPE:
+            submesh = parent_mesh
+        else:
+            submesh = parent_mesh.create_submesh(ttnn.MeshShape(rows, cols), ttnn.MeshCoordinate(0, 0))
+
+        mesh_config = MeshConfig((rows, cols), tp=cols if tp is None else tp)
+        ccl_manager = CCLManager(
+            submesh,
+            num_links=get_default_num_links(submesh),
+            topology=ttnn.Topology.Ring,
+        )
+        return {
+            "mesh_device": submesh,
+            "parent_mesh": parent_mesh,
+            "mesh_shape": (rows, cols),
+            "mesh_config": mesh_config,
+            "ccl_manager": ccl_manager,
+            "hf_config": llama_hf_config(llama_config_dims()),
+            "weight_dtype": weight_dtype if weight_dtype is not None else ttnn.bfloat16,
+            "tensor_cache_path": tensor_cache_path,
+        }
+
+    @staticmethod
     def setup_test(mesh_device, *, tp: int | None = None, weight_dtype=None, tensor_cache_path=None):
         """Build `MeshConfig` + `CCLManager` + the normalised `hf_config` and return them in a dict.
 
@@ -195,6 +244,48 @@ class TestFactory:
             "weight_dtype": weight_dtype if weight_dtype is not None else ttnn.bfloat16,
             "tensor_cache_path": tensor_cache_path,
         }
+
+
+# --- Multi-device parametrisation (P8 / `DEC-080`, `DEC-081`) --------------------------
+def parametrize_galaxy_submeshes(submesh_shapes, *, trace_region_size=None):
+    """Parametrise `(mesh_device, device_params, submesh_shape)` for the P8 multi-device gates.
+
+    Every case opens the **same** parent — the full `(4, 8)` galaxy with `FABRIC_1D_RING` — and
+    carries the shape the test should carve out of it with `TestFactory.setup_submesh`. The test body
+    therefore never opens a mesh, and the fabric is brought up once for the whole 32-device cluster,
+    which is the only way it comes up at all on this machine (`DEC-080`).
+
+    Contrast `models/demos/minimax_m3/tests/test_factory.py:89` `parametrize_mesh_with_fabric`, which
+    parametrises `mesh_device` with the *sub*-shape and lets the fixture open it directly. That is the
+    right shape for a LoudBox, where `(1,8)` is the whole machine; here it dies in fabric bring-up.
+
+    Case ids are the submesh shape (`1x2`, `1x8`, `2x8`, `4x8`), so `pytest -k 2x8` filters cleanly.
+    Shapes that do not fit inside the galaxy are dropped.
+    """
+    import ttnn
+
+    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+    if trace_region_size is not None:
+        device_params["trace_region_size"] = trace_region_size
+    rows, cols = TestFactory.TARGET_MESH_SHAPE
+    shapes = [tuple(s) for s in submesh_shapes if s[0] <= rows and s[1] <= cols]
+    params = [
+        pytest.param(TestFactory.TARGET_MESH_SHAPE, dict(device_params), shape, id=f"{shape[0]}x{shape[1]}")
+        for shape in shapes
+    ]
+    if not params:
+        params = [
+            pytest.param(
+                TestFactory.TARGET_MESH_SHAPE,
+                dict(device_params),
+                TestFactory.TARGET_MESH_SHAPE,
+                id="none",
+                marks=pytest.mark.skip(reason="no requested submesh shape fits in the (4,8) galaxy"),
+            )
+        ]
+    return pytest.mark.parametrize(
+        "mesh_device, device_params, submesh_shape", params, indirect=["mesh_device", "device_params"]
+    )
 
 
 # --- Promoted numerical helpers (P6 / `DEC-046`) ---------------------------------------

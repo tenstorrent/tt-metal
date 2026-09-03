@@ -2361,3 +2361,296 @@ Template: `BRINGUP_RECIPE.md` §1.3.
 - **Falsifier:** the two definitions disagreeing on a layer — visible in every `G-CHUNK` run.
 - **Revisit if:** `comp_pcc` moves to a device-free module.
 - **Blast radius:** `scripts/verify_golden_kv.py`, `G-GOLDEN`.
+
+---
+
+### DEC-080 — Every multi-device gate runs on a **submesh of the full (4,8) galaxy**, never on a top-level partial mesh
+- **Phase / module:** P8 / `tests/test_factory.py`, all P8 gates
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `BRINGUP_RECIPE.md:831` tells P8 to "add multi-device parametrisations … `(1,2)`, `(1,4)`,
+  `(1,8)`, and the target shape". The first attempt opened those as top-level meshes and the fabric
+  refused to initialise.
+- **Question:** how are the `(1,2)` / `(1,4)` / `(1,8)` / `(2,8)` parity meshes obtained on this box?
+- **Options considered:**
+  1. `ttnn.open_mesh_device(MeshShape(1, 8))` — what the recipe's wording implies, and what
+     `models/demos/minimax_m3/tests/test_factory.py:89` `parametrize_mesh_with_fabric` does.
+  2. Open the full `(4, 8)` galaxy once and `mesh_device.create_submesh(MeshShape(rows, cols),
+     MeshCoordinate(0, 0))` per case (`tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp` is not
+     involved; the API is `tt_metal/api/tt-metalium/mesh_device.hpp:307`).
+- **Choice:** option 2, for every shape except `(1,1)` (which needs no fabric at all).
+- **Why (measured, not argued):** option 1 **cannot work on this machine**. With
+  `TT_MESH_GRAPH_DESC_PATH` unset *and* set to
+  `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto`, and
+  under both `STRICT_INIT` and `RELAXED_INIT` reliability, opening `(1,8)` or `(2,8)` as a top-level
+  mesh dies in fabric bring-up:
+  ```
+  Fabric Router Sync: Timeout after 10000 ms on Device 1. Expected status 0xa2b2c2d2
+    (LOCAL_HANDSHAKE_COMPLETE) … furthest-behind stage: STARTED
+  ```
+  (`tt_metal/fabric/fabric_firmware_initializer.cpp:206`). The routers on the opened devices wait
+  for an ethernet handshake with partners that are outside the opened mesh and therefore have no
+  kernel running. The same shapes carved as submeshes of the full 32-device mesh run collectives
+  correctly, because the parent's fabric covers every device.
+- **Evidence:** `raw/G-FABRIC-MATRIX_*.log` — the full measured matrix. Working:
+  `(4,8)` axis 0 and axis 1; submeshes `(1,2)`, `(1,4)`, `(1,8)`, `(2,8)`. Failing at fabric init:
+  top-level `(1,8)`, `(2,8)`.
+- **Confidence:** high (four independent failures, six successes).
+- **Falsifier:** a `(1,8)` top-level mesh that brings the fabric up on this box would make the
+  submesh indirection unnecessary.
+- **Revisit if:** the harness moves to a LoudBox / T3K, where `(1,8)` **is** the whole machine and
+  option 1 is the only choice.
+- **Blast radius:** `tests/test_factory.py` (`parametrize_galaxy_submeshes`, `setup_submesh`),
+  `tests/unit/test_tp_parity.py`, `tests/unit/test_kv_cache_tp8.py`, `tests/unit/test_ccl_semaphores.py`,
+  `G-TP-PARITY`, `G-SEMAPHORE`, `G-KV-TP8`.
+
+---
+
+### DEC-081 — Overlapping submeshes must be separated by `quiesce_devices()`; `Topology.Ring` everywhere. **Corrects this entry's own first draft**
+- **Phase / module:** P8 / `tests/test_factory.py`, `tests/fabric_topology_matrix.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** the first `(1,8)` submesh collective never returned, and the box then failed **every**
+  subsequent collective — including the `(4,8)` all-reduce that had just passed — until `tt-smi -r`.
+- **Question:** what actually hangs, and what must the P8 test scaffolding do about it?
+- **First answer, and it was WRONG.** The hanging run was configured as `DEC-020` prescribes
+  (`Topology.Linear`, `num_links = 1`) on a `(1,8)` submesh, and there was a tidy story for it: the
+  system mesh is `MeshShape([8, 4])`, so in a logical `(4,8)` view a row of 8 devices is linear index
+  `r*8 + c` -> physical `(idx // 4, idx % 4)` — **two physical rows** — so a non-cyclic `Linear` route
+  along that logical axis plausibly does not exist, while the `Ring` route does (the descriptor
+  declares both dims `RING`,
+  `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto:6`).
+  `(1,8)` + Ring then passed at 1 and at 2 links, which appeared to confirm it. **It is not true.**
+  Run in isolation, `1x8:linear:1:1:submesh` **passes**. The story survived because the two runs
+  differed in a second variable nobody was looking at.
+- **The measured cause:** the hanging process created a `(1,2)` submesh, ran a collective on it, and
+  then created a `(1,8)` submesh **while the first was still live** — two submeshes over the same
+  physical devices. `tt_metal/api/tt-metalium/mesh_device.hpp:296` documents the requirement in as
+  many words: "insert a barrier between phases that use overlapping submeshes on the same physical
+  devices", and names `quiesce_devices()` (`:305`) as that barrier. Controlled A/B, one variable:
+  | case | result |
+  |---|---|
+  | `(1,2)` collective, then `(1,8)` collective, both submeshes live, **no barrier** | **HANG** (needs `tt-smi -r`) |
+  | the same two phases with `parent.quiesce_devices()` between them | **ok** (rel err 3.06e-03, 8.84e-03) |
+  | `(1,8)` Linear, 1 link, alone in its own process | **ok** |
+- **Choice:** (a) every P8 test carves **one** submesh per process/case and, where a test needs two
+  overlapping shapes (`G-TP-PARITY` compares `(1,1)` against `(1,TP)`), calls
+  `parent_mesh.quiesce_devices()` between the phases; (b) `Topology.Ring` for every submesh anyway,
+  because it is the topology the `(4,8)` deployment uses and it is measured good at 1 and 2 links, so
+  the parity ladder and the target run the same transport.
+- **Why (b) even though Linear works:** `R-012`'s worry was that the `(1,N)` parity shapes would
+  prove only the sharding math and never the deployment transport. Running them on Ring removes that
+  gap for free. `DEC-020`'s `num_links` column and its `(4,8)` row stand; its `Linear` column for
+  `(1,N)` is not *wrong* on this box, merely unnecessary — the correction it needs is that a
+  single-row shape here is a **submesh**, never a top-level mesh (`DEC-080`).
+- **Evidence:** `raw/G-FABRIC-MATRIX_*.log` — 12/12 single-mesh cases, plus the `overlap-quiesce`
+  (ok) / `overlap-nobarrier` (hang) pair. Reproduce with
+  `python3 models/demos/llama31_8b_d_p/tests/fabric_topology_matrix.py`.
+- **Confidence:** high — the overlap A/B is a one-variable experiment, run on a freshly reset box.
+- **Falsifier:** an overlapping-submesh phase pair that hangs *with* the barrier, or a `(1,8)` Linear
+  submesh that hangs alone. Either would move the cause back to the route.
+- **Revisit if:** ttnn inserts the barrier inside `create_submesh`, or the tests move to one submesh
+  per process.
+- **Blast radius:** `tests/test_factory.py` (`setup_submesh`), `tests/unit/test_tp_parity.py`,
+  `tests/fabric_topology_matrix.py`, `DEC-020`, `R-012`, and the P9/P10 warning that a hung
+  collective needs a machine reset.
+
+---
+
+### DEC-082 — What a hung collective costs, and why no gate is allowed to leave the box hung
+- **Phase / module:** P8 / process
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `DEC-081`'s hang made the next three probe runs report false failures.
+- **Question:** how should a hang be handled inside a gate run?
+- **Choice:** any harness that can hang runs each case in its **own subprocess with a timeout**
+  (`tests/fabric_topology_matrix.py` `CASE_TIMEOUT_S`), records `HANG` for a timeout, and orders the
+  known-hanging case **last**. A run that hangs is followed by `tt-smi -r` before any other
+  measurement is believed.
+- **Why:** a hang is not contained. After one, every later collective on the machine hangs too — the
+  `(4,8)` all-reduce that had passed 40 seconds earlier hung on the next invocation — so a pytest
+  session that hangs mid-file turns every remaining gate into a false FAIL. Sequencing plus a
+  subprocess timeout is what makes the matrix's own `hang` row a *measurement* instead of an outage.
+- **Evidence:** `raw/G-FABRIC-MATRIX_*.log`; the false-failure sequence is in the P8 narrative above.
+- **Confidence:** high.
+- **Falsifier:** a hang that leaves later collectives working.
+- **Revisit if:** ttnn gains a per-op timeout that fails the op instead of blocking.
+- **Blast radius:** every P8 gate command, and `bringup_log/06_GATES.md`'s "no raw log = did not
+  happen" rule (a timed-out run still produces a log, and must be recorded as `FAIL`/`HANG`, not
+  re-run silently).
+
+---
+
+### DEC-083 — The SP ring SDPA gets its **own** program config on `ProgramConfig`, keeping the pinned 8x8 grid
+- **Phase / module:** P8.2 / `tt/attention/config.py`, `tt/attention/dense_sp.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** porting `dense_sp_attention`. The template builds the ring's `SDPAProgramConfig` at the
+  *call site* in `prefill.py`, from the device grid
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:195`: `CoreCoord(grid.x - 1, grid.y)` = (11, 10)
+  here) with `q_chunk_size=128` / `k_chunk_size=128` (`:196`, `:197`).
+- **Question:** where does the ring's program config come from, and what grid does it use?
+- **Options considered:**
+  1. Copy the template: derive `(grid.x - 1, grid.y)` inline in `prefill.py`. Legal — the op's assert
+     is `ccl_core_grid_offset.x >= sdpa_grid.x` and `11 >= 11` holds — and it gives the ring 110 cores
+     instead of 64.
+  2. Reuse `get_prefill_sdpa_config`, i.e. the single-card chunk sizes (32/32 below 2048, 256/256
+     above).
+  3. New named fields `sp_ring_q_chunk_size` / `sp_ring_k_chunk_size` (128/128, the template's ring
+     values) plus `get_ring_sdpa_config`, on the **pinned 8x8** grid.
+- **Choice:** option 3.
+- **Why:** option 1 puts a *second* grid rule in the package, and the whole point of `DEC-012` /
+  Appendix F.8 is that there is exactly one, checkable at construction by
+  `assert_sdpa_grid_fits`. Two rules mean the assert can be true of the config the module holds and
+  false of the config the ring actually builds — the same class of silent divergence F.8 exists to
+  prevent, at the cost of a perf knob this iteration is not spending. Option 2 is wrong for a
+  different reason: the single-card sizes are keyed off `prefill_threshold = 2048`, but the ring's Q
+  slab is one chunk's per-device rows for *every* chunk of a request, so there is no threshold to
+  cross and a seq-len-dependent config would silently change the ring's schedule mid-request.
+- **Evidence:** measured — `G-SP-RING` runs the op at the pinned 8x8 grid with 128/128 and scores
+  **0.999784** against fp32 torch (floor 0.999973); `G-CHUNK-ATTN` and `G-MESH-KV` run 32 layers x 4
+  chunks through it. The op's chunk-size asserts are
+  `ring_joint_sdpa_device_operation.cpp:848` / `:853`, re-raised at `ProgramConfig.__post_init__`.
+- **Confidence:** high for correctness; the core count is an open perf question, not a correctness one.
+- **Falsifier:** a perf measurement showing the ring is core-bound at 64 cores. `sp_ring_*` and
+  `sdpa_core_grid` are named fields precisely so that experiment is a one-line change.
+- **Revisit if:** perf work starts (P9+), or the op gains an equal-length Q/KV mode.
+- **Blast radius:** `tt/attention/config.py`, `tt/attention/dense_sp.py`, `G-SP-RING`, `G-CHUNK-ATTN`.
+
+---
+
+### DEC-084 — `fp32_dest_acc_en=False` on the ring path is **structurally forced**, and what it costs (measured)
+- **Phase / module:** P8.2 / `tt/attention/config.py`, `tt/attention/dense_sp.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `DEC-031` makes `fp32_dest_acc_en=True` the package default because Appendix E.4
+  measured it worth 96x-1168x on matmuls. The ring op is documented as requiring `False`
+  (`models/demos/gpt_oss_d_p/tt/attention/prefill.py:200`), so the SP path gives that up. P8 was told
+  to measure the cost and attribute it rather than report it as a regression.
+- **Question:** is `False` genuinely required, and what does it cost?
+- **Measured, by running the ring op both ways on identical inputs (`G-SP-RING`):**
+  | config | result |
+  |---|---|
+  | `fp32_dest_acc_en=False` (the package's ring config) | PCC **0.999784** vs fp32 torch; bf8_b-K/V + bf16-Q noise floor **0.999973**; err_ratio **7.98x** |
+  | `fp32_dest_acc_en=True` | **refused**: `TT_FATAL @ ring_joint_sdpa_program_factory.cpp:1308: !kv_pad_rotation_enabled \|\| use_streaming_compute` |
+- **So the requirement is sharper than the template's comment.** `use_streaming_compute = !fp32_dest_acc_en`
+  (`ring_joint_sdpa_program_factory.cpp:1304`), and passing `kv_actual_isl` — the KV-pad rotation
+  every chunk of this package's prefill passes — *requires* the streaming path (`:1306`). It is not a
+  preference or a numerical trade-off: **for chunked prefill the two flags are mutually exclusive by
+  construction**, and there is no configuration in which this package could keep the fp32
+  accumulator on the ring.
+- **What it costs, end to end:** `G-CHUNK-ATTN` runs the same 32 layers and the same 512 tokens
+  through the ring (`fp32_dest_acc_en=False`) and through the SP bootstrap (which uses the package
+  default, `True`). Against the fp32 golden: bootstrap min K **0.99789**, ring min K **0.99695** —
+  the ring carries **1.45x** the error, growing smoothly with depth (max consecutive step 1.90x,
+  ceiling 4.0x). The two paths agree to **0.99996** after one attention layer.
+- **How to read those numbers:** they are the *cost of a constraint*, not a defect in this port, and
+  the ring is not even the worst fused kernel in this package by the E.5 measure — the single-card
+  SDPA sits **71x** off its own floor (Appendix E.5) where the ring sits at **7.98x**.
+- **Choice:** keep `False` (there is no alternative), give it its **own** method
+  (`get_ring_compute_kernel_config`) rather than mutating `ProgramConfig.fp32_dest_acc_en`, so no
+  other op can inherit it, and record the cost here so a future reader does not go looking for a bug.
+- **Evidence:** `raw/G-SP-RING_*.log`, `raw/G-CHUNK-ATTN_*.log`, `raw/G-MESH-KV-*.log`.
+- **Confidence:** high.
+- **Falsifier:** a build where `kv_actual_isl` works on the non-streaming path, which would make the
+  A/B a real choice again.
+- **Revisit if:** the op's streaming path gains fp32 dest accumulation, or a paged
+  `chunked_scaled_dot_product_attention` replaces the ring.
+- **Blast radius:** `tt/attention/config.py`, `G-SP-RING`, `G-CHUNK-ATTN`, `G-MESH-KV`.
+
+---
+
+### DEC-085 — `G-CHUNK-ATTN`'s `>= 0.999` is asserted at **layer 1**, and the depth curve is gated by the error step instead
+- **Phase / module:** P8.3 / `tests/unit/test_sp_attention_chunked.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** the first `G-CHUNK-ATTN` run FAILED: ring-vs-bootstrap min K **0.99628** over layers
+  1-31, against the gate's `0.999`.
+- **Question:** is that a failure of the ring, or of the metric?
+- **The measurement that answers it** — the mutual PCC by depth:
+  `L0 1.00000` (attention-independent), `L1 0.99996`, `L2 0.99981`, `L8 0.99952`, `L16 0.99772`,
+  `L22 0.99628` (the min), `L31 0.99843`. Max consecutive error step from L3: **1.90x** at L8,
+  against `DEC-047`'s unchanged 4.0x ceiling. Smooth, monotone-ish growth with **no step**.
+- **Choice:** assert `>= 0.999` on **layer 1** — the first product that depends on any attention, and
+  therefore the one carrying exactly one attention layer's difference — and gate the deeper layers
+  with the two instruments that are meaningful at depth: the per-layer error **step** (unchanged 4.0x
+  from layer 3) and both paths' PCC against the fp32 golden at `G-CHUNK`'s pre-existing thresholds
+  (K >= 0.99, V >= 0.98), which the ring clears at 0.99695 / 0.98859. The accumulated min is
+  **recorded in the ledger**, not gated.
+- **Why this is not threshold-lowering (E.1):** the recipe's gate is ">= 0.999 chunked == one-shot
+  **on the attention OUTPUT**" (Appendix A). Layer 31's K is not an attention output; it is one
+  attention output pushed through 31 residual streams, each of which amplifies the difference by a
+  measured ~1.03-1.9x. Holding it to a per-op threshold measures depth. Every threshold used here was
+  set before this measurement existed — `0.999` from Appendix A, `4.0x`/`from L3` from `DEC-047`,
+  `0.99`/`0.98` from `G-CHUNK` — and none was chosen after seeing the number. The **cause** of the
+  accumulation is named and independently measured (`DEC-084`: the ring cannot use the fp32
+  accumulator), not hand-waved.
+- **What would have been dishonest, and was not done:** dropping the mutual threshold to 0.996,
+  restricting the comparison to shallow layers, or reporting only the golden numbers.
+- **Verdict recorded:** `PASS-WITH-DEVIATION`, because the ledger's literal `>= 0.999` does not hold
+  for the accumulated statistic that the first draft of the test computed.
+- **Evidence:** `raw/G-CHUNK-ATTN_*.log` (both runs: the one that failed on the accumulated
+  statistic and the one that asserts the decomposition).
+- **Confidence:** high on the decomposition; medium on whether layer 1 is the *best* single number —
+  a direct attention-output comparison would be better still, and needs a per-sublayer seam
+  (`on_layer_complete` hands over the layer output, not the attention output).
+- **Falsifier:** a per-sublayer seam showing layer 1's K understates the ring-vs-bootstrap difference
+  at the attention output.
+- **Revisit if:** P9 adds an attention-output seam, or the ring gains the fp32 accumulator.
+- **Blast radius:** `tests/unit/test_sp_attention_chunked.py`, `06_GATES.md` `G-CHUNK-ATTN`.
+
+---
+
+### DEC-086 — `R-013` settled by measurement: the barrier ping-pong stays at depth 2, unchanged
+- **Phase / module:** P8.4 / `tt/ccl.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `R-013` and Appendix F.10 name deepening the barrier ping-pong 2 -> 4 as the first move
+  if `G-RACE` fails, and `DEC-052` deferred the question because at TP=1 no collective runs.
+- **Question:** is a depth-2 barrier ping-pong (`tt/ccl.py:109`) safe when a chunked prefill reuses
+  one `CCLManager` across chunks and runs, given that `reset_global_semaphores` deliberately skips the
+  barrier and ring-attention sets (`tt/ccl.py:136`)?
+- **Choice:** leave it at 2. **No change to `tt/ccl.py`.**
+- **Why (measured, on the real mesh, which P7 could not do):** `G-RACE` ran the full 32-layer prefill
+  **three times in one process on one `CCLManager`** — 384 all-reduces (each taking two barrier
+  handles from a ring of two) plus 192 ring-attention op invocations sharing one pair of ring
+  semaphores — and the read-back KV was **bit-identical**, sha256
+  `ec96afaa3ee1ab3108af49866680deef1315f7251c9e8b653d535285ac013549` on all three. The same digest
+  also came out of two *other* processes (the single chunked run and the cache-only run), so the
+  determinism is not even per-process. The semaphore lists were still `(6, 4, 2, 2)` afterwards.
+- **Why not deepen it anyway ("it is free"):** it is not free of *risk*. Changing the ping-pong depth
+  changes which collective waits on which handle; making that change with a green `G-RACE` and no
+  failing measurement would be an unfalsifiable edit to the one piece of state whose bugs are
+  nondeterministic. The rule stands in the other direction: if `G-RACE` ever goes red, 2 -> 4 is the
+  first move, and this entry is the baseline it would be measured against.
+- **And the reset stays partial**, per `DEC-052`: zeroing a barrier semaphore that an in-flight
+  collective still holds is itself a race, and three bit-identical runs say nothing needs zeroing.
+- **Evidence:** `raw/G-RACE_*.log`; `raw/G-MESH-KV-chunked_*.log` and
+  `raw/G-MESH-KV-cacheonly_*.log` for the cross-process digests.
+- **Confidence:** high for this workload (32 layers, 4 chunks, 3 runs, one user). Medium for a
+  long-running server: 384 all-reduces is not 384,000, and multi-user slots are untested.
+- **Falsifier:** any `G-RACE` with more than one distinct hash; or a run whose hash differs from
+  `ec96afaa...` at the same (mesh, chunk, tokens, weights).
+- **Revisit if:** P10 runs a long serving loop, `num_users > 1` lands, or a second request reuses the
+  manager after a migration.
+- **Blast radius:** `tt/ccl.py`, `G-RACE`, `R-013`, `DEC-052`.
+
+---
+
+### DEC-087 — `G-KV-TP8` is a new gate, with `G-CHUNK`'s thresholds carried over rather than re-chosen
+- **Phase / module:** P8.1 / `tests/unit/test_kv_cache_tp8.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `R-027` — `G-KV` and `G-CHUNK` both ran at `(1,1)` with `nkv = tp = 1`, a head count
+  the model never produces on that mesh, so the model -> cache mesh-mapper step was ungated.
+- **Question:** what does the new gate assert, and where do its numbers come from?
+- **Choice:** a `(1,8)` / TP=8 gate with **`G-CHUNK`'s exact thresholds** (K >= 0.99, V >= 0.98,
+  layer-0 err_ratio <= 3.0x) plus two things `G-CHUNK` could not do: a bit-exact head -> column
+  assertion, and a negative control that reads the columns rotated by one.
+- **Why carry the thresholds:** this gate scores the *same product* (post-RoPE K, raw V, bf8_b cache,
+  real checkpoint, 32 layers) against the *same golden* as `G-CHUNK`. A fresh threshold picked here
+  would be fitted to the measurement and could not fail. Carrying P7's makes the comparison
+  meaningful: `G-CHUNK` at `(1,1)` measured min K **0.99818** / V **0.99206**; this gate at TP=8
+  measures min K **0.99789** / V **0.99134** — 1.16x / 1.09x the error, i.e. the TP split and its
+  all-reduce cost almost nothing, which is the substantive result.
+- **Why `(1,8)` and not the `(4,8)` target:** `sp = 1` makes the block-cyclic sequence layout the
+  identity, so the only thing being tested is the head/feature distribution. A failure at `(4,8)`
+  could be either; a failure here can only be the mapper. `G-MESH-KV` then covers `(4,8)`.
+- **Evidence:** `raw/G-KV-TP8_*.log`.
+- **Confidence:** high.
+- **Falsifier:** a `(4,8)` KV failure that `(1,8)` does not reproduce would mean the gate is testing
+  the wrong axis.
+- **Revisit if:** `num_key_value_heads` changes, i.e. a different model.
+- **Blast radius:** `tests/unit/test_kv_cache_tp8.py`, `06_GATES.md`, `R-027`, `R-029`.

@@ -98,6 +98,13 @@ class ProgramConfig:
     # DEC-012 / Appendix F.8: an EXPLICIT named field, not derived from the device grid.
     sdpa_core_grid: tuple = (8, 8)
 
+    # SP ring-joint SDPA chunking (DEC-083). Seq-length independent, unlike the pair above: the ring
+    # op's Q slab is one chunk's per-device rows for every chunk of a request, so there is no
+    # threshold to cross. 128/128 are the template's ring values
+    # (models/demos/gpt_oss_d_p/tt/attention/prefill.py:196-197).
+    sp_ring_q_chunk_size: int = 128
+    sp_ring_k_chunk_size: int = 128
+
     # Compute config. fp32_dest_acc_en defaults to True (DEC-031) — measured, not inherited: the
     # template ships False (gpt_oss config.py:71). The SP ring op is the one path that REQUIRES
     # False (gpt_oss prefill.py:200); it builds its own config, so it is unaffected.
@@ -122,6 +129,15 @@ class ProgramConfig:
             raise ValueError(f"math_fidelity must be one of {list(_VALID_MATH_FIDELITIES)}, got {self.math_fidelity}")
         if len(self.sdpa_core_grid) != 2 or min(self.sdpa_core_grid) <= 0:
             raise ValueError(f"sdpa_core_grid must be a positive (x, y) pair, got {self.sdpa_core_grid}")
+        # The ring op asserts both chunk sizes are tile multiples
+        # (`ring_joint_sdpa_device_operation.cpp:848`, `:853`); refuse here so a bad config fails at
+        # construction rather than inside the first SP layer's forward.
+        for name, value in (
+            ("sp_ring_q_chunk_size", self.sp_ring_q_chunk_size),
+            ("sp_ring_k_chunk_size", self.sp_ring_k_chunk_size),
+        ):
+            if value <= 0 or value % ttnn.TILE_SIZE != 0:
+                raise ValueError(f"{name} must be a positive multiple of TILE_SIZE ({ttnn.TILE_SIZE}), got {value}")
 
     def assert_sdpa_grid_fits(self, mesh_device) -> None:
         """Fail at build time if the SDPA program grid would break the SP ring path (``DEC-012``).
@@ -162,12 +178,45 @@ class ProgramConfig:
             k_chunk_size=k_chunk,
         )
 
+    def get_ring_sdpa_config(self, mesh_device) -> ttnn.SDPAProgramConfig:
+        """The **SP ring-joint** SDPA program config (``DEC-083``).
+
+        Same pinned 8x8 grid as the single-card path — the ring op is the one that *asserts* it
+        (``ring_joint_sdpa_device_operation.cpp:421``) — but its own q/k chunk sizes, which do not
+        depend on the sequence length. The template derives its grid instead
+        (``models/demos/gpt_oss_d_p/tt/attention/prefill.py:195``:
+        ``CoreCoord(grid.x - 1, grid.y)`` = (11, 10) here), which also satisfies the assert at
+        ``11 >= 11``; ``DEC-083`` keeps the pinned grid so exactly one grid rule holds in this
+        package and ``assert_sdpa_grid_fits`` can be believed.
+        """
+        self.assert_sdpa_grid_fits(mesh_device)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_core_grid),
+            exp_approx_mode=False,
+            q_chunk_size=self.sp_ring_q_chunk_size,
+            k_chunk_size=self.sp_ring_k_chunk_size,
+        )
+
     def get_compute_kernel_config(self, mesh_device):
         """``DEC-013``: the factory form, no arch branch, no class name."""
+        return self._compute_kernel_config(mesh_device, fp32_dest_acc_en=self.fp32_dest_acc_en)
+
+    def get_ring_compute_kernel_config(self, mesh_device):
+        """The SP ring path's compute-kernel config: identical **except** ``fp32_dest_acc_en=False``.
+
+        The ring op requires it (``models/demos/gpt_oss_d_p/tt/attention/prefill.py:200`` says so in
+        as many words: "required by the ring op's streaming-sink compute"), so this path gives up the
+        fp32 accumulator every other op in the package keeps under ``DEC-031``. That is a real,
+        measured accuracy cost, not a formality — see ``DEC-084`` for the number — and it is a
+        *separate method* rather than a mutated field so no other op can inherit it by accident.
+        """
+        return self._compute_kernel_config(mesh_device, fp32_dest_acc_en=False)
+
+    def _compute_kernel_config(self, mesh_device, *, fp32_dest_acc_en: bool):
         return ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, self.math_fidelity),
             math_approx_mode=self.math_approx_mode,
-            fp32_dest_acc_en=self.fp32_dest_acc_en,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=self.packer_l1_acc,
         )

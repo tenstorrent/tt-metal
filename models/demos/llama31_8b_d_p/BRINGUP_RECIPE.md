@@ -1408,3 +1408,119 @@ bf16 tensor *values* must keep every value <= 256, or split the id across lanes 
 of 64 with the head id in its own lane block, which also covers more `kv_actual` offsets than the
 original 3x128). A failing probe is not evidence of a failing module until the probe's own numerics are
 checked.
+
+### F.11 Orchestration hygiene — do not mutate the worktree while a phase session is live
+Three separate problems in this run traced to one cause: the orchestrator committing and renaming
+while a phase session was still working in the same worktree. All were recoverable; all were
+avoidable.
+
+| What happened | Consequence |
+|---|---|
+| Committed mid-P7 the moment commits were authorised | A P7 file (`scripts/generate_golden_kv_cache.py`) landed in the commit whose message says **"P0-P6"**. The history is now mildly inaccurate — the content is fine, the label is not. |
+| Renamed the package while the P7 session was still alive | Its path references stopped resolving mid-run; it had to re-derive where its own files had gone. Nothing was lost, but only because a rename is a move. |
+| Renamed the golden-trace directory too | Same, for `$PREFILL_TRACE_DIR`. |
+
+**And the subtle one — the verification gap.** After the rename the orchestrator verified imports,
+`verify_citations.py`, and a 23-test smoke (`G-MESH` + `G-RMS`) — then declared the rename clean. But
+it did **not re-run the gates of the phase that had just finished**, so P7's entire evidence base
+briefly existed only against paths no longer in the tree. The P7 session caught this and re-ran both
+its test files at the new path (16 passed, every number identical:
+`raw/G-P7-POSTRENAME_20260903T211141Z.log`). A gate's evidence is only as good as the paths it was
+recorded against.
+
+**Rules, for this run and any re-run of this recipe:**
+1. **Commit only at a phase boundary, with no session live.** "Commits are authorised" is not
+   "commit right now". Check for a running session first.
+2. **Never rename, move, or restructure while a session is live.** A rename is the worst case: it
+   invalidates in-flight path references silently and rewrites the provenance of raw logs.
+3. **After any path-affecting change, re-run the previous phase's gates**, not a smoke test. Import
+   checks and a citation pass prove the tree is wired; they prove nothing about the gates.
+4. **Raw logs from before a rename keep the old path** — that is correct, not stale. They record what
+   actually ran. Rewriting them would make the evidence less trustworthy; note the boundary in the
+   ledger instead.
+5. If a mid-phase mutation is genuinely unavoidable, **message the live session** with the exact
+   change before making it, rather than letting it discover the breakage.
+
+### F.11 — P8 step 1 is not runnable as written on this machine: the sub-shapes must be **submeshes**
+
+`BRINGUP_RECIPE.md:831` tells P8 to "add multi-device parametrisations to the P5/P6 unit tests:
+`(1,2)`, `(1,4)`, `(1,8)`, and the target shape", and step 1 then talks about `device_params` with a
+`fabric_config` — i.e. it assumes the `mesh_device` fixture opens each shape directly, exactly as
+`models/demos/minimax_m3/tests/test_factory.py:89` `parametrize_mesh_with_fabric` does.
+
+**On this Blackhole galaxy that cannot work.** Opening `(1,8)` or `(2,8)` as a *top-level* mesh dies
+in fabric bring-up:
+
+```
+Fabric Router Sync: Timeout after 10000 ms on Device 1. Expected status 0xa2b2c2d2
+  (LOCAL_HANDSHAKE_COMPLETE) … furthest-behind stage: STARTED
+```
+(`tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:200`) — the routers on the opened
+devices wait for an ethernet handshake with partners *outside* the mesh, which have no kernel
+running. Reproduced with and without `TT_MESH_GRAPH_DESC_PATH`, under `STRICT_INIT` and
+`RELAXED_INIT`. The fix is `DEC-080`: open the full `(4,8)` once and
+`mesh_device.create_submesh(...)` per case (`tt_metal/api/tt-metalium/mesh_device.hpp:307`).
+
+This is machine-specific, not universal: on a LoudBox / T3K, `(1,8)` **is** the whole machine and the
+minimax form is the right one. A port must switch back. `R-031`.
+
+### F.12 — Submeshes that overlap need `quiesce_devices()`, and forgetting it **hangs the machine**
+
+`tt_metal/api/tt-metalium/mesh_device.hpp:296` requires a barrier "between phases that use
+overlapping submeshes on the same physical devices" and names `quiesce_devices()` (`:305`). Nothing
+enforces it, and `G-TP-PARITY` — which compares `(1,1)` against `(1,TP)` — is exactly such a pair.
+
+Measured, one variable at a time: `(1,2)` collective then `(1,8)` collective with both submeshes live
+and **no barrier** → **hang**; the same two phases with `parent.quiesce_devices()` between → ok;
+`(1,8)` alone in its own process → ok.
+
+**Two things make this worth an appendix entry rather than a code comment.**
+
+1. **A hang is not contained.** After one, *every* later collective on the box hangs too — including a
+   `(4,8)` all-reduce that had passed forty seconds earlier — until `tt-smi -r`. A pytest session that
+   hits it turns every remaining gate into a false FAIL. Any harness that can hang should run its
+   cases in **subprocesses with a timeout** so a hang is a recorded measurement (`DEC-082`,
+   `tests/fabric_topology_matrix.py`).
+2. **The first diagnosis was wrong, and plausible.** The hanging run was configured as `DEC-020`
+   prescribes (`Topology.Linear`, `num_links=1`) on a `(1,8)` submesh, and there was a tidy story: the
+   system mesh is `MeshShape([8, 4])`, so a logical `(4,8)` row of 8 is linear index `r*8 + c` →
+   physical `(idx // 4, idx % 4)` = two physical rows, and a non-cyclic route along that axis
+   plausibly does not exist. `(1,8)` + Ring then passed at 1 and 2 links, which *appeared* to confirm
+   it. Running `(1,8)` + Linear **alone** falsified the whole story. `DEC-081` keeps the wrong
+   argument on the record next to the measurement that killed it, because the failure mode — a
+   variable nobody was varying deliberately — is the transferable lesson.
+
+`R-032`.
+
+### F.13 — `G-CHUNK-ATTN`'s threshold needs a stated **depth**, or it measures depth instead of the op
+
+`bringup_log/06_GATES.md:29` (P7's row; the gate is not in Appendix A) states `>= 0.999 chunked ==
+one-shot on the attention OUTPUT`. P8's first implementation compared the **KV product at every
+layer** and reported the min over 32 layers, which failed at 0.99628 — and that failure was an
+artefact of the metric, not of the ring:
+
+| layer | ring vs one-shot, K |
+|---|---|
+| 0 (no attention has run) | **1.00000** |
+| 1 (**one** attention layer) | **0.99996** |
+| 8 | 0.99952 |
+| 22 (the min) | **0.99628** |
+
+Layer 31's K is one attention output pushed through 31 residual streams, each amplifying the
+difference; holding it to a per-op threshold measures depth. `DEC-085` resolves it: assert `0.999` at
+**layer 1**, and gate the deep layers with the per-layer error **step** (`DEC-047`'s unchanged 4.0x
+from layer 3 — measured 1.90x) plus both paths' PCC against the fp32 golden at `G-CHUNK`'s
+thresholds. **Every threshold used was set before the measurement existed**; none was refitted.
+
+The general rule, which also applies to `G-CHUNK` and `G-MODEL`: **a mutual-PCC gate must name the
+depth at which it applies.** "Path A == path B" is a per-op claim; the min over a 32-layer stack is a
+different quantity and needs a different instrument.
+
+Related, and measured (`DEC-084`, `G-SP-RING`): the ring's `fp32_dest_acc_en=False` is **not** a
+preference. `use_streaming_compute = !fp32_dest_acc_en`
+(`ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:1304`) and
+`kv_actual_isl` requires the streaming path (`:1306`), so for chunked prefill the two flags are
+mutually exclusive by construction and `True` is refused with a `TT_FATAL`. Cost, measured: the ring
+op alone sits **7.98x** off its noise floor (against the single-card SDPA's **71x**, E.5), and end to
+end the chunked path carries **1.45x** the error of the one-shot path (min K 0.99695 vs 0.99789).
+Expect it, attribute it, and set any future KV threshold against the **chunked** number. `R-033`.

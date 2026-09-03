@@ -86,6 +86,13 @@ def resolve_chunk_sizes(default_chunk_size: int, additional_chunk_sizes: tuple, 
     return sizes
 
 
+# R-025 / DEC-047 / DEC-060: the per-layer error-step ceiling and the layer it starts applying from,
+# carried over verbatim from the P6 hidden-state curve so that re-measuring at a new chunk size tests
+# the threshold instead of re-fitting it. Used by `_log_layer_error_steps`.
+MAX_LAYER_ERROR_STEP = 4.0
+STEP_CHECK_FROM_LAYER = 3
+
+
 def _dense_sp_is_implemented() -> bool:
     """Is ``tt/attention/dense_sp.dense_sp_attention`` a real port yet, or still the P5 stub?
 
@@ -714,4 +721,36 @@ class TtPrefillRuntime:
             f"{sum(r[1] for r in rows) / len(rows):.5f} | min V={min_v:.5f} mean V="
             f"{sum(r[2] for r in rows) / len(rows):.5f}"
         )
+        self._log_layer_error_steps(rows, chunk_size=chunk_size, n_tokens=n_tokens)
         return min(min_k, min_v)
+
+    @staticmethod
+    def _log_layer_error_steps(rows, *, chunk_size, n_tokens) -> None:
+        """Log the per-layer error-STEP curve of the K and V columns (``R-025`` / ``DEC-060``).
+
+        The consecutive ratio of ``1 - pcc``. Smooth growth is accumulation through the residual
+        stream; a *step* is one layer doing something different — a wrong weight, a wrong RoPE
+        offset, a wrong cache slot — and it is visible even when the absolute PCC still looks fine.
+        The ceiling and the first checked layer are ``DEC-047``'s, carried over unchanged so that
+        re-measuring them at a new chunk size is a *test* of the threshold rather than a re-fit
+        (``MAX_LAYER_ERROR_STEP`` / ``STEP_CHECK_FROM_LAYER`` below).
+
+        Logged rather than asserted: this helper is a bring-up read-back, and the caller that wants
+        a gate is a test or the galaxy harness, both of which can read the number. The early layers
+        are excluded from the max because they climb off a near-exact baseline where the ratio is
+        noise (layer 1's error is ~1/50th of the deepest layer's), and they are printed anyway.
+        """
+        if len(rows) <= STEP_CHECK_FROM_LAYER + 1:
+            return
+        for name, column in (("K", 1), ("V", 2)):
+            steps = [
+                (rows[i][0], (1 - rows[i][column]) / max(1 - rows[i - 1][column], 1e-12)) for i in range(1, len(rows))
+            ]
+            checked = [(i, st) for i, st in steps if i >= STEP_CHECK_FROM_LAYER]
+            worst_step, at_layer = max(checked, key=lambda t: t[1])[::-1]
+            logger.info(
+                f"[kv-pcc] R-025 {name} error-step curve at chunk={chunk_size} over {n_tokens} "
+                f"tokens: max consecutive ratio {worst_step:.2f}x at layer {at_layer} "
+                f"(ceiling {MAX_LAYER_ERROR_STEP}x, checked from layer {STEP_CHECK_FROM_LAYER}); "
+                f"excluded early steps {[(i, round(st, 2)) for i, st in steps if i < STEP_CHECK_FROM_LAYER]}"
+            )

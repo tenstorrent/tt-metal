@@ -1,0 +1,64 @@
+
+=== case 4x8:ring:2:1:toplevel (expect ok) ===
+[fabric] START 4x8 toplevel topology=ring num_links=2 axis=1
+[fabric] DONE 4x8 toplevel topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1874 rel=4.96e-03
+
+=== case 4x8:ring:2:0:toplevel (expect ok) ===
+[fabric] START 4x8 toplevel topology=ring num_links=2 axis=0
+[fabric] DONE 4x8 toplevel topology=ring num_links=2 axis=0 out=(1, 1, 128, 4096) ring=4 max|err vs 4x input|=0.0622 rel=3.23e-03
+
+=== case 1x2:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x2 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x2 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0311 rel=3.08e-03
+
+=== case 1x4:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x4 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x4 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=4 max|err vs 4x input|=0.0937 rel=4.76e-03
+
+=== case 1x8:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x8 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x8 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1875 rel=4.85e-03
+
+=== case 1x8:ring:1:1:submesh (expect ok) ===
+[fabric] START 1x8 submesh topology=ring num_links=1 axis=1
+[fabric] DONE 1x8 submesh topology=ring num_links=1 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1871 rel=4.62e-03
+
+=== case 2x8:ring:2:1:submesh (expect ok) ===
+[fabric] START 2x8 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 2x8 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1874 rel=4.65e-03
+
+=== case 2x8:ring:2:0:submesh (expect ok) ===
+[fabric] START 2x8 submesh topology=ring num_links=2 axis=0
+[fabric] DONE 2x8 submesh topology=ring num_links=2 axis=0 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0307 rel=3.16e-03
+
+=== case 1x2:linear:1:1:submesh (expect ok) ===
+[fabric] START 1x2 submesh topology=linear num_links=1 axis=1
+[fabric] DONE 1x2 submesh topology=linear num_links=1 axis=1 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0276 rel=2.72e-03
+
+=== case 1x8:linear:1:1:toplevel (expect fabric-init-fail) ===
+    2026-09-03 22:09:22.226 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 1. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (f
+
+=== case 2x8:ring:2:1:toplevel (expect fabric-init-fail) ===
+    2026-09-03 22:09:51.093 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 0. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (f
+
+=== case 1x8:linear:1:1:submesh (expect hang) ===
+[fabric] START 1x8 submesh topology=linear num_links=1 axis=1
+[fabric] DONE 1x8 submesh topology=linear num_links=1 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.3682 rel=9.71e-03
+
+| case (shape:topology:links:axis:mode) | expected | measured | |
+|---|---|---|---|
+| `4x8:ring:2:1:toplevel` | ok | **ok** | MATCH |
+| `4x8:ring:2:0:toplevel` | ok | **ok** | MATCH |
+| `1x2:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x4:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x8:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x8:ring:1:1:submesh` | ok | **ok** | MATCH |
+| `2x8:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `2x8:ring:2:0:submesh` | ok | **ok** | MATCH |
+| `1x2:linear:1:1:submesh` | ok | **ok** | MATCH |
+| `1x8:linear:1:1:toplevel` | fabric-init-fail | **fabric-init-fail** | MATCH |
+| `2x8:ring:2:1:toplevel` | fabric-init-fail | **fabric-init-fail** | MATCH |
+| `1x8:linear:1:1:submesh` | hang | **ok** | MISMATCH |
+
+[fabric] 11/12 cases matched expectation. DEC-080: top-level partial meshes cannot init the fabric. DEC-081: Topology.Linear hangs the 8-wide logical row; Ring works at 1 and 2 links.
+[fabric] a HANG case was run — reset the machine now: tt-smi -r

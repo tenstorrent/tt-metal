@@ -52,6 +52,7 @@ from models.demos.llama31_8b_d_p.tests.test_factory import (
     TestFactory,
     hf_model_path,
     llama_config_dims,
+    parametrize_galaxy_submeshes,
     quantize_like_device,
     requires_hf_reference,
 )
@@ -371,3 +372,62 @@ def test_state_dict_prefix_and_audit_refusals(mesh_device, tmp_path, expect_erro
         ModelArgs.get_state_dict_prefix("mlp")
     with expect_error(AssertionError, "checkpoint directory"):
         ModelArgs(mesh_device, weights_path="", hf_config=hf_config)
+
+
+# =====================================================================================
+# R-017 / Appendix F.10 (P8) — the same cache-only assertion on the TARGET mesh
+# =====================================================================================
+@parametrize_galaxy_submeshes([(4, 8)])
+@requires_hf_reference
+@torch.no_grad()
+def test_cache_only_rebuild_is_bit_identical_at_tp8(mesh_device, device_params, submesh_shape, state_dict, tmp_path):
+    """`R-017`: cache-only loading, proven where the cache is actually sharded.
+
+    `ttnn.as_tensor` caches the **already-sharded, already-tilized per-device tensor**, so the
+    `(1,1)` version of this test above proves the plumbing and nothing about sharding: at TP=1 there
+    is one shard and it is the whole weight. At `(4,8)` a wrong-shape or stale cache hands every chip
+    the unsharded weight, and nothing downstream notices — it presents as "one layer runs on
+    garbage", first visible at `G-MESH-KV` (Appendix B's signature, Appendix F.10's warning).
+
+    `_hash_all` hashes `named_device_tensors()`, whose values are the **mesh-composed** host
+    tensors, so a per-column difference changes the digest. Two layers, same reasoning as the
+    `(1,1)` test: the cache path is per-tensor and identical in every layer.
+    """
+    objs = TestFactory.setup_submesh(mesh_device, submesh_shape)
+    mesh = objs["mesh_device"]
+    cache = tmp_path / "cache_4x8"
+    cache.mkdir()
+    kwargs = dict(
+        mesh_config=objs["mesh_config"],
+        ccl_manager=objs["ccl_manager"],
+        max_seq_len=512,
+        num_layers=2,
+        tensor_cache_path=str(cache),
+        with_lm_head=True,
+    )
+
+    model_a = Model(mesh, objs["hf_config"], state_dict, **kwargs)
+    hashes_a = _hash_all(model_a)
+    per_device = {name: len(ttnn.get_device_tensors(tensor)) for name, tensor in model_a.named_device_tensors().items()}
+    del model_a
+
+    model_b = Model(mesh, objs["hf_config"], {}, **kwargs)
+    hashes_b = _hash_all(model_b)
+
+    assert set(hashes_a) == set(hashes_b), f"different tensor sets: {sorted(set(hashes_a) ^ set(hashes_b))}"
+    differing = sorted(k for k in hashes_a if hashes_a[k] != hashes_b[k])
+    shard_counts = sorted(set(per_device.values()))
+    logger.info(
+        f"[G-WEIGHTS] cache-only rebuild on {submesh_shape}: {len(hashes_a)} device tensors compared "
+        f"by SHA-256, {len(differing)} differ; each tensor spans {shard_counts} device shard(s); "
+        f"cache dir {cache}"
+    )
+    assert shard_counts == [32], (
+        f"expected every weight to span all 32 devices on {submesh_shape}, got {shard_counts}; the "
+        f"cache-only claim would then be about a replicated tensor, not a sharded one"
+    )
+    assert not differing, (
+        f"[G-WEIGHTS] cache-only rebuild is NOT bit-identical at {submesh_shape} for "
+        f"{len(differing)} tensors: {differing}. A sharded cache replayed wrongly is the R-017 "
+        f"failure: every chip gets the same bytes and only G-MESH-KV notices."
+    )

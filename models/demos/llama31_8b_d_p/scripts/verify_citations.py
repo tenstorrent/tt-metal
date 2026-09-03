@@ -29,6 +29,8 @@ DS = "models/demos/deepseek_v3_d_p"
 CP = "models/demos/common/prefill"
 CM = "models/common"
 LL = "models/demos/llama31_8b_d_p"
+# P8: the ring-joint SDPA device op — cited by tt/attention/dense_sp.py and tt/attention/config.py.
+RJ = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp"
 
 # (file, line, substring that MUST appear on that line)
 CITES = [
@@ -546,9 +548,9 @@ CITES = [
     (f"{LL}/tt/attention/config.py", 45, "class AttentionConfig"),
     (f"{LL}/tt/attention/config.py", 88, "class ProgramConfig"),
     (f"{LL}/tt/attention/config.py", 99, "sdpa_core_grid"),
-    (f"{LL}/tt/attention/config.py", 106, "fp32_dest_acc_en"),
-    (f"{LL}/tt/attention/config.py", 126, "def assert_sdpa_grid_fits"),
-    (f"{LL}/tt/attention/config.py", 165, "def get_compute_kernel_config"),
+    (f"{LL}/tt/attention/config.py", 113, "fp32_dest_acc_en"),
+    (f"{LL}/tt/attention/config.py", 142, "def assert_sdpa_grid_fits"),
+    (f"{LL}/tt/attention/config.py", 200, "def get_compute_kernel_config"),
     (
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp",
         421,
@@ -600,7 +602,7 @@ CITES = [
     (f"{GO}/tt/attention/prefill.py", 51, "def attention_forward"),
     (f"{GO}/tt/attention/prefill.py", 200, "fp32_dest_acc_en=False"),
     (f"{LL}/tt/attention/prefill.py", 66, "def _run_sdpa"),
-    (f"{LL}/tt/attention/prefill.py", 81, "def attention_forward"),
+    (f"{LL}/tt/attention/prefill.py", 116, "def attention_forward"),
     (
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp",
         98,
@@ -624,7 +626,7 @@ CITES = [
     (f"{GO}/tt/attention/dense_sp.py", 36, "return full_seq"),
     (f"{GO}/tt/attention/dense_sp.py", 41, "def dense_sp_attention"),
     (f"{GO}/tt/attention/dense_sp.py", 134, "use_column_major_ccl"),
-    (f"{LL}/tt/attention/dense_sp.py", 43, "def dense_sp_attention"),
+    (f"{LL}/tt/attention/dense_sp.py", 54, "def dense_sp_attention"),
     # attention/__init__.py
     (f"{GO}/tt/attention/__init__.py", 28, "class Attention"),
     (f"{GO}/tt/attention/__init__.py", 47, "layer_types"),
@@ -711,8 +713,8 @@ CITES = [
     (f"{M3}/tt/model_config.py", 214, "TT_CACHE_PATH"),
     (f"{GO}/tt/runners/adapters/gpt_oss.py", 75, "def weight_cache_path"),
     # tests/test_factory.py — the promoted helpers (DEC-046)
-    (f"{LL}/tests/test_factory.py", 212, "def quantize_like_device"),
-    (f"{LL}/tests/test_factory.py", 230, "def err_ratio"),
+    (f"{LL}/tests/test_factory.py", 303, "def quantize_like_device"),
+    (f"{LL}/tests/test_factory.py", 321, "def err_ratio"),
     # tests/unit/test_decoder_layer_vs_ref.py — G-LAYER
     (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 118, "def _torch_rms_norm"),
     (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 140, "def _torch_layer"),
@@ -731,11 +733,11 @@ CITES = [
     ),
     (f"{LL}/tests/unit/test_decoder_layer_vs_ref.py", 452, "def test_promoted_helpers_match_the_p5_copies"),
     # tests/unit/test_weight_loading.py — G-WEIGHTS
-    (f"{LL}/tests/unit/test_weight_loading.py", 90, "def test_no_missing_and_no_unused_keys"),
-    (f"{LL}/tests/unit/test_weight_loading.py", 148, "def test_cache_only_rebuild_is_bit_identical"),
-    (f"{LL}/tests/unit/test_weight_loading.py", 197, "def test_device_weights_match_the_checkpoint"),
-    (f"{LL}/tests/unit/test_weight_loading.py", 268, "def test_meta_renaming_is_caught_by_the_audit"),
-    (f"{LL}/tests/unit/test_weight_loading.py", 317, "def test_weight_cache_path_carries_the_mesh_shape"),
+    (f"{LL}/tests/unit/test_weight_loading.py", 91, "def test_no_missing_and_no_unused_keys"),
+    (f"{LL}/tests/unit/test_weight_loading.py", 149, "def test_cache_only_rebuild_is_bit_identical"),
+    (f"{LL}/tests/unit/test_weight_loading.py", 198, "def test_device_weights_match_the_checkpoint"),
+    (f"{LL}/tests/unit/test_weight_loading.py", 269, "def test_meta_renaming_is_caught_by_the_audit"),
+    (f"{LL}/tests/unit/test_weight_loading.py", 318, "def test_weight_cache_path_carries_the_mesh_shape"),
     # tests/unit/test_model_vs_ref.py — G-MODEL
     (f"{LL}/tests/unit/test_model_vs_ref.py", 88, "MAX_LAYER_ERROR_STEP"),
     (f"{LL}/tests/unit/test_model_vs_ref.py", 98, "def _hf_model"),
@@ -777,14 +779,39 @@ CITES = [
         "cache and input num-heads dim must match",
     ),
     (f"{LL}/tt/attention/kv_cache.py", 130, "torch.zeros(num_users * num_layers, 1, seq_local, head_dim)"),
-    (f"{LL}/tt/attention/prefill.py", 218, "elif cached_len > 0:"),
-    (f"{LL}/tt/attention/prefill.py", 195, "if config.sequence_parallel and mesh_config.sp > 1:"),
-    (f"{LL}/tt/attention/dense_sp.py", 43, "def dense_sp_attention("),
+    (f"{LL}/tt/attention/prefill.py", 271, "elif cached_len > 0:"),
+    (f"{LL}/tt/attention/prefill.py", 230, "if config.sequence_parallel and mesh_config.sp > 1:"),
+    (f"{LL}/tt/attention/dense_sp.py", 54, "def dense_sp_attention("),
     (f"{GO}/tt/tt_prefill_runtime.py", 46, "def resolve_chunk_sizes("),
     (f"{GO}/tt/tt_prefill_runtime.py", 185, 'getattr(self.hf_config, "rope_theta", 150000.0)'),
     (f"{GO}/tt/tt_prefill_runtime.py", 555, "half * (m % 2) + (m // 2)"),
     (f"{GO}/tt/runners/adapters/gpt_oss.py", 132, "default_chunk_size=params.chunk_size"),
     (f"{M3}/scripts/generate_golden_kv_cache.py", 180, "ids = tokenizer.apply_chat_template("),
+    # ---- P8: the SP ring-joint SDPA op, the mesh/submesh API, and the fabric initialiser ----
+    # Every one of these is load-bearing for tt/attention/dense_sp.py or for DEC-080/DEC-081, and
+    # all of them live in files this package does not own, i.e. exactly the refs most likely to rot.
+    (f"{RJ}", 176, "page_size() == page_size"),
+    (f"{RJ}", 421, "ccl_core_grid_offset.x >="),
+    (f"{RJ}", 501, "window_size = args.sliding_window_size.value()"),
+    (f"{RJ}", 580, "N_local_q <= N_local_kv"),
+    (f"{RJ}", 617, "is_chunked"),
+    (f"{RJ}", 627, "is_balanced"),
+    (f"{RJ}", 633, "N_local_kv % N_local_q == 0"),
+    (f"{RJ}", 848, "q_chunk_size % tt::constants::TILE_WIDTH == 0"),
+    (f"{RJ}", 853, "k_chunk_size % tt::constants::TILE_WIDTH == 0"),
+    ("tt_metal/api/tt-metalium/mesh_device.hpp", 305, "void quiesce_devices()"),
+    ("tt_metal/api/tt-metalium/mesh_device.hpp", 307, "create_submesh"),
+    ("tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp", 200, "Fabric Router Sync: Timeout"),
+    (f"{GO}/tt/attention/prefill.py", 191, "use_cache_backed_ring"),
+    (f"{GO}/tt/attention/prefill.py", 195, "compute_with_storage_grid_size"),
+    (f"{GO}/tt/attention/prefill.py", 196, "q_chunk_size=128"),
+    (f"{GO}/tt/attention/prefill.py", 197, "k_chunk_size=128"),
+    (f"{GO}/tt/attention/prefill.py", 200, "fp32_dest_acc_en=False is required by the ring op"),
+    (f"{GO}/tt/attention/prefill.py", 243, "reduce_scatter_minimal_async"),
+    (f"{GO}/tt/attention/dense_sp.py", 41, "def dense_sp_attention"),
+    (f"{GO}/tt/attention/dense_sp.py", 106, "ring_joint_scaled_dot_product_attention"),
+    (f"{GO}/tests/galaxy_prefill_kv_pcc.py", 78, "def main"),
+    (f"{M3}/tests/test_factory.py", 89, "def parametrize_mesh_with_fabric"),
 ]
 
 

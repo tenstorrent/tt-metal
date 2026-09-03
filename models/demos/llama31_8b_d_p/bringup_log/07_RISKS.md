@@ -1014,3 +1014,160 @@ table must encode is already fixed and gated by `G-KV`:
   `DEC-062`-`DEC-069` and no `R-026`-`R-039`. §1.3 specifies monotonic numbering, and P7 was told to
   continue from `DEC-052`, so P7 used `DEC-052`-`DEC-061` and `R-026`-`R-030`. There is no collision,
   but a reviewer should know the gap is a reservation someone made, not a lost block.
+
+---
+
+## Status updates and closures from P8
+
+Every risk P8 owned was settled by a measurement on the real `(4,8)` galaxy, not by argument. The
+raw logs are named per item.
+
+### `R-027` — **CLOSED.** The model -> cache path is proven at TP=8
+The coverage hole was that `G-KV` and `G-CHUNK` ran at `(1,1)` with `nkv = tp = 1`, a head count the
+model never produces on that mesh, so the mesh-mapper step (KV head `c` -> mesh column `c`) was
+untested. `G-KV-TP8` (new, `tests/unit/test_kv_cache_tp8.py`) closes it two ways:
+
+* **bit-exactly, without the model** — a position/head-labelled tensor written through the model's own
+  mesh mapper reads back with column `c` holding head `c` at `rtol=atol=0`, and the per-chip shape is
+  `(1, 1, 128, 128)`, i.e. exactly the one KV head `kv_cache.py:130` allocates;
+* **through the real model** — `Model.prefill_forward` writing the real cache at TP=8 scores min K
+  **0.99789** / V **0.99134** over 32 layers against the fp32 golden, versus `G-CHUNK`'s hand-written
+  per-head **0.99818 / 0.99206** at `(1,1)`. The mesh mapper and the TP all-reduce cost 1.16x / 1.09x
+  of the error and nothing else.
+
+The assert `_resolve_kv` raises at `TP != num_key_value_heads` stays: it is still true that the packed
+cache holds one KV head per chip and that TP must equal 8. What is no longer open is whether the model
+feeds it correctly. `raw/G-KV-TP8_20260903T222825Z.log`.
+
+### `R-028` — **CLOSED.** `dense_sp_attention` is implemented and `G-CHUNK-ATTN` ran
+`tt/attention/dense_sp.py` is the ring-joint port (`DEC-083`, `DEC-084`), and
+`tt/attention/prefill.py` gained the SP bootstrap that `DEC-021` owed, selected by the same
+cache-capacity rule as upstream. `G-CHUNK-ATTN` is promoted from `BLOCKED` to
+**PASS-WITH-DEVIATION** (`DEC-085`): one attention layer of ring-vs-bootstrap difference is
+**0.99996**, and the deep-layer divergence is measured accumulation (max step 1.90x against a 4.0x
+ceiling), attributed to the ring's mandatory `fp32_dest_acc_en=False`.
+
+R-028 predicted "enabling it is not a flag flip", and that was right: it needed the port, the
+bootstrap, a ring program config and a ring compute-kernel config. It also predicted that
+`TtPrefillRuntimeConfig(sequence_parallel=True)` would then work **with no edit** to
+`tt/tt_prefill_runtime.py` because `_chunked_read_supported` *probes* the stub — and that was right
+too. The runtime's only P8 change is a bring-up-only logging helper (`_log_layer_error_steps`).
+
+### `R-029` — **CLOSED.** The read-back helpers ran on device
+`gather_layer`, `dump_slot_kv`, `compare_device_dump` and `kv_cache_pcc_check` all executed against a
+real device cache for the first time, at TP=8 (`G-KV-TP8`) and at SP=4 x TP=8 (`G-MESH-KV`,
+`G-RACE`, `G-CHUNK-ATTN`). Both previously-unexercised pieces are now covered: the
+`blockcyclic_positions` inverse at `sp > 1` (every `(4,8)` read-back inverts it, and the numbers
+would collapse if it were wrong) and the `r * cols + col` indexing that maps KV head `c` to column
+`c` (asserted bit-exactly, with a rotated-column negative control that scores **-0.038** against the
+golden). The metadata contract test that stood in for them can stay as a cheap guard.
+
+### `R-013` — **SETTLED by measurement. Nothing changed.**
+`G-RACE` ran the 32-layer prefill three times in **one process on one `CCLManager`** — 384
+all-reduces over a 2-deep barrier ping-pong plus 192 ring-attention invocations over one semaphore
+pair — and produced one KV digest, `ec96afaa…`, three times. Two other processes produced the same
+digest. So the depth-2 barrier ping-pong is safe for this workload and
+`reset_global_semaphores` stays partial (`DEC-052` upheld, `DEC-086`). The 2 -> 4 deepening remains
+the documented first move **if `G-RACE` ever goes red**; making it now, with a green gate, would be
+an unfalsifiable edit. **Still open for P10:** 384 all-reduces is not 384,000, and `num_users > 1`
+and a post-migration reuse of the manager are untested.
+
+### `R-012` — **CLOSED, and its premise no longer holds on this machine.**
+R-012 said the `(1,N)` parity meshes would run `num_links = 1` + `Topology.Linear` and so prove
+nothing about the ring transport. On this box they cannot run as top-level meshes at all
+(`DEC-080`), so every parity shape is a submesh of the galaxy running `Topology.Ring` (`DEC-081`).
+The `(2,8)` parametrisation R-012 asked for is added anyway and does run `num_links = 2` with
+`sp > 1`. `G-TP-PARITY` is green on all five shapes, worst cell **0.999972**.
+
+### `R-017` — **CLOSED.** Cache-only loading proven where the cache is sharded
+Two independent checks at `(4,8)`: 21 device tensors SHA-256-identical between a checkpoint build and
+a `{}` + cache rebuild, each spanning all **32** device shards; and a full 32-layer cache-only prefill
+producing a **byte-identical KV digest** to the checkpoint-loaded run. The `4x8` segment of
+`weight_cache_path` (`DEC-048`) was exercised by a real write and read for the first time.
+
+### `R-025` — **CLOSED for the KV product at the real chunk size; the hidden-state curve stays open.**
+`MAX_LAYER_ERROR_STEP = 4.0` and `STEP_CHECK_FROM_LAYER = 3` were carried over **unchanged** and
+re-measured on the `(4,8)` mesh at **2048 tokens with chunk 512** — 4x the sequence length and 4x the
+chunk size P7 measured them at, and past `ProgramConfig.prefill_threshold = 2048`: max consecutive
+error step **K 2.17x**, **V 1.76x**, both at layer 8, against the 4.0x ceiling. The excluded layer-2
+step (K 5.35x) is the same near-exact-baseline artefact P7 recorded. The step curve is now logged by
+`TtPrefillRuntime._log_layer_error_steps` on every `kv_cache_pcc_check`, so it is re-measured by
+every future harness run rather than by a one-off script.
+
+**Still open (re-assigned to P9/P10):** the *hidden-state* curve at the 8192-token default chunk. P8
+measured the KV product at 2048, not the hidden state at 8192, and a 32-layer fp32 HF reference at
+8192 tokens is still the large host run P7 declined.
+
+---
+
+## R-031 — Fabric bring-up fails on any top-level partial mesh, so every sub-shape must be a submesh (measured, P8)
+
+**Status:** mitigated by `DEC-080` + `TestFactory.setup_submesh`; **the underlying limitation is
+open** and belongs to whoever runs this package on other hardware.
+
+`ttnn.open_mesh_device(MeshShape(1, 8))` and `(2, 8)` both open and then die in fabric bring-up with
+`Fabric Router Sync: Timeout after 10000 ms … furthest-behind stage: STARTED`
+(`tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:200`), with and without
+`TT_MESH_GRAPH_DESC_PATH`, under `STRICT_INIT` and `RELAXED_INIT`. The routers on the opened devices
+wait for an ethernet handshake with partners outside the mesh, which have no kernel running.
+
+**Consequence for the tests:** `parametrize_galaxy_submeshes` always opens the full `(4,8)` and carves
+the shape, which is *not* what `models/demos/minimax_m3/tests/test_factory.py:89` does. On a LoudBox
+or T3K, where `(1,8)` **is** the whole machine, the minimax form is the correct one and ours would
+over-allocate. Whoever ports these tests to smaller hardware must switch back.
+
+Evidence: `raw/G-FABRIC-MATRIX_20260903T221822Z.log`, cases `1x8:linear:1:1:toplevel` and
+`2x8:ring:2:1:toplevel`.
+
+---
+
+## R-032 — Two overlapping submeshes hang the machine unless `quiesce_devices()` separates them (measured, P8)
+
+**Status:** mitigated in `tests/unit/test_tp_parity.py`; **the trap is open for every future test.**
+
+`mesh_device.hpp:296` documents that a barrier is required "between phases that use overlapping
+submeshes on the same physical devices" and names `quiesce_devices()` (`:305`). Nothing enforces it.
+Measured, one variable at a time on a freshly reset box:
+
+| case | result |
+|---|---|
+| `(1,2)` collective, then `(1,8)` collective, both submeshes live, **no barrier** | **HANG** |
+| the same two phases with `parent.quiesce_devices()` between | **ok** |
+| `(1,8)` alone in its own process, same topology and link count | **ok** |
+
+**Why this is worse than an error.** The hang is not contained: after it, *every* later collective on
+the machine hangs too — including a `(4,8)` all-reduce that had passed forty seconds earlier — until
+`tt-smi -r`. A pytest session that hits it turns every remaining gate into a false FAIL, and the first
+diagnosis is wrong: the P8 draft blamed `Topology.Linear` on the 8-wide logical row and had a tidy
+physical-mapping story for it (`DEC-081` keeps the whole wrong argument on the record). Only running
+the shape **alone** falsified it.
+
+**What a future test must do:** carve one submesh per test where possible; where two shapes are needed
+(`G-TP-PARITY` compares `(1,1)` against `(1,TP)`), call `parent_mesh.quiesce_devices()` between the
+phases. And any harness that *can* hang should run its cases in subprocesses with a timeout
+(`DEC-082`), so a hang is a recorded measurement instead of an outage.
+
+Evidence: `raw/G-FABRIC-MATRIX_20260903T221822Z.log`, cases `overlap-nobarrier` / `overlap-quiesce`.
+
+---
+
+## R-033 — The ring path can never use the fp32 accumulator, and that cost grows with depth (measured, P8)
+
+**Status:** open by construction — not fixable in this package.
+
+`use_streaming_compute = !fp32_dest_acc_en`
+(`ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:1304`), and
+passing `kv_actual_isl` — the KV-pad rotation **every** chunk of this package's prefill passes —
+requires the streaming path (`:1306`). So for chunked prefill the two are mutually exclusive by
+construction; `fp32_dest_acc_en=True` is refused with a `TT_FATAL`, not merely discouraged.
+
+Measured cost (`DEC-084`): the ring op alone scores **0.999784** against fp32 torch on identical
+values (floor 0.999973, `err_ratio` 7.98x). End to end over 32 layers, against the fp32 golden, the
+ring carries **1.45x** the error of the SP bootstrap, which keeps the accumulator: min K **0.99695**
+vs **0.99789**. The gap grows smoothly with depth (max consecutive step 1.90x, ceiling 4.0x).
+
+**Why it is filed rather than fixed:** the alternatives are all outside this package — a paged
+`chunked_scaled_dot_product_attention` (needs a paged cache; this one is a DRAM `NdShard`), or an
+upstream change giving the streaming compute path fp32 dest accumulation. **What it means for
+P9/P10:** the deployment path's KV is ~1.45x further from fp32 than a one-shot request's, permanently,
+and any future KV threshold must be set against the *chunked* number, not the one-shot one.

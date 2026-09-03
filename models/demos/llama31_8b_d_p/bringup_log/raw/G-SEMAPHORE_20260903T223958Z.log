@@ -1,0 +1,119 @@
+2026-09-03 22:40:00.903 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 5 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0] 2026-09-03 22:40:02.091 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 22:40:02.091 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 22:40:02.108 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 22:40:02.108 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 22:40:02.208 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 22:40:02.213 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 22:40:03.640 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 22:40:03.640 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 22:40:03.640 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 22:40:03.640 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 22:40:03.659 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 22:40:04.925 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:40:04.929 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:40:05.012 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 22:40:08.860 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:40:08.862 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:40:08.883 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:40:08.883 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:40:08.884 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:40:08.885 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:40:08.886 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:40:08.886 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:40:09.513 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 22:40:10.214 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 22:40:10.312 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:40:10.315 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_manager_constructs_and_allocates_once:67 - [G-MESH] CCLManager semaphore lists at construction (rs/ag/barrier/ring) = (6, 4, 2, 2)
+2026-09-03 22:40:10.315 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_manager_constructs_and_allocates_once:95 - [G-MESH] after 64 all-reduce-equivalents: lists = (6, 4, 2, 2) (unchanged)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0] 2026-09-03 22:40:11.321 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 22:40:11.400 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 22:40:11.400 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:40:11.403 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ping_pong_indices_cycle_depth_two:126 - [G-MESH] ping-pong depth = 2 for rs / ag / barrier, as designed
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0] 2026-09-03 22:40:12.393 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 22:40:12.486 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 22:40:12.487 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 22:40:12.490 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_core_grid_is_derived_from_the_device:135 - [G-MESH] compute_with_storage_grid_size() = (12, 10); ring_attention_ccl_core_grid_offset = (11, 0)
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0] 2026-09-03 22:40:13.506 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 22:40:13.599 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 22:40:13.599 | WARNING  | models.demos.llama31_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_counts_hold_on_the_target_mesh[blackhole-4x8] 2026-09-03 22:40:13.786 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:40:13.786 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:40:13.786 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:40:13.787 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:40:13.804 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:40:13.804 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:40:13.805 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:40:13.807 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:40:13.807 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:40:13.807 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:40:13.810 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:13.810 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:13.810 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:13.810 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:14.638 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:14.638 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:14.638 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:14.638 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:40:14.734 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:40:14.941 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:40:14.941 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:40:16.130 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:40:21.984 | WARNING  | models.demos.llama31_8b_d_p.tt.model:__init__:114 - [llama31_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 22:40:29.352 | INFO     | llama31_8b_d_p.tests.unit.test_ccl_semaphores:test_semaphore_counts_hold_on_the_target_mesh:260 - [G-SEMAPHORE] on (4, 8): rs/ag/barrier/ring = (6, 4, 2, 2) before and after building 2 layers (2 collectives each); all layers share ONE CCLManager; CCL grid (12, 10), ring-attention offset (11, 0)
+PASSED
+
+=============================== warnings summary ===============================
+models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+13.49s call     models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_counts_hold_on_the_target_mesh[blackhole-4x8]
+8.28s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+2.51s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_counts_hold_on_the_target_mesh[blackhole-4x8]
+1.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0]
+1.07s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0]
+1.06s setup    models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0]
+0.20s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_counts_hold_on_the_target_mesh[blackhole-4x8]
+0.10s call     models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+0.02s teardown models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py::test_semaphore_counts_hold_on_the_target_mesh[blackhole-4x8]
+======================== 5 passed, 1 warning in 27.91s =========================
+2026-09-03 22:40:31.583 | info     |    BuildKernels | JIT cache stats: 145/145 hits (100.0%) [145 cached, 595 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 22:40:31.584 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 22:40:31.809 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 22:40:31.809 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 22:40:39.814 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 22:40:39.814 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 22:40:39.815 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

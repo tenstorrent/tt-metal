@@ -23,7 +23,8 @@ Also asserted here, because it is cheap and its failure mode is two phases away
   `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp:421`.
   Deriving the SDPA grid instead would give `11 >= 12` and fail only at SP > 1, in P8.
 
-P5 runs this on `(1,1)`; P8 re-parametrises it onto the `(4,8)` target (`G-SEMAPHORE`).
+P5 runs this on `(1,1)`; P8 adds the `(4,8)` target-mesh test at the bottom (`G-SEMAPHORE`),
+where the semaphores are the ones a real collective consumes.
 
 Run:
     pytest models/demos/llama31_8b_d_p/tests/unit/test_ccl_semaphores.py -x -q
@@ -34,7 +35,8 @@ from __future__ import annotations
 import pytest
 from loguru import logger
 
-from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory
+import ttnn
+from models.demos.llama31_8b_d_p.tests.test_factory import TestFactory, parametrize_galaxy_submeshes
 
 # bringup_log/04_CCL_PLAN.md section 6: the four counts, with the constants they come from in
 # models/demos/gpt_oss_d_p/tt/ccl.py (:65 3*2, :71 2*2, :77 2*1, :85 range(2)).
@@ -160,3 +162,120 @@ def test_reset_global_semaphores_runs(mesh_device):
     ccl.reset_global_semaphores()
     assert len(ccl.rs_ping_pong_semaphores) == EXPECTED_RS_SEMAPHORES
     assert len(ccl.ag_ping_pong_semaphores) == EXPECTED_AG_SEMAPHORES
+
+
+# =====================================================================================
+# G-SEMAPHORE (P8) — the same invariant, on the mesh the deployment actually uses
+# =====================================================================================
+@parametrize_galaxy_submeshes([(4, 8)])
+def test_semaphore_counts_hold_on_the_target_mesh(mesh_device, device_params, submesh_shape):
+    """`G-SEMAPHORE`: `CCLManager` allocates **6 / 4 / 2 / 2** on `(4,8)`, and a multi-layer model
+    built on top of it does not multiply them.
+
+    The `(1,1)` test above proves the getters do not allocate. This one proves the two things that
+    `(1,1)` cannot: that the counts are the same on the mesh where the semaphores are actually used
+    by a collective, and that **building layers does not create managers** — every `DecoderLayer`
+    takes the manager it is handed (`tt/layer.py`), so a 32-layer model must leave the four lists at
+    their constants. The recipe states the gate in exactly those terms
+    (`BRINGUP_RECIPE.md:855-857`: "instantiate the model and check the manager's semaphore list
+    lengths equal the constants, not `n_layers x` them").
+
+    Two layers, random weights: the invariant is depth-independent (the layer loop is one expression)
+    and 32 layers of real weights would spend two minutes proving nothing extra. The full-depth,
+    real-weight version of this check is the `[prefill-pcc] semaphores` line the galaxy harness prints
+    after a 32-layer run (`tests/galaxy_prefill_kv_pcc.py`).
+    """
+    import torch
+
+    from models.demos.llama31_8b_d_p.tests.test_factory import llama_config_dims
+    from models.demos.llama31_8b_d_p.tt.model import Model
+    from models.demos.llama31_8b_d_p.tt.model_config import llama_hf_config
+
+    objs = TestFactory.setup_submesh(mesh_device, submesh_shape)
+    mesh, ccl = objs["mesh_device"], objs["ccl_manager"]
+    counts_before = (
+        len(ccl.rs_ping_pong_semaphores),
+        len(ccl.ag_ping_pong_semaphores),
+        len(ccl.barrier_semaphore),
+        len(ccl.ring_attention_ccl_semaphore_handles),
+    )
+    expected = (
+        EXPECTED_RS_SEMAPHORES,
+        EXPECTED_AG_SEMAPHORES,
+        EXPECTED_BARRIER_SEMAPHORES,
+        EXPECTED_RING_ATTENTION_SEMAPHORES,
+    )
+    assert counts_before == expected, f"on {submesh_shape}: {counts_before} != {expected}"
+
+    dims = llama_config_dims()
+    hf_config = llama_hf_config(dims)
+    generator = torch.Generator().manual_seed(0)
+    num_layers = 2
+
+    def rnd(*shape):
+        return torch.randn(*shape, generator=generator) * 0.02
+
+    hidden, inter = dims["hidden_size"], dims["intermediate_size"]
+    n_heads, n_kv, head_dim = dims["num_attention_heads"], dims["num_key_value_heads"], dims["head_dim"]
+    state = {
+        "model.embed_tokens.weight": rnd(dims["vocab_size"], hidden),
+        "model.norm.weight": torch.rand(hidden, generator=generator) + 0.5,
+    }
+    for layer_idx in range(num_layers):
+        prefix = f"model.layers.{layer_idx}."
+        state.update(
+            {
+                prefix + "input_layernorm.weight": torch.rand(hidden, generator=generator) + 0.5,
+                prefix + "post_attention_layernorm.weight": torch.rand(hidden, generator=generator) + 0.5,
+                prefix + "self_attn.q_proj.weight": rnd(n_heads * head_dim, hidden),
+                prefix + "self_attn.k_proj.weight": rnd(n_kv * head_dim, hidden),
+                prefix + "self_attn.v_proj.weight": rnd(n_kv * head_dim, hidden),
+                prefix + "self_attn.o_proj.weight": rnd(hidden, n_heads * head_dim),
+                prefix + "mlp.gate_proj.weight": rnd(inter, hidden),
+                prefix + "mlp.up_proj.weight": rnd(inter, hidden),
+                prefix + "mlp.down_proj.weight": rnd(hidden, inter),
+            }
+        )
+    model = Model(
+        mesh,
+        hf_config,
+        state,
+        mesh_config=objs["mesh_config"],
+        ccl_manager=ccl,
+        max_seq_len=512,
+        num_layers=num_layers,
+        with_lm_head=False,
+    )
+    counts_after = (
+        len(ccl.rs_ping_pong_semaphores),
+        len(ccl.ag_ping_pong_semaphores),
+        len(ccl.barrier_semaphore),
+        len(ccl.ring_attention_ccl_semaphore_handles),
+    )
+    assert counts_after == expected, f"building {num_layers} layers changed the counts: {counts_after}"
+    # Identity, not just count: every layer must hold the SAME manager object.
+    managers = {id(layer.self_attn.ccl_manager) for layer in model.layers} | {
+        id(layer.mlp.ccl_manager) for layer in model.layers
+    }
+    assert managers == {id(ccl)}, f"{len(managers)} distinct CCLManagers across {num_layers} layers; expected 1"
+    # Negative control: a SECOND manager on the same mesh must hand out DIFFERENT semaphore objects.
+    # Without this, `managers == {id(ccl)}` above could pass for a trivial reason (e.g. if `id()`
+    # collided, or if every CCLManager shared one global set), and the gate would be asserting
+    # nothing about sharing.
+    from models.demos.llama31_8b_d_p.tt.ccl import CCLManager
+    from models.demos.llama31_8b_d_p.utils.general_utils import get_default_num_links
+
+    other = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Ring)
+    shared = {id(s) for s in ccl.rs_ping_pong_semaphores} & {id(s) for s in other.rs_ping_pong_semaphores}
+    assert not shared, (
+        f"a second CCLManager handed out {len(shared)} of the first one's semaphore objects; the "
+        f"'all layers share ONE manager' assertion above would then be vacuous"
+    )
+
+    logger.info(
+        f"[G-SEMAPHORE] on {submesh_shape}: rs/ag/barrier/ring = {counts_after} before and after "
+        f"building {num_layers} layers (2 collectives each); all layers share ONE CCLManager; CCL "
+        f"grid {(ccl.compute_grid_size.x, ccl.compute_grid_size.y)}, ring-attention offset "
+        f"{ccl.ring_attention_ccl_core_grid_offset}; negative control: a second manager shares NONE "
+        f"of the first's semaphore objects"
+    )

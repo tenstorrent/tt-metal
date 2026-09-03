@@ -345,15 +345,29 @@ def test_runtime_satisfies_the_engine_contract(mesh_device, reset_seeds, expect_
 
 @pytest.mark.parametrize("mesh_device", [TestFactory.SINGLE_CARD_MESH_SHAPE], indirect=True)
 def test_construction_refuses_half_enabled_and_mismatched_configs(mesh_device, expect_error):
-    """SP without a real `dense_sp`, SP on a 1-row mesh, and a config/device mesh-shape mismatch.
+    """SP on a 1-row mesh, and a config/device mesh-shape mismatch.
 
-    All three are cheap to get wrong and expensive to notice. The SP one is the worst: with
-    `sequence_parallel=True` and the P5 stub still in place, every layer raises **after** the KV
-    cache has been written, so a caller that swallowed the exception would be left with a
-    half-populated cache and no output.
+    Both are cheap to get wrong and expensive to notice: a half-enabled SP config raises inside the
+    forward, **after** the KV cache has been written, so a caller that swallowed the exception would
+    be left with a half-populated cache and no output.
+
+    **Changed in P8.** This test used to assert a third refusal, `sequence_parallel=True` while
+    `tt/attention/dense_sp.dense_sp_attention` was "still the P5 stub". P8 implemented it, so that
+    refusal is *correctly* gone and asserting it would now fail. What replaces it is not another
+    refusal but its opposite, asserted below: `_dense_sp_is_implemented()` — the probe
+    `TtPrefillRuntime` uses to decide whether SP is available (`DEC-056`) — must now return **True**.
+    That keeps the probe itself under test: it works by calling the function with no arguments and
+    distinguishing `NotImplementedError` (stub) from `TypeError` (a real signature), so a port that
+    kept a `*args, **kwargs` signature would leave it stuck on `False` and silently disable SP.
     """
+    from models.demos.llama31_8b_d_p.tt.tt_prefill_runtime import _dense_sp_is_implemented
+
     hf_config = llama_hf_config(llama_config_dims())
-    with expect_error(AssertionError, "still the P5 stub"):
+    assert _dense_sp_is_implemented(), (
+        "the dense_sp stub probe still reports NOT implemented after P8's port; "
+        "TtPrefillRuntime._chunked_read_supported would then refuse every chunk past the first"
+    )
+    with expect_error(AssertionError, "there is no sequence axis to shard"):
         TtPrefillRuntime(
             mesh_device,
             hf_config,
@@ -361,7 +375,7 @@ def test_construction_refuses_half_enabled_and_mismatched_configs(mesh_device, e
             TtPrefillRuntimeConfig(
                 num_layers=1,
                 max_seq_len=MAX_SEQ,
-                mesh_shape=(4, 8),
+                mesh_shape=tuple(mesh_device.shape),
                 default_chunk_size=CHUNK,
                 sequence_parallel=True,
             ),
@@ -373,4 +387,7 @@ def test_construction_refuses_half_enabled_and_mismatched_configs(mesh_device, e
             {},
             TtPrefillRuntimeConfig(num_layers=1, max_seq_len=MAX_SEQ, mesh_shape=(4, 8), default_chunk_size=CHUNK),
         )
-    logger.info("[G-RUNTIME] half-enabled SP and mesh-shape mismatches are refused at construction")
+    logger.info(
+        "[G-RUNTIME] the dense_sp probe reports IMPLEMENTED (P8); half-enabled SP (sp=1) and "
+        "mesh-shape mismatches are still refused at construction"
+    )

@@ -1,0 +1,77 @@
+
+=== case 4x8:ring:2:1:toplevel (expect ok) ===
+[fabric] START 4x8 toplevel topology=ring num_links=2 axis=1
+[fabric] DONE 4x8 toplevel topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1875 rel=5.04e-03
+
+=== case 4x8:ring:2:0:toplevel (expect ok) ===
+[fabric] START 4x8 toplevel topology=ring num_links=2 axis=0
+[fabric] DONE 4x8 toplevel topology=ring num_links=2 axis=0 out=(1, 1, 128, 4096) ring=4 max|err vs 4x input|=0.0576 rel=3.10e-03
+
+=== case 1x2:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x2 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x2 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0298 rel=2.67e-03
+
+=== case 1x4:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x4 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x4 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=4 max|err vs 4x input|=0.0937 rel=4.86e-03
+
+=== case 1x8:ring:2:1:submesh (expect ok) ===
+[fabric] START 1x8 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 1x8 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1875 rel=4.75e-03
+
+=== case 1x8:ring:1:1:submesh (expect ok) ===
+[fabric] START 1x8 submesh topology=ring num_links=1 axis=1
+[fabric] DONE 1x8 submesh topology=ring num_links=1 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1875 rel=4.80e-03
+
+=== case 2x8:ring:2:1:submesh (expect ok) ===
+[fabric] START 2x8 submesh topology=ring num_links=2 axis=1
+[fabric] DONE 2x8 submesh topology=ring num_links=2 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.1874 rel=5.06e-03
+
+=== case 2x8:ring:2:0:submesh (expect ok) ===
+[fabric] START 2x8 submesh topology=ring num_links=2 axis=0
+[fabric] DONE 2x8 submesh topology=ring num_links=2 axis=0 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0300 rel=3.13e-03
+
+=== case 1x2:linear:1:1:submesh (expect ok) ===
+[fabric] START 1x2 submesh topology=linear num_links=1 axis=1
+[fabric] DONE 1x2 submesh topology=linear num_links=1 axis=1 out=(1, 1, 128, 4096) ring=2 max|err vs 2x input|=0.0305 rel=3.37e-03
+
+=== case 1x8:linear:1:1:toplevel (expect fabric-init-fail) ===
+    2026-09-03 22:21:51.613 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 1. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (f
+
+=== case 2x8:ring:2:1:toplevel (expect fabric-init-fail) ===
+    2026-09-03 22:22:20.951 | error    |           Metal | Fabric Router Sync: Timeout after 10000 ms on Device 0. Expected status 0xa2b2c2d2 (LOCAL_HANDSHAKE_COMPLETE) at edm_status_address=0x00015c10. Per-router status: (f
+
+=== case 1x8:linear:1:1:submesh (expect ok) ===
+[fabric] START 1x8 submesh topology=linear num_links=1 axis=1
+[fabric] DONE 1x8 submesh topology=linear num_links=1 axis=1 out=(1, 1, 128, 4096) ring=8 max|err vs 8x input|=0.3531 rel=8.90e-03
+
+=== case overlap-quiesce (expect ok) ===
+[fabric] START overlap phase 0 1x2 barrier=True
+[fabric] DONE overlap phase 0 1x2 rel=3.25e-03
+[fabric] quiesce_devices() barrier taken
+[fabric] START overlap phase 1 1x8 barrier=True
+[fabric] DONE overlap phase 1 1x8 rel=7.50e-03
+[fabric] quiesce_devices() barrier taken
+
+=== case overlap-nobarrier (expect hang) ===
+    no completion in 240s
+
+| case | expected | measured | |
+|---|---|---|---|
+| `4x8:ring:2:1:toplevel` | ok | **ok** | MATCH |
+| `4x8:ring:2:0:toplevel` | ok | **ok** | MATCH |
+| `1x2:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x4:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x8:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `1x8:ring:1:1:submesh` | ok | **ok** | MATCH |
+| `2x8:ring:2:1:submesh` | ok | **ok** | MATCH |
+| `2x8:ring:2:0:submesh` | ok | **ok** | MATCH |
+| `1x2:linear:1:1:submesh` | ok | **ok** | MATCH |
+| `1x8:linear:1:1:toplevel` | fabric-init-fail | **fabric-init-fail** | MATCH |
+| `2x8:ring:2:1:toplevel` | fabric-init-fail | **fabric-init-fail** | MATCH |
+| `1x8:linear:1:1:submesh` | ok | **ok** | MATCH |
+| `overlap-quiesce` | ok | **ok** | MATCH |
+| `overlap-nobarrier` | hang | **hang** | MATCH |
+
+[fabric] 14/14 cases matched expectation. DEC-080: top-level partial meshes cannot init the fabric, so every sub-shape is a submesh of the open galaxy. DEC-081: two OVERLAPPING submeshes live at once hang the machine unless quiesce_devices() separates them; topology and link count are innocent.
+[fabric] a HANG case was run — reset the machine now: tt-smi -r

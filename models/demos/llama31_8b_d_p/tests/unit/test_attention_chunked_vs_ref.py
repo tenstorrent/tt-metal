@@ -420,7 +420,16 @@ def test_chunked_kv_equals_one_shot_and_golden(  # noqa: C901
     trace_dir = _trace_dir()
     metadata = _load_golden_meta(trace_dir)
     token_ids = list(metadata["token_ids"])
-    assert len(token_ids) >= seq_len, f"golden has {len(token_ids)} tokens, need >= {seq_len}"
+    if len(token_ids) < seq_len:
+        # SKIP, not fail (P8 fix). A golden trace shorter than this parametrisation is a missing
+        # *input*, exactly like the absent trace `_trace_dir()` already skips on — and the 2048 case
+        # needs a different trace directory than the 512 one, so whichever `$PREFILL_TRACE_DIR` the
+        # suite is run with, one of the two cases has no input. Failing made the whole package suite
+        # red for an environment reason and hid real failures behind it.
+        pytest.skip(
+            f"$PREFILL_TRACE_DIR golden has {len(token_ids)} tokens, this case needs >= {seq_len}; "
+            f"point it at a longer trace (e.g. .../p7_s2048) to run the s{seq_len} case"
+        )
     token_ids = token_ids[:seq_len]
     if not state_dict:
         pytest.skip("no real checkpoint loaded; G-CHUNK is a real-weight gate")

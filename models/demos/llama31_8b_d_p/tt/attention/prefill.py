@@ -78,6 +78,41 @@ def _run_sdpa(tt_q, tt_k, tt_v, config, program_config, compute_kernel_config, m
     )
 
 
+def _run_sp_bootstrap_sdpa(
+    tt_q, tt_k, tt_v, config, program_config, compute_kernel_config, mesh_device, mesh_config, ccl_manager, seq_len
+):
+    """The SP **one-shot** attention core: all-gather Q/K/V on the SP axis -> plain causal SDPA ->
+    reduce-scatter -> ``x 1/sp`` (``DEC-021``; template
+    ``models/demos/gpt_oss_d_p/tt/attention/prefill.py:233``).
+
+    Why it exists at all: the ring path needs Q strictly shorter than the per-chip cache shard
+    (``ring_joint_sdpa_device_operation.cpp:580``), so a request whose cache is exactly one chunk
+    long — ``max_seq_len == seq_len * sp``, which is what a one-shot ``G-MESH-KV`` run looks like —
+    has no ring to take, chunk 0 included. It is also the only SP path that does not depend on the
+    KV cache being correct, which makes it the bisection tool when a cache-backed run fails.
+
+    Why the ``x 1/sp``: after the all-gather every SP row holds the *same* full-sequence Q/K/V and so
+    computes the *same* full output. The reduce-scatter is being used as a scatter, and it sums
+    ``sp`` identical copies on the way, so the rescale undoes the sum. Routed through
+    ``mesh_config.reduce_scatter`` rather than a raw ``reduce_scatter_minimal_async`` — the
+    "collectives only via ``MeshConfig``" convention, and the clean-up ``DEC-021`` owed to P8.
+    """
+    sp = mesh_config.sp
+    sp_axis = mesh_config.sp_axis
+    full_seq_len = seq_len * sp
+    gathered = [mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2) for t in (tt_q, tt_k, tt_v)]
+    tt_out_full = _run_sdpa(
+        gathered[0], gathered[1], gathered[2], config, program_config, compute_kernel_config, mesh_device, full_seq_len
+    )
+    for t in gathered:
+        t.deallocate(True)
+    scattered = mesh_config.reduce_scatter(tt_out_full, ccl_manager, dim=2, axis=sp_axis)
+    tt_out_full.deallocate(True)
+    rescaled = ttnn.multiply(scattered, 1.0 / sp)
+    scattered.deallocate(True)
+    return rescaled
+
+
 def attention_forward(
     hidden_states,
     rope_mats,
@@ -194,27 +229,45 @@ def attention_forward(
     # --- Attention core ---
     if config.sequence_parallel and mesh_config.sp > 1:
         assert kv_cache is not None, "SP prefill needs a KV cache"
-        # P8. The stub raises; see dense_sp.py for the exact port and its three constraints.
-        tt_sdpa_out = dense_sp_attention(
-            tt_q,
-            kv_cache.k,
-            kv_cache.v,
-            tt_k,
-            tt_v,
-            kv_actual=cached_len,
-            logical_n=cached_len + seq_len * mesh_config.sp,
-            n_kv=config.num_kv_heads,
-            cache_global=kv_cache.max_seq_len,
-            head_dim=config.head_dim,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            scale=config.scaling,
-            cluster_axis=mesh_config.sp_axis,
-            slot_idx=user_id,
-            layer_idx=layer_idx,
-            num_layers=kv_cache.num_layers,
-            write_chunk=False,  # the per-layer seam already wrote this chunk above
-        )
+        # DEC-021's selection rule, verbatim from the template (`gpt_oss prefill.py:191`): the ring
+        # path needs Q shorter than the per-chip cache shard, so a cache sized to exactly one chunk
+        # takes the bootstrap even for chunk 0. Production sizes max_seq_len above one chunk and
+        # therefore always takes the ring.
+        if cached_len > 0 or kv_cache.max_seq_len > seq_len * mesh_config.sp:
+            tt_sdpa_out = dense_sp_attention(
+                tt_q,
+                kv_cache.k,
+                kv_cache.v,
+                tt_k,
+                tt_v,
+                kv_actual=cached_len,
+                logical_n=cached_len + seq_len * mesh_config.sp,
+                n_kv=config.num_kv_heads,
+                cache_global=kv_cache.max_seq_len,
+                head_dim=config.head_dim,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                program_config=program_config,
+                scale=config.scaling,
+                cluster_axis=mesh_config.sp_axis,
+                slot_idx=user_id,
+                layer_idx=layer_idx,
+                num_layers=kv_cache.num_layers,
+                write_chunk=False,  # the per-layer seam already wrote this chunk above
+            )
+        else:
+            tt_sdpa_out = _run_sp_bootstrap_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                config,
+                program_config,
+                compute_kernel_config,
+                mesh_device,
+                mesh_config,
+                ccl_manager,
+                seq_len,
+            )
     elif cached_len > 0:
         raise NotImplementedError(
             "llama31_8b_d_p: single-device chunked cache-read attention (cached_len>0) is not "

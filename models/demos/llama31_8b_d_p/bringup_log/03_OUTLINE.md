@@ -1078,3 +1078,29 @@ all caught by pass 1 and corrected here: `gpt_oss_d_p/tt/model.py` `:37`→`:38`
 `models/demos/gpt_oss_d_p/tt/model.py:252` for the `rot_mats_local` parameter; it is at **`:250`**
 (`:252` is `get_last_token`). P2's verifier reported 200/200 because that particular reference was
 never added to `CITES` — which is the argument for pass 2.
+
+---
+
+## 9. Files P8 added (and the two that were planned but never created)
+
+Appendix F.9 states the rule these follow: **when adding a gate, add its file in the same edit**, or
+the gate silently becomes a `NOT-RUN`.
+
+| file | gate | why it did not exist before |
+|---|---|---|
+| `tests/unit/test_tp_parity.py` | `G-TP-PARITY` | Appendix F.9 assigned it to P5, but P5 had no multi-device mesh to parametrise, so it was never created. P8 creates it. |
+| `tests/unit/test_kv_cache_tp8.py` | **`G-KV-TP8`** (new) | `R-027`'s coverage hole: the model -> cache path needs TP=8, which no earlier phase could open. |
+| `tests/unit/test_sp_attention_chunked.py` | `G-CHUNK-ATTN`, **`G-SP-RING`** (new) | `G-CHUNK-ATTN` was `BLOCKED` on `dense_sp_attention` (`R-028`). `G-SP-RING` is new: the ring op alone, against fp32 torch, plus the `fp32_dest_acc_en` A/B. |
+| `tests/galaxy_prefill_kv_pcc.py` | `G-MESH-KV`, `G-RACE` | §3.22 lists it under the P8 row; it is the `gpt_oss_d_p` harness minus the MoE knobs, plus `PREFILL_RUNS` (the `G-RACE` repetition on **one** `CCLManager`). |
+| `tests/fabric_topology_matrix.py` | **`G-FABRIC-MATRIX`** (new) | Not planned. It exists because two P8 assumptions about this machine were wrong (`DEC-080`, `DEC-081`) and the corrections needed a reproducible measurement rather than a paragraph. |
+
+Additions to existing files: `tests/test_factory.py` gains `TestFactory.setup_submesh` and
+`parametrize_galaxy_submeshes` (`DEC-080`); `tests/unit/test_ccl_semaphores.py` gains the `(4,8)`
+`G-SEMAPHORE` test; `tests/unit/test_weight_loading.py` gains the TP=8 cache-only test (`R-017`);
+`tt/attention/config.py` gains `get_ring_sdpa_config` / `get_ring_compute_kernel_config`
+(`DEC-083`, `DEC-084`); `tt/attention/prefill.py` gains `_run_sp_bootstrap_sdpa` (the `DEC-021`
+bootstrap P4 owed to P8) and the `use_cache_backed_ring` selection; `tt/tt_prefill_runtime.py` gains
+one bring-up-only logging helper, `_log_layer_error_steps` (`R-025`).
+
+`tt/attention/dense_sp.py` stops being a stub. Nothing else in `tt/` changed, and nothing under
+`tt/runners/` was written — that is P10's.

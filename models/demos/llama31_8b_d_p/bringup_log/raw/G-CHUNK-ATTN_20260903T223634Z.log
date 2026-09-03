@@ -1,0 +1,150 @@
+2026-09-03 22:36:36.908 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_chunked_ring_attention_equals_one_shot[blackhole-4x8] 2026-09-03 22:36:39.159 | INFO     | llama31_8b_d_p.conftest:state_dict:63 - [llama31_8b_d_p] loading state dict from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-03 22:36:39.164 | INFO     | llama31_8b_d_p.conftest:state_dict:65 - [llama31_8b_d_p] loaded 291 tensors
+2026-09-03 22:36:39.362 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 22:36:39.362 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 22:36:39.380 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 22:36:39.380 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 22:36:39.477 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 22:36:39.482 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 22:36:40.917 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 22:36:40.917 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 22:36:40.917 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 22:36:40.917 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 22:36:40.935 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 22:36:41.625 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:36:42.116 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 22:36:42.200 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 22:36:46.039 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:36:46.041 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:36:46.061 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:36:46.062 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:36:46.063 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:36:46.064 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:36:46.064 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:36:46.064 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:36:46.081 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:36:46.081 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:36:46.081 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:36:46.082 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:36:46.099 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:36:46.099 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:36:46.100 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:36:46.101 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:36:46.101 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:36:46.101 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:36:46.104 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.104 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.104 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.104 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.702 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.702 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.702 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.702 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:36:46.801 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:36:47.014 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:36:47.014 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:36:48.243 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:37:32.560 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:228 - [G-CHUNK-ATTN] three paths written on (4, 8): one-shot 1x512 (bootstrap), chunked 2x256 (ring cache-read), and the cached_len=0 control
+2026-09-03 22:37:33.047 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 0: ring-vs-bootstrap K=1.00000 V=1.00000 | vs golden (ring) K=0.99996 V=0.99994 (bootstrap) K=0.99996 | cached_len=0 control K=0.55499
+2026-09-03 22:37:33.461 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 1: ring-vs-bootstrap K=0.99996 V=0.99983 | vs golden (ring) K=0.99995 V=0.99981 (bootstrap) K=0.99997 | cached_len=0 control K=0.59475
+2026-09-03 22:37:33.893 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 2: ring-vs-bootstrap K=0.99981 V=0.99964 | vs golden (ring) K=0.99975 V=0.99948 (bootstrap) K=0.99985 | cached_len=0 control K=0.48957
+2026-09-03 22:37:34.317 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 3: ring-vs-bootstrap K=0.99989 V=0.99953 | vs golden (ring) K=0.99987 V=0.99932 (bootstrap) K=0.99990 | cached_len=0 control K=0.53258
+2026-09-03 22:37:34.725 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 4: ring-vs-bootstrap K=0.99987 V=0.99940 | vs golden (ring) K=0.99986 V=0.99916 (bootstrap) K=0.99990 | cached_len=0 control K=0.53238
+2026-09-03 22:37:35.188 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 5: ring-vs-bootstrap K=0.99981 V=0.99935 | vs golden (ring) K=0.99978 V=0.99909 (bootstrap) K=0.99986 | cached_len=0 control K=0.50080
+2026-09-03 22:37:35.624 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 6: ring-vs-bootstrap K=0.99981 V=0.99919 | vs golden (ring) K=0.99978 V=0.99888 (bootstrap) K=0.99986 | cached_len=0 control K=0.50893
+2026-09-03 22:37:36.064 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 7: ring-vs-bootstrap K=0.99975 V=0.99901 | vs golden (ring) K=0.99971 V=0.99869 (bootstrap) K=0.99982 | cached_len=0 control K=0.50622
+2026-09-03 22:37:36.531 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 8: ring-vs-bootstrap K=0.99952 V=0.99836 | vs golden (ring) K=0.99945 V=0.99792 (bootstrap) K=0.99971 | cached_len=0 control K=0.44795
+2026-09-03 22:37:37.003 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L 9: ring-vs-bootstrap K=0.99918 V=0.99727 | vs golden (ring) K=0.99912 V=0.99683 (bootstrap) K=0.99956 | cached_len=0 control K=0.43506
+2026-09-03 22:37:37.487 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L10: ring-vs-bootstrap K=0.99889 V=0.99636 | vs golden (ring) K=0.99882 V=0.99599 (bootstrap) K=0.99948 | cached_len=0 control K=0.41625
+2026-09-03 22:37:37.975 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L11: ring-vs-bootstrap K=0.99831 V=0.99492 | vs golden (ring) K=0.99831 V=0.99482 (bootstrap) K=0.99925 | cached_len=0 control K=0.41313
+2026-09-03 22:37:38.414 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L12: ring-vs-bootstrap K=0.99846 V=0.99248 | vs golden (ring) K=0.99854 V=0.99268 (bootstrap) K=0.99933 | cached_len=0 control K=0.50687
+2026-09-03 22:37:38.851 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L13: ring-vs-bootstrap K=0.99721 V=0.99215 | vs golden (ring) K=0.99739 V=0.99255 (bootstrap) K=0.99871 | cached_len=0 control K=0.37709
+2026-09-03 22:37:39.332 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L14: ring-vs-bootstrap K=0.99728 V=0.99279 | vs golden (ring) K=0.99758 V=0.99341 (bootstrap) K=0.99873 | cached_len=0 control K=0.41817
+2026-09-03 22:37:39.816 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L15: ring-vs-bootstrap K=0.99749 V=0.98990 | vs golden (ring) K=0.99785 V=0.99147 (bootstrap) K=0.99874 | cached_len=0 control K=0.43963
+2026-09-03 22:37:40.273 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L16: ring-vs-bootstrap K=0.99772 V=0.99263 | vs golden (ring) K=0.99805 V=0.99363 (bootstrap) K=0.99882 | cached_len=0 control K=0.45845
+2026-09-03 22:37:40.740 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L17: ring-vs-bootstrap K=0.99686 V=0.99009 | vs golden (ring) K=0.99748 V=0.99215 (bootstrap) K=0.99830 | cached_len=0 control K=0.42796
+2026-09-03 22:37:41.212 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L18: ring-vs-bootstrap K=0.99682 V=0.99295 | vs golden (ring) K=0.99739 V=0.99419 (bootstrap) K=0.99825 | cached_len=0 control K=0.42894
+2026-09-03 22:37:41.675 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L19: ring-vs-bootstrap K=0.99717 V=0.99261 | vs golden (ring) K=0.99766 V=0.99383 (bootstrap) K=0.99843 | cached_len=0 control K=0.44771
+2026-09-03 22:37:42.112 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L20: ring-vs-bootstrap K=0.99687 V=0.99221 | vs golden (ring) K=0.99744 V=0.99345 (bootstrap) K=0.99822 | cached_len=0 control K=0.42075
+2026-09-03 22:37:42.554 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L21: ring-vs-bootstrap K=0.99654 V=0.99076 | vs golden (ring) K=0.99716 V=0.99229 (bootstrap) K=0.99807 | cached_len=0 control K=0.43943
+2026-09-03 22:37:43.017 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L22: ring-vs-bootstrap K=0.99628 V=0.99114 | vs golden (ring) K=0.99695 V=0.99287 (bootstrap) K=0.99789 | cached_len=0 control K=0.41795
+2026-09-03 22:37:43.482 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L23: ring-vs-bootstrap K=0.99662 V=0.99137 | vs golden (ring) K=0.99720 V=0.99263 (bootstrap) K=0.99807 | cached_len=0 control K=0.45495
+2026-09-03 22:37:43.914 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L24: ring-vs-bootstrap K=0.99708 V=0.99181 | vs golden (ring) K=0.99756 V=0.99302 (bootstrap) K=0.99830 | cached_len=0 control K=0.47066
+2026-09-03 22:37:44.370 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L25: ring-vs-bootstrap K=0.99712 V=0.99083 | vs golden (ring) K=0.99755 V=0.99209 (bootstrap) K=0.99838 | cached_len=0 control K=0.50361
+2026-09-03 22:37:44.837 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L26: ring-vs-bootstrap K=0.99673 V=0.98760 | vs golden (ring) K=0.99723 V=0.98976 (bootstrap) K=0.99812 | cached_len=0 control K=0.44629
+2026-09-03 22:37:45.279 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L27: ring-vs-bootstrap K=0.99683 V=0.99063 | vs golden (ring) K=0.99725 V=0.99202 (bootstrap) K=0.99815 | cached_len=0 control K=0.45007
+2026-09-03 22:37:45.739 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L28: ring-vs-bootstrap K=0.99689 V=0.98597 | vs golden (ring) K=0.99733 V=0.98859 (bootstrap) K=0.99820 | cached_len=0 control K=0.46605
+2026-09-03 22:37:46.185 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L29: ring-vs-bootstrap K=0.99713 V=0.98739 | vs golden (ring) K=0.99750 V=0.98957 (bootstrap) K=0.99838 | cached_len=0 control K=0.52185
+2026-09-03 22:37:46.647 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L30: ring-vs-bootstrap K=0.99671 V=0.98799 | vs golden (ring) K=0.99710 V=0.99004 (bootstrap) K=0.99808 | cached_len=0 control K=0.40922
+2026-09-03 22:37:47.115 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:280 - [G-CHUNK-ATTN] L31: ring-vs-bootstrap K=0.99843 V=0.99395 | vs golden (ring) K=0.99859 V=0.99470 (bootstrap) K=0.99906 | cached_len=0 control K=0.52986
+2026-09-03 22:37:47.115 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:296 - [G-CHUNK-ATTN] ring-vs-bootstrap divergence is ACCUMULATION, not a step: max consecutive error ratio 1.90x at L8 (ceiling 4.0x, checked from L3); excluded early steps [(1, 43677759.52), (2, 4.37)]
+2026-09-03 22:37:47.115 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_chunked_ring_attention_equals_one_shot:302 - [G-CHUNK-ATTN] 32 layers on (4, 8): layer 0 (attention-independent) K=1.00000 V=1.00000; layer 1 (ONE attention layer, the gate's quantity) K=0.99996 V=0.99983 (threshold 0.999); layers 1-31 accumulated min K=0.99628 min V=0.98597 (recorded, not gated — DEC-085) | vs golden: ring min K=0.99695 V=0.98859, bootstrap min K=0.99789 | layer-0 err_ratio=1.30x of the bf8_b storage floor | control worst K=0.37709
+PASSED
+models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8] 2026-09-03 22:37:47.630 | INFO     | models.demos.utils.trace_region_sizes:resolve_trace_region_size_for_candidates:155 - No trace_region_size configured for model candidates ['/home/mstojkovic/models/Llama-3.1-8B-Instruct', 'Llama-3.1-8B-Instruct', 'Llama-3.1-8B'] and SKU='bh_galaxy_perf'; defaulting to dynamic allocation (trace_region_size=0).
+2026-09-03 22:37:47.632 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:324)
+2026-09-03 22:37:47.632 | info     |     Distributed | Using custom mesh graph descriptor: /home/mstojkovic/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto (metal_env.cpp:418)
+2026-09-03 22:37:47.634 | info     |          Fabric | Loaded physical groupings from: /home/mstojkovic/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto (fabric_host_utils.cpp:338)
+2026-09-03 22:37:47.653 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:939)
+2026-09-03 22:37:47.653 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:997)
+2026-09-03 22:37:47.654 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 4x8_Mesh_flat_torus_xy (TORUSXY) (physical_grouping_descriptor_matching.cpp:1199)
+2026-09-03 22:37:47.657 | info     |          Fabric | Rank-bound PGD pinning enrichment: assigned pinnings to 1/1 logical mesh(es) (topology_mapper_utils.cpp:1617)
+2026-09-03 22:37:47.657 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3368)
+2026-09-03 22:37:47.657 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 22:37:47.661 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:47.661 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:47.661 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:47.661 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:48.496 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:48.496 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:48.496 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:48.496 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-09-03 22:37:48.520 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-03 22:37:48.680 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:455)
+2026-09-03 22:37:48.680 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-03 22:37:49.800 | DEBUG    | conftest:mesh_device:668 - multidevice with 32 devices is created
+2026-09-03 22:37:49.989 | critical |          Always | TT_FATAL: kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_en=true is not supported. (assert.hpp:104)
+2026-09-03 22:37:50.035 | INFO     | llama31_8b_d_p.tests.unit.test_sp_attention_chunked:test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost:505 - [G-SP-RING] ring_joint SDPA alone on (4, 8): Q (1, 32, 256, 128) at offset 256, cache 512 tokens bf8_b, GQA 32/8. fp32_dest_acc_en=False (the package's ring config): PCC 0.999784; bf8_b K/V + bf16 Q noise floor 0.999973; err_ratio 7.98x. fp32_dest_acc_en=True REFUSED by the op: RuntimeError: TT_FATAL @ /home/mstojkovic/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:1308: !kv_pad_rotation_enabled || use_streaming_compute
+info:
+kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by fp32_dest_acc_
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+58.88s call     models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_chunked_ring_attention_equals_one_shot[blackhole-4x8]
+9.09s setup    models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_chunked_ring_attention_equals_one_shot[blackhole-4x8]
+2.48s setup    models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+0.67s teardown models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+0.24s call     models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+0.19s teardown models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_chunked_ring_attention_equals_one_shot[blackhole-4x8]
+=========================== short test summary info ============================
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_chunked_ring_attention_equals_one_shot[blackhole-4x8]
+PASSED models/demos/llama31_8b_d_p/tests/unit/test_sp_attention_chunked.py::test_ring_sdpa_alone_vs_torch_and_the_fp32_accumulator_cost[blackhole-4x8]
+=================== 2 passed, 1 warning in 72.80s (0:01:12) ====================
+2026-09-03 22:37:52.485 | info     |    BuildKernels | JIT cache stats: 409/409 hits (100.0%) [409 cached, 7610 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 22:37:52.485 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 22:37:52.711 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 22:37:52.711 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 22:38:00.905 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 22:38:00.905 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 22:38:00.905 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

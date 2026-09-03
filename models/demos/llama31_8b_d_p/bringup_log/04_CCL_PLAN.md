@@ -342,3 +342,39 @@ citations verified, 0 mismatched, 0 missing files**, plus a new document-scan pa
 140** `path:line` references in `03_OUTLINE.md` and this file. Raw log:
 `raw/G-CCL-PLAN_20260903T170527Z.log` (same transcript as `raw/G-OUTLINE_20260903T170527Z.log`; the two gates share one
 verifier run). The 11 wrong line numbers this caught are itemised in `03_OUTLINE.md` §8.
+
+---
+
+## 12. P8 outcome — what the plan got right, and the two things it did not predict
+
+Every collective in §7 ran on the `(4,8)` galaxy under `G-MESH-KV` / `G-RACE` / `G-CHUNK-ATTN`.
+
+**Confirmed as planned:**
+
+* the semaphore-lifetime statement of §6 — **6 / 4 / 2 / 2**, unchanged after **384** all-reduces
+  across three full 32-layer prefills on one `CCLManager` (`G-SEMAPHORE`, `G-RACE`);
+* the depth-2 ping-pong (§6 note 2) is safe under real collectives: three runs, one KV digest
+  (`DEC-086`). §6 note 3's open question — whether to extend `reset_global_semaphores` — is answered
+  **no**, on the evidence, upholding `DEC-052`;
+* the SP one-shot bootstrap of §9 is not dead code: it is what a one-shot request *must* take,
+  because the ring op needs Q strictly shorter than the per-chip cache shard. It runs in the
+  `G-MESH-KV` one-shot configuration and scores min K 0.99789;
+* the ring-attention CCL offset `(grid.x - 1, 0) = (11, 0)` and the pinned 8x8 SDPA grid coexist
+  exactly as `DEC-012` predicted; the ring op's `ccl_core_grid_offset.x >= sdpa_grid.x` assert passes
+  at `11 >= 8`.
+
+**Two things §8 did not predict, both measured in `G-FABRIC-MATRIX`:**
+
+1. **`(1,N)` cannot be opened as a top-level mesh at all** on this machine — fabric bring-up times
+   out (`DEC-080`, `R-031`). §8's table is a table of *configurations*, and it is right about
+   `num_links`; what it is missing is that on this box the sub-shapes only exist as **submeshes** of
+   the open galaxy.
+2. **The `Linear` column is unnecessary and its first use hung the machine** — not because Linear is
+   wrong, but because the run that used it also had two overlapping submeshes live without
+   `quiesce_devices()` (`DEC-081`, `R-032`). All submeshes now run `Topology.Ring`, which has the
+   side benefit of making `G-TP-PARITY` a ring measurement at every shape and closing `R-012`.
+
+**One new collective consumer** that §7 lists but could not describe: the ring-joint SDPA allocates
+exactly **2** persistent gather buffers (`dense_k`, `dense_v`, keyed on `cache_global`), reused across
+all 32 layers and every chunk — visible in the harness's `ring-gather buffers allocated = 2` line, and
+`0` on the one-shot bootstrap path, which never enters the ring.
