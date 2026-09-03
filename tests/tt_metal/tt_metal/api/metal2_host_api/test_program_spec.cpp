@@ -4191,20 +4191,17 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentPrUsageExampleJITSmoke) {
 void kernel_main() {
     DataflowBuffer dfb_normal(dfb::normal);
 
-    constexpr const DFBBindingToken* bias_token = dfb::get_token_if_present<"bias">();
+    const DFBBindingToken* bias_token = dfb::get_token_if_present<"bias">();
+
     std::optional<DataflowBuffer> dfb_bias;
-#pragma GCC diagnostic push
-// This is needed to avoid compiler warning the address will not/ always be null.
-#pragma GCC diagnostic ignored "-Waddress"
-    if constexpr (bias_token != nullptr) {
+    if (bias_token != nullptr) {
         dfb_bias.emplace(*bias_token);
     }
 
     dfb_normal.push_back(1);
-    if constexpr (bias_token != nullptr) {
+    if (dfb_bias) {
         dfb_bias->push_back(1);
     }
-#pragma GCC diagnostic pop
 }
 )";
 
