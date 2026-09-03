@@ -63,6 +63,7 @@ add_subdirectory(deepseek/moe/generalized_moe_gate)
 add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
+add_subdirectory(graph_kernel)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
@@ -109,6 +110,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::GraphKernel
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
@@ -160,6 +162,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::GraphKernel>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>

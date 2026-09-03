@@ -53,6 +53,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
+#include "ttnn/operations/experimental/graph_kernel/graph_kernel_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/rgb_to_yuv/rgb_to_yuv_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
@@ -181,6 +182,7 @@ void py_module(nb::module_& mod) {
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
+    graph_kernel_op::detail::bind_experimental_graph_kernel_operation(mod);
     deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
     ttnn::experimental::detail::bind_rgb_to_yuv(mod);
     reshape::detail::bind_view(mod);
