@@ -441,11 +441,6 @@ def test_mlp_2d_vs_reference(
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
-@pytest.mark.xfail(
-    reason="TT_FATAL @ tt_metal/fabric/fabric.cpp:174 forwarding_direction: no forwarding "
-    "direction D0 to D28 on the 8x4 mesh. The 4x8 orientation passes. Remove once fixed.",
-    strict=True,  # Fail if the 8x4 fabric path is accidentally fixed (so we know to update)
-)
 def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     """
     Test that MLP2D class matches the HuggingFace/Meta reference model.

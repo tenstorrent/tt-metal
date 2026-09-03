@@ -30,6 +30,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
@@ -693,25 +694,24 @@ void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const Nodes& target_nodes,
-                                  std::string_view entity_type,
-                                  std::string_view entity_name) {
-        const NodeRangeSet range_set = to_node_range_set(target_nodes);
-        for (const NodeRange& range : range_set.ranges()) {
-            for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    node.x < compute_grid.x && node.y < compute_grid.y,
-                    "{} '{}' targets node ({},{}), which is out of bounds. "
-                    "The compute worker grid on this device is {}x{}.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y,
-                    compute_grid.x,
-                    compute_grid.y);
+    auto check_target_nodes =
+        [&](const Nodes& target_nodes, std::string_view entity_type, std::string_view entity_name) {
+            const NodeRangeSet range_set = to_node_range_set(target_nodes);
+            for (const NodeRange& range : range_set.ranges()) {
+                for (const NodeCoord& node : range) {
+                    TT_FATAL(
+                        node.x < compute_grid.x && node.y < compute_grid.y,
+                        "{} '{}' targets node ({},{}), which is out of bounds. "
+                        "The compute worker grid on this device is {}x{}.",
+                        entity_type,
+                        entity_name,
+                        node.x,
+                        node.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                }
             }
-        }
-    };
+        };
 
     for (const auto& work_unit : spec.work_units) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
@@ -1672,7 +1672,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1759,10 +1762,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.name,
-                    other_work_unit.name);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
@@ -2303,22 +2303,33 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const BufferType buffer_type = memory_config.buffer_type();
     const bool is_dram = (buffer_type == BufferType::DRAM);
     const bool is_sharded = memory_config.is_sharded();
-    // dynamic_tensor_shape is only meaningful on sharded tensors: for interleaved
-    // tensors the CTA payload never carried tensor_shape in the first place (and
-    // the device-side accessor doesn't read it), so the flag is a pure host-side
-    // validation loosening and has no effect on the CTA/CRTA layout.
+    // The tensor SHAPE only rides the CTA/CRTA payload for a sharded tensor: an interleaved payload
+    // never carried it in the first place, and the device-side accessor doesn't read it. So this
+    // particular induction is sharded-only.
+    //
+    // That is a statement about the shape words, NOT about the flag. dynamic_tensor_shape is a
+    // dynamic relaxation on every layout -- see dyn_page immediately below, which moves an
+    // interleaved ROW-MAJOR page size out of the CTAs. (match_padded_shape_only is the flag that is
+    // purely a host-side validation loosening with no CTA/CRTA effect; do not transplant its
+    // description onto this one.)
     const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
-    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
-    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
-    // the width without varying the logical shape), so there is no "page size varies but shape
-    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
-    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
-    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
-    const bool dyn_page =
-        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+    // accessor strides by the wrong number of bytes. We induce that here rather than expose a flag
+    // for it: a useful page-size change is ALWAYS a shape change on row-major (you can't vary the
+    // width without varying the logical shape), so there is no "page size varies but shape doesn't"
+    // case to give a flag to. Tiled page size is dtype-fixed and sharded page size is spec-fixed, so
+    // neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages words instead
+    // (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    //
+    // match_page_size opts out of the induction, for the CONVERSE case: shape varies, width does
+    // not. That implication runs only one way, so the flag does not reopen the reasoning above --
+    // it declares a narrower equivalence class in which the page size is pinned, and the match
+    // enforces it (tensor_spec_relaxations.cpp), so the CTA below cannot go stale.
+    const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
+                          !tensor_parameter.relaxations.match_page_size && !is_sharded &&
+                          spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2547,9 +2558,13 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id
+// Create map of accessor name -> semaphore handle: the logical id, the resolved scope,
+// and the binder hart count for local cached semaphores.
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
-    const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    const KernelSpec& kernel_spec,
+    const sem_solver::SemaphoreBinderCensus& semaphore_binders,
+    const SemaphoreNameToIdMap& semaphore_name_to_id,
+    const sem_solver::SemaphoreNameToScopeMap& semaphore_name_to_scope) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2560,7 +2575,19 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
-        out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
+        const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
+        const uint32_t total_binder_harts =
+            scope == SemScope::DM_LOCAL_CACHED
+                ? sem_solver::BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
+                : 0u;
+        TT_FATAL(
+            total_binder_harts <= 0x7FFFu,
+            "Semaphore '{}' has {} binder harts; the cached seed protocol supports at most 32767",
+            semaphore_binding.semaphore_spec_name,
+            total_binder_harts);
+        out.emplace(
+            semaphore_binding.accessor_name,
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
     }
     return out;
 }
@@ -2691,8 +2718,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgs& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
@@ -2897,7 +2923,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1b: Census the semaphore binders, using the kernel node sets from Step 1a. Runs
+    // unconditionally because it also rejects a kernel that binds the same semaphore twice.
+    const sem_solver::SemaphoreBinderCensus semaphore_binders =
+        sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
+
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected, metal_ctx);
     }
@@ -3056,7 +3087,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
-    // Create Semaphores and build name -> ID map.
+    // Create Semaphores and build the name -> ID map.
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
@@ -3068,6 +3099,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
+    // Pick each semaphore's access mechanism.
+    const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders);
+
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
@@ -3077,7 +3112,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
             MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
