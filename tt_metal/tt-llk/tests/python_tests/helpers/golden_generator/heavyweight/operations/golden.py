@@ -27,6 +27,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
 
 from ..data_transfer_blocks.data_transfer_blocks import DataTransferBlocks
+from ..data_transfer_blocks.l1_codec import datums_per_tile
 from ..data_transfer_blocks.pack_effects import PackEdgeMask
 from .chain import Chain, Registers, StageRecord, Step
 
@@ -43,6 +44,9 @@ class OpConfig:
     out_format: DataFormat
     dest_format: DataFormat
     geometry: Dict = field(default_factory=dict)
+    #: Result tiles accumulated into one Dest before it is packed. 1 is the
+    #: ordinary case: one input tile in, one output tile out.
+    tiles_per_accumulation: int = 1
     relu_type: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     edge_mask: Optional[PackEdgeMask] = None
@@ -76,6 +80,15 @@ class Golden:
     def build_chain(self, cfg: OpConfig) -> Chain:
         """The pipeline this operation runs. Every op declares its own."""
         raise NotImplementedError
+
+    @staticmethod
+    def source(operand: int, tile: int = 0) -> str:
+        """Register holding one operand's L1 buffer for one tile of a block.
+
+        Tile 0 keeps the plain name, so an op that does not accumulate reads
+        ``in0``/``in1`` and its trace stays uncluttered.
+        """
+        return f"in{operand}" if tile == 0 else f"in{operand}_t{tile}"
 
     # ------------------------------------------------------------------
     # The data-transfer blocks, as chainable steps
@@ -168,35 +181,30 @@ class Golden:
 
     def src_to_dest(
         self,
+        cfg: OpConfig,
         fn: Callable[[Registers], torch.Tensor],
         *,
         reads: tuple = ("srcA",),
         into: str = "dest",
+        accumulate: bool = False,
     ) -> Step:
-        """The maths between the src registers and Dest."""
+        """The maths between the src registers and Dest.
 
-        def run(regs: Registers) -> None:
-            regs[into] = fn(regs)
+        `fn` supplies the arithmetic, which is the operation's business; the
+        block decides how the result lands in a Dest slot.
 
-        return Step(self.op_name, run, reads=reads, writes=(into,))
-
-    def accumulate_into_dest(
-        self,
-        fn: Callable[[Registers], torch.Tensor],
-        *,
-        reads: tuple = ("srcA",),
-        into: str = "dest",
-    ) -> Step:
-        """Like :meth:`src_to_dest`, but adds into Dest instead of replacing it.
-
-        This is what lets a multi-pass op be written as a loop.
+        With `accumulate`, the result is added to what Dest already holds rather
+        than replacing it, and each pass rounds to Dest precision — which is what
+        lets a multi-pass op be written as a loop.
         """
 
         def run(regs: Registers) -> None:
-            value = fn(regs)
-            regs[into] = value if into not in regs else regs[into] + value
+            regs[into] = self.blocks.src_to_dest(
+                fn(regs), cfg.dest_format, regs.get(into) if accumulate else None
+            )
 
-        return Step(f"{self.op_name}+=", run, reads=reads, writes=(into,))
+        name = f"{self.op_name}+=" if accumulate else self.op_name
+        return Step(name, run, reads=reads, writes=(into,))
 
     # ------------------------------------------------------------------
     # Running
@@ -212,6 +220,7 @@ class Golden:
         dest_format: Optional[DataFormat] = None,
         num_faces: int = 4,
         face_r_dim: int = 16,
+        num_tiles_per_accumulation: int = 1,
         trace: Optional[List[StageRecord]] = None,
         **pack_effects,
     ) -> torch.Tensor:
@@ -235,8 +244,11 @@ class Golden:
             dest_format=dest_format
             or self.blocks.dest_format_for(in_formats[0], dest_acc),
             geometry=geometry,
+            tiles_per_accumulation=num_tiles_per_accumulation,
             **pack_effects,
         )
+        if num_tiles_per_accumulation > 1:
+            return self._run_accumulating(stimuli, in_formats, cfg, trace)
         # Lay the stimuli out in L1 exactly as the test harness does before
         # writing them to the device, so the chain reads the bytes the hardware
         # read. Note this packs tiles contiguously while
@@ -254,6 +266,44 @@ class Golden:
         self.last_chain = self.build_chain(cfg)
         l1_out = self.last_chain.run(regs, result="out", trace=trace)
         return self.blocks.unpack_from_l1(l1_out, out_format, **geometry)
+
+    def _run_accumulating(
+        self,
+        stimuli: Sequence[torch.Tensor],
+        in_formats: Sequence[DataFormat],
+        cfg: OpConfig,
+        trace: Optional[List[StageRecord]],
+    ) -> torch.Tensor:
+        """Run one chain per block of `cfg.tiles_per_accumulation` input tiles.
+
+        Each block accumulates its tiles into a single Dest and packs once, so
+        the output holds one tile per block rather than one per input tile.
+        """
+        per_tile = datums_per_tile(**cfg.geometry)
+        depth = cfg.tiles_per_accumulation
+        total_tiles = stimuli[0].numel() // per_tile
+        if total_tiles % depth:
+            raise ValueError(
+                f"{total_tiles} input tiles is not a multiple of the "
+                f"{depth} tiles accumulated per Dest"
+            )
+
+        chain = self.build_chain(cfg)
+        self.last_chain = chain
+        packed_blocks: List[int] = []
+        for block in range(total_tiles // depth):
+            regs = Registers()
+            for tile in range(depth):
+                index = block * depth + tile
+                for operand, (values, fmt) in enumerate(zip(stimuli, in_formats)):
+                    chunk = values.reshape(-1)[
+                        index * per_tile : (index + 1) * per_tile
+                    ]
+                    regs[self.source(operand, tile)] = self.blocks.pack_to_l1(
+                        chunk, fmt, **cfg.geometry
+                    )
+            packed_blocks.extend(chain.run(regs, result="out", trace=trace))
+        return self.blocks.unpack_from_l1(packed_blocks, cfg.out_format, **cfg.geometry)
 
     def run_l1(
         self, l1_buffers: Sequence, cfg: OpConfig, *, trace=None
