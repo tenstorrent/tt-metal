@@ -36,6 +36,11 @@ ring_params_8k_flux2_transformer = {**ring_params_8k_flux2, "trace_region_size":
 # Ring 4x8 keeps its existing params -- deliberately no trace_region_size, unlike the line rows --
 # and only gains the self-skip.
 ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **_REQ_EXACT}
+# PROBE (not for merge as-is): same 4x8 mesh, same sp/tp factors, same 8k fabric router, same
+# absence of a trace region -- differing from the Ring row ONLY in FabricConfig and Topology.
+# Lets one run separate "the residual all_blocks error is Ring-specific" from "it is a property
+# of sp=4/tp=8 at this scale".
+line_params_8k_flux2_req_exact = {**line_params_8k_flux2, **_REQ_EXACT}
 
 
 class ModelLocationGenerator(Protocol):
@@ -64,12 +69,14 @@ class ModelLocationGenerator(Protocol):
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2_req_exact],
+        [(4, 8), 0, 1, ttnn.Topology.Linear, 2, False, line_params_8k_flux2_req_exact],
     ],
     ids=[
         "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
+        "bh_4x8_linear",
     ],
     indirect=["mesh_device", "device_params"],
 )
