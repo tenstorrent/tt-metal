@@ -26,7 +26,15 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
         native = getattr(getattr(config, "text_config", config), "max_position_embeddings", 32768)
         if "Qwen" in hf_model_name and total_length > native:
-            scaling = {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": native}
+            # factor derived, not hardcoded. test_long_context stretches the model's rotary
+            # frequencies by `max_seq_len / native` (1.606 at its 64k row: 65792 / 40960), so a
+            # reference built with a fixed 4.0 would encode positions differently from the model
+            # under test and every disagreement would be charged to whatever else changed.
+            scaling = {
+                "rope_type": "yarn",
+                "factor": total_length / native,
+                "original_max_position_embeddings": native,
+            }
             # transformers >= 5 renamed rope_scaling -> rope_parameters and type -> rope_type
             if getattr(config, "rope_parameters", None) is not None:
                 config.rope_parameters = {**config.rope_parameters, **scaling}
@@ -73,6 +81,20 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
     segment_accuracies = []
     chunk_size = 1024
 
+    # Context is carried across chunks. Without this the HuggingFace branch below called the
+    # model with no cache and no position offset, so every 1024-token chunk restarted at
+    # position 0 -- `--total_length N` produced N/1024 independent short windows rather than one
+    # N-token context, at any N. That made a long-context reference unobtainable by any argument,
+    # and it is exactly the regime a reduced-precision KV cache degrades. The branch for the
+    # non-HuggingFace reference model already carried position via `start_pos=chunk_start`; this
+    # gives the HuggingFace branch the same contract.
+    #
+    # chunk_size stays at 1024 deliberately: one forward pass over the whole window would
+    # materialize attention scores for N^2 positions (~137 GB in float32 at N=32768). Chunking
+    # with a carried cache costs the same total arithmetic with bounded peak memory -- the cache
+    # itself is 36 layers x 2 x 8 kv heads x 128 dims x N x 4 bytes, 9.0 GiB at 32k.
+    past_key_values = None
+
     with torch.no_grad():
         for chunk_start in range(0, total_length - 1, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_length)
@@ -87,8 +109,9 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
             # Process chunk based on model type
             chunk_tokens = chunk_tokens.to(device)
             if hf_model_name:
-                outputs = model(chunk_tokens)
+                outputs = model(chunk_tokens, past_key_values=past_key_values, use_cache=True)
                 ref_output = outputs.logits
+                past_key_values = outputs.past_key_values
             else:
                 pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
                 ref_output = reference_model(pt_decode_input, start_pos=chunk_start)
