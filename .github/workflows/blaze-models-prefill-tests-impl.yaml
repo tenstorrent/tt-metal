@@ -98,6 +98,16 @@ jobs:
           TEST_TYPE="${{ inputs.test-type }}"
           EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
           INCLUDE_GROUP="${{ inputs.include-test-group }}"
+          # The group inputs are caller constants and bypass validate_test_type_selection.py, so a
+          # typo would otherwise filter the matrix to nothing and skip silently. Checked against the
+          # unfiltered matrix, since the selection below can legitimately leave a group empty.
+          KNOWN_GROUPS=$(echo "$MATRIX" | jq -r '[.[] | .test_group // empty] | unique | join(" ")')
+          for g in $(echo "$EXCLUDE_GROUP,$INCLUDE_GROUP" | tr ',' ' '); do
+            if ! echo "$KNOWN_GROUPS" | grep -qw "$g"; then
+              echo "::error::Unknown test_group '$g' for ${{ inputs.enabled-skus }}; known groups: $KNOWN_GROUPS"
+              exit 1
+            fi
+          done
           if [ -z "$TEST_TYPE" ] || \
             echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
             :
