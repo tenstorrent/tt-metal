@@ -469,26 +469,43 @@ def _safe_arg_str(v, _depth=0):
         return f"<unprintable {type(v).__name__}: {type(e).__name__}: {e}>"
 
 
-def record_python_operation(name, function_args, function_kwargs):
+def append_python_io_record(name):
+    """Reserve a ``python_io`` slot for this operation before argument capture.
+
+    The importer pairs records to ``function_start`` nodes by name, in order.
+    Appending first keeps that queue aligned if later setup raises: the failed
+    start consumes this slot instead of a later same-name operation's record.
+    """
+    record = {
+        "name": name,
+        "arguments": {},
+        "input_tensor_ids": [],
+    }
+    _python_io_data.append(record)
+    return record
+
+
+def record_python_operation(name, function_args, function_kwargs, *, record=None):
     """Record a Python-level operation's arguments and I/O tensor ids.
 
     Called from ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``
     to capture the Python-visible arguments (named kwargs + positional args)
     that the C++ graph trace does not see.
+
+    Decorators pass ``record`` from :func:`append_python_io_record` so the slot
+    exists even if argument capture raises. Direct callers may omit it.
     """
+    if record is None:
+        record = append_python_io_record(name)
+
     args_dict = {}
     for k, v in function_kwargs.items():
         args_dict[k] = _safe_arg_str(v)
     for idx, v in enumerate(function_args):
         args_dict[str(idx)] = _safe_arg_str(v)
 
-    input_tensor_ids = _collect_tensor_ids((*function_args, *function_kwargs.values()))
-
-    record = {
-        "name": name,
-        "arguments": args_dict,
-        "input_tensor_ids": input_tensor_ids,
-    }
+    record["arguments"] = args_dict
+    record["input_tensor_ids"] = _collect_tensor_ids((*function_args, *function_kwargs.values()))
 
     if _python_stack_traces_enabled:
         try:
@@ -496,15 +513,15 @@ def record_python_operation(name, function_args, function_kwargs):
         except Exception:
             record["python_stack_trace"] = []
 
-    _python_io_data.append(record)
     return record
 
 
 def record_python_operation_error(record, error_type, error_message):
     """Attach the exception to the python_io record created for this call.
 
-    ``record`` is the object returned by :func:`record_python_operation`. If
-    that call never completed, pass ``None``; do not search older records by name.
+    ``record`` is the object returned by :func:`append_python_io_record` or
+    :func:`record_python_operation`. If no slot was reserved for this call, pass
+    ``None``; do not search older records by name.
     """
     if record is None or "error" in record:
         return
@@ -525,7 +542,7 @@ def store_captured_graph(captured_graph_json):
 
     Called from ``runtime_decorator.call_wrapper`` (slow dispatch) right after
     ``end_graph_capture()``.  ``[-1]`` is always the correct entry since
-    ``record_python_operation`` is called first for the same operation.
+    ``append_python_io_record`` is called first for the same operation.
     """
     if _python_io_data:
         _python_io_data[-1]["captured_graph"] = captured_graph_json

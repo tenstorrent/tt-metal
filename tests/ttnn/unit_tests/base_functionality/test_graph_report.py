@@ -3974,6 +3974,27 @@ class TestRecordPythonOperation:
         g.record_python_operation_error(None, "RuntimeError", "python_io setup failed")
         assert "error" not in first
 
+    def test_append_then_populate_mutates_the_same_record(self):
+        import ttnn.graph as g
+
+        reserved = g.append_python_io_record("ttnn.add")
+        filled = g.record_python_operation("ttnn.add", (), {"bias": "1"}, record=reserved)
+        assert filled is reserved
+        assert len(g._python_io_data) == 1
+        assert reserved["arguments"]["bias"] == "1"
+
+    def test_populate_failure_keeps_the_reserved_record(self, expect_error):
+        import ttnn.graph as g
+
+        class Boom:
+            def __str__(self):
+                raise RuntimeError("stringify failed")
+
+        with expect_error(RuntimeError, "stringify failed"):
+            g.record_python_operation("ttnn.add", (Boom(),), {})
+        assert len(g._python_io_data) == 1
+        assert g._python_io_data[0]["name"] == "ttnn.add"
+
     def test_python_stack_trace_captured_when_enabled(self):
         import ttnn.graph as g
 
@@ -4615,6 +4636,74 @@ class TestPythonIONameMatching:
         assert values == ["1.0", "2.0"], f"Expected ordered matching, got {values}"
         conn.close()
 
+    def test_setup_failure_slot_does_not_take_the_next_same_name_record(self, tmp_path):
+        """A reserved empty/error slot must be consumed by the failed start, not by the next op."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": []},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "duration_ns": 200,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.relu",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "error": {"type": "RuntimeError", "message": "python_io setup failed"},
+            },
+            {"name": "ttnn.relu", "arguments": {"alpha": "ok"}, "input_tensor_ids": []},
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id FROM operations ORDER BY operation_id")
+        first_id, second_id = (row[0] for row in cursor.fetchall())
+
+        cursor.execute("SELECT error_message FROM errors WHERE operation_id = ?", (first_id,))
+        assert cursor.fetchone() == ("python_io setup failed",)
+
+        cursor.execute("SELECT COUNT(*) FROM errors WHERE operation_id = ?", (second_id,))
+        assert cursor.fetchone() == (0,)
+
+        cursor.execute(
+            "SELECT value FROM operation_arguments WHERE operation_id = ? AND name = 'alpha'",
+            (second_id,),
+        )
+        assert cursor.fetchone() == ("ok",)
+        cursor.execute(
+            "SELECT COUNT(*) FROM operation_arguments WHERE operation_id = ? AND name = 'alpha'",
+            (first_id,),
+        )
+        assert cursor.fetchone() == (0,)
+        conn.close()
+
     def test_unmatched_python_io_ignored(self, tmp_path):
         """python_io records for non-existent ops should be silently ignored."""
         mock_graph = [
@@ -4920,10 +5009,71 @@ class TestFastOperationGraphTracking:
                 with expect_error(RuntimeError, "python_io setup failed"):
                     op()
             records = [r for r in ttnn.graph._python_io_data if r["name"] == "ttnn.dummy_setup_fail"]
-            assert len(records) == 1
+            assert len(records) == 2
             assert "error" not in records[0]
+            assert records[1]["error"] == {"type": "RuntimeError", "message": "python_io setup failed"}
         finally:
             ttnn.graph.end_graph_capture()
+
+    def test_setup_failure_does_not_assign_next_same_name_record(self, monkeypatch, expect_error, tmp_path):
+        """A recording failure must not give the next same-name op's python_io to the failed start."""
+        from ttnn.decorators import FastOperation
+
+        original = ttnn.graph.record_python_operation
+        calls = {"n": 0}
+
+        def maybe_boom(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("python_io setup failed")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", maybe_boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op(tag="failed")
+                op(tag="ok")
+            python_io = [dict(r) for r in ttnn.graph._python_io_data if r["name"] == "ttnn.dummy_setup_fail"]
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        assert len(python_io) == 2
+        assert python_io[0]["error"] == {"type": "RuntimeError", "message": "python_io setup failed"}
+        assert "error" not in python_io[1]
+        assert python_io[1]["arguments"]["tag"] == "ok"
+
+        report = _make_report(graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn.dummy_setup_fail' ORDER BY operation_id")
+        ids = [row[0] for row in cursor.fetchall()]
+        assert len(ids) == 2
+        cursor.execute("SELECT error_message FROM errors WHERE operation_id = ?", (ids[0],))
+        assert cursor.fetchone() == ("python_io setup failed",)
+        cursor.execute("SELECT COUNT(*) FROM errors WHERE operation_id = ?", (ids[1],))
+        assert cursor.fetchone() == (0,)
+        cursor.execute(
+            "SELECT value FROM operation_arguments WHERE operation_id = ? AND name = 'tag'",
+            (ids[1],),
+        )
+        assert cursor.fetchone() == ("ok",)
+        conn.close()
 
 
 class TestUnwindAbandonedScopes:
