@@ -36,12 +36,6 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
-def _module_is_loaded(module: object | None) -> bool:
-    """Whether ``module`` holds weights on device. Anything without load state counts as loaded."""
-    is_loaded = getattr(module, "is_loaded", None)
-    return True if is_loaded is None else bool(is_loaded())
-
-
 def _release_module_trace(module: object | None) -> None:
     """Release the trace captured on ``module.forward``, if it has one."""
     forward = getattr(type(module), "forward", None)
@@ -283,7 +277,8 @@ class Flux2Pipeline:
 
     def _prepare_prompt_encoder(self) -> None:
         encoder = getattr(self._prompt_encoder, "_encoder", None)
-        if self.dynamic_load and not _module_is_loaded(encoder):
+        encoder_is_loaded = getattr(encoder, "is_loaded", None)
+        if self.dynamic_load and encoder_is_loaded is not None and not encoder_is_loaded():
             self._release_denoise_trace()
         self._prompt_encoder.load_weights()
         ttnn.synchronize_device(self._mesh_device)
