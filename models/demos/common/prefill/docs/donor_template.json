@@ -1,0 +1,78 @@
+{
+  "_comment": "Donor map for prefill model bring-up: for each part, which existing file to copy from. ADVISORY - these are pointers that guide and advise the implementation. The prefill spec is binding and takes priority over anything here; where a donor conflicts with the spec, the donor is wrong.",
+  "_resolution": {
+    "all_entries": "Every entry here must be filled by the donor for that entry. Usage of a donor is for agent to look into implementation and copy/adapt the donor's file into the new package. The donor is a template, not a reference.",
+    "kv_cache": "Coupled cluster: set donor_package, then fill every path in sub_entry_paths from THAT package. Never source the seven roles from different packages."
+  },
+  "model": {
+    "name": "",
+    "_note": "Label only, so a filled map says which model it belongs to. The model's own facts (attention family, dims, checkpoint) live in the recipe's fact sheet, not here."
+  },
+  "weights": {
+    "loading": {
+      "donor": "",
+      "notes": "Depends on checkpoint format. safetensors iteration, prefix filtering, dtype conversion."
+    },
+    "dequant_and_permute": {
+      "donor": "",
+      "required": false,
+      "notes": "Only if the checkpoint is quantized or packed. qkv fusion/swizzle, tile-alignment padding, bias handling."
+    }
+  },
+  "compute": {
+    "mlp_dense": {
+      "donor": "",
+      "notes": "Column/row-parallel split and where the CCL lands."
+    },
+    "moe_wrapper": {
+      "donor": "",
+      "required": false,
+      "notes": "Thin per-model wrapper over the imported substrate: router, activation variant, shared-expert presence."
+    },
+    "attention": {
+      "donor": "",
+      "notes": "PARTIAL donor. Head split, projection sharding, program configs, output-proj CCL tail transfer. The attention math does not."
+    },
+    "rope": {
+      "donor": "",
+      "required": false,
+      "notes": "Variant plumbing plus the whole-cache indexed rope built once. Shares its alignment constraint with the KV cache."
+    }
+  },
+  "kv_cache": {
+    "_comment": "COUPLED CLUSTER. All seven roles must come from the SAME donor package. Sourcing them from different packages produces silent PCC loss or wrong migration addresses, never a crash.",
+    "_how_to_fill": "1) Set donor_package. 2) For each role below, find the file that plays it inside that package and record the path RELATIVE to the package root. Package layouts differ - locate the files, do not assume a path. Use sub_entry_roles to know what to look for.",
+    "_layout_invariants": "Not here. See MODEL_BRINGUP_RECIPE.md section 4.1 for the constants all seven roles must agree on, and the four things you are allowed to vary.",
+    "donor_package": "",
+    "sub_entry_paths": {
+      "layout_and_allocation": "",
+      "write_op": "",
+      "attention_read_path": "",
+      "sdpa_path_selection": "",
+      "kvcaches_handle": "",
+      "runtime_offsets": "",
+      "address_table": ""
+    },
+    "sub_entry_roles": {
+      "layout_and_allocation": "Defines the cache tensors: per-chip shape, DRAM NdShard spec, slot packing. The source of truth for the layout.",
+      "write_op": "The update_padded_kv_cache call: slot/layer indexing, dtype match, tile-aligned chunk boundary.",
+      "attention_read_path": "The SDPA that reads the block-cyclic cache back (ring / sparse). This op is why the layout is canonical.",
+      "sdpa_path_selection": "Chooses one-shot vs cache-backed per chunk, and fails loud on unimplemented cases.",
+      "kvcaches_handle": "The KvCaches subclass the engine holds as an opaque handle.",
+      "runtime_offsets": "Maps actual_start/actual_end onto cache writes, plus the range assertions.",
+      "address_table": "DRAM bank walk for migration: turns (slot, layer, token range) into an address."
+    }
+  },
+  "serving": {
+    "runtime": {
+      "donor": "",
+      "notes": "compile / make_chunk_input / _resolve_kv / prefill_chunk. Pairs with the kv_cache cluster."
+    }
+  },
+  "migration": {
+    "hooks": {
+      "donor": "",
+      "notes": "kv_migration_base_address / kv_migration_stages / set_layer_ack_channel. Pairs with the kv_cache cluster."
+    }
+  }
+}
