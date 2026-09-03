@@ -977,9 +977,10 @@ void FiberSchedulerImpl::watchdog() {
                     }
                 }
                 if (released) {
+                    const auto repoll_started = std::chrono::steady_clock::now();
                     repoll_used = true;
                     observing_repoll = true;
-                    repoll_deadline = now + repoll_observation;
+                    repoll_deadline = repoll_started + repoll_observation;
                     last_resump = r;
                     continue;
                 }
