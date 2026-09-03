@@ -31,6 +31,8 @@ Constraints (first cut):
     a circular-buffer modulo (the assistant attention config doesn't carry one).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -79,6 +81,7 @@ class Gemma4AssistantModel:
         mesh_config=None,
         max_local_batch_size=1,
         bounded_sliding_kv_cache=False,
+        precision=None,
     ):
         self.mesh_device = mesh_device
         self.max_local_batch_size = max_local_batch_size
@@ -108,6 +111,19 @@ class Gemma4AssistantModel:
 
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
+        # Per-module dtype overrides from precision_overrides.json (see
+        # Gemma4Model for the target-model equivalent). Without this the
+        # drafter's attention/mlp weights silently stayed at ``dtype`` (bf16)
+        # regardless of what the table says for this checkpoint, since the
+        # assistant is a separate checkpoint keyed independently of the target.
+        from models.demos.gemma4.tt.precision import Gemma4Precision
+
+        if precision is None:
+            precision = Gemma4Precision()
+        shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        attention_dtype = precision.get("attention", dtype)
+        lm_head_dtype = precision.get("lm_head", dtype)
+
         # Decoder layers (reuse the target's layer, MoE disabled, KV-shared).
         #
         # Bounded target KV: the drafter cross-attends into the TARGET's caches,
@@ -126,6 +142,8 @@ class Gemma4AssistantModel:
                 layer_idx=i,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
+                shared_mlp_dtype=shared_mlp_dtype,
+                attention_dtype=attention_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{i}" if tensor_cache_path else None,
                 mesh_config=mesh_config,
                 max_seq_len=self.text_args.max_seq_len,
@@ -150,7 +168,7 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True):
+        def _linear(key, mapper, transpose=True, dtype_override=None, cache_suffix=""):
             w = state_dict.get(key)
             if w is None:
                 return None
@@ -159,19 +177,41 @@ class Gemma4AssistantModel:
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=dtype_override if dtype_override is not None else dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_")),
+                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_") + cache_suffix),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        self.pre_projection = _linear("pre_projection.weight", None)
-        self.post_projection = _linear("post_projection.weight", None)
+        # pre_projection is DRAM-bandwidth-bound at decode (M=1 padded to a
+        # single tile, K=2*backbone, N=hidden): its whole cost is reading the
+        # weight, so bfp8 halves the bytes read vs the model-wide default
+        # (bf16). Opt out with GEMMA4_PREPROJ_BFP8=0. The cache filename gets
+        # a distinct suffix whenever this differs from the model-wide dtype so
+        # flipping the flag can never load a stale wrong-dtype tensorbin.
+        preproj_bfp8 = os.environ.get("GEMMA4_PREPROJ_BFP8", "1").lower() not in ("0", "false", "no")
+        preproj_dtype = ttnn.bfloat8_b if preproj_bfp8 else dtype
+        preproj_suffix = "_bfp8" if preproj_dtype != dtype else ""
+        self.pre_projection = _linear(
+            "pre_projection.weight", None, dtype_override=preproj_dtype, cache_suffix=preproj_suffix
+        )
+        # post_projection (hidden -> backbone) is pre_projection's output-side
+        # mirror and is just as DRAM-bandwidth-bound at decode (M=1 padded to a
+        # tile) -- bfp8 halves its weight-read bytes too.
+        postproj_bfp8 = os.environ.get("GEMMA4_POSTPROJ_BFP8", "1").lower() not in ("0", "false", "no")
+        postproj_dtype = ttnn.bfloat8_b if postproj_bfp8 else dtype
+        postproj_suffix = "_bfp8" if postproj_dtype != dtype else ""
+        self.post_projection = _linear(
+            "post_projection.weight", None, dtype_override=postproj_dtype, cache_suffix=postproj_suffix
+        )
         # lm_head tied to the assistant's own embed_tokens when a separate
-        # lm_head.weight isn't stored.
+        # lm_head.weight isn't stored. Follows precision_overrides.json's
+        # "lm_head" entry (bfp8 for the shipped variants), same override the
+        # target model's own lm_head gets.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
+        lm_head_suffix = "_bfp8" if lm_head_dtype != dtype else ""
+        self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype, cache_suffix=lm_head_suffix)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
 
