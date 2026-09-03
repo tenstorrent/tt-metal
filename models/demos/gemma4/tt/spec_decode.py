@@ -856,12 +856,73 @@ class SpeculativeDecoder:
         v_pos_cache = ttnn.typecast(ttnn.reshape(v_pos, (P,)), ttnn.int32)
         return anchor_tok, d_pu, d_pi, v_pos, v_pos_cache
 
+    def _copy_host_u32(self, torch_buf, dest):
+        host = self._pv_from_torch(torch_buf, ttnn.uint32, device=False)
+        ttnn.copy_host_to_device_tensor(host, dest)
+        host.deallocate(True)
+
+    def _copy_host_i32(self, torch_buf, dest):
+        host = self._pv_from_torch(torch_buf, ttnn.int32, device=False)
+        ttnn.copy_host_to_device_tensor(host, dest)
+        host.deallocate(True)
+
+    def _stage_fused_shaped(self, tr, token, pos):
+        """H2D of native-shaped fused inputs (no in-graph slice/typecast unpack).
+
+        In-trace unpack of ``io_pack`` was ~10 ms of tiny kernels on WH 1×8.
+        Persistent buffers + ``copy_host_to_device_tensor`` keep host glue small
+        without those device ops. ``GEMMA4_SPEC_IO_PACK=1`` restores unpack.
+        """
+        P = int(tr["P"])
+        tok = tr.get("_tok_torch")
+        if tok is None:
+            tok = torch.zeros(1, 1, dtype=torch.int64)
+        tok[0, 0] = int(token)
+        tr["_tok_torch"] = tok
+        pu = tr.get("_pu_torch")
+        if pu is None:
+            pu = torch.zeros(1, 32, dtype=torch.int64)
+        else:
+            pu.zero_()
+        pu[0, 0] = int(pos)
+        tr["_pu_torch"] = pu
+        pi = tr.get("_pi_torch")
+        if pi is None:
+            pi = torch.zeros(1, dtype=torch.int32)
+        pi[0] = int(pos)
+        tr["_pi_torch"] = pi
+        vp = tr.get("_vp_torch")
+        if vp is None or vp.shape[-1] != P:
+            vp = torch.zeros(1, P, dtype=torch.int64)
+        vp[0] = torch.arange(int(pos), int(pos) + P, dtype=torch.int64)
+        tr["_vp_torch"] = vp
+        vpc = tr.get("_vpc_torch")
+        if vpc is None or vpc.numel() != P:
+            vpc = torch.zeros(P, dtype=torch.int32)
+        vpc[:] = torch.arange(int(pos), int(pos) + P, dtype=torch.int32)
+        tr["_vpc_torch"] = vpc
+        self._copy_host_u32(tok, tr["anchor_tok"])
+        self._copy_host_u32(pu, tr["d_pu"])
+        self._copy_host_i32(pi, tr["d_pi"])
+        self._copy_host_u32(vp, tr["v_pos"])
+        self._copy_host_i32(vpc, tr["v_pos_cache"])
+
     def _stage_fused_io_pack(self, tr, token, pos):
         buf = self._io_pack_torch(token, pos, int(tr["P"]), tr.get("_io_torch"))
         tr["_io_torch"] = buf
         host = self._pv_from_torch(buf, ttnn.uint32, device=False)
         ttnn.copy_host_to_device_tensor(host, tr["io_pack"])
         host.deallocate(True)
+
+    def _io_pack_in_graph_enabled(self):
+        """In-graph unpack of one uint32 blob. Default on (previous fast-host).
+
+        ``GEMMA4_SPEC_SHAPED_IO=1`` instead H2Ds native-shaped token/pos tensors
+        and skips slice/typecast in the fused trace (A/B for the ~10 ms fused tax).
+        """
+        if os.environ.get("GEMMA4_SPEC_SHAPED_IO", "0").lower() in ("1", "true", "yes"):
+            return False
+        return True
 
     def _accept_ids_from_trace(self, tr):
         """One D2H of concat([verify_x, vidx]) → (vx_flat, target_ids)."""
