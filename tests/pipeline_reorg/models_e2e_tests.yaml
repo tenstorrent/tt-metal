@@ -1762,10 +1762,15 @@
     export HF_HOME=/mnt/models/huggingface
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
       ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
+      python3 tools/tt-telemetry-probe/tt_telemetry_probe.py --interval 10 -- \
+        python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
     '
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
+    bh_sc1_high_power:
+      timeout: 45
+      tier: 3
+      release_ready: false
     bh_sc1:
       timeout: 45
       tier: 3

@@ -67,6 +67,7 @@ on:
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
           - "bh_sc1 (BH SC1)"
+          - "bh_sc1_high_power (BH SC1 High Power)"
       platform:
         required: false
         type: choice
