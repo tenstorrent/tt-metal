@@ -11,11 +11,9 @@ on every RISC around Tensix (``configure_gathering()`` in
 ``load_replay_buf()`` is the complement: it brackets the replay-record window with
 disable/enable, but only ``#if defined(ENABLE_GATHERING)``.
 
-Those are two halves of one contract -- either gathering is off globally, or it is on
-and the record window is bracketed. Before ``configure_gathering()`` was added to
-``do_crt0()``, the test harness implemented neither half: it never defines
-ENABLE_GATHERING (so no bracketing) and never wrote cfg0 (so no global disable), which
-left the tests running in a configuration that never ships.
+Those are two halves of one contract: either gathering is off globally, or it is on
+and the record window is bracketed. The test firmware must implement one of them, and
+this test is what holds it to that.
 
 This test asserts on the built firmware rather than on behaviour, because the
 gathering hazard is a codegen lottery: a kernel that happens to be laid out safely
