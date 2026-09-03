@@ -20,6 +20,7 @@ TTNN conv has no reflect pad. k=1 TDNNs and SE 1x1 convs are device
 on device. Mel filterbank + Hann window are cached on host.
 """
 
+import math
 import os
 from typing import Optional, Tuple
 
@@ -114,6 +115,14 @@ class SpeakerEncoder(LightweightModule):
         # ascending runs and concatenates them (~3.3 us/slice); "gather" is one
         # ttnn.gather (~500 us at these shapes — correct but 10x the cost).
         self._se_conv_shift = os.environ.get("QWEN3_TTS_SE_CONV_SHIFT", "slice")
+        # Mel spectrogram on device instead of host torch.stft. Ported from the
+        # ign/xtts_modules branch (models/experimental/xtts/tt/xtts_mel.py). ON by
+        # default: it costs ~2.4 s of one-off JIT and ~10 ms warm against the host's
+        # 1.8 ms, which is an accepted trade for a waveform-to-embedding path with no
+        # host STFT in it. QWEN3_TTS_SE_DEVICE_MEL=0 restores the host path.
+        # See compute_mel_spectrogram_device for the full measurements.
+        self._se_device_mel = os.environ.get("QWEN3_TTS_SE_DEVICE_MEL", "1") != "0"
+        self._device_mel_cache = {}
         # Option A: one captured forward per mel length, with the host path as the
         # fallback on a miss. Traces are shape-locked and mel length varies with the
         # reference audio (~1 frame per 10.7 ms), so it is a cache, not a bucket list.
@@ -211,6 +220,228 @@ class SpeakerEncoder(LightweightModule):
             self._hann_window_cpu = torch.hann_window(win_size).float()
             self._mel_stft_key = key
         return self._mel_basis_cpu, self._hann_window_cpu
+
+    # ------------------------------------------------------------------ #
+    # Mel spectrogram on device (QWEN3_TTS_SE_DEVICE_MEL=1)
+    # ------------------------------------------------------------------ #
+    # Ported from the ign/xtts_modules branch, models/experimental/xtts/tt/xtts_mel.py.
+    # Three ideas are taken from there:
+    #   * reflect padding as a matmul against an anti-diagonal identity, which is
+    #     bit-exact (torch's reflect mirrors about the edge sample, excluding it, so
+    #     the pad is just a reversed slice);
+    #   * framing without a gather: reshape the padded signal ROW_MAJOR to
+    #     [rows, hop], then concatenate ``ceil(n_fft/hop)`` row-shifted slices along
+    #     the width, which yields frames strided by hop. Also bit-exact here, because
+    #     hop=256 divides n_fft=1024 so no trim is needed;
+    #   * a precomputed windowed DFT basis, so the transform is a matmul.
+    #
+    # One thing does NOT carry over. XTTS's speaker frontend uses power=2, so
+    # ``fb @ (re^2 + im^2)`` collapses into a single matmul against a [fb; fb] stack.
+    # Qwen3-TTS takes ``sqrt(re^2 + im^2 + 1e-9)`` *before* the filterbank, so the
+    # magnitude has to be materialised per frequency: two matmuls (cos, sin) and an
+    # elementwise sqrt. Doing it as two matmuls rather than one wide one also avoids
+    # slicing a 1026-wide tensor at offset 513, which is not tile-aligned.
+    #
+    # Measured on the demo's 4.01 s reference audio, against the host mel:
+    #   framing + reflect pad : bit-exact (relRMS 0.0000%)
+    #   DFT re/im             : 0.10%
+    #   mel, before log       : 0.19%
+    #   mel, after log+clamp  : 1.17%   <- log amplifies; 0.2% of bins sit under the
+    #                                      1e-5 clamp, where log's slope is 1e5
+    # Speaker embedding, which is what actually matters:
+    #   device mel vs host mel, through this encoder : 1.19% relRMS, cos 0.99993
+    #   this encoder vs the fp32 reference, host mel : 2.80% relRMS
+    #   this encoder vs the fp32 reference, dev mel  : 2.91% relRMS
+    # So it costs ~0.1 points on top of the encoder's own 2.8% bf16 noise.
+    #
+    # It is ON by default (owner's call: the wall-time cost is acceptable) even
+    # though it is slower than the host mel, warm as well as cold:
+    #   device mel  617.7 ms cold (JIT)   11.3 ms warm
+    #   host mel                            1.8 ms
+    #   waveform -> embedding, warm:  48.4 ms device mel   33.3 ms host mel
+    # A single run pays only the cold number, and only the FIRST ever run pays it in
+    # full: the kernels land in the on-disk cache, after which the speaker-embedding
+    # step goes from ~1.09 s (host mel) to ~1.3-1.5 s, i.e. +0.4 s, and demo wall
+    # time is within noise (37.5 s vs 37.3 s measured back to back).
+    #
+    # Enabling it CHANGES THE DEFAULT AUDIO: the embedding moves by ~1.2% relRMS,
+    # which reseeds sampling, so generated waveforms will not match runs from before
+    # this was switched on. Frame counts and EOS behaviour are unaffected (103 frames
+    # on N300, 107 on N150, EOS both ways).
+    #
+    # The reason is arithmetic, not TTNN. torch.stft uses a real FFT, O(n log n); a
+    # DFT basis is a dense matmul, O(n^2) — [1024, 513] per frame here, and twice,
+    # because the magnitude has to be materialised. XTTS gets away with it at
+    # n_fft=512 / hop=160 / 64 mels / 16 kHz and power=2 (one matmul); Qwen3-TTS is
+    # n_fft=1024 / hop=256 / 128 mels / 24 kHz, roughly 8x the work per frame. The
+    # mel also runs ONCE per utterance — it is the reference audio, not a per-frame
+    # cost — so there is nothing to amortise.
+    #
+    # Kept because it is the only waveform-to-embedding path with no host STFT in it,
+    # which is what capturing the encoder as one trace from the waveform would need,
+    # and because the framing/reflect-pad half is bit-exact and reusable.
+
+    def _device_mel_constants(self, n_fft: int, num_mels: int, sampling_rate: int, win_size: int, fmin: int, fmax: int):
+        """Cache the windowed DFT basis, mel filterbank and reflect-pad matrices."""
+        key = (n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
+        hit = self._device_mel_cache.get(key)
+        if hit is not None:
+            return hit
+        mel_basis, hann = self._mel_stft_constants(n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
+        n_freqs = n_fft // 2 + 1
+        n = torch.arange(n_fft, dtype=torch.float32)
+        k = torch.arange(n_freqs, dtype=torch.float32).unsqueeze(1)
+        ang = 2 * math.pi * k * n / n_fft
+        # [n_fft, n_freqs] so a framed [T, n_fft] block matmuls straight into it.
+        cos_b = (torch.cos(ang) * hann).t().contiguous()
+        sin_b = (-torch.sin(ang) * hann).t().contiguous()
+
+        def _up(t):
+            return ttnn.from_torch(
+                t,
+                device=self.device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        hit = {
+            "cos": _up(cos_b),
+            "sin": _up(sin_b),
+            "fb": _up(mel_basis.t().contiguous()),
+            "rev": {},
+        }
+        self._device_mel_cache[key] = hit
+        return hit
+
+    def _anti_identity(self, consts: dict, p: int) -> ttnn.Tensor:
+        """Reversal matrix for a reflect pad of ``p`` samples."""
+        got = consts["rev"].get(p)
+        if got is None:
+            got = ttnn.from_torch(
+                torch.flip(torch.eye(p, dtype=torch.float32), dims=[0]),
+                device=self.device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            consts["rev"][p] = got
+        return got
+
+    def compute_mel_spectrogram_device(
+        self,
+        audio: torch.Tensor,
+        n_fft: int = 1024,
+        num_mels: int = 128,
+        sampling_rate: int = 24000,
+        hop_size: int = 256,
+        win_size: int = 1024,
+        fmin: int = 0,
+        fmax: int = 12000,
+        frame_chunk: int = 256,
+    ) -> ttnn.Tensor:
+        """Log-mel on device, returned as NLC ``[1, T, num_mels]`` bfloat16.
+
+        NLC is what ``_forward_device`` consumes, so the mel never touches the host.
+        ``frame_chunk`` bounds the framing reshape: the ROW_MAJOR reshape's page is
+        what sizes the circular buffers, and the whole 4 s window at once overflows
+        L1 ("dataflow buffers grow to 1660432 B beyond max L1 size of 1499136 B").
+        """
+        if audio.dim() == 1:
+            audio = audio.unsqueeze(0)
+        length = int(audio.shape[1])
+        pad = (n_fft - hop_size) // 2
+        rows_per_frame = -(-n_fft // hop_size)
+        assert self.device_mel_supported(audio, n_fft, hop_size), "unsupported input for the device mel path"
+        consts = self._device_mel_constants(n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
+        L1 = ttnn.L1_MEMORY_CONFIG
+        kcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        wav_tt = ttnn.from_torch(
+            audio.float(),
+            device=self.device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        # torch's reflect pad mirrors about the edge sample and excludes it, so the
+        # left pad is reverse(x[1:pad+1]) and the right pad reverse(x[L-1-pad:L-1]).
+        rev = self._anti_identity(consts, pad)
+        left = ttnn.matmul(ttnn.slice(wav_tt, [0, 1], [1, pad + 1]), rev, compute_kernel_config=kcfg)
+        right = ttnn.matmul(ttnn.slice(wav_tt, [0, length - 1 - pad], [1, length - 1]), rev, compute_kernel_config=kcfg)
+        xpad = ttnn.concat([left, wav_tt, right], dim=1)
+        ttnn.deallocate(left)
+        ttnn.deallocate(right)
+        ttnn.deallocate(wav_tt)
+
+        frames = 1 + (length + 2 * pad - n_fft) // hop_size
+        pieces = []
+        for start in range(0, frames, frame_chunk):
+            nf = min(frame_chunk, frames - start)
+            rows_needed = nf + rows_per_frame - 1
+            seg = ttnn.slice(xpad, [0, start * hop_size], [1, (start + rows_needed) * hop_size])
+            rows = ttnn.reshape(ttnn.to_layout(seg, ttnn.ROW_MAJOR_LAYOUT), [rows_needed, hop_size])
+            ttnn.deallocate(seg)
+            blocks = [ttnn.slice(rows, [j, 0], [j + nf, hop_size], memory_config=L1) for j in range(rows_per_frame)]
+            ttnn.deallocate(rows)
+            wide = ttnn.concat(blocks, dim=1, memory_config=L1)
+            for b in blocks:
+                ttnn.deallocate(b)
+            framed = ttnn.to_layout(wide, ttnn.TILE_LAYOUT, memory_config=L1)
+            ttnn.deallocate(wide)
+            re = ttnn.matmul(framed, consts["cos"], memory_config=L1, compute_kernel_config=kcfg)
+            im = ttnn.matmul(framed, consts["sin"], memory_config=L1, compute_kernel_config=kcfg)
+            ttnn.deallocate(framed)
+            power = ttnn.add(ttnn.square(re, memory_config=L1), ttnn.square(im, memory_config=L1), memory_config=L1)
+            ttnn.deallocate(re)
+            ttnn.deallocate(im)
+            # clamp before sqrt so tile padding can never carry a NaN into the
+            # filterbank matmul (the filterbank's own padded rows are zero).
+            mag = ttnn.sqrt(ttnn.clamp(ttnn.add(power, 1e-9, memory_config=L1), 1e-30, 1e30), memory_config=L1)
+            ttnn.deallocate(power)
+            pieces.append(ttnn.matmul(mag, consts["fb"], memory_config=L1, compute_kernel_config=kcfg))
+            ttnn.deallocate(mag)
+        ttnn.deallocate(xpad)
+
+        mel = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=0)
+        if len(pieces) > 1:
+            for p in pieces:
+                ttnn.deallocate(p)
+        mel = ttnn.log(ttnn.clamp(mel, 1e-5, 1e30))
+        # [T, num_mels] is already NLC once the batch axis is added.
+        out = ttnn.reshape(mel, [1, frames, num_mels])
+        return ttnn.typecast(out, ttnn.bfloat16)
+
+    def device_mel_supported(self, audio: torch.Tensor, n_fft: int = 1024, hop_size: int = 256) -> bool:
+        """Can :meth:`compute_mel_spectrogram_device` handle this input?
+
+        The device path is the default, so callers fall back to the host mel instead
+        of failing. Three things have to hold: one waveform (the framing indexes a
+        single row), a hop that divides ``n_fft`` (otherwise the concatenated frames
+        need a trim this implementation does not do), and enough samples for the
+        reflect pad, which mirrors ``(n_fft - hop) / 2`` samples about each edge.
+        """
+        a = audio.unsqueeze(0) if audio.dim() == 1 else audio
+        if a.dim() != 2 or int(a.shape[0]) != 1:
+            return False
+        if (-(-n_fft // hop_size)) * hop_size != n_fft:
+            return False
+        return int(a.shape[1]) > (n_fft - hop_size) // 2 + 1
+
+    def _replicate_mapper(self):
+        """ReplicateTensorToMesh on a multi-chip mesh, else None."""
+        try:
+            if self.device.__class__.__name__ == "MeshDevice" and self.device.get_num_devices() > 1:
+                return ttnn.ReplicateTensorToMesh(self.device)
+        except Exception:
+            pass
+        return None
 
     def _conv1d_params_to_ttnn(self, weight: torch.Tensor, bias: torch.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         key = (weight.data_ptr(), bias.data_ptr())
@@ -1342,6 +1573,10 @@ class SpeakerEncoder(LightweightModule):
         Returns:
             Speaker embedding [batch, 2048]
         """
+        if self._se_device_mel and self.device_mel_supported(audio):
+            mel_nlc = self.compute_mel_spectrogram_device(audio)
+            out_tt = self._forward_device(mel_nlc)
+            return _mesh_to_torch(out_tt, dtype=torch.float32).reshape(1, -1)
         mel = self.compute_mel_spectrogram(audio)
         return self.forward(mel)
 
