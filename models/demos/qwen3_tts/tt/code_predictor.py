@@ -157,14 +157,18 @@ class CodePredictor(LightweightModule):
             self.input_proj = w_to_tt(state_dict[proj_key])
             if bias_key in state_dict:
                 b = state_dict[bias_key]
-                bias_tt = ttnn.from_torch(
-                    b.to(torch.bfloat16),
+                # TILE, not ROW_MAJOR: ttnn.linear's bias must be TILE, so a ROW_MAJOR
+                # upload made every call re-tilize this constant — a 1-core
+                # TilizeWithValPadding [1,1,1,1024]->[1,1,32,1024] at 88 us, x15 CP
+                # passes = 1.32 ms/frame (4% of the CP frame). Uploading it already
+                # tiled produces the identical tensor once, at init.
+                self.input_proj_bias = ttnn.from_torch(
+                    b.to(torch.bfloat16).view(1, 1, 1, int(b.shape[0])),
                     device=device,
                     dtype=ttnn.bfloat16,
-                    layout=ROW,
+                    layout=TILE,
                     memory_config=DRAM,
                 )
-                self.input_proj_bias = ttnn.reshape(bias_tt, [1, 1, 1, int(b.shape[0])], memory_config=DRAM)
             else:
                 self.input_proj_bias = None
         else:
