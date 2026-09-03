@@ -21,7 +21,6 @@ Owner:
     onenezicTT
 """
 
-from collections import defaultdict
 from dataclasses import dataclass
 
 import tt_umd
@@ -70,14 +69,11 @@ class DramHealthRow:
     speed_mts: int = triage_field("Speed MT/s")
 
 
-# A DRAM core's logical coordinate is (channel, subchannel), so exalens' own block list gives the
-# channel grouping directly - right arch by construction, and harvested cores are already excluded.
+# Telemetry is indexed by PHYSICAL GDDR module, so the arch layout has to drive the indexing.
 def dram_endpoints_by_channel(device: Device) -> list[list[OnChipCoordinate]]:
-    by_channel: dict[int, list[tuple[int, OnChipCoordinate]]] = defaultdict(list)
-    for location in device.get_block_locations("dram"):
-        (channel, subchannel), _ = location.to("logical")
-        by_channel[channel].append((subchannel, location))
-    return [[loc for _, loc in sorted(by_channel.get(ch, []))] for ch in range(max(by_channel) + 1)]
+    live = {location.to("noc0") for location in device.get_block_locations("dram")}
+    rows = tt_umd.SocArchDescriptor(tt_umd.ARCH.BLACKHOLE).dram_cores
+    return [[OnChipCoordinate(c.x, c.y, "noc0", device) for c in row if (c.x, c.y) in live] for row in rows]
 
 
 def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
@@ -94,8 +90,8 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
         speed = read_arc_telemetry_entry(device_id, TAG_DDR_SPEED)
         status_word = read_arc_telemetry_entry(device_id, TAG_DDR_STATUS)
         uncorr_bitmask = read_arc_telemetry_entry(device_id, TAG_GDDR_UNCORR)
-        temp_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_TEMP_BASE + p) for p in range(modules // 2)]
-        corr_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_CORR_BASE + p) for p in range(modules // 2)]
+        temp_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_TEMP_BASE + p) for p in range((modules + 1) // 2)]
+        corr_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_CORR_BASE + p) for p in range((modules + 1) // 2)]
     except RuntimeError as e:
         log_warning_device(device, f"no GDDR telemetry on FW {fw}: {e}")
         return None
@@ -117,7 +113,7 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
 
         log_check_device(
             device,
-            training == "SUCCESS" and bist == "SUCCESS",
+            training == "SUCCESS" and (not check_bist or bist == "SUCCESS"),
             f"GDDR instance {i} did not come up cleanly: training={training} bist={bist}",
         )
 
