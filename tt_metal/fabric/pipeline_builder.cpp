@@ -154,16 +154,46 @@ std::vector<std::string> topological_sort(
     return order;
 }
 
-/// Backtracking search: assign a submesh index to each stage in topological order.
-/// Returns {stage_name -> submesh_index} or throws if no valid assignment exists.
-std::map<std::string, size_t> assign_stages_to_submeshes(
+using EndpointKey = std::tuple<std::string, uint32_t, uint32_t>;
+
+struct CapacityFailure {
+    std::string stage;
+    uint32_t row = 0;
+    uint32_t col = 0;
+    uint32_t required = 0;
+    uint32_t capacity = 0;
+    std::vector<std::string> roles;
+
+    std::string describe() const {
+        std::string result = "stage '" + stage + "', chip (" + std::to_string(row) + "," + std::to_string(col) +
+                             "), required slots " + std::to_string(required) + ", declared capacity " +
+                             std::to_string(capacity) + ", endpoint roles [";
+        for (size_t i = 0; i < roles.size(); ++i) {
+            result += (i == 0 ? "" : ", ") + roles[i];
+        }
+        return result + "]";
+    }
+};
+
+std::optional<GraphLayoutResult> try_resolve_capacity_layout(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::map<std::string, size_t>& stage_to_submesh,
+    const std::map<ConnectionKey, ConnectionInfo>& connections,
+    const std::vector<std::vector<InternalChip>>& chips,
+    const std::map<std::string, uint32_t>& capacities,
+    const std::string& stage0,
+    CapacityFailure& best_failure);
+
+/// Backtracking search over stage-to-submesh assignments. For each complete
+/// assignment, resolve links and endpoint slots when capacities are supplied.
+GraphLayoutResult resolve_stage_layout(
     const std::vector<std::string>& stage_order,
     const std::vector<EdgeInputTuple>& edges,
     const std::map<ConnectionKey, ConnectionInfo>& connections,
     size_t num_submeshes,
     const std::map<std::string, uint32_t>& stage_chip_counts,
     const std::vector<std::vector<InternalChip>>& chips,
-    const std::function<bool(const std::map<std::string, size_t>&)>& complete_assignment_check = {}) {
+    const std::map<std::string, uint32_t>& stage_pipeline_core_counts) {
     // Build reverse-lookup: destination stage -> upstream stages for non-loopback edges.
     std::map<std::string, std::vector<std::string>> upstream_stages;
     for (const auto& [src_stage, dst_stage, is_loopback] : edges) {
@@ -174,6 +204,8 @@ std::map<std::string, size_t> assign_stages_to_submeshes(
 
     std::map<std::string, size_t> stage_to_submesh;
     std::set<size_t> used;
+    GraphLayoutResult resolved_layout;
+    CapacityFailure best_failure;
 
     std::function<bool(size_t)> solve = [&](size_t idx) -> bool {
         if (idx == stage_order.size()) {
@@ -195,7 +227,24 @@ std::map<std::string, size_t> assign_stages_to_submeshes(
                     return false;
                 }
             }
-            return !complete_assignment_check || complete_assignment_check(stage_to_submesh);
+            if (stage_pipeline_core_counts.empty()) {
+                resolved_layout.node_to_submesh = stage_to_submesh;
+                return true;
+            }
+            auto capacity_layout = try_resolve_capacity_layout(
+                edges,
+                stage_to_submesh,
+                connections,
+                chips,
+                stage_pipeline_core_counts,
+                stage_order.front(),
+                best_failure);
+            if (!capacity_layout) {
+                return false;
+            }
+            capacity_layout->node_to_submesh = stage_to_submesh;
+            resolved_layout = std::move(*capacity_layout);
+            return true;
         }
         const auto& stage_name = stage_order[idx];
 
@@ -238,34 +287,17 @@ std::map<std::string, size_t> assign_stages_to_submeshes(
     };
 
     if (!solve(0)) {
-        throw std::runtime_error(
-            "resolve_graph_layout: no valid submesh assignment found — "
+        std::string error =
+            "resolve_graph_layout: no valid submesh assignment found -- "
             "physical connectivity (and per-stage shape, if constrained) does not "
-            "match the graph topology");
-    }
-    return stage_to_submesh;
-}
-
-using EndpointKey = std::tuple<std::string, uint32_t, uint32_t>;
-
-struct CapacityFailure {
-    std::string stage;
-    uint32_t row = 0;
-    uint32_t col = 0;
-    uint32_t required = 0;
-    uint32_t capacity = 0;
-    std::vector<std::string> roles;
-
-    std::string describe() const {
-        std::string result = "stage '" + stage + "', chip (" + std::to_string(row) + "," + std::to_string(col) +
-                             "), required slots " + std::to_string(required) + ", declared capacity " +
-                             std::to_string(capacity) + ", endpoint roles [";
-        for (size_t i = 0; i < roles.size(); ++i) {
-            result += (i == 0 ? "" : ", ") + roles[i];
+            "match the graph topology";
+        if (best_failure.required != 0) {
+            error += "; pipeline-core capacity exhausted at " + best_failure.describe();
         }
-        return result + "]";
+        throw std::runtime_error(error);
     }
-};
+    return resolved_layout;
+}
 
 /// Select links and endpoint chips jointly for one stage-to-submesh assignment.
 /// Edges are processed in declaration order, followed by stage-0 H2D and D2H.
@@ -463,43 +495,15 @@ GraphLayoutResult resolve_graph_layout(
                     "resolve_graph_layout: stage '" + stage_name + "' declares zero pipeline-core capacity");
             }
         }
-
-        std::optional<GraphLayoutResult> capacity_layout;
-        CapacityFailure best_failure;
-        auto try_capacity_layout_for_assignment = [&](const std::map<std::string, size_t>& candidate) {
-            auto attempt = try_resolve_capacity_layout(
-                edges, candidate, connections, chips, stage_pipeline_core_counts, stage_order.front(), best_failure);
-            if (!attempt) {
-                return false;
-            }
-            capacity_layout = std::move(*attempt);
-            return true;
-        };
-
-        try {
-            auto stage_to_submesh = assign_stages_to_submeshes(
-                stage_order,
-                edges,
-                connections,
-                num_submeshes,
-                stage_chip_counts,
-                chips,
-                try_capacity_layout_for_assignment);
-            GraphLayoutResult result = std::move(*capacity_layout);
-            result.stage_order = std::move(stage_order);
-            result.node_to_submesh = std::move(stage_to_submesh);
-            return result;
-        } catch (const std::runtime_error& error) {
-            if (best_failure.required != 0) {
-                throw std::runtime_error(
-                    std::string(error.what()) + "; pipeline-core capacity exhausted at " + best_failure.describe());
-            }
-            throw;
-        }
     }
 
-    auto stage_to_submesh =
-        assign_stages_to_submeshes(stage_order, edges, connections, num_submeshes, stage_chip_counts, chips);
+    GraphLayoutResult result = resolve_stage_layout(
+        stage_order, edges, connections, num_submeshes, stage_chip_counts, chips, stage_pipeline_core_counts);
+    result.stage_order = stage_order;
+    if (!stage_pipeline_core_counts.empty()) {
+        return result;
+    }
+    const auto& stage_to_submesh = result.node_to_submesh;
 
     // ------------------------------------------------------------------
     // 5. Resolve physical coords for every edge
@@ -671,9 +675,7 @@ GraphLayoutResult resolve_graph_layout(
     // ------------------------------------------------------------------
     // 7. Build result
     // ------------------------------------------------------------------
-    GraphLayoutResult result;
     result.stage_order = std::move(stage_order);
-    result.node_to_submesh = std::move(stage_to_submesh);
     result.resolved_edges = std::move(resolved_edges);
     result.h2d_entry_row = h2d_row;
     result.h2d_entry_col = h2d_col;
