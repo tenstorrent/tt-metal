@@ -359,6 +359,91 @@ class TokenAccuracy:
 _ACCURACY_RUN = "--accuracy" in sys.argv
 TEST_TIMEOUT = 14400 if _ACCURACY_RUN else 1800 * max(BATCH_SIZES)
 
+# HOST_STAGE_TIMING=1 attributes the per-token host cost, for when wall clock exceeds summed
+# device time and you need to know where the difference goes. It wraps the four host-side stages
+# the "sampling on host" path forces on every token and reports totals at exit. It changes
+# nothing about what runs -- no work is skipped -- so device work is identical to a normal run
+# and the numbers are attributable; the instrumented run measured 32.75 ms/token against 32.92
+# uninstrumented, inside the 0.35 ms run-to-run spread.
+#
+# The blocking read is split: synchronising first makes the wait for the chip explicit, so the
+# time left in the read is the transfer alone. Note that synchronising is itself not free (it
+# cost ~1.5 ms/token when measured), so the split run's total is perturbed even though the
+# split within it is sound.
+#
+# Measured this way on Qwen3-8B, N300, 32k, batch 1, 36 layers, host-sampling path:
+#   transfer logits to host (9.7 MB)   2.545 ms/token   50.2%
+#   host argmax over 4,861,952 values  1.848            36.5%
+#   rebuild decode inputs on host      0.493             9.7%
+#   copy those inputs to device        0.180             3.6%
+#   TOTAL                              5.066    of a 32.83 ms token
+# With the chip wait of 27.571 that accounts for 32.637 of the instrumented run's 32.75 --
+# 0.113 ms unattributed, 99.7% accounted for.
+if os.environ.get("HOST_STAGE_TIMING") == "1":
+    import atexit
+    import time as _timing_clock
+
+    import models.tt_transformers.tt.generator as _gen
+    from models.tt_transformers.tt.model import Transformer as _Transformer
+
+    _host_stage_totals = {}
+
+    def _time_stage(name, fn):
+        def wrapper(*args, **kwargs):
+            started = _timing_clock.perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                entry = _host_stage_totals.setdefault(name, [0.0, 0])
+                entry[0] += _timing_clock.perf_counter() - started
+                entry[1] += 1
+
+        return wrapper
+
+    _Transformer.prepare_decode_inputs_host = _time_stage(
+        "1. rebuild decode inputs on host", _Transformer.prepare_decode_inputs_host
+    )
+    _gen.copy_host_to_device = _time_stage("2. copy those inputs to device", _gen.copy_host_to_device)
+
+    _unsplit_read = _gen.Generator.read_decode_output
+
+    def _read_split_into_wait_and_transfer(self, *args, **kwargs):
+        before_sync = _timing_clock.perf_counter()
+        ttnn.synchronize_device(self.model_args[0].mesh_device)
+        after_sync = _timing_clock.perf_counter()
+        try:
+            return _unsplit_read(self, *args, **kwargs)
+        finally:
+            done = _timing_clock.perf_counter()
+            entry = _host_stage_totals.setdefault("3a. wait for the chip", [0.0, 0])
+            entry[0] += after_sync - before_sync
+            entry[1] += 1
+            entry = _host_stage_totals.setdefault("3b. transfer logits to host", [0.0, 0])
+            entry[0] += done - after_sync
+            entry[1] += 1
+
+    _gen.Generator.read_decode_output = _read_split_into_wait_and_transfer
+    _gen.Generator.process_decode_output_host = _time_stage(
+        "4. host argmax / convert", _gen.Generator.process_decode_output_host
+    )
+
+    @atexit.register
+    def _report_host_stages():
+        if not _host_stage_totals:
+            logger.warning("HOST_STAGE_TIMING: nothing recorded (device sampling active?)")
+            return
+        logger.info("=== per-token host cost (total ms / calls / ms per call) ===")
+        total = 0.0
+        for name in sorted(_host_stage_totals):
+            seconds, calls = _host_stage_totals[name]
+            total += seconds
+            logger.info(
+                f"  {name:34s} {seconds * 1000:9.1f} ms  {calls:5d} calls  {seconds * 1000 / max(calls, 1):7.3f}"
+            )
+        logger.info(f"  {'TOTAL':34s} {total * 1000:9.1f} ms")
+
+    logger.warning("HOST_STAGE_TIMING active: per-token host stages timed; behaviour unchanged")
+
 
 @torch.no_grad()
 @pytest.mark.timeout(TEST_TIMEOUT)
