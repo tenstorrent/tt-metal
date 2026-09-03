@@ -39,7 +39,7 @@ void bind_neighbor_pad_async(nb::module_& mod) {
             num_links (List[int], optional): Number of links per dim. Defaults to `[1, ...]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
-            persistent_output_buffer (ttnn.Tensor, optional): Pre-allocated output buffer. When provided, skips the H writer startup barrier since the output buffer is guaranteed to exist on all devices. Defaults to `None`.
+            persistent_output_buffer (ttnn.Tensor, optional): Pre-allocated output buffer. When provided, skips the fabric startup barrier: all halo traffic (including 2D corners) is written into this DRAM buffer, which is ping-ponged so the neighbor can still be reading the previous output. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the padded output tensor.

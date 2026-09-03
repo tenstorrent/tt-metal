@@ -50,8 +50,8 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(2);
 // Output TensorAccessorArgs start at index 3 (variable length)
 constexpr auto dst_ct_args = TensorAccessorArgs<3>();
 constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
-constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_dst);
-constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst + 1);
+constexpr bool use_l1_intermediate [[maybe_unused]] = get_compile_time_arg_val(ct_after_dst);
+constexpr uint32_t recv_cb_id [[maybe_unused]] = get_compile_time_arg_val(ct_after_dst + 1);
 constexpr bool handle_incoming_writes = get_compile_time_arg_val(ct_after_dst + 2);
 constexpr bool is_w_fabric_writer = get_compile_time_arg_val(ct_after_dst + 3);
 constexpr uint32_t ring_size = get_compile_time_arg_val(ct_after_dst + 4);
@@ -119,13 +119,6 @@ void kernel_main() {
 
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
-    CircularBuffer cb_recv(recv_cb_id);
-
-    // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
-    uint32_t recv_buf_base = 0;
-    if constexpr (use_l1_intermediate) {
-        recv_buf_base = cb_recv.get_write_ptr();
-    }
 
     // pre-populate packet headers with proper routing
     auto pkt_hdr = PacketHeaderPool::allocate_header();
@@ -242,30 +235,13 @@ void kernel_main() {
             }
         }
     }
-    // Always zero: Phase 2 H→W signaling reuses this word even when the startup barrier is skipped.
+    // Always zero barrier_sem, even when the startup barrier itself was skipped
+    // (persistent output): Phase 2 (H->W) signaling reuses this same address, so a
+    // stale non-zero value here would corrupt the Phase 2 handshake.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
-    // Corners-only optimization for 2D H writers:
-    // Only W-boundary sticks (corners) go to neighbor L1; non-corner sticks go directly to DRAM.
-    // Phase 2 W reader only needs corners, so this is safe.
-    // Derivation: the output row is [pad2_left | W interior sticks | pad2_right].
-    // The factory sets stick_start_id = pad2_left (the W offset where interior data begins),
-    // num_sticks_per_halo_dim = W + pad2_left + pad2_right (full output row width),
-    // and num_sticks_to_read = W (interior width). So:
-    //   pad2_left_sticks  = stick_start_id = pad2_left
-    //   pad2_right_sticks = (W + pad2_left + pad2_right) - W - pad2_left = pad2_right
-    // These can be different (asymmetric W padding is supported).
-    uint32_t pad2_left_sticks = 0;
-    uint32_t pad2_right_sticks = 0;
-    if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        pad2_left_sticks = stick_start_id;
-        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;
-    }
-
     // Per-row processing body shared between H writer sequential loop and W writer two-pass loop.
-    // Captured by reference so it sees all local variables (outer_dim_offset, l1_buf_offset, etc.).
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
-    uint32_t l1_buf_offset = 0;  // L1 intermediate: accumulates across all outer_dims (no reuse)
 
     auto process_one_row = [&]() {
         if (is_first_chip) {
@@ -355,27 +331,11 @@ void kernel_main() {
                     }
                     uint32_t l1_read_addr = cb_output.get_read_ptr();
 
-                    uint64_t dst_noc_addr;
-                    if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-                        // Corners-only: W-boundary sticks go to L1, rest to DRAM
-                        bool is_corner =
-                            (iter < pad2_right_sticks) || (iter >= (num_sticks_to_read - pad2_left_sticks));
-                        if (is_corner) {
-                            dst_noc_addr = safe_get_noc_addr(
-                                neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
-                            l1_buf_offset += stick_size;
-                        } else {
-                            // Non-corner: send directly to neighbor's output DRAM
-                            dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
-                        }
-                    } else if constexpr (use_l1_intermediate) {
-                        // W writer: all sticks to L1
-                        dst_noc_addr = safe_get_noc_addr(
-                            neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
-                        l1_buf_offset += stick_size;
-                    } else {
-                        dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
-                    }
+                    // Always the neighbor's output DRAM (the persistent ping-pong buffer when
+                    // allocated). Remote L1 CBs are not double-buffered: they only exist while
+                    // this program is resident, so fabric-writing them after skipping the
+                    // startup barrier can land in the neighbor's previous op (conv3d / GN).
+                    uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
 
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
                     if (direction) {
@@ -461,64 +421,13 @@ void kernel_main() {
     // Ensure all DRAM writes from main loop are complete.
     noc_obj.async_write_barrier();
 
-    // Incoming writes: pop sticks that the paired reader pushed from its L1 recv buffer
-    // (fabric-delivered padding from neighbor) and write to output DRAM.
-    // Used by both H fabric writers (incoming H halo) and W fabric writers (incoming W padding).
+    // Incoming fabric writes land in output DRAM (persistent POB when allocated).
+    // The paired H reader waits on neighbor_sem then pushes one CB token so this
+    // writer does not signal Phase 2 until those DRAM writes are visible.
     if constexpr (handle_incoming_writes) {
         if (!is_first_chip) {
-            uint32_t inc_offset = outer_dim_offset_start_id;
-            for (uint32_t od = 0; od < outer_dim_size; od++) {
-                for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
-                    uint32_t row_offset;
-                    if (direction) {
-                        row_offset = (output_halo_dim_size - padding + pad_id) * num_sticks_per_halo_dim;
-                    } else {
-                        row_offset = pad_id * num_sticks_per_halo_dim;
-                    }
-                    uint32_t base_dst = inc_offset + row_offset + stick_start_id;
-
-                    if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-                        if (pad2_right_sticks + pad2_left_sticks >= num_sticks_to_read) {
-                            // Overlap: all sticks are corners, pop exactly num_sticks_to_read
-                            for (uint32_t c = 0; c < num_sticks_to_read; c++) {
-                                cb_output.wait_front(1);
-                                noc_obj.async_write(cb_output, dst_accessor, stick_size, {}, {.page_id = base_dst + c});
-                                noc_obj.async_write_barrier();
-                                cb_output.pop_front(1);
-                            }
-                        } else {
-                            // Corners-only: pop left corners then right corners from CB
-                            // Left corners: first pad2_right_sticks of interior
-                            for (uint32_t c = 0; c < pad2_right_sticks; c++) {
-                                cb_output.wait_front(1);
-                                noc_obj.async_write(cb_output, dst_accessor, stick_size, {}, {.page_id = base_dst + c});
-                                noc_obj.async_write_barrier();
-                                cb_output.pop_front(1);
-                            }
-                            // Right corners: last pad2_left_sticks of interior
-                            uint32_t right_start = base_dst + (num_sticks_to_read - pad2_left_sticks);
-                            for (uint32_t c = 0; c < pad2_left_sticks; c++) {
-                                cb_output.wait_front(1);
-                                noc_obj.async_write(
-                                    cb_output, dst_accessor, stick_size, {}, {.page_id = right_start + c});
-                                noc_obj.async_write_barrier();
-                                cb_output.pop_front(1);
-                            }
-                        }
-                    } else {
-                        // Original: all sticks sequentially
-                        uint32_t dst_stick_id = base_dst;
-                        for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
-                            cb_output.wait_front(1);
-                            noc_obj.async_write(cb_output, dst_accessor, stick_size, {}, {.page_id = dst_stick_id});
-                            noc_obj.async_write_barrier();
-                            cb_output.pop_front(1);
-                            dst_stick_id++;
-                        }
-                    }
-                }
-                inc_offset += num_sticks_per_halo_dim * output_halo_dim_size;
-            }
+            cb_output.wait_front(1);
+            cb_output.pop_front(1);
         }
     }
 

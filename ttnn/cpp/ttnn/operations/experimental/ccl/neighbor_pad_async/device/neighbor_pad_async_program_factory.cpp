@@ -124,10 +124,10 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 // Phase 1 — Interior copy + H halo exchange (all ~120 cores active):
 //   Local copy cores: read input sticks → write to output DRAM at (h+pH, w+pW) offset.
 //   H fabric writer (BRISC): self-pad zeros/replicate to output DRAM for H pad rows,
-//     send H boundary data to neighbor via fabric.
-//   H fabric reader (NCRISC): receive H halo from fabric → L1 → output DRAM.
-//   All Phase 1 cores (local copy writers, H fabric writers, and H fabric readers)
-//     signal Phase 2 barrier on completion.
+//     send H boundary data (including 2D corner sticks) to neighbor output DRAM via fabric.
+//     The destination is the persistent ping-pong tensor when allocated — never a remote L1 CB.
+//   H fabric reader (NCRISC): wait for fabric DRAM writes, then unblock the paired writer.
+//   All Phase 1 H fabric writers signal Phase 2 barrier on completion.
 //
 // Phase 2 — W halo exchange (2–8 W fabric cores, i.e. 2 × pad2_num_links):
 //   W reader: waits on Phase 2 barrier, then reads W boundary sticks from output DRAM
@@ -303,26 +303,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
-    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here.
-    // Corners-only optimization: only W-boundary sticks (pad2_left + pad2_right per row) go
-    // to L1; non-corner sticks go directly to neighbor DRAM via fabric.
-    // Buffer must hold ALL outer_dims' corner sticks (no per-outer_dim reuse) because the
-    // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
-    // copying outer_dim N.
-    uint32_t recv_cb_index = tt::CB::c_in1;
+    // Fabric H halo (including 2D corners) is written to the output DRAM tensor, not an L1
+    // recv CB. That tensor is the persistent ping-pong buffer when allocated, so skipping
+    // the startup barrier cannot land halo in the neighbor's previous op's L1 scratch.
+    uint32_t recv_cb_index = 0;
     uint32_t corner_sticks_per_row =
         is_2d ? std::min(operation_attributes.pad2_left + operation_attributes.pad2_right, num_sticks_per_halo_dim) : 0;
-    if (is_2d) {
-        uint32_t max_padding = std::max(operation_attributes.padding_left, operation_attributes.padding_right);
-        uint32_t max_outer_dims_per_core = dims_per_core_group_1;
-        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
-        uint32_t recv_buf_size = recv_total_sticks * page_size;
-        if (recv_buf_size > 0) {
-            CircularBufferConfig recv_cb_config =
-                CircularBufferConfig(recv_buf_size, {{recv_cb_index, df}}).set_page_size(recv_cb_index, page_size);
-            CreateCircularBuffer(program, worker_core_ranges, recv_cb_config);
-        }
-    }
 
     // Phase 2 W-axis setup (for 2D padding)
     std::vector<CoreCoord> w_fabric_logical_cores;
@@ -427,8 +413,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*input_buffer).append_to(h_reader_kernel_config.compile_args);
-    h_reader_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
-    h_reader_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
+    h_reader_kernel_config.compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate (Phase 2 token)
+    h_reader_kernel_config.compile_args.push_back(recv_cb_index);               // recv_cb_id (unused; halo is DRAM)
     auto h_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -447,8 +433,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
     TensorAccessorArgs(*output_buffer).append_to(h_writer_kernel_config.compile_args);
-    h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);                   // use_l1_intermediate
-    h_writer_kernel_config.compile_args.push_back(is_2d ? recv_cb_index : 0);       // recv_cb_id
+    h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);                   // use_l1_intermediate (Phase 2 token)
+    h_writer_kernel_config.compile_args.push_back(recv_cb_index);                    // recv_cb_id (unused; halo is DRAM)
     h_writer_kernel_config.compile_args.push_back(is_2d ? 1 : 0);                   // handle_incoming_writes
     h_writer_kernel_config.compile_args.push_back(0);                               // is_w_fabric_writer (false for H)
     h_writer_kernel_config.compile_args.push_back(operation_attributes.ring_size);  // ring_size
@@ -494,7 +480,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
                 num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
-                corner_sticks_per_row};   // num_l1_recv_sticks_per_row (corners-only for 2D)
+                corner_sticks_per_row};   // unused (kept for RT arg layout; halo is DRAM)
             // Per-core direction args (moved from compile-time for kernel consolidation)
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
