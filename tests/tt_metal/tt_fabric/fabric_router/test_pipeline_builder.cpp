@@ -242,6 +242,20 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
 
 }  // namespace
 
+TEST(PipelineBuilderLayoutTest, MapsStageWithoutCapacityConstraints) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips);
+
+    ASSERT_EQ(result.stage_order, nodes);
+    EXPECT_EQ(result.node_to_submesh.at("s0"), 0);
+    EXPECT_TRUE(result.resolved_edges.empty());
+    EXPECT_FALSE(result.h2d_core_slot.has_value());
+    EXPECT_FALSE(result.d2h_core_slot.has_value());
+}
+
 // These focused capacity tests use one synthetic submesh, so connection discovery
 // never queries the control plane and no device or fabric initialization is needed.
 TEST(PipelineBuilderCapacityTest, SpreadsHostEndpointsAcrossAvailableChips) {
@@ -346,6 +360,10 @@ TEST_F(ControlPlaneFixture, TestPipelineBuilderCheck) {
             EXPECT_FALSE(edge.exit_core_slot.has_value());
             EXPECT_FALSE(edge.entry_core_slot.has_value());
         }
+        const auto legacy_error = validate_pipeline_builder_graph_layout_errors(control_plane, layouts, legacy);
+        EXPECT_FALSE(legacy_error.has_value())
+            << "Legacy pipeline ring failed validation: " << legacy_error.value_or("")
+            << "\n  layout: " << describe_layouts(layouts);
     }
 
     std::map<std::string, uint32_t> capacities;
