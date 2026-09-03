@@ -1200,20 +1200,39 @@ def test_high_bw_all_gather_paged_kv_pool(mesh_device, expect_error):
             )
 
 
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_1D_RING),
+                "require_exact_physical_num_devices": True,
+            },
+            id="fabric_1d_ring",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
 @run_for_blackhole("high_bw_all_gather paged KV performance coverage requires Blackhole")
 def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
+    """Page-32 KV gather must meet the non-paged 55K QuietBox production gate."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.skip("paged high_bw_all_gather performance coverage requires the realtime device profiler")
+        pytest.fail("paged high_bw_all_gather performance coverage requires the realtime device profiler")
+    if not _is_physical_quietbox(mesh_device):
+        pytest.skip("paged high_bw_all_gather production gate requires the complete physical QuietBox")
 
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     axis_size = rank_line.shape[cluster_axis]
-    rows, width, page_size = 6400, 576, 32
+    global_rows, width, page_size = 55_000, 576, 32
+    assert global_rows % axis_size == 0
+    rows = global_rows // axis_size
     num_layers, layer_idx = 3, 1
-    logical_bundles = rows // page_size
+    logical_bundles = math.ceil(rows / page_size)
+    capacity_rows = logical_bundles * page_size
     physical_bundles = logical_bundles + 8
     torch.manual_seed(271)
-    host_input = torch.randn(1, 1, rows * axis_size, width, dtype=torch.bfloat16)
+    host_input = torch.randn(1, 1, capacity_rows * axis_size, width, dtype=torch.bfloat16)
     device_input = _make_tensor(
         rank_line,
         host_input,
@@ -1249,14 +1268,14 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
     )
     contiguous_output = _make_tensor(
         rank_line,
-        torch.zeros(1, 1, rows * axis_size, width, dtype=torch.bfloat16),
+        torch.zeros(1, 1, capacity_rows * axis_size, width, dtype=torch.bfloat16),
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ReplicateTensorToMesh(rank_line),
     )
     paged_output = _make_tensor(
         rank_line,
-        torch.zeros(1, 1, rows * axis_size, width, dtype=torch.bfloat16),
+        torch.zeros(1, 1, capacity_rows * axis_size, width, dtype=torch.bfloat16),
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ReplicateTensorToMesh(rank_line),
@@ -1269,6 +1288,7 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
             output_tensor=contiguous_output,
             cluster_axis=cluster_axis,
             num_links=_NUM_LINKS,
+            gathered_dim_size=global_rows,
         )
 
     def gather_paged():
@@ -1282,6 +1302,7 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
             kv_cache_page_size=page_size,
             kv_cache_num_layers=num_layers,
             kv_cache_layer_idx=layer_idx,
+            gathered_dim_size=global_rows,
         )
 
     gather_contiguous()
@@ -1294,10 +1315,18 @@ def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
     contiguous_median = statistics.median(contiguous_ns)
     paged_median = statistics.median(paged_ns)
     ratio = paged_median / contiguous_median
+    payload_bytes = rows * width * 2 * (axis_size - 1)
+    contiguous_bandwidth_gbps = payload_bytes / contiguous_median
+    paged_bandwidth_gbps = payload_bytes / paged_median
+    min_bandwidth_gbps = _QUIETBOX_CI_MIN_BANDWIDTH_GBPS[global_rows]
     print(
         f"PAGED_HIGH_BW_ALL_GATHER contiguous={contiguous_median / 1e6:.3f}ms "
-        f"paged={paged_median / 1e6:.3f}ms ratio={ratio:.4f}"
+        f"paged={paged_median / 1e6:.3f}ms ratio={ratio:.4f} "
+        f"contiguous_bw={contiguous_bandwidth_gbps:.3f}GB/s paged_bw={paged_bandwidth_gbps:.3f}GB/s "
+        f"production_floor={min_bandwidth_gbps:.1f}GB/s"
     )
+    assert contiguous_bandwidth_gbps >= min_bandwidth_gbps
+    assert paged_bandwidth_gbps >= min_bandwidth_gbps
     assert ratio <= 1.05, f"paged high_bw_all_gather regressed device time by {(ratio - 1) * 100:.2f}%"
 
 

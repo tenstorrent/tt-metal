@@ -1440,20 +1440,29 @@ def run_indexer_m3(device):
 # (M3 is a single index head, so its matmul is a small slice -- the block-pool dominates -- hence the much
 # lower expected util than the multi-head DSA cases.)
 # ---------------------------------------------------------------------------
+INDEXER_EXPECTED_UTIL = {
+    # Calibrated on the current Blackhole IOMMU perf runner.  Keep these shared by
+    # the contiguous and paged production checks so neither layout gets a looser target.
+    "glm5": 36.0,
+    "minimax_m3": 42.9,
+    "glm5_tp1": 63.70,
+}
+
+
 _MATH_UTIL_CASES = [
     # (case_id, run_fn(device) -> op output, mm_flops_thunk, expected_util, math_fidelity)
     (
         "glm5",
         lambda device: run_indexer_sp7(device, 8),
         lambda: indexer_mm_flops(sp7_valid_tiles(), 8),
-        36.48,
+        INDEXER_EXPECTED_UTIL["glm5"],
         "LoFi",
     ),
     (
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        42.9,
+        INDEXER_EXPECTED_UTIL["minimax_m3"],
         "HiFi2",
     ),
     # Block-split grid fill: GLM5 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
@@ -1464,7 +1473,7 @@ _MATH_UTIL_CASES = [
         "glm5_tp1",
         lambda device: run_indexer_short(device, 32),
         lambda: indexer_mm_flops(short_valid_tiles(), 32),
-        63.70,
+        INDEXER_EXPECTED_UTIL["glm5_tp1"],
         "LoFi",
     ),
 ]
@@ -1522,10 +1531,16 @@ def test_indexer_score_paged_perf_matches_contiguous(device, mode):
     if mode == "dsa":
         heads, sq, t, chunk_start = 8, GLX_SQ, GLX_T, SP7_CHUNK_START
         q_dtype, block_size, scale, cfg = ttnn.bfloat8_b, 0, 1.0, glx_config(heads)
+        expected_util = INDEXER_EXPECTED_UTIL["glm5"]
+        mm_flops = indexer_mm_flops(sp7_valid_tiles(), heads)
+        math_fidelity = "LoFi"
     else:
         heads, sq, t, chunk_start = 1, M3_SQ, M3_T, M3_CHUNK_START
         q_dtype, block_size, scale = ttnn.bfloat16, 128, M3_DIM**-0.5
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+        expected_util = INDEXER_EXPECTED_UTIL["minimax_m3"]
+        mm_flops = m3_valid_tiles() * (32 * 32) * (2 * M3_DIM)
+        math_fidelity = "HiFi2"
 
     page_size = 32
     q, k, w = make_inputs(heads, GLX_DIM, sq, t)
@@ -1574,11 +1589,21 @@ def test_indexer_score_paged_perf_matches_contiguous(device, mode):
         contiguous_ns.append(contiguous_record["duration_ns"])
         paged_ns.append(paged_record["duration_ns"])
     contiguous_ms = sorted(contiguous_ns)[len(contiguous_ns) // 2] / 1e6
-    paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
+    paged_duration_ns = sorted(paged_ns)[len(paged_ns) // 2]
+    paged_ms = paged_duration_ns / 1e6
     ratio = paged_ms / contiguous_ms
+    peak = _MM_FLOPS_PER_CYCLE_PER_CORE[math_fidelity]
+    paged_util = mm_flops / (INDEXER_PERF_CORES * paged_duration_ns * _BH_CLOCK_GHZ * peak) * 100
+    lower = expected_util * (1 - INDEXER_PERF_MARGIN)
+    upper = expected_util * (1 + INDEXER_PERF_MARGIN)
     logger.info(
         f"indexer_score {mode} paged perf: contiguous={contiguous_ms:.3f} ms, "
-        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}, math_util={paged_util:.2f}% "
+        f"(same target as contiguous: {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+    assert lower <= paged_util <= upper, (
+        f"paged indexer_score_{mode} math utilization {paged_util:.2f}% outside the contiguous production band "
+        f"[{lower:.2f}, {upper:.2f}]"
     )
     assert ratio <= 1.03, f"paged indexer_score_{mode} regressed device time by {(ratio - 1) * 100:.2f}%"
 

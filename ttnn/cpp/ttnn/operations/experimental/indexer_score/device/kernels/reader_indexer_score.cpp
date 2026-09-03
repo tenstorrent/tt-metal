@@ -285,13 +285,20 @@ inline void read_ktile_dims(Noc, const PagedKVAccessor<ReaderType>& acc, uint32_
     // One physical bundle/layer page is exactly one ND shard. Resolve its row address once, then walk the
     // head-dimension tiles linearly; invoking the generic TensorAccessor mapping for all four D=128 tiles
     // is visible on MSA's short fused-single-head path.
-    const auto cursor = acc.cursor(logical_row);
-    const uint64_t row_noc_addr =
-        acc.get_shard_row_noc_addr(cursor, cursor.row_in_bundle * head_dim_tiles * k_tile_bytes);
-    for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
-        noc_async_read(row_noc_addr + dim_tile * k_tile_bytes, ptr, k_tile_bytes);
-        ptr += k_tile_bytes;
+    uint64_t row_noc_addr;
+    if constexpr (page_bundle_size_tiles == 1) {
+        // Page-32 production cache: one logical sequence tile is one bundle. Keep this common path free of
+        // the generic cursor's runtime divide/modulo even though both divisors are compile-time one here.
+        const uint32_t physical_bundle = CoreLocalMem<volatile uint16_t>(acc.bundle_ids_l1_addr)[logical_row];
+        const uint32_t physical_page = physical_bundle * page_bundle_num_layers + page_bundle_layer_idx;
+        row_noc_addr = acc.get_shard_noc_addr(physical_page);
+    } else {
+        const auto cursor = acc.cursor(logical_row);
+        row_noc_addr = acc.get_shard_row_noc_addr(cursor, cursor.row_in_bundle * head_dim_tiles * k_tile_bytes);
     }
+    constexpr uint32_t row_bytes = head_dim_tiles * k_tile_bytes;
+    noc_async_read(row_noc_addr, ptr, row_bytes);
+    ptr += row_bytes;
 }
 
 template <typename ReaderType>
@@ -551,7 +558,17 @@ void kernel_main() {
             page_bundle_l1 = cb.get_write_ptr();
             uint32_t first_bundle = 0;
             uint32_t bundles_to_read = page_bundle_count;
-            if constexpr (!block_cyclic && !fused_ring_enabled) {
+            if constexpr (block_cyclic && fused_ring_enabled) {
+                // The fused cache is capacity-sized, but a decode/prefill invocation only touches the
+                // active KV prefix.  Block-cyclic layout appends bc_chunk_local tiles to each rank per
+                // global slab, so bound the local page-table prefix by the number of active slabs instead
+                // of fetching the full 1M-token capacity table on every K sender.
+                constexpr uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+                const uint32_t active_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
+                const uint32_t active_local_tiles = active_slabs * bc_chunk_local;
+                bundles_to_read = std::min(
+                    page_bundle_count, (active_local_tiles + page_bundle_size_tiles - 1) / page_bundle_size_tiles);
+            } else if constexpr (!block_cyclic && !fused_ring_enabled) {
                 // A regular scheduler cell owns a contiguous run of K bands, so it only needs that run's
                 // table entries. Align the uint16 slice to one 32-byte NOC quantum while retaining its
                 // global index in L1; production MSA reads ~320 B/core instead of the full ~3.5 KiB table.

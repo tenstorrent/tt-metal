@@ -18,6 +18,7 @@ Run (requires an IOMMU-enabled Blackhole runner):
 """
 
 import math
+import statistics
 
 import pytest
 import torch
@@ -167,8 +168,9 @@ def _ring_perf_config():
 @pytest.mark.parametrize("mesh_device", RING_PERF_MESHES, ids=RING_PERF_MESH_IDS, indirect=True)
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("kv_len", RING_PERF_KV_LENS, ids=RING_PERF_KV_IDS)
+@pytest.mark.parametrize("cache_layout", ["contiguous", "paged32"], ids=["contiguous", "paged32"])
 @pytest.mark.timeout(0)
-def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
+def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, cache_layout):
     """Profile one warm fused ring score at a 55K or 512K KV prefix.
 
     The realtime profiler's fused-program critical path is converted to FPU
@@ -209,16 +211,54 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
     # from this *capacity* (not kv_len): kv_len bounds the populated prefix,
     # but leaves the capacity-sized K-band schedule intact. Selecting slot 20
     # matches the final full GLM-5.2 indexer layer.
-    k_local = init_kvpe_cache(
-        kvpe_cache_head_dim=GLM52_INDEX_DIM,
-        mesh_device=mesh_device,
-        seq_len=GLM52_K_CACHE_CAPACITY,
-        mesh_shape=(sp, tp),
-        sp_axis=0,
-        num_kvpe_cache_layers=GLM52_INDEX_CACHE_SLOTS,
-        num_users=1,
-        dtype=ttnn.bfloat8_b,
-    )
+    paging = {}
+    if cache_layout == "contiguous":
+        k_local = init_kvpe_cache(
+            kvpe_cache_head_dim=GLM52_INDEX_DIM,
+            mesh_device=mesh_device,
+            seq_len=GLM52_K_CACHE_CAPACITY,
+            mesh_shape=(sp, tp),
+            sp_axis=0,
+            num_kvpe_cache_layers=GLM52_INDEX_CACHE_SLOTS,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        page_size = 32
+        local_bundles = GLM52_K_CACHE_CAPACITY // sp // page_size
+        dram_banks = mesh_device.dram_grid_size().x
+        dram_cores = [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_banks)]
+        page_mem = ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.DRAM,
+            nd_shard_spec=ttnn.NdShardSpec(
+                shard_shape=[1, 1, page_size, GLM52_INDEX_DIM],
+                grid=ttnn.CoreRangeSet(dram_cores),
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+        # Each rank owns a private physical pool. A full [32, hidden_dim] page is one ND shard/bank.
+        k_local = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([local_bundles * GLM52_INDEX_CACHE_SLOTS, 1, page_size, GLM52_INDEX_DIM]),
+            ttnn.bfloat8_b,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            page_mem,
+        )
+        page_table = ttnn.from_torch(
+            torch.arange(local_bundles, dtype=torch.int64).reshape(1, 1, 1, -1),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        paging = dict(
+            kv_cache_num_layers=GLM52_INDEX_CACHE_SLOTS,
+            kv_cache_layer_idx=GLM52_INDEX_CACHE_SLOT,
+            page_bundle_indices=page_table,
+            kv_cache_page_size=page_size,
+        )
     # The all-gather output is persistent and full-width on every rank.  It is
     # zero-seeded because only shape/route/device timing matters here.
     k_gathered = ttnn.from_torch(
@@ -237,6 +277,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
     try:
 
         def run_once():
+            cache_selection = {"cache_batch_idx": GLM52_INDEX_CACHE_SLOT} if cache_layout == "contiguous" else paging
             return ttnn.experimental.ring_indexer_score_dsa(
                 q_dev,
                 k_gathered,
@@ -249,10 +290,10 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
                 ag_sub_device_id=subdevice_id,
                 chunk_start_idx=chunk_start,
                 kv_len=kv_len,
-                cache_batch_idx=GLM52_INDEX_CACHE_SLOT,
                 block_cyclic_sp_axis=0,
                 block_cyclic_chunk_local=GLM52_Q_PER_CHIP,
                 program_config=_ring_perf_config(),
+                **cache_selection,
             )
 
         # Compile/cache warm-up is deliberately outside the profiler window.
@@ -274,18 +315,25 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         def replay_once():
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
-        _, programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
-        duration_ns = _ring_indexer_duration_ns(programs)
+        # A single trace replay can move by a few tenths of a percent on an otherwise
+        # idle box, which is material against the +/-2% production band.  Use the
+        # median of three identical replays for both cache layouts.
+        duration_samples_ns = []
+        for _ in range(3):
+            _, programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
+            duration_samples_ns.append(_ring_indexer_duration_ns(programs))
+        duration_ns = statistics.median(duration_samples_ns)
         ideal_compute_cycles = _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start)
         fpu_utilization = ideal_compute_cycles / (duration_ns * _BH_CLOCK_GHZ) * 100
         expected_fpu_utilization = RING_INDEXER_EXPECTED_FPU_UTIL[(sp, kv_len)]
         lower = expected_fpu_utilization * (1 - RING_INDEXER_PERF_MARGIN)
         upper = expected_fpu_utilization * (1 + RING_INDEXER_PERF_MARGIN)
         logger.info(
-            "ring_indexer_score_dsa perf: mesh={} fabric={} topology=ring heads={} k_capacity={} kv_len={} "
+            "ring_indexer_score_dsa perf: mesh={} fabric={} topology=ring cache={} heads={} k_capacity={} kv_len={} "
             "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}% (expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
                 tuple(mesh_device.shape),
                 ttnn.get_fabric_config(),
+                cache_layout,
                 GLM52_INDEX_HEADS,
                 GLM52_K_CACHE_CAPACITY,
                 kv_len,
@@ -299,7 +347,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         )
         assert duration_ns > 0, "fused ring-indexer profiler duration must be positive"
         assert lower <= fpu_utilization <= upper, (
-            f"ring_indexer_score_dsa mesh={(sp, tp)} kv_len={kv_len}: FPU utilization "
+            f"ring_indexer_score_dsa mesh={(sp, tp)} cache={cache_layout} kv_len={kv_len}: FPU utilization "
             f"{fpu_utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
             f"(expected {expected_fpu_utilization:.2f}%, margin +/- {RING_INDEXER_PERF_MARGIN * 100:.1f}%)"
         )
