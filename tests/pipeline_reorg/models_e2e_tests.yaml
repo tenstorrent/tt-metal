@@ -1991,7 +1991,7 @@
     '
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 45
       tier: 3
       release_ready: false
@@ -2025,7 +2025,7 @@
     '
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 20
       tier: 3
       release_ready: false
@@ -2041,7 +2041,7 @@
     '
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 75
       tier: 3
       release_ready: false
