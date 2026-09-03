@@ -42,7 +42,7 @@ import torch
 VSA_TILE_SHAPE = (4, 4, 4)
 VSA_TILE_TOKENS = 64  # math.prod(VSA_TILE_SHAPE); also the fine-stage block size
 
-VSA_PLACEMENTS = ("identity", "striped")
+VSA_PLACEMENTS = ("identity", "striped", "interleaved")
 
 
 def chop_prefix_segments(prefix_segments: tuple[int, ...]) -> list[int]:
@@ -204,6 +204,33 @@ def _striped_order(is_exempt: torch.Tensor, sp_factor: int, capacity: int) -> to
     return order
 
 
+def _interleaved_order(is_exempt: torch.Tensor, sp_factor: int, capacity: int) -> torch.Tensor:
+    """Striped across shards AND spread evenly within each shard.
+
+    ``striped`` balances exempt (dense-list) tiles across shards but parks them at the front of
+    each shard, so inside vsa_sdpa the first pass and the first workers (rows are dealt to workers
+    in 4-row chunks, passes take rmax rows per worker) carry all of a shard's dense rows while the
+    rest idle. Here each shard's exempt tiles sit at evenly spaced slots, so every pass and every
+    worker sees roughly the same share of them.
+    """
+    striped = _striped_order(is_exempt, sp_factor, capacity)
+    order = torch.empty_like(striped)
+    for s in range(sp_factor):
+        shard = striped[s * capacity : (s + 1) * capacity]
+        exempt = shard[is_exempt[shard]]
+        others = shard[~is_exempt[shard]]
+        n_ex = int(exempt.numel())
+        slots = torch.zeros(capacity, dtype=torch.bool)
+        if n_ex:
+            # evenly spaced slots, e.g. n_ex=3, capacity=12 -> 0, 4, 8
+            slots[(torch.arange(n_ex, dtype=torch.long) * capacity) // n_ex] = True
+        out = torch.empty(capacity, dtype=torch.long)
+        out[slots] = exempt
+        out[~slots] = others
+        order[s * capacity : (s + 1) * capacity] = out
+    return order
+
+
 def build_vsa_geometry(
     prefix_segments: tuple[int, ...],
     video_grid: tuple[int, int, int],
@@ -273,8 +300,10 @@ def build_vsa_geometry(
 
     if placement == "identity":
         order = torch.arange(n_tiles, dtype=torch.long)
-    else:
+    elif placement == "striped":
         order = _striped_order(is_exempt, sp_factor, n_tiles // sp_factor)
+    else:
+        order = _interleaved_order(is_exempt, sp_factor, n_tiles // sp_factor)
 
     valid_counts = valid_counts[order]
     is_3d = is_3d[order]

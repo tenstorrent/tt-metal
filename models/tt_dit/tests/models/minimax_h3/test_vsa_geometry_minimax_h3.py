@@ -20,7 +20,6 @@ from ....pipelines.minimax_h3.vsa_geometry import (
     VSA_TILE_TOKENS,
     build_vsa_geometry,
     chop_prefix_segments,
-    video_tile_partition_indices,
     video_tile_valid_counts,
 )
 
@@ -56,9 +55,13 @@ def test_matches_upstream_geometry(upstream, fixture):
     prefix_segments, grid = _FIXTURES[fixture]
     upstream_prefix = tuple(s for s in prefix_segments if s > 0)
 
-    (tile_partition_indices, variable_block_sizes, untile_combined_index, num_prefix_tiles, num_video_tiles) = (
-        h3._h3_tile_geometry(upstream_prefix, grid, _CPU, (4, 4, 4))
-    )
+    (
+        tile_partition_indices,
+        variable_block_sizes,
+        untile_combined_index,
+        num_prefix_tiles,
+        num_video_tiles,
+    ) = h3._h3_tile_geometry(upstream_prefix, grid, _CPU, (4, 4, 4))
 
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=1)
     assert geometry.n_prefix_tiles == num_prefix_tiles
@@ -117,7 +120,7 @@ def test_segment_purity():
             start = end
 
 
-@pytest.mark.parametrize("placement", ["identity", "striped"])
+@pytest.mark.parametrize("placement", ["identity", "striped", "interleaved"])
 @pytest.mark.parametrize("sp_factor", [1, 8])
 def test_roundtrip_identity(placement, sp_factor):
     """unpack(pack(x)) == x for every fixture, placement, and SP factor."""
@@ -150,11 +153,12 @@ def test_pad_tiles_and_shard_alignment():
     assert int(geometry.is_candidate.sum()) == 27 * 6 * 11
 
 
-def test_striped_placement():
+@pytest.mark.parametrize("placement", ["striped", "interleaved"])
+def test_striped_placement(placement):
     """Striping permutes whole tiles, spreads exempt tiles, and unpacks identically."""
     for prefix_segments, grid in _FIXTURES.values():
         identity = build_vsa_geometry(prefix_segments, grid, sp_factor=8, placement="identity")
-        striped = build_vsa_geometry(prefix_segments, grid, sp_factor=8, placement="striped")
+        striped = build_vsa_geometry(prefix_segments, grid, sp_factor=8, placement=placement)
 
         # same multiset of tiles: match up by canonical id
         order = torch.argsort(striped.tile_ids, stable=True)[striped.n_pad_tiles :]
@@ -166,6 +170,14 @@ def test_striped_placement():
         # exempt tiles spread across shards: max/min per-shard counts differ by <= 1
         per_shard = striped.is_exempt.reshape(8, striped.tiles_per_shard).sum(dim=1)
         assert int(per_shard.max() - per_shard.min()) <= 1
+        if placement == "interleaved":
+            # ... and spread within each shard: no two exempt tiles closer than half the ideal gap
+            ex = striped.is_exempt.reshape(8, striped.tiles_per_shard)
+            for shard_ex in ex:
+                pos = torch.nonzero(shard_ex).reshape(-1)
+                if pos.numel() > 1:
+                    gap = striped.tiles_per_shard / pos.numel()
+                    assert int((pos[1:] - pos[:-1]).min()) >= int(gap // 2)
 
         # both placements recover the same rows
         x = torch.randn(identity.seq_len, 2)

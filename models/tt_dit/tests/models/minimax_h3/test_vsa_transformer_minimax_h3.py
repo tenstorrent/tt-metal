@@ -12,8 +12,8 @@ rows. R6d: striped placement equals identity placement on the final (unpacked) o
 
 import pytest
 import torch
+from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3RotaryPosEmbed
 from diffusers.models.transformers.transformer_minimax_h3 import (
-    MiniMaxH3RotaryPosEmbed,
     MiniMaxH3Transformer3DModel as TorchMiniMaxH3Transformer,
 )
 from loguru import logger
@@ -22,7 +22,7 @@ import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig, MiniMaxH3VSACoarseStage
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
 from ....utils.check import assert_quality
 from ....utils.tensor import from_torch
@@ -118,9 +118,7 @@ def test_vsa_transformer_sparsity0_matches_dense(
     )  # fmt: skip
 
     grid_t = _SHAPE["num_video"] // (_SHAPE["grid"][0] * _SHAPE["grid"][1])
-    geometry = build_vsa_geometry(
-        (_SHAPE["num_text"], 0, _SHAPE["num_audio"]), (grid_t, *_SHAPE["grid"]), sp_factor=8
-    )
+    geometry = build_vsa_geometry((_SHAPE["num_text"], 0, _SHAPE["num_audio"]), (grid_t, *_SHAPE["grid"]), sp_factor=8)
     assert geometry.n_pad_tiles > 0  # the shape is chosen to cover pad tiles and a ragged prefix tail
 
     torch_model = TorchMiniMaxH3Transformer(**TRANSFORMER_CONFIG, rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
@@ -154,7 +152,7 @@ def test_vsa_transformer_sparsity0_matches_dense(
 def test_vsa_transformer_striped_matches_identity(
     mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, reset_seeds
 ) -> None:
-    """R6d at model level: striped placement gives the same outputs as identity after unpacking."""
+    """R6d at model level: striped/interleaved placement gives the same outputs as identity after unpacking."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     if tuple(mesh_device.shape)[sp_axis] != 8:
         pytest.skip("VSA v0 targets 4x8")
@@ -180,7 +178,7 @@ def test_vsa_transformer_striped_matches_identity(
 
     grid_t = _SHAPE["num_video"] // (_SHAPE["grid"][0] * _SHAPE["grid"][1])
     outs = {}
-    for placement in ("identity", "striped"):
+    for placement in ("identity", "striped", "interleaved"):
         geometry = build_vsa_geometry(
             (_SHAPE["num_text"], 0, _SHAPE["num_audio"]), (grid_t, *_SHAPE["grid"]), sp_factor=8, placement=placement
         )
@@ -197,7 +195,8 @@ def test_vsa_transformer_striped_matches_identity(
         )
         del model
 
-    logger.info("checking video output")
-    assert_quality(outs["identity"][0], outs["striped"][0], pcc=MIN_PCC)
-    logger.info("checking audio output")
-    assert_quality(outs["identity"][1], outs["striped"][1], pcc=MIN_PCC)
+    for placement in ("striped", "interleaved"):
+        logger.info(f"checking video output: {placement} vs identity")
+        assert_quality(outs["identity"][0], outs[placement][0], pcc=MIN_PCC)
+        logger.info(f"checking audio output: {placement} vs identity")
+        assert_quality(outs["identity"][1], outs[placement][1], pcc=MIN_PCC)

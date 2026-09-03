@@ -12,6 +12,8 @@ with `-k`: a multi-parameter profiled run yields a CSV containing only the first
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
@@ -23,14 +25,14 @@ import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig, MiniMaxH3VSACoarseStage
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
 from ....utils.tensor import bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
 from .common import GALAXY_RING, REAL_BLOCK_CONFIG, ROPE_FREQ_DIM, ROPE_THETA, TT_BLOCK_CONFIG, upload_rope
-from .test_performance_minimax_h3 import NUM_TEXT_TOKENS, _packed_sizes
+from .test_performance_minimax_h3 import _packed_sizes
 
 HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
 HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
@@ -71,7 +73,10 @@ def test_minimax_h3_vsa_block_perf(
     # audio rows kept even (stereo channel-major); _packed_sizes reports latents, rows are 2x... it
     # reports num_audio directly -- match the dense perf test's row count exactly.
     prefix_segments = (sizes["num_text"], 0, sizes["num_audio"])
-    geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp_factor)
+    # VSA_PLACEMENT=striped spreads the exempt (dense-list) tiles over the SP shards; under the
+    # default identity placement the SP-rank-0 devices carry them all and gate the block.
+    placement = os.environ.get("VSA_PLACEMENT", "identity")
+    geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp_factor, placement=placement)
     logger.info(
         f"{duration_s:g}s @ 768P: seq_len={geometry.seq_len} -> {geometry.padded_len} tiled "
         f"({geometry.n_tiles} tiles, {geometry.n_pad_tiles} pad, {geometry.padded_len // sp_factor} rows/device)"
@@ -96,9 +101,9 @@ def test_minimax_h3_vsa_block_perf(
     adaln = ts_idx * MINIMAX_H3_MODALITY_NUM + tags
     position_ids = torch.zeros(geometry.seq_len, 3, dtype=torch.float64)
     video = torch.meshgrid(*(torch.arange(d) for d in grid), indexing="ij")
-    position_ids[sizes["num_text"] + sizes["num_audio"] :] = torch.stack(
-        [c.reshape(-1) for c in video], dim=-1
-    ).to(torch.float64)
+    position_ids[sizes["num_text"] + sizes["num_audio"] :] = torch.stack([c.reshape(-1) for c in video], dim=-1).to(
+        torch.float64
+    )
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
@@ -118,7 +123,7 @@ def test_minimax_h3_vsa_block_perf(
         sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
         cfg_parallel=None,
     )
-    vsa_config = MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=K_CHUNK_BLOCKS)
+    vsa_config = MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=K_CHUNK_BLOCKS, placement=placement)
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,
         rotary_dim=2 * 3 * ROPE_FREQ_DIM,

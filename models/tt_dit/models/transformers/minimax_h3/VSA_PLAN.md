@@ -263,6 +263,36 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
   15s/768p PASSES (PCC 99.9999% vs untraced) and the untraced block survives two cache-hit repeats.
   Remaining run-to-run noise (PCC 0.99994-0.99998, not bit-exact) is the timing-dependent window
   partitioning; the arrival-bin patch (scratch apply_det_windows.py) would make it exact if wanted.
+- E2E with the streaming kernel (2026-09-02 night): `test_vsa_transformer_sparsity0_matches_dense`
+  PASS (PCC 99.9998%); real-weights `test_t2va_vsa_15s_768p` PASS (14.5 min wall).
+- Block-level tracy, dense vs VSA, per block forward on device 0 (5/10/15 s 768p, streaming kernel):
+    5s : dense 19.0 ms | VSA 25.7 ms  (attn 7.4 -> vsa_sdpa 5.8; +8.0 ms VSA-only ops)
+    10s: dense 42.8 ms | VSA 54.3 ms  (attn 24.7 -> vsa_sdpa 13.5; +22.3 ms VSA-only ops, of which
+         9.1 ms were the three pooling matmuls on 20 cores)
+    15s: dense 76.7 ms | VSA 72.2 ms  (attn 51.4 -> vsa_sdpa 24.3; +22.5 ms VSA-only ops; measured
+         with the pooling fold already in: the same matmuls were 13.6 ms before it)
+  VSA-only ops at 15 s: 2 x ~4.0 ms K/V all-gather (20 cores, ~9 GB/s -- the elephant; dense ring
+  attention has no such step), 4.4 ms extra all-gather-matmul (gate projection), ~3 ms
+  repeat_interleave lowering (permute/concat/tilize -> replaced by a 0/1 matmul), 3 x 0.5 ms pooling
+  (after the fold), transposes/topk/index assembly ~2 ms.
+  Re-measured with pooling fold + 0/1 broadcast matmul (commit 183d3a84491):
+    5s : dense 19.0 | VSA 24.7 ms   10s: dense 42.8 | VSA 45.4 ms   15s: dense 76.7 | VSA 70.7 ms
+  (tuned all-gather hyperparams for the K/V gathers: no effect, 2.75 vs 2.72 ms at 10 s -- reverted.)
+  LOAD IMBALANCE: vsa_sdpa per device at 15 s is 15.9 ms median but 24.3 ms on the four SP-rank-0
+  devices (0, 4, 24, 28), which hold every exempt (text/dense-list) row under the default "identity"
+  placement; the block waits for them (~8 ms at 15 s, 6 ms at 10 s, 3.4 ms at 5 s). The geometry
+  already has placement="striped" (exempt tiles dealt round-robin across shards); the pipeline
+  plumbs MiniMaxH3VSAConfig.placement but the block/perf tests build the geometry with the default.
+  placement="striped" measured at 15 s: vsa_sdpa max 24.3 -> 21.4 ms but median 15.9 -> 19.0 ms
+  (block 70.7 -> 68.1 ms): striping parks each shard's exempt tiles at the FRONT of the shard, so
+  inside vsa_sdpa the first pass / first workers (4-row chunk dealing, rmax=15 rows per pass) carry
+  all the dense rows while the rest idle -- the imbalance moved inside the shard. Added
+  placement="interleaved" (striped across shards, evenly spaced within each shard); geometry tests
+  extended (17 pass). Traced block with striped: PASS.
+  placement="interleaved" at 15 s: vsa_sdpa min/median/max 17.0/17.5/20.2 ms (identity 15.4/15.9/24.3,
+  striped 18.6/19.0/21.4); block max 67.3 ms (identity 71.1, striped 68.6); dense 76.7 -> VSA 13%
+  faster at 15 s. Coarse-stage oracle tests (5) and the traced block PASS with interleaved; it is now
+  MiniMaxH3VSAConfig's default. Residual spread (17.0-20.2) is the +-1 exempt tile per shard.
 - Run-to-run NONDETERMINISM: untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:

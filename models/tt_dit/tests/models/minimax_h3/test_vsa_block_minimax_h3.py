@@ -72,7 +72,8 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
     num_video = t * gh * gw
     seq_len = num_text + num_audio + num_video
 
-    geometry = build_vsa_geometry((num_text, 0, num_audio), grid, sp_factor=sp_factor)
+    placement = os.environ.get("VSA_PLACEMENT", "identity")  # see test_vsa_performance_minimax_h3
+    geometry = build_vsa_geometry((num_text, 0, num_audio), grid, sp_factor=sp_factor, placement=placement)
     logger.info(
         f"15s/768p: seq_len={seq_len}, tiles={geometry.n_tiles} ({geometry.n_pad_tiles} pad), "
         f"padded_len={geometry.padded_len} ({geometry.padded_len // sp_factor} rows/device)"
@@ -107,7 +108,10 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
     )
     # VSA_KERNEL=v1 selects the per-row gather kernel (bisecting trace issues against the stream path)
     vsa_config = MiniMaxH3VSAConfig(
-        sparsity=0.9, k_chunk_blocks=2, streaming=os.environ.get("VSA_KERNEL", "stream") != "v1"
+        sparsity=0.9,
+        k_chunk_blocks=2,
+        streaming=os.environ.get("VSA_KERNEL", "stream") != "v1",
+        placement=placement,
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,

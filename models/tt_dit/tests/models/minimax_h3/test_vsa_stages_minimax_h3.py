@@ -15,15 +15,9 @@ import torch
 import ttnn
 
 from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage
-from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry
+from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
 from ....utils.check import assert_quality
-from .vsa_oracle import (
-    VSA_INDEX_SENTINEL,
-    coarse_output,
-    coarse_scores,
-    select_index_rows,
-    vsa_attention,
-)
+from .vsa_oracle import VSA_INDEX_SENTINEL, coarse_output, coarse_scores, select_index_rows, vsa_attention
 
 _TINY64 = ((70, 5, 130), (9, 10, 13))
 HEADS = 2
@@ -53,7 +47,7 @@ def _from_device(mesh_device, x):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("placement", ["identity", "striped"])
+@pytest.mark.parametrize("placement", ["identity", "striped", "interleaved"])
 def test_coarse_stage_vs_oracle(mesh_device, placement, reset_seeds):
     prefix_segments, grid = _TINY64
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=1, placement=placement)

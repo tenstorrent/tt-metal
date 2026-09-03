@@ -46,7 +46,10 @@ class MiniMaxH3VSAConfig:
     """Host-side VSA knobs (R5): the attention path is selected by passing this to the model."""
 
     sparsity: float
-    placement: str = "identity"  # tile placement across SP shards: "identity" | "striped"
+    # tile placement across SP shards: "identity" | "striped" | "interleaved". Interleaved (default)
+    # spreads the exempt dense-list tiles across shards AND evenly within each shard, so no device
+    # (and no worker/pass inside vsa_sdpa) carries a disproportionate share of the dense rows.
+    placement: str = "interleaved"
     k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk (v1 kernel only)
     streaming: bool = True  # vsa_sdpa kernel: streaming leader/worker (default) or the v1 per-row gather
 
