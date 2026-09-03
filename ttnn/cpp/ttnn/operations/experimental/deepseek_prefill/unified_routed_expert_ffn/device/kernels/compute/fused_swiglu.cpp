@@ -73,15 +73,15 @@
 #include "api/compute/bcast.h"
 #endif
 
-// SwiGLU-OAI and SiTU-GLU both evaluate their activation as one binary SFPU op over the
-// raw gate/up accumulators, so they share the phase-3 path below and differ only in the op
-// called. The program factory sets exactly one of the two variant defines; each variant
+// SwiGLU-OAI, SiTU-GLU and clamped SiLU-GLU all evaluate their activation as one binary SFPU
+// op over the raw gate/up accumulators, so they share the phase-3 path below and differ only
+// in the op called. The program factory sets exactly one variant define; each variant
 // caches as a distinct program, so a stray second define would mean wrong numerics with no
 // host-side signal.
-#if defined(SWIGLU_OAI) && defined(SITU_GLU)
-#error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
+#if (defined(SWIGLU_OAI) + defined(SITU_GLU) + defined(CLAMPED_SILU_GLU)) > 1
+#error "SWIGLU_OAI, SITU_GLU and CLAMPED_SILU_GLU are mutually exclusive activation variants"
 #endif
-#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(CLAMPED_SILU_GLU)
 #define FUSED_BINARY_ACT 1
 #endif
 
@@ -99,6 +99,11 @@
 // Computes (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up)).
 // Bakes SituGluConfigKimi (beta_gate=4.0, beta_up=25.0), Kimi K3's config.
 #include "api/compute/situ_glu.h"
+#endif
+
+#ifdef CLAMPED_SILU_GLU
+// Computes silu(min(gate,L)) * clamp(up,±L). Bakes ClampedSiluGluConfigDsV4 (limit=10.0).
+#include "api/compute/clamped_silu_glu.h"
 #endif
 
 namespace {
@@ -660,8 +665,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
 // Both ops share the (gate, up, out) dst-index signature and bake their constants into a
 // config struct, so only these lines differ. Each variant is named explicitly rather than
-// left to an #else, so adding a third one fails the build instead of silently compiling as
-// whichever variant owned the fallback.
+// left to an #else, so a new one fails the build instead of silently compiling as whichever
+// variant owned the fallback.
 #if defined(SWIGLU_OAI)
 #define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
 #define BINARY_ACT_TILE(fp32, g, u, o) MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32>(g, u, o)))
@@ -669,6 +674,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(fp32, g, u, o) situ_glu_tile(g, u, o)
+#elif defined(CLAMPED_SILU_GLU)
+// clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+#define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
+#define BINARY_ACT_TILE(fp32, g, u, o) clamped_silu_glu_tile(g, u, o)
 #else
 #error "FUSED_BINARY_ACT is set but no activation variant matched"
 #endif
@@ -963,8 +972,9 @@ void kernel_main() {
     // the pack thread). Same total compute, better pipelining.
     // Init once — shared across all experts.
 #ifdef FUSED_BINARY_ACT
-    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI,
-    // tanh for SiTU-GLU) instead of silu's.
+    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI and clamped
+    // SiLU-GLU, tanh for SiTU-GLU) instead of silu's. The recip table sets
+    // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
     BINARY_ACT_INIT();
 #else
     silu_tile_init();
