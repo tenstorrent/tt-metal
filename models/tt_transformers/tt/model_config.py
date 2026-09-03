@@ -3568,6 +3568,29 @@ class ModelArgs:
             fuse_batch=fuse_batch,
         )
 
+    def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
+        """in0_block_w for a DRAM-sharded decode matmul on Blackhole with one reader per bank.
+
+        The activation multicast is one semaphore-gated block per sender, chained across senders,
+        and with one reader per bank it is the floor at narrow N (mirror #342); the cost is the block
+        count K / in0_block_w. The factory lets a block span several consecutive storage shards, so
+        the width is no longer bounded by the storage grid. It is bounded by L1: each worker buffers
+        in0_block_w x per_worker_N weight tiles three deep, capped here at ~800 KB for a bfp8 tile
+        (16 tiles wide at most).
+        """
+        k_tiles = k // ttnn.TILE_SIZE
+        per_core_k = k_tiles // num_cores
+        per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        budget_tiles = 800 * 1024 // (3 * 1088)
+        for bw in range(min(16, k_tiles), 0, -1):
+            if k_tiles % bw:
+                continue
+            if per_core_k % bw and bw % per_core_k:
+                continue
+            if bw * per_worker_n <= budget_tiles:
+                return bw
+        return self.find_largest_divisor(per_core_k)
+
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
@@ -3711,8 +3734,12 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
+        if is_blackhole() and not self.is_galaxy and self.prefetcher is None:
+            in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
+        else:
+            in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
