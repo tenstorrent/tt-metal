@@ -872,3 +872,91 @@ sentinel and a set of asserts precisely because none of this was reachable.
 6. **Should stage 1 happen at all if stage 2 is not funded?** §6 Option C's honest weakness. My
    answer is yes — the object model is where metal is going and the free functions will bit-rot —
    but it is a judgement call, not a finding.
+
+---
+
+## 10. The ask upstream: emit DFB bindings uniformly, with their roles
+
+Everything in §9.3 works, and one fact still travels the wrong way. The kernel declares its
+buffers' endpoints and the host reads them, because the host has to name a producer and a
+consumer per DFB. But the host is the one that DECIDES those bindings -- it writes the
+`producer_of` / `consumer_of` calls -- so a kernel declaring them is restating the host's own
+decision back at it. It works because the host reads the restatement rather than trusting it,
+which is what makes them impossible to disagree. It is still the wrong direction.
+
+### 10.1 What the device gets today
+
+Per kernel, `write_kernel_bindings_generated_header` (`genfiles.cpp:217-223`) emits an id and
+nothing else, for the buffers THIS kernel binds:
+
+    namespace dfb {
+    constexpr DFBBindingToken in{0};
+    }  // namespace dfb
+
+`DFBBindingToken` is a `uint16_t` id with a `constexpr operator uint32_t` and no other state
+(`dataflow_buffer.h:84-96`). The device-side `DataflowBuffer` exposes geometry and capacity --
+entry size, entry count, tile dims -- and nothing about endpoints. On Gen1 there is nothing to
+read at runtime either: the whole per-core blob is four words (`addr`, `total size`,
+`num_entries`, `entry_size`, `dataflow_buffer.cpp:1371-1394`), and the producer/consumer masks
+never leave the host. On Gen2 they do reach the device, as per-hart tile-counter and remapper
+config consumed by firmware, which is not something a kernel can read and could not be a
+compile-time constant anyway.
+
+So a kernel can learn WHICH buffers it binds -- by whether `dfb::in` exists in its build -- and
+never in which ROLE. And a unified kernel cannot ask the first question either, because a
+one-source-five-projections kernel would have to name `dfb::in` on the projection where it does
+not exist. That is §7.1's finding and the reason slots travel as compile-time VALUES.
+
+### 10.2 The ask
+
+Emit, on EVERY kernel, one record per DFB in the PROGRAM rather than tokens for the bound
+subset, and carry the role:
+
+    namespace dfb {
+    constexpr DFBBinding in{0, Endpoint::Producer};    // this kernel fills it
+    constexpr DFBBinding out{1, Endpoint::Unbound};    // declared by the program, not bound here
+    }  // namespace dfb
+
+Two properties, and the second is the one worth having:
+
+  * **Every name exists on every projection**, so shared source can reference it. That retires
+    the workaround in §7.1 outright: a unified kernel could take its slot from `dfb::in` instead
+    of from a named compile-time arg the host predicts and the kernel static_asserts back.
+  * **The role is a compile-time constant the HOST authored.** A kernel then needs no thread
+    number at all. `thread` does exactly two jobs -- decide whether this projection executes the
+    transfer, and pick the NOC -- and `Endpoint::Producer` on this build answers the first while
+    the RISC identity answers the second. `u::Input<0, kDfbIn, Block1D>` becomes
+    `u::Input<dfb::in, Block1D>`, and nothing anywhere states a thread.
+
+The host already holds all of it: `KernelSpec::DFBBinding::endpoint_type` is exactly this value,
+validated per node before anything is built (`program_spec.cpp:319-384`). It is not computed,
+inferred or new -- it is dropped on the floor at emission time. The change is additive: a
+settings callback that reports the role alongside the id, and the loop above widened from the
+bound subset to the program's DFBs.
+
+### 10.3 What it would let us delete
+
+  * The `dfb_<name>` compile-time args, and the slot prediction behind them: the harness
+    predicts metal's lowest-free-slot rule, passes the prediction as a value, and has the
+    compute projection static_assert it against `dfb::` tokens (§7.2). All three go.
+  * `derive_roles`, entirely. The host would no longer read anything out of a kernel -- not the
+    roles, not the threads, not the two declaration patterns that replaced fifteen. What the
+    kernel says would BE what the host said.
+  * The DM thread from every kernel declaration, which is the last fact stated in two places.
+
+### 10.4 What it does not solve, and what makes it moot
+
+It does not make an endpoint's THREAD the host's free choice. Which DM thread carries an operand
+is a first-order performance property -- flipping which NOC takes the large operand is worth
+1.4x on the blocked matmul alone -- so someone still decides it. This moves the decision to
+where the binding is authored (the launcher, which for `matmul_blocked`, `matmul_mcast` and
+`mcast_bcast` already tunes it through a define) and out of the kernel, which is a real
+trade-off and not obviously a win for the seventeen kernels where the split is a property of the
+dataflow rather than a knob.
+
+Gen2 may retire the question instead. `num_threads > 1` is legal there (`kernel_spec.hpp:96-100`),
+so one DM KernelSpec could hold both RISCs, with the DFB's STRIDED / ALL access pattern dividing
+entries between its SPMD threads. Then no one names a thread: the endpoint is a kernel, and which
+hart runs it is the solver's business, which `SolveGen2KernelRiscMasks` already decides. Gen1
+forbids `num_threads > 1`, which is why the two-KernelSpec shape -- and the thread number that
+comes with it -- exists at all.
