@@ -36,7 +36,7 @@
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
 #              leg covers (kimi_k2_6, kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
-#              and the unit under test (moe, gate, mla, hca, sdpa, ccl, block, transformer,
+#              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
 #              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
@@ -629,6 +629,44 @@
     '
   test_type: hca_perf
   test_tags: [dsv4_flash, hca]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 3
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4-Flash) SWA chunked accuracy 55k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_swa.py::test_swa_long_prefill_mesh -k "flash and mixed5120 and torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: swa_mixed
+  test_tags: [dsv4_flash, swa]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 5
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4-Flash) SWA chunked perf 10k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_swa_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: swa_perf
+  test_tags: [dsv4_flash, swa]
   test_group: module
   skus:
     bh_sc1_high_power:
