@@ -39,7 +39,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -193,27 +193,19 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). Re-centered 2026-08-29: 2D matmul program configs on the shared expert and
-    # the latent projections took 2-5% off every chunk and 7/11 fell out the bottom of the old band --
-    # the baseline was stale, not the margin too tight. The saving is device-side, so it lands here and
-    # nowhere else: the untraced twin is host-dispatch bound at ~1.04 s/chunk and did not move, passing
-    # its own gate in the same run.
-    #
-    # Per-chunk medians of run 33251442925/job 99098593625 verbatim. ONE run, where the superseded
-    # value carried a second run agreeing to <=0.010 s -- traced replay has the device as its only
-    # noise source and per-chunk stddev here is 0.000-0.003 s, but cross-check the next green run.
+    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944).
     (61, 11, 10): [
-        0.519,
-        0.521,
-        0.569,
-        0.597,
-        0.631,
-        0.665,
-        0.683,
-        0.725,
-        0.777,
-        0.816,
-        0.855,
+        0.497,
+        0.501,
+        0.539,
+        0.567,
+        0.598,
+        0.629,
+        0.659,
+        0.697,
+        0.749,
+        0.788,
+        0.824,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -1046,7 +1038,7 @@ _PADDED_MODES = ["notrace", "traced"]
             (8, 4),
             # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
             torus_xy_device_params(
-                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1057,7 +1049,7 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_padded(
@@ -1752,7 +1744,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
-# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_7_HF_MODEL); the golden trace is optional.
 # Two independent axes on top of the existing perf sweep:
 #   check_pcc — also PCC the populated KV against the golden (needs PREFILL_TRACE_DIR)
 #   use_trace — capture the chunk forward once and replay it per chunk
@@ -1790,7 +1782,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1801,7 +1793,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1882,7 +1874,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=768,
                 trace_region_size=256 * 1024 * 1024,
             ),
@@ -1893,7 +1885,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked(
