@@ -34,11 +34,4 @@ struct SliceRmProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
-// Per-dispatch dynamic runtime args for SliceRmProgramFactory: re-emits the reader's aligned source
-// base address (input buffer address + hash-constant offset) on every active core, since a base+offset
-// value cannot be represented by a plain Buffer* binding. Shared by SliceDeviceOperation::
-// get_dynamic_runtime_args so the emitted value matches create_descriptor exactly.
-std::vector<tt::tt_metal::DynamicRuntimeArg> slice_rm_reader_dynamic_args(
-    const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output);
-
 }  // namespace ttnn::prim
