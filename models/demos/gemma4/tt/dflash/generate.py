@@ -4,7 +4,7 @@
 """Multi-iteration DFlash generation loop, real hardware, no static torch reference
 required at runtime -- everything a live caller needs (the drafter's noise-block
 embeddings, RoPE cos/sin, and the sliding-window "context" input) is now built from
-whatever tokens the loop itself produces.
+whatever tokens the loop itself produces, entirely ON DEVICE.
 
 Validated mechanisms this composes (see docs/dflash_design.md and
 tests/dflash/test_dflash_*.py for the individual PCC/exact-match checks):
@@ -18,39 +18,25 @@ tests/dflash/test_dflash_*.py for the individual PCC/exact-match checks):
   verify call landing at a non-tile-aligned position inside an already-touched KV-cache
   tile (see verify.py's module docstring for the one-time tile-alignment requirement on
   the very FIRST verify call only).
-- ``build_noise_inputs``: a standalone (no live HF drafter object needed) reproduction of
-  the reference's ``_raw_input_embeddings`` (plain embedding gather, pre-draft mask block)
-  and ``Qwen3RotaryEmbedding``'s cos/sin formula, confirmed to exactly reproduce the
-  reference's own dumped values (bit-identical, bf16) for known token ids/positions.
+- Noise-block embedding: ``model.raw_embed`` (the target's own on-device embedding
+  table, tied to the drafter's), undoing the target's baked-in sqrt(hidden) scale --
+  the reference's ``_raw_input_embeddings`` is unscaled, unlike ``model.embed_tokens``.
+- RoPE cos/sin: ``rope_cache.py``'s on-device gather, confirmed bit-identical (bf16,
+  PCC 1.0) against the torch reference's own ``Qwen3RotaryEmbedding`` output for known
+  positions -- replacing what was previously a host-torch trig computation every
+  iteration (build_noise_inputs, removed).
 """
 
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 import ttnn
 from models.demos.gemma4.tt.dflash.context import compute_context
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
 from models.demos.gemma4.tt.dflash.lm_head import compute_dflash_logits
+from models.demos.gemma4.tt.dflash.rope_cache import build_dflash_rope_cache_2d, gather_rope_on_device
 from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior
-
-
-def build_noise_inputs(embed_weight_torch, block_output_ids, position_ids, head_dim, rope_theta):
-    """block_output_ids: [1, block_size] with mask_token_id at every position except the
-    real anchor at index 0 (the pre-draft block -- the drafter fills the rest in itself).
-    position_ids: [1, seq] absolute positions covering the sliding context window PLUS
-    this new block (``rope_position_ids`` in dflash.py:245's convention). Returns
-    (noise_embedding, cos, sin), all in embed_weight_torch's dtype."""
-    noise_embedding = F.embedding(block_output_ids, embed_weight_torch)
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-    position_ids_expanded = position_ids[:, None, :].float()
-    freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos().to(dtype=noise_embedding.dtype)
-    sin = emb.sin().to(dtype=noise_embedding.dtype)
-    return noise_embedding, cos, sin
 
 
 def _to_tt(mesh_device, x, dtype=ttnn.bfloat16):
@@ -91,7 +77,6 @@ def dflash_generate(
     ccl_manager,
     tt_kv_cache,
     page_table_torch: torch.Tensor,
-    embed_weight_torch: torch.Tensor,
     input_ids_padded: torch.Tensor,
     ctx_len: int,
     max_new_tokens: int,
@@ -114,11 +99,13 @@ def dflash_generate(
     block_size = config.block_size
     mask_token_id = config.mask_token_id
     head_dim = config.head_dim
-    rope_theta = config.rope_theta
     num_local_heads = config.num_attention_heads // mesh_config.tp
     num_local_kv_heads = config.num_key_value_heads // mesh_config.tp
     is_mesh = hasattr(mesh_device, "shape")
     stop_tokens = set(stop_token_ids or [])
+
+    max_seq_len = input_ids_padded.shape[-1]
+    cos_2d, sin_2d = build_dflash_rope_cache_2d(mesh_device, head_dim, config.rope_theta, max_seq_len)
 
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     page_table_tt = ttnn.from_torch(
@@ -161,16 +148,26 @@ def dflash_generate(
 
     while len(output_ids) < max_new_tokens and not stopped:
         verify_size = block_size  # always request a full block; excess is truncated below
-        pre_draft_ids = torch.tensor([[output_ids[-1]] + [mask_token_id] * (verify_size - 1)], dtype=torch.long)
-        rope_position_ids = torch.arange(start - context_len, start + verify_size, dtype=torch.long).unsqueeze(0)
-        noise_torch, cos_torch, sin_torch = build_noise_inputs(
-            embed_weight_torch, pre_draft_ids, rope_position_ids, head_dim, rope_theta
-        )
 
         if verify_size > 1:
-            noise_tt = _to_tt(mesh_device, noise_torch.unsqueeze(0))
-            cos_tt = _to_tt(mesh_device, cos_torch.unsqueeze(0))
-            sin_tt = _to_tt(mesh_device, sin_torch.unsqueeze(0))
+            pre_draft_ids = torch.tensor([[output_ids[-1]] + [mask_token_id] * (verify_size - 1)], dtype=torch.long)
+            pre_draft_ids_tt = ttnn.from_torch(
+                pre_draft_ids,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                device=mesh_device,
+                mesh_mapper=replicate,
+            )
+            noise_tt = model.raw_embed(pre_draft_ids_tt)
+            ttnn.deallocate(pre_draft_ids_tt)
+            if len(noise_tt.shape) != 4:
+                noise_tt = ttnn.unsqueeze_to_4D(noise_tt)
+            if noise_tt.layout != ttnn.TILE_LAYOUT:
+                noise_tt = ttnn.to_layout(noise_tt, ttnn.TILE_LAYOUT)
+
+            positions = list(range(start - context_len, start + verify_size))
+            cos_tt, sin_tt = gather_rope_on_device(mesh_device, positions, cos_2d, sin_2d, head_dim)
+
             drafter_out = dflash_drafter_forward(
                 context_tt,
                 noise_tt,
