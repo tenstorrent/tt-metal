@@ -91,7 +91,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: per-kernel resolved DFB binding (accessor name, device slot, relay flags, optional LLK facts).
+// Metal 2.0: per-kernel resolved DFB binding (accessor name, device slot, relay flags, optional LLK metadata).
 // prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
 // PrefetcherPipe relays, where it names the persistent slot baked into the token so
 // the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
@@ -100,7 +100,7 @@ struct DataflowBufferBindingHandle {
     uint16_t slot = 0;
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
-    LlkOperandFacts llk_facts;
+    std::optional<LLKMetadata> llk_metadata;
 };
 using DataflowBufferBindingHandleMap = std::vector<DataflowBufferBindingHandle>;
 
@@ -135,7 +135,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
-    LlkOperandFacts llk_facts;
+    std::optional<LLKMetadata> llk_metadata;
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -155,7 +155,7 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
-    LlkOperandFacts llk_facts;
+    std::optional<LLKMetadata> llk_metadata;
 };
 
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
@@ -249,7 +249,7 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const LlkOperandFacts&)>) const override;
+                                                     const std::optional<LLKMetadata>&)>) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -259,12 +259,13 @@ public:
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words,
-                                            const LlkOperandFacts&)>) const override;
+                                            const std::optional<LLKMetadata>&)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    void process_scratchpad_binding_handles(
-        std::function<void(
-            const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&)>)
-        const override;
+    void process_scratchpad_binding_handles(std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t size_bytes,
+                                                uint32_t addr_crta_word,
+                                                const std::optional<LLKMetadata>&)>) const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {

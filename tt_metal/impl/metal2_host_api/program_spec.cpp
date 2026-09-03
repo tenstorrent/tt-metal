@@ -27,7 +27,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
-#include "jit_build/llk_operand_facts.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -783,37 +783,66 @@ void ValidateLlkTileAndFaceGeometry(
         "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
         kind,
         unique_id);
-    if (tile.has_value()) {
-        compute_face_grid_dims(
-            tile->get_height(),
-            tile->get_width(),
-            face->face_r_dim,
-            face->num_faces,
-            fmt::format("{} '{}'", kind, unique_id));
-    }
+    const Tile resolved_tile = tile.value_or(Tile{});
+    TT_FATAL(
+        resolved_tile.get_width() % constants::FACE_WIDTH == 0,
+        "{} '{}': tile width ({}) must be a multiple of FACE_WIDTH ({})",
+        kind,
+        unique_id,
+        resolved_tile.get_width(),
+        constants::FACE_WIDTH);
+    const uint32_t num_faces_c_dim = std::min(resolved_tile.get_width() / constants::FACE_WIDTH, face->num_faces);
+    TT_FATAL(
+        face->num_faces % num_faces_c_dim == 0,
+        "{} '{}': num_faces ({}) must be divisible by num_faces_c_dim ({})",
+        kind,
+        unique_id,
+        face->num_faces,
+        num_faces_c_dim);
+    const uint32_t num_faces_r_dim = face->num_faces / num_faces_c_dim;
+    TT_FATAL(
+        num_faces_r_dim * face->face_r_dim <= resolved_tile.get_height(),
+        "{} '{}': face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile height ({})",
+        kind,
+        unique_id,
+        num_faces_r_dim,
+        face->face_r_dim,
+        num_faces_r_dim * face->face_r_dim,
+        resolved_tile.get_height());
 }
 
-// Normalize each source's LLK metadata into the facts genfiles bakes onto the binding token. A DFB or
-// scratchpad without a declared format is not an LLK operand, so it gets absent facts. A tensor always
-// has both a dtype and a tile, and that tile *is* the geometry -- there is no face-geometry override.
-LlkOperandFacts FactsFromDfb(const DataflowBufferSpec& spec) {
+FaceGeometry FaceGeometryFromTile(const Tile& tile) {
+    return FaceGeometry{.face_r_dim = tile.get_face_shape()[0], .num_faces = tile.get_num_faces()};
+}
+
+std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
-        return {};
+        return std::nullopt;
     }
-    return facts_from_format_tile_and_face(
-        *spec.data_format_metadata, spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+    Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{
+        .format = *spec.data_format_metadata,
+        .tile = tile,
+        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
 }
 
-LlkOperandFacts FactsFromScratchpad(const ScratchpadSpec& spec) {
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
     if (!spec.data_format_metadata.has_value()) {
-        return {};
+        return std::nullopt;
     }
-    return facts_from_format_tile_and_face(
-        *spec.data_format_metadata, spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+    Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{
+        .format = *spec.data_format_metadata,
+        .tile = tile,
+        .face_geometry = spec.unpack_face_geometry_metadata.value_or(FaceGeometryFromTile(tile))};
 }
 
-LlkOperandFacts FactsFromTensorSpec(const TensorSpec& spec) {
-    return facts_from_tile(datatype_to_dataformat_converter(spec.data_type()), spec.tile());
+std::optional<LLKMetadata> LLKMetadataFromTensorSpec(const TensorSpec& spec) {
+    const Tile& tile = spec.tile();
+    return LLKMetadata{
+        .format = datatype_to_dataformat_converter(spec.data_type()),
+        .tile = tile,
+        .face_geometry = FaceGeometryFromTile(tile)};
 }
 
 }  // namespace
@@ -2388,8 +2417,8 @@ struct ResolvedTensorParameter {
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
 
-    // Compile-time LLK operand facts derived from the TensorParameter's spec, baked onto the binding token.
-    LlkOperandFacts llk_facts;
+    // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
+    std::optional<LLKMetadata> llk_metadata;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2470,7 +2499,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         std::numeric_limits<uint32_t>::max());
 
     ResolvedTensorParameter result;
-    result.llk_facts = FactsFromTensorSpec(spec);
+    result.llk_metadata = LLKMetadataFromTensorSpec(spec);
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2601,7 +2630,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
-        handle.llk_facts = resolved.llk_facts;
+        handle.llk_metadata = resolved.llk_metadata;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2645,7 +2674,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
-        handle.llk_facts = FactsFromScratchpad(*scratchpad_spec);
+        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -2682,7 +2711,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.slot = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        handle.llk_facts = FactsFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         out.push_back(std::move(handle));
     }
     return out;

@@ -28,6 +28,8 @@ class Scratchpad;
 //
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
+
+// Support for LLKOperandFrom.
 namespace binding_details {
 template <const auto& Token>
 struct LLKOperandExtractor;
@@ -35,14 +37,15 @@ struct LLKOperandExtractor;
 
 class ScratchpadBindingToken {
 public:
+    // Construct a Scratchpad from the offset and size supplied by the host.
+    //
+    // This Scratchpad does not contain any llk metadata.
+    // Attempt to extract an LLKOperand from this token using LLKOperandFrom will cause a compile-time error.
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
     // Optional binding token constructor used when the host supplies LLK metadata.
-    // See "Entry format metadata" in ScratchpadSpec. LLKOperandFrom rejects tokens created by
-    // the two-arg constructor and reads metadata-bearing tokens via
-    // binding_details::LLKOperandExtractor (api/llk_operand_from_tokens.h). Plain working memory
-    // uses the two-arg form.
+    // See "Entry format metadata" in ScratchpadSpec.
     constexpr ScratchpadBindingToken(
         uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}

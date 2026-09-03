@@ -53,8 +53,9 @@
 #endif
 
 #include "impl/kernels/kernel.hpp"
+#include "jit_build/genfiles.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "jit_build/llk_operand_facts.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
@@ -557,20 +558,20 @@ struct Metal2BindingsSnapshot {
         std::string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
-        LlkOperandFacts facts;
+        LLKMetadata metadata;
     };
     // Scratchpad bindings, in insertion order (matches genfiles.cpp's vector).
     struct ScratchEntry {
         std::string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
-        LlkOperandFacts facts;
+        std::optional<LLKMetadata> metadata;
     };
     struct DfbEntry {
         uint16_t id = 0;
         bool is_relay = false;
         uint8_t prefetcher_pipe_id = 0xFF;
-        LlkOperandFacts facts;
+        std::optional<LLKMetadata> metadata;
     };
 
     bool is_metal2 = false;
@@ -585,14 +586,18 @@ struct Metal2BindingsSnapshot {
     // IDs — without this they collide on cache key and the second silently
     // reuses the first's .so.
     std::string cache_key_suffix() const {
-        auto facts_key = [](const LlkOperandFacts& f) {
-            return "," + std::to_string(static_cast<int>(f.present)) + "," + std::to_string(f.hw_format) + "," +
-                   std::to_string(f.face_r_dim) + "," + std::to_string(f.face_c_dim) + "," +
-                   std::to_string(f.num_faces_r_dim) + "," + std::to_string(f.num_faces_c_dim);
+        auto metadata_key = [](const std::optional<LLKMetadata>& metadata) {
+            if (!metadata.has_value()) {
+                return std::string(",0");
+            }
+            return ",1," + std::to_string(static_cast<int>(metadata->format)) + "," +
+                   std::to_string(metadata->tile.get_height()) + "," + std::to_string(metadata->tile.get_width()) +
+                   "," + std::to_string(metadata->face_geometry.face_r_dim) + "," +
+                   std::to_string(metadata->face_geometry.num_faces);
         };
         std::string s;
         for (const auto& [name, entry] : dfb_accessors) {
-            s += ":dfb:" + name + "=" + std::to_string(entry.id) + facts_key(entry.facts);
+            s += ":dfb:" + name + "=" + std::to_string(entry.id) + metadata_key(entry.metadata);
             if (entry.is_relay) {
                 s += ":relay";
                 if (entry.prefetcher_pipe_id != 0xFF) {
@@ -605,11 +610,11 @@ struct Metal2BindingsSnapshot {
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," + std::to_string(ta.addr_crta_offset) +
-                 facts_key(ta.facts);
+                 metadata_key(ta.metadata);
         }
         for (const auto& sp : scratch_accessors) {
             s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word) +
-                 facts_key(sp.facts);
+                 metadata_key(sp.metadata);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -823,8 +828,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
             uint16_t id,
             bool is_relay,
             uint8_t prefetcher_pipe_id,
-            const LlkOperandFacts& facts) {
-            s.dfb_accessors[name] = {id, is_relay, prefetcher_pipe_id, facts};
+            const std::optional<LLKMetadata>& metadata) {
+            s.dfb_accessors[name] = {id, is_relay, prefetcher_pipe_id, metadata};
         });
     kernel.process_semaphore_binding_handles(
         [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
@@ -844,7 +849,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
             uint32_t cta_off,
             uint32_t addr_crta_off,
             uint32_t num_rt_words,
-            const LlkOperandFacts& facts) {
+            const std::optional<LLKMetadata>& metadata) {
             TT_FATAL(
                 num_rt_words == 0,
                 "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
@@ -854,12 +859,16 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 "before enabling this path.",
                 name,
                 num_rt_words);
-            s.ta_accessors.push_back({name, cta_off, addr_crta_off, facts});
+            TT_FATAL(metadata.has_value(), "Tensor binding '{}' is missing LLK metadata", name);
+            s.ta_accessors.push_back({name, cta_off, addr_crta_off, *metadata});
         });
-    kernel.process_scratchpad_binding_handles(
-        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts& facts) {
-            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word, facts});
-        });
+    kernel.process_scratchpad_binding_handles([&s](
+                                                  const std::string& name,
+                                                  uint32_t size_bytes,
+                                                  uint32_t addr_crta_word,
+                                                  const std::optional<LLKMetadata>& metadata) {
+        s.scratch_accessors.push_back({name, size_bytes, addr_crta_word, metadata});
+    });
     return s;
 }
 
@@ -929,19 +938,19 @@ static void emit_metal2_namespaces(
         for (const auto& [name, entry] : s.dfb_accessors) {
             if (entry.is_relay) {
                 f << "constexpr RelayDFBBindingToken " << name << "{" << entry.id;
-                if (entry.facts.present) {
+                if (entry.metadata.has_value()) {
                     f << ", "
                       << (entry.prefetcher_pipe_id != 0xFF
                               ? std::to_string(static_cast<uint32_t>(entry.prefetcher_pipe_id))
                               : "RelayDFBBindingToken::NO_PREFETCHER_PIPE")
-                      << ", " << format_llk_metadata(entry.facts);
+                      << ", " << format_llk_metadata(*entry.metadata);
                 } else if (entry.prefetcher_pipe_id != 0xFF) {
                     f << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
                 }
                 f << "};\n";
-            } else if (entry.facts.present) {
-                f << "constexpr DFBBindingToken " << name << "{" << entry.id << ", " << format_llk_metadata(entry.facts)
-                  << "};\n";
+            } else if (entry.metadata.has_value()) {
+                f << "constexpr DFBBindingToken " << name << "{" << entry.id << ", "
+                  << format_llk_metadata(*entry.metadata) << "};\n";
             } else {
                 f << "constexpr DFBBindingToken " << name << "{" << entry.id << "};\n";
             }
@@ -956,16 +965,16 @@ static void emit_metal2_namespaces(
         for (const auto& ta : s.ta_accessors) {
             f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
               << ta.addr_crta_offset << "u>;\n";
-            f << "constexpr " << ta.name << "_t " << ta.name << "{" << format_llk_metadata(ta.facts) << "};\n";
+            f << "constexpr " << ta.name << "_t " << ta.name << "{" << format_llk_metadata(ta.metadata) << "};\n";
         }
         f << "}  // namespace tensor\n";
     }
     if (!s.scratch_accessors.empty()) {
         f << "namespace scratch {\n";
         for (const auto& sp : s.scratch_accessors) {
-            if (sp.facts.present) {
+            if (sp.metadata.has_value()) {
                 f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
-                  << sp.size_bytes << "u, " << format_llk_metadata(sp.facts) << "};\n";
+                  << sp.size_bytes << "u, " << format_llk_metadata(*sp.metadata) << "};\n";
             } else {
                 f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
                   << sp.size_bytes << "u};\n";

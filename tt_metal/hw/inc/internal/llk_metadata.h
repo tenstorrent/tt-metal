@@ -10,21 +10,19 @@
 // notice.
 namespace binding_details {
 
-// The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen. Kernels never name
-// this type: headergen emits it as a nested braced-initializer on the token's constructor.
-// Compute kernels read it via LLKOperandFrom (api/llk_operand_from_tokens.h) /
-// binding_details::LLKOperandExtractor — not by naming this struct.
+// The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen.
 //
-// This separation is explicitly designed to avoid:
+// This should never be used directly, kernel authors should interact with these metadata via LLKOperandFrom.
+//
+// This struct is explicitly separated from llk constructs to avoid:
 // 1. Coupling of LLK metadata with the Metal 2.0 binding infrastructure.
-// 2. Conditionally injecting metadata between different types of kernels (some LLK metadata definitions may only be
-// available for compute kernels).
-//
-// Layout mirrors LLKMemDescriptor (format + a 4-byte TensorShape).
+// 2. Dealing with conditional includes of LLK among different kernels.
 struct LLKMetadata {
     static constexpr uint8_t kNoFormat = 0xFF;
 
     uint8_t format = kNoFormat;
+
+    // Needed to construct ckernel::TensorShape
     uint8_t face_r_dim = 16;
     uint8_t face_c_dim = 16;
     uint8_t num_faces_r_dim = 2;

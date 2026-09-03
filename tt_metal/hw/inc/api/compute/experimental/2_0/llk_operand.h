@@ -29,7 +29,7 @@
 // Namespace split: LLKOperand lives in ckernel::experimental (public); ckernel::experimental::detail holds
 // internal-only helpers built on it (tile_address). The source (CB / DataflowBuffer / Scratchpad) is NOT
 // known here -- source -> operand is done at the call site via the test-common CB helpers
-// (cb_operand_helpers.h) or Metal 2's LLKOperandFrom (api/llk_operand_from_tokens.h).
+// (cb_operand_helpers.h) or a future accessor's translator.
 // =====================================================================================================
 
 namespace ckernel {
