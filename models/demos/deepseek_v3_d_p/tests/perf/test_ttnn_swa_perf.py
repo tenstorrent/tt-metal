@@ -95,9 +95,6 @@ def test_swa_layer_perf_galaxy(mesh_device, device_params, topology, variant, mo
             _log_breakdown(per_program, chunk_ns)
 
     logger.info(f"swa {variant} {_CHUNKS}x{_CHUNK} realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms)")
-    if expected_ns is None:
-        pytest.skip(f"no baseline yet for {variant}; measured {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms)")
-
     lower, upper = expected_ns * (1 - _MARGIN), expected_ns * (1 + _MARGIN)
     assert lower <= total_ns <= upper, (
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
