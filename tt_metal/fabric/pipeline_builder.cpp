@@ -320,7 +320,7 @@ std::optional<GraphLayoutResult> try_resolve_capacity_layout(
                 if (auto slot = try_reserve_endpoint_slot(stage0, chip.row, chip.col, role)) {
                     row = chip.row;
                     col = chip.col;
-                    core_slot = *slot;
+                    core_slot = slot;
                     return true;
                 }
             }
@@ -370,8 +370,8 @@ std::optional<GraphLayoutResult> try_resolve_capacity_layout(
                 link.exit_col,
                 link.entry_row,
                 link.entry_col,
-                *exit_slot,
-                *entry_slot};
+                exit_slot,
+                entry_slot};
             if (place_edges(edge_idx + 1)) {
                 return true;
             }
@@ -398,8 +398,12 @@ GraphLayoutResult resolve_graph_layout(
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
-    const std::map<std::string, uint32_t>& stage_chip_counts,
-    const std::map<std::string, uint32_t>& stage_pipeline_core_counts) {
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts) {
+    // The public API retains node-oriented names for Blaze compatibility. Inside
+    // the resolver, graph nodes represent pipeline stages.
+    const auto& stage_chip_counts = node_chip_counts;
+    const auto& stage_pipeline_core_counts = node_pipeline_core_counts;
     // ------------------------------------------------------------------
     // 0. Convert chip tuples to internal representation
     // ------------------------------------------------------------------
