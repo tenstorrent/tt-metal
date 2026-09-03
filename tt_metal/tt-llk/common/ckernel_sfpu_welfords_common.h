@@ -12,6 +12,10 @@
 #error "WELFORD_SFPU_ONLINE_HAZARD_NOP must encode the architecture-specific online Welford hazard"
 #endif
 
+#ifndef WELFORD_SFPU_INDEPENDENT_SHFT2_NOP
+#error "WELFORD_SFPU_INDEPENDENT_SHFT2_NOP must encode the architecture-specific SFPSHFT2 spacing"
+#endif
+
 #ifndef WELFORD_SFPU_INSTR_PER_ROW
 #error "WELFORD_SFPU_INSTR_PER_ROW must match the architecture-specific online Welford replay body"
 #endif
@@ -913,7 +917,9 @@ sfpi_inline void _two_pass_horizontal_sum_pair_()
     // mean and variance reductions to cover SFPSHFT2 latency.
 #define TWO_PASS_REDUCE_ROTATE_PAIR()                                                                     \
     TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
-    TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1)
+    WELFORD_SFPU_INDEPENDENT_SHFT2_NOP();                                                                 \
+    TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
+    WELFORD_SFPU_INDEPENDENT_SHFT2_NOP()
 #define TWO_PASS_REDUCE_ADD_PAIR()                                                                                    \
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0); \
     TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0)
@@ -970,7 +976,11 @@ sfpi_inline void _two_pass_horizontal_sum_pair_()
 /** Horizontally reduce LREG0 while preserving the already-broadcast value in LREG4. */
 sfpi_inline void _two_pass_horizontal_sum_mean_()
 {
-#define TWO_PASS_REDUCE_ROTATE_MEAN() TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1)
+    // This single reduction has no independent shuffle chain to fill the
+    // SFPSHFT2 latency slots, so every dependent rotate needs an explicit NOP.
+#define TWO_PASS_REDUCE_ROTATE_MEAN()                                                                     \
+    TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
+    TTI_SFPNOP
 #define TWO_PASS_REDUCE_ADD_MEAN()    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0)
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
@@ -1000,8 +1010,11 @@ sfpi_inline void _two_pass_horizontal_sum_mean_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG0, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 }
 
 /**

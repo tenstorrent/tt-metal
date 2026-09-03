@@ -5,9 +5,12 @@
 #pragma once
 
 #define WELFORD_SFPU_DST_ADDR_MOD        ckernel::ADDR_MOD_3
+// Alternating independent shuffle chains provide Wormhole's required spacing.
+#define WELFORD_SFPU_INDEPENDENT_SHFT2_NOP()
 #define WELFORD_SFPU_ONLINE_HAZARD_NOP() TTI_SFPNOP
 #define WELFORD_SFPU_INSTR_PER_ROW       8
 #include "ckernel_sfpu_welfords_common.h"
 #undef WELFORD_SFPU_INSTR_PER_ROW
 #undef WELFORD_SFPU_ONLINE_HAZARD_NOP
+#undef WELFORD_SFPU_INDEPENDENT_SHFT2_NOP
 #undef WELFORD_SFPU_DST_ADDR_MOD
