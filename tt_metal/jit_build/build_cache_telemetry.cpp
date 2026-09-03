@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -71,6 +72,21 @@ BuildCacheTelemetry::~BuildCacheTelemetry() {
 BuildCacheTelemetry& BuildCacheTelemetry::inst() {
     static BuildCacheTelemetry instance;
     return instance;
+}
+
+TelemetryToken& per_target_telemetry_token(
+    std::string_view metric_name, std::string_view target_name, std::string_view unit) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, TelemetryToken*> tokens;
+    std::string key(metric_name);
+    key += '.';
+    key += target_name;
+    std::lock_guard lock(mutex);
+    auto [it, inserted] = tokens.try_emplace(key, nullptr);
+    if (inserted) {
+        it->second = &BuildCacheTelemetry::inst().register_metric(key, std::string(unit));
+    }
+    return *it->second;
 }
 
 void BuildCacheTelemetry::enable() {

@@ -109,19 +109,6 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
-TelemetryToken& per_target_telemetry_token(
-    std::string_view metric_name, const std::string& target_name, std::string_view unit) {
-    static std::mutex mutex;
-    static std::unordered_map<std::string, TelemetryToken*> tokens;
-    std::string key = fmt::format("{}.{}", metric_name, target_name);
-    std::lock_guard lock(mutex);
-    auto [it, inserted] = tokens.try_emplace(key, nullptr);
-    if (inserted) {
-        it->second = &BuildCacheTelemetry::inst().register_metric(key, std::string(unit));
-    }
-    return *it->second;
-}
-
 }  // namespace
 
 std::string get_default_root_path() {

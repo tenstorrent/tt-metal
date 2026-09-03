@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -108,5 +109,8 @@ private:
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
     std::mutex owned_tokens_mutex_;
 };
+
+TelemetryToken& per_target_telemetry_token(
+    std::string_view metric_name, std::string_view target_name, std::string_view unit);
 
 }  // namespace tt::tt_metal
