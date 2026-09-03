@@ -33,12 +33,16 @@ since ``ttnn_decode_forward`` hits the identical kernel bug at the identical pos
 This is a real defect in Gemma4's paged-attention prefill/decode write path, not specific
 to DFlash or to the verify mechanism -- it affects any Gemma4 decode call immediately
 following a non-tile-aligned prefill. The correct long-term fix is in
-``attention/prefill.py``'s pad-removal condition. Until that lands, callers of
-``dflash_verify`` MUST ensure the prefill KV cache's committed length (``start_pos``) is a
-multiple of 32 -- e.g. by padding the real prompt with genuine, attended-to context up to
-the next 32-token boundary before prefill (NOT with masked/ignored pad tokens -- padding
-that isn't actually attended to leaves the same unused-tile-row garbage that causes the
-bug in the first place)."""
+``attention/prefill.py``'s pad-removal condition. Until that lands, callers MUST ensure the
+INITIAL prefill's committed length (``ctx_len``) is a multiple of 32 -- e.g. by padding the
+real prompt with genuine, attended-to context up to the next 32-token boundary before
+prefill (NOT with masked/ignored pad tokens -- padding that isn't actually attended to
+leaves the same unused-tile-row garbage that causes the bug in the first place). This is a
+ONE-TIME constraint on the FIRST decode-style touch to the cache: once any tile has been
+written by a real decode/verify call, later ``dflash_verify`` calls landing anywhere in
+that same tile -- even at a non-tile-aligned ``start_pos`` -- are fine, since every tile
+beyond the (now tile-aligned) real content is uniform prefill padding, not a straddling
+mix, and behaves like any other tile on its own first decode touch."""
 
 from __future__ import annotations
 
@@ -95,14 +99,10 @@ def dflash_verify(
     ttnn_verify_forward batch call. Returns (posterior, logits_torch) -- posterior[i] is
     the target's own greedy prediction AFTER consuming candidate_ids[i].
 
-    REQUIRES start_pos (the prefill KV cache's committed length) to be a multiple of 32 --
-    see module docstring for the known kernel bug this sidesteps."""
-    if start_pos % 32 != 0:
-        raise ValueError(
-            f"dflash_verify requires start_pos to be a multiple of 32 (got {start_pos}) -- "
-            "see verify.py module docstring: KNOWN GEMMA4 KERNEL BUG."
-        )
-
+    The very FIRST dflash_verify call after prefill requires start_pos (== the prefill
+    KV cache's committed length) to be a multiple of 32 -- see module docstring for the
+    known kernel bug this sidesteps. Later calls, once real decode/verify writes have
+    already touched every relevant tile, are not subject to this constraint."""
     block_size = len(candidate_ids)
     pos_uint32, pos_int32, page_table_tt = build_verify_inputs(mesh_device, page_table_torch, start_pos, block_size)
 
