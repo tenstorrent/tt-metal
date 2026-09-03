@@ -273,11 +273,23 @@ QUASAR_STALL_REASON_METRICS = {
 QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
 
 
-def quasar_l1_client_label(sel):
-    """Human label for the l1_client event counter selection (subport*8 + event).
+# Event-bit meanings verified against the A0 L1 RTL. Events 2-6 are counter carries: one pulse
+# per LANE_CNT (sub-bank count) stalls/works, or per CLIENT_ORDER_D pending requests, so multiply
+# by the lane count to estimate cycles. Events 1 and 7 are per-cycle indicators.
+QUASAR_L1_CLIENT_EVENT_NAMES = (
+    "UNUSED",
+    "SBANK_POP",
+    "ISSUE_STALL_CARRY",
+    "ISSUE_WORK_CARRY",
+    "FLEX_STALL_CARRY",
+    "FLEX_WORK_CARRY",
+    "PENDING_REQS_CARRY",
+    "ORDER_FIFO_ACTIVE",
+)
 
-    Subport identities are RTL-confirmed; the 8 event-bit meanings are not, so events keep raw indices.
-    """
+
+def quasar_l1_client_label(sel):
+    """Human label for the l1_client event counter selection (subport*8 + event)."""
     subport, event = divmod(int(sel), 8)
     if subport < 4:
         port = f"TRISC{subport}"
@@ -287,7 +299,7 @@ def quasar_l1_client_label(sel):
         port = f"UNPACK{subport - 5}"
     else:
         port = f"PACK{subport - 25}"
-    return f"L1_CLIENT_{port}_EVENT{event}"
+    return f"L1_CLIENT_{port}_{QUASAR_L1_CLIENT_EVENT_NAMES[event]}"
 
 
 # (class, thread) pairs already covered by the tt-1xx metric names above them.
