@@ -129,8 +129,10 @@ Tensor run_argmax_nc(
     return row_major_out;
 }
 
-// Path selection: the one place that decides which argmax path runs.
-// Everything downstream consumes ArgmaxParams::path.
+// Chooses between the scalar readers and the two Blackhole vector paths, and is the only
+// chooser for those three. It is not the only routing decision in the op: which *scalar*
+// program runs is still settled later, by should_use_nc_path and should_row_major_h_via_tile
+// below, and by uses_multicore_path in ArgMaxDeviceOperation::select_program_factory.
 
 using ttnn::prim::ArgMaxPath;
 

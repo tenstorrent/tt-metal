@@ -41,19 +41,25 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                     recover it. Only available for the Blackhole cases described below;
                     supplying it for any other call raises an error rather than returning an
                     unwritten tensor. Default: ``None``.
-                exact_special_values (bool, optional): controls how special values are handled
-                    on Blackhole. By default a faster implementation may run, and it differs
-                    from the reference implementation on a few inputs: a NaN reports its index
-                    but the value written to ``maxval_tensor`` reads as infinity, negative zero
-                    is reported as positive zero, denormal values are treated as zero, and
-                    values below roughly ``2**-118`` may differ by a very small amount. Ordinary
-                    finite values, including ties, always give identical results. Set this to
-                    ``True`` when the data contains NaNs, signed zeros or denormals and results
-                    must match the reference implementation exactly. It can reduce throughput,
-                    but never changes results for ordinary data. Default: ``False``.
+                exact_special_values (bool, optional): controls how special values are
+                    compared when reducing the last dimension on Blackhole. By default a faster
+                    implementation may run, and on inputs holding NaNs, signed zeros or
+                    denormals it can return a *different index*: NaN compares as an infinity of
+                    the same sign (so a +inf earlier in the row wins instead of the NaN, and a
+                    -NaN never wins), +0 and -0 compare equal (so the earliest zero wins), and
+                    denormals compare as zero. Ordinary finite values, including ties, always
+                    give identical results. Set this to ``True`` to force the comparison order
+                    used by the reference: a sign-magnitude ordering of the bfloat16 bit
+                    patterns, smallest index winning ties. It can reduce throughput, but never
+                    changes results for ordinary data.
+
+                    This applies to last-dimension reductions only. Reducing a batch or channel
+                    dimension always compares as IEEE floating point, on every architecture, and
+                    this flag does not change that. Default: ``False``.
                 sub_core_grids (ttnn.CoreRangeSet, optional): restricts execution to a subset of
-                    cores. Supported when reducing the last dimension, when reducing a batch or
-                    channel dimension, and for the Blackhole cases described below.
+                    cores. Honoured on ROW_MAJOR last-dimension reductions (at most 2 core
+                    ranges; more raises), on batch and channel dimension reductions, and for the
+                    Blackhole cases described below. Ignored on other calls rather than raising.
                     Default: ``None``.
 
             Returns:
@@ -72,9 +78,12 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             On Blackhole, reducing the last dimension of a BFLOAT16 tensor runs a faster
             implementation when the tensor is in TILE layout, is interleaved, and its last
-            dimension is a multiple of 32. Padding the last dimension up to a multiple of 32 is
-            therefore worth doing if it is not already. This is chosen automatically and does not
-            change results, apart from the special values noted under ``exact_special_values``.
+            dimension is a multiple of 32. This is chosen automatically and does not change
+            results, apart from the special values noted under ``exact_special_values``.
+
+            Do not pad the reduction dimension to reach that multiple unless you pad with
+            ``-inf``: padding with zero (or any value above the row's true maximum) makes the
+            padding win, and the returned index points into it.
 
             Example:
 
