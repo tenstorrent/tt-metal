@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-02",
+  "last_scan_date": "2026-09-04",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -36,7 +36,9 @@
     "33274485285",
     "33300580035",
     "33375429322",
-    "33433754247"
+    "33433754247",
+    "33799208648",
+    "33710037838"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -64,7 +66,8 @@
     "galaxy-integration-tests.yaml",
     "models-t2-e2e-tests.yaml",
     "blackhole-e2e-tests.yaml",
-    "galaxy-sanity.yaml"
+    "galaxy-sanity.yaml",
+    "tt-metal-l2-nightly.yaml"
   ],
   "in_flight_prs": [
     {
@@ -280,10 +283,17 @@
     {
       "branch": "silencer/layernorm-rmsnorm-dfb-x-id-unused",
       "pattern": "layernorm.cpp RMSNORM dfb_x_id unused-but-set-variable",
-      "status": "pr-opened-dispatch-requested",
+      "status": "resolved",
       "validation_workflow": "models-t3-e2e-tests",
-      "note": "Awaiting CI validation before Phase A can reconcile/mark ready for review."
+      "note": "Validation confirmed: 0 occurrences of dfb_x_id/unused-but-set-variable in job log. Reconciliation comment posted, PR marked ready for review (2026-09-04)."
+    },
+    {
+      "branch": "silencer/dedupe-fabric-trim-routing-planes-warning",
+      "pattern": "ControlPlane trim_ethernet_channels_not_mapped_to_live_routing_planes() 'routing planes are available' warning fired twice (~570ms apart) during dispatch-fallback fabric enable, due to redundant DeviceManager::initialize_fabric_config() call already performed inside MetalEnvImpl::set_fabric_config()",
+      "status": "pr-opened-dispatch-requested",
+      "validation_workflow": "models-t1-e2e-tests",
+      "note": "Observed in models-t1-e2e-tests run 33710037838, job 100508882668 (TT-DiT LTX-2.3 Fast T2V e2e tests [bh_sc1]): 4 warnings from control_plane.cpp:1064-1073 printed twice at 03:24:18.691 and 03:24:19.260. Root cause: device_manager.cpp:286 called ctx_.initialize_fabric_config() redundantly right after set_fabric_config(), which already calls initialize_fabric_config() internally for any is_tt_fabric_config() config (metal_env.cpp:329-332). Removed the redundant call. Awaiting CI validation."
     }
   ],
-  "backlog_cursor": "Phase B target this run: verbose tar extraction noise fixed. Next run: continue scanning untried workflows (models t1/t2, single-card, blackhole) or check validation results for this PR."
+  "backlog_cursor": "Phase B target this run: dedupe redundant DeviceManager fabric-config reinit causing duplicate ControlPlane routing-planes warnings (branch silencer/dedupe-fabric-trim-routing-planes-warning). UMD-sourced Sysmem/AICLK warnings in same job ruled out as out-of-scope (tt-umd submodule). Next run: check validation result for this PR, or continue scanning untried workflows (single-card, blackhole, t3000-perf)."
 }
