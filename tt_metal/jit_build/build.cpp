@@ -269,13 +269,13 @@ void JitBuildEnv::init(
                 "bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
                 perf_counter_mode);
             if (perf_counter_mode == quasar_valid_groups) {
-                // All four groups emit 85 records = 255 profiler slots, over the 250-slot L1 budget,
-                // and Quasar TRISCs cannot flush to DRAM mid-readout.
+                // 81 records = 243 of the 250 profiler slots; kernels that also log many zones can
+                // still overflow, and Quasar TRISCs cannot flush to DRAM mid-readout.
                 log_warning(
                     tt::LogBuildKernels,
-                    "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass; the last few "
-                    "INSTRN records may be dropped when the profiler L1 buffer fills. For a complete capture run "
-                    "twice: once with 32 (INSTRN) and once with 7 (FPU|PACK|UNPACK).");
+                    "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass, close to the "
+                    "profiler buffer budget; if the runtime dropped-markers warning fires, split the capture into "
+                    "masks 32 (INSTRN) and 7 (FPU|PACK|UNPACK).");
             }
             if (rtoptions.get_profiler_perf_counter_l1_sel() >= 0) {
                 TT_FATAL(

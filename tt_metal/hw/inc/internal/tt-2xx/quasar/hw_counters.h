@@ -49,20 +49,29 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
-// TDMA_UNPACK unit: 11 banks, req/grant wiring identical to Blackhole (sel >= 256 = grant side).
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
-    {{PerfCounterType::MATH_SRC_DATA_READY, 0},          {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::MATH_FIDELITY_STALL, 2},          {PerfCounterType::MATH_INSTRN_STARTED, 3},
-     {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},        {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
-     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},         {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
-     {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},         {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
-     {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},        {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
-     {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},     {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
-     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},          {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
-     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261}, {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
-     {PerfCounterType::SRCA_WRITE_THREAD0, 263},         {PerfCounterType::SRCB_WRITE_THREAD0, 264},
-     {PerfCounterType::SRCA_WRITE_THREAD1, 265},         {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr std::size_t NUM_UNPACK_COUNTERS = 22;
+// TDMA_UNPACK unit: 11 banks. Sels 2/256/257 are dead on A0 (fidelity logic hardwired off) and
+// sel 258 duplicates sel 3, so they are not captured. Quasar runs 3 unpackers per thread: sel 9 is
+// unpacker2/thread0 and sel 10 is unpacker0/thread1 (the Blackhole names do not carry over).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
+    {{PerfCounterType::MATH_SRC_DATA_READY, 0},
+     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::MATH_INSTRN_STARTED, 3},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
+     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
+     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
+     {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
+     {PerfCounterType::UNPACK2_BUSY_THREAD0, 9},
+     {PerfCounterType::UNPACK0_BUSY_THREAD1, 10},
+     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
+     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
+     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
+     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
+     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+constexpr std::size_t NUM_UNPACK_COUNTERS = 18;
 
 // TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18, 12-14 and 17 tied on A0.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
@@ -74,7 +83,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
 // INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35
-// per-thread any-stall, 36-50 thread-ORed stall reasons; grants (sel >= 256) = the thread's ibuffer dequeues.
+// per-thread any-stall, 36-50 thread-ORed backend-stage stall conditions (sampled downstream of the
+// ibuffer, so they can exceed the any-stall counts); grants (sel >= 256) = the thread's ibuffer dequeues.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

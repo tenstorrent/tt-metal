@@ -926,11 +926,6 @@ def _enrich_ops_from_device_logs(
                 # Math Pipeline Utilization
                 assign_metric("Math Pipeline Utilization", per_op_stats.get("Math Pipeline Utilization", {}))
 
-                # Math-to-Pack Handoff Efficiency
-                assign_metric(
-                    "Math-to-Pack Handoff Efficiency", per_op_stats.get("Math-to-Pack Handoff Efficiency", {})
-                )
-
                 # Unpacker-to-Math Data Flow
                 assign_metric("Unpacker-to-Math Data Flow", per_op_stats.get("Unpacker-to-Math Data Flow", {}))
 
@@ -1056,7 +1051,9 @@ def _enrich_ops_from_device_logs(
                 for metric_name, metric_dict in per_op_stats.items():
                     if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
                         continue
-                    catch_all_suffix = "" if metric_name.endswith(("Instrn Issue Rate", "IPC While Active")) else " (%)"
+                    catch_all_suffix = (
+                        "" if metric_name.endswith(("Instrn Issue Rate", "Instrn Per Non-Stalled Cycle")) else " (%)"
+                    )
                     assign_metric(metric_name, metric_dict, suffix=catch_all_suffix)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
