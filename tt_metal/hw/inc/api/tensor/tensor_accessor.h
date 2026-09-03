@@ -147,7 +147,7 @@ public:
     // The step is the aligned page size, so a bulk read carries inter-page pad. Padding never
     // shortens the count, so callers needing packed pages must transfer per page.
     // end_page_id caps the answer, 0 means the whole tensor.
-    // A run can stop inside a shard; use shard_pages() for a whole shard.
+    // A run can stop inside a shard (edge padding, shard boundary); use shard_pages() for a whole shard.
     uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id = 0) const {
         const uint32_t end = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
         ASSERT(page_id < end);
