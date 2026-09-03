@@ -469,6 +469,44 @@ Use the **full** test name — `-k talker_layer_prefill` matches all three bucke
 three windows in one capture — and one `-k` per Tracy run, since the CSV is picked by
 newest timestamp.
 
+### Profiling the CP layer the *demo* actually runs
+
+`test_qwen3_tts_profile_single_layer.py -k cp_layer_*` is a faithful shape/config replica of
+one CP layer (same `CodePredictor._layer_forward`, same seq 2 / 1, same KV max 32, same
+`_n150` / `_n300_cp_opt` / `fast` flags), but it is **not** the demo's path:
+
+- it runs **eager**; the demo runs the whole CP frame inside one `ttnn.execute_trace`
+  (`capture_fused_cp_trace` in `tt/server.py`, replayed in `tt/utils.py`),
+- it builds `Qwen3TTSCodePredictorConfig(num_hidden_layers=1)` and always feeds a fresh
+  DRAM-interleaved input, so it always pays the input `to_memory_config`. In the demo only
+  layer 0 does — layers 1-4 receive the previous layer's output already in `_ln_attn_memcfg`
+  and skip that I2S,
+- it omits everything outside the layer: `small_to_mtp_projection`, the S2I + final RMSNorm,
+  the 15 `lm_head` matmuls, the in-trace concat / embeddings / sampler, the KV-restore
+  `assign`s.
+
+So `single-layer × 5` is an upper bound on the layer stack, not the frame. The profiler
+handles traced ops (`METAL TRACE ID` / `METAL TRACE REPLAY SESSION ID` in the CSV), so the
+real frame can be captured directly. `QWEN3_TTS_PROFILE_CP_FRAME=<step>` signposts exactly
+one decode step's CP frame:
+
+```bash
+export TT_METAL_HOME=$(pwd) PYTHONPATH="$(pwd)" ARCH_NAME=wormhole_b0 MESH_DEVICE=N300
+TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_TRACE_TRACKING=1 \
+QWEN3_TTS_PROFILE_CP_FRAME=3 \
+python -m tracy -p -v -r -m models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
+  --text "..." --max-tokens 8
+CSV=$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)
+tt-perf-report --start-signpost cp_frame_start --end-signpost cp_frame_stop "$CSV"
+```
+
+Pick a step past the first frame so one-time warmup is excluded, and keep `--max-tokens`
+small — the device profiler buffer fills fast when every frame replays two traces. The
+signpost is host-side and the frame is one `execute_trace`, so the window cannot be
+subdivided further; inside it the CSV is in trace order, which is enough to read off the
+5-layer prefill block and each of the 14 decode steps. The same env var also works on the
+per-step (non-fused, `--greedy`) path.
+
 ---
 
 **Use `python_env/bin/python3`, not the bare `python3`.** On this host the bare interpreter
