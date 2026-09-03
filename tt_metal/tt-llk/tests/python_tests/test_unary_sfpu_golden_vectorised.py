@@ -12,7 +12,9 @@ Bit-exactness, not tolerance, is the bar. The golden is what every SFPU test ass
 against, so a vectorised op that is merely *close* to the scalar one silently moves the
 pass/fail boundary of the whole sweep. torch is entitled to pick a different code path
 for a 1-element tensor than for a 1024-element one -- and for some ops it does -- which
-is exactly why membership of the table has to be measured rather than assumed.
+is exactly why membership of the table has to be measured rather than assumed. For the
+same reason the comparison is repeated at every window size the sweep dispatches (see
+``WINDOWS``) rather than at one tile.
 
 An op with no table entry is not a failure; it falls back to the per-element loop.
 ``test_no_unlisted_op_is_silently_bit_exact_capable`` reports the fallback set so the
@@ -23,11 +25,27 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 
-# One tile. The window __call__ evaluates is a whole number of tiles, so this is the
-# smallest input that exercises the real code path.
+# One tile: the base population size, and the smallest window __call__ can produce.
 TILE = 1024
+
+# The window sizes __call__ actually hands to a vector op. It evaluates the whole
+# ``TILE_SIZE * iterations`` slice at once, and the sweep's input shapes are 64x64 and
+# 128x256, so in production that slice is 4,096 or 32,768 elements -- not one tile.
+# torch selects its kernel on numel, which is the very reason several ops had to be kept
+# off the table, so agreement has to be *measured* at each dispatched size rather than
+# inferred from the smallest one.
+#
+# The larger windows are the base population tiled. That keeps the scalar oracle at
+# 1,024 evaluations without weakening the check: every op on the table is a pure
+# elementwise map, so the per-element answer for a repeated input is the repeated
+# answer, and what the larger window changes is the shape torch dispatches on.
+#
+# Measured on torch 2.9: no op on the table is shape-sensitive across these three
+# windows -- the 0-d-vs-N-d split that kept 18 ops off it is a boundary at N == 1, not a
+# threshold further up. The check is here so that stays a measured fact; it costs ~1.3 s.
+WINDOWS = [1024, 4096, 32768]
 
 # Both formats matter: _torch_unary's inf->NaN substitution fires only for an
 # A-exponent (Float16) format, so an op is only proven equivalent if it agrees under
@@ -87,18 +105,78 @@ def _population(name):
 POPULATIONS = ["unit_interval", "positive", "signed_wide", "above_one", "specials"]
 
 
+def _by_name(ops):
+    """Sorted so the parametrize ids are stable across runs."""
+    return sorted(ops, key=lambda o: o.name)
+
+
 def _vector_ops():
     golden = get_golden_generator(UnarySFPUGolden)
-    return sorted(
+    return _by_name(
         set(golden._VECTOR_TORCH_FNS)
         | set(golden._VECTOR_DST_TORCH_FNS)
         | set(golden._VECTOR_PY_FNS)
-        | set(golden._VECTOR_SPECIAL_OPS),
-        key=lambda o: o.name,
+        | set(golden._VECTOR_SPECIAL_OPS)
     )
 
 
 VECTOR_OPS = _vector_ops()
+
+# _VECTOR_SPECIAL_OPS entries whose method routes through ``_torch_unary_vec`` or calls
+# ``handle_infinite_numbers`` itself, so the NaN rule reaches them as well. The rest of
+# that table (_vec_sign, _vec_cast_fp32_to_fp16a, the clamp/relu/Hardsigmoid family) has
+# no such rule and neither do their scalar twins, so requiring it of them would assert a
+# behaviour the golden does not have -- they are checked for format *invariance*
+# instead. See test_nan_rule_holds_for_every_op_that_carries_it.
+_NAN_RULE_SPECIAL_OPS = frozenset(
+    {
+        MathOperation.I0,
+        MathOperation.I1,
+        MathOperation.Square,
+    }
+)
+
+
+def _nan_rule_partition():
+    """Split the vector tables into the ops the NaN rule applies to and the rest.
+
+    ``_VECTOR_DST_TORCH_FNS`` is in neither group: it evaluates *in* dst_format, so
+    Float16 and Float16_b are two different computations there and nothing can be said
+    about the pair.
+    """
+    golden = get_golden_generator(UnarySFPUGolden)
+    rule = {
+        "_VECTOR_TORCH_FNS": _by_name(golden._VECTOR_TORCH_FNS),
+        "_VECTOR_SPECIAL_OPS": _by_name(
+            set(golden._VECTOR_SPECIAL_OPS) & _NAN_RULE_SPECIAL_OPS
+        ),
+    }
+    invariant = _by_name(
+        (set(golden._VECTOR_SPECIAL_OPS) - _NAN_RULE_SPECIAL_OPS)
+        | set(golden._VECTOR_PY_FNS)
+    )
+    return rule, invariant
+
+
+_NAN_RULE_TABLES, _FORMAT_INVARIANT_OPS = _nan_rule_partition()
+
+# The floor this file guards against a regression that quietly empties the vector
+# tables: 88 of the 114 registered ops were measured bit-exact and are on the table.
+# Asserted as a floor, not an equality -- adding an op is the intended direction, and
+# only a *drop* means the optimisation has silently gone away.
+MIN_VECTORISED_OPS = 88
+
+
+def _bind_formats(golden, data_format):
+    """Bind the fields ``__call__`` sets before dispatching.
+
+    ``_torch_unary_vec`` and ``handle_infinite_numbers`` read ``data_format`` and
+    ``_torch_dst_vec`` reads ``dst_format``, so they have to be bound the same way on
+    both sides for the comparison to be fair.
+    """
+    golden.data_format = data_format
+    golden.dst_format = data_format
+    golden.dest_acc = DestAccumulation.No
 
 
 def _scalar_reference(golden, operation, values):
@@ -119,24 +197,34 @@ def _scalar_reference(golden, operation, values):
     return torch.tensor(out, dtype=torch.float32), torch.tensor(ok)
 
 
-def _bitwise_equal(a, b):
-    """Bitwise equality on fp32, treating any-NaN as equal to any-NaN.
+def _bits_agree(a, b, nan_sign_matters=False):
+    """Elementwise bitwise equality on fp32, treating any-NaN as equal to any-NaN.
 
-    NaN *payloads* are not part of what the golden asserts: ``__call__`` canonicalises
-    the sign of every NaN it did not itself create (see _NAN_SIGN_TRANSPARENT_OPS), and
-    the payload never survives the cast to Dest. Everything else -- including the
-    distinction between NaN and infinity, which is the one the pack path turns into a
-    visible +inf/-inf disagreement -- is compared exactly.
+    NaN *payloads* are not part of what the golden asserts: the payload never survives
+    the cast to Dest. Everything else -- including the distinction between NaN and
+    infinity, which is the one the pack path turns into a visible +inf/-inf disagreement
+    -- is compared exactly.
+
+    The NaN *sign* is a different matter, and *nan_sign_matters* is the caller's way of
+    saying so. ``__call__`` canonicalises the sign of every NaN except for the three ops
+    in ``_NAN_SIGN_TRANSPARENT_OPS`` (Neg, Abs, Identity) -- precisely the ops whose NaN
+    sign is meaningful, and all three are on the vector path. For them a sign
+    disagreement becomes a visible +inf vs -inf once ``convert_nan_to_inf`` runs, so
+    folding it into "both NaN" would hide the one property ``cast_to_dest_dtype`` is
+    there to preserve.
     """
     both_nan = a.isnan() & b.isnan()
-    return ((a.view(torch.int32) == b.view(torch.int32)) | both_nan).all()
+    if nan_sign_matters:
+        both_nan &= torch.signbit(a) == torch.signbit(b)
+    # `a == b` plus matching sign bits *is* bitwise equality for floats: the only two
+    # distinct patterns that compare equal are +0.0 and -0.0. Written this way rather
+    # than as an int32 bit view so it also applies to the float64 and 16-bit tensors the
+    # tables produce before __call__'s cast.
+    return ((a == b) & (torch.signbit(a) == torch.signbit(b))) | both_nan
 
 
-def _first_difference(a, b, values):
-    both_nan = a.isnan() & b.isnan()
-    bad = (
-        (~((a.view(torch.int32) == b.view(torch.int32)) | both_nan)).nonzero().flatten()
-    )
+def _first_difference(a, b, values, nan_sign_matters=False):
+    bad = (~_bits_agree(a, b, nan_sign_matters)).nonzero().flatten()
     i = int(bad[0])
     return (
         f"{len(bad)}/{a.numel()} elements differ; first at [{i}]: "
@@ -144,33 +232,17 @@ def _first_difference(a, b, values):
     )
 
 
-@pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
-@pytest.mark.parametrize("population", POPULATIONS)
-@pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
-def test_vector_op_matches_scalar_op(operation, population, data_format):
-    """Every table entry, over every population, under both NaN-rule branches."""
-    golden = get_golden_generator(UnarySFPUGolden)
-    values = _population(population).to(torch.float32)
+def _compare(golden, operation, vector, scalar, evaluable, values, label):
+    """Assert bit-exact agreement, dropping the inputs the oracle could not evaluate.
 
-    # __call__ sets these before dispatching; _torch_unary and handle_infinite_numbers
-    # both read them, so they have to be bound the same way for a fair comparison.
-    golden.data_format = data_format
-    golden.dst_format = data_format
-    golden.dest_acc = DestAccumulation.No
-
-    vector_op = golden._vector_op(operation)
-    assert vector_op is not None, f"{operation.name} is in the table but has no impl"
-
-    vector = vector_op(values).to(torch.float32)
-    scalar, evaluable = _scalar_reference(golden, operation, values)
-
-    # Some scalar methods cannot evaluate every input: _cosh/_sinh go through
-    # math.cosh/sinh, which raise OverflowError near the fp32 maximum instead of
-    # returning an infinity (torch returns inf there, so the vectorised path is
-    # strictly more total). Those elements drop out of the comparison rather than being
-    # papered over -- the oracle has no answer to compare against. The sweep never
-    # reaches them, because each op's stimuli come from its registered domain; this file
-    # is the only thing that feeds an op its format limits.
+    Some scalar methods cannot evaluate every input: _cosh/_sinh go through
+    math.cosh/sinh, which raise OverflowError near the fp32 maximum instead of returning
+    an infinity (torch returns inf there, so the vectorised path is strictly more
+    total). Those elements drop out of the comparison rather than being papered over --
+    the oracle has no answer to compare against. The sweep never reaches them, because
+    each op's stimuli come from its registered domain; this file is the only thing that
+    feeds an op its format limits.
+    """
     if not bool(evaluable.all()):
         excluded = int((~evaluable).sum())
         assert excluded < values.numel() // 2, (
@@ -180,31 +252,97 @@ def test_vector_op_matches_scalar_op(operation, population, data_format):
         vector = vector[evaluable]
         scalar = scalar[evaluable]
 
+    nan_sign_matters = operation in golden._NAN_SIGN_TRANSPARENT_OPS
     # raise rather than `assert cond, msg`: pytest's assertion rewriting renders both
-    # 1024-element tensors into the failure report, which buries the one line that says
-    # what actually differs.
-    if not _bitwise_equal(vector, scalar):
+    # tensors into the failure report, which buries the one line that says what
+    # actually differs.
+    if not _bits_agree(vector, scalar, nan_sign_matters).all():
         raise AssertionError(
-            f"{operation.name} / {population} / {data_format.name}: "
-            + _first_difference(vector, scalar, values[evaluable].tolist())
+            f"{operation.name} / {label}: "
+            + _first_difference(
+                vector, scalar, values[evaluable].tolist(), nan_sign_matters
+            )
         )
 
 
 @pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
-def test_vector_op_preserves_shape_and_dtype(operation):
-    """The whole-tile result must be a same-length fp32 tensor.
+@pytest.mark.parametrize("population", POPULATIONS)
+@pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
+def test_vector_op_matches_scalar_op(operation, population, data_format):
+    """Every table entry, over every population, at every window, under both NaN rules."""
+    golden = get_golden_generator(UnarySFPUGolden)
+    _bind_formats(golden, data_format)
+    base = _population(population).to(torch.float32)
 
-    ``__call__`` writes it straight into a slice of ``result``, so a shape or dtype
-    surprise corrupts the tile rather than raising.
+    vector_op = golden._vector_op(operation)
+    assert vector_op is not None, f"{operation.name} is in the table but has no impl"
+
+    scalar, evaluable = _scalar_reference(golden, operation, base)
+
+    for window in WINDOWS:
+        repeats = window // TILE
+        values = base.repeat(repeats)
+        _compare(
+            golden,
+            operation,
+            vector_op(values).to(torch.float32),
+            scalar.repeat(repeats),
+            evaluable.repeat(repeats),
+            values,
+            f"{population} / {data_format.name} / window {window}",
+        )
+
+
+@pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
+@pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
+def test_vector_op_matches_scalar_op_in_the_tile_dtype(operation, data_format):
+    """The same agreement with the window arriving in the tile's own dtype.
+
+    ``__call__`` does not hand ``vector_op`` an fp32 tensor: ``result`` follows
+    *input_format* through ``tilize_block``, so for a 16-bit format the window is
+    bfloat16 or float16 while the scalar path sees the Python doubles that
+    ``result.tolist()`` widens the same elements to. Every other check here feeds fp32,
+    the one dtype where that narrowing cannot lose anything -- a NaN sign included, which
+    is exactly what ``cast_to_dest_dtype`` exists to preserve.
+
+    One cell rather than the full matrix: the populations are already covered in fp32,
+    and what is being pinned here is the dtype the window arrives in, so the specials
+    are the population that matters.
     """
     golden = get_golden_generator(UnarySFPUGolden)
-    golden.data_format = DataFormat.Float16_b
-    golden.dst_format = DataFormat.Float16_b
-    golden.dest_acc = DestAccumulation.No
-    values = _population("signed_wide").to(torch.float32)
-    out = golden._vector_op(operation)(values).to(torch.float32)
-    assert out.shape == values.shape
-    assert out.dtype == torch.float32
+    _bind_formats(golden, data_format)
+    values = _population("specials").to(format_dict[data_format])
+
+    vector_op = golden._vector_op(operation)
+    scalar, evaluable = _scalar_reference(golden, operation, values)
+    _compare(
+        golden,
+        operation,
+        vector_op(values).to(torch.float32),
+        scalar,
+        evaluable,
+        values,
+        f"specials in {format_dict[data_format]} / {data_format.name}",
+    )
+
+
+@pytest.mark.parametrize("operation", VECTOR_OPS, ids=lambda o: o.name)
+@pytest.mark.parametrize("window", WINDOWS)
+def test_vector_op_preserves_shape_and_dtype(operation, window):
+    """The whole-tile result must be a same-length float tensor.
+
+    ``__call__`` writes it straight into a slice of ``result``, so a shape or dtype
+    surprise corrupts the tile rather than raising. Asserted on the *pre-cast* tensor:
+    the ``.to(torch.float32)`` every other test applies would launder a bool- or
+    int-returning table entry (several entries end in ``.to(d.dtype)`` for exactly that
+    reason) into a passing float.
+    """
+    golden = get_golden_generator(UnarySFPUGolden)
+    _bind_formats(golden, DataFormat.Float16_b)
+    values = _population("signed_wide").to(torch.float32).repeat(window // TILE)
+    raw = golden._vector_op(operation)(values)
+    assert raw.shape == values.shape
+    assert raw.dtype.is_floating_point, f"{operation.name} returned {raw.dtype}"
 
 
 def test_every_table_entry_is_a_registered_op():
@@ -219,41 +357,114 @@ def test_every_table_entry_is_a_registered_op():
 
 
 def test_no_unlisted_op_is_silently_bit_exact_capable():
-    """Report which ops still take the per-element path.
+    """Report which ops still take the per-element path, and hold the table's floor.
 
-    Not an assertion about the size of the table -- ops legitimately stay scalar. This
-    exists so the fallback set is written down somewhere a reader will see it, and so a
-    regression that empties the table shows up as a diff here rather than only as a
-    slower nightly.
+    The report is the point: ops legitimately stay scalar, and this is the only place
+    the fallback set is written down where a reader will see it.
+
+    The assertion is on the size of the *vector* table, not the fallback set. Asserting
+    the fallback set instead is what makes this test vacuous: it is a subset of
+    ``golden.ops`` by construction, so any bound against ``len(golden.ops)`` holds even
+    with every vector table emptied -- which is the regression the test exists for.
     """
     golden = get_golden_generator(UnarySFPUGolden)
     scalar_only = sorted(op.name for op in golden.ops if op not in set(VECTOR_OPS))
-    # The count is asserted loosely on purpose: it should only ever go down.
-    assert len(scalar_only) <= len(golden.ops), "impossible"
     print(f"\n{len(VECTOR_OPS)} vectorised, {len(scalar_only)} still per-element:")
     print("  " + ", ".join(scalar_only))
+    assert len(VECTOR_OPS) >= MIN_VECTORISED_OPS, (
+        f"only {len(VECTOR_OPS)} ops are on the vector tables, down from the measured "
+        f"{MIN_VECTORISED_OPS}; the sweep has silently gone back to the per-element "
+        f"golden for {MIN_VECTORISED_OPS - len(VECTOR_OPS)} op(s)"
+    )
 
 
-def test_nan_rule_branch_is_actually_exercised():
-    """The Float16 population must really produce an infinity for some op.
+def _eval_under(golden, operation, values, data_format):
+    """Evaluate *operation* with *data_format* bound, in the table's own precision.
 
-    ``_torch_unary``'s inf->NaN substitution is the one behaviour that differs between
-    the two FORMATS. If no op/population combination ever produces an infinity, the
-    Float16 half of this file's matrix proves nothing, and a vectorised path that
-    dropped the rule would still pass.
+    Deliberately **not** cast to fp32. The NaN rule is about the infinities the op
+    itself produces, and an fp32 cast manufactures others: ``_vec_square`` works in
+    float64, where 3.4e38 squares to a finite 1.16e77 and never reaches
+    ``handle_infinite_numbers`` -- it only becomes an infinity in the later cast, under
+    both formats alike. Comparing after the cast would read that as the rule having been
+    dropped.
+    """
+    _bind_formats(golden, data_format)
+    return golden._vector_op(operation)(values)
+
+
+@pytest.mark.parametrize("table", sorted(_NAN_RULE_TABLES))
+def test_nan_rule_holds_for_every_op_that_carries_it(table):
+    """``+/-inf`` under exponent-B must be NaN under an A-exponent format. Per op.
+
+    ``_torch_unary_vec``'s inf->NaN substitution is the one behaviour that differs
+    between the ``FORMATS`` entries, and the Float16 half of this file's matrix rests on
+    it. Asserted as the rule itself, for every op that carries it, rather than by proxy:
+    "some op produced an infinity" is satisfied by ``Abs`` -- a ``_VECTOR_PY_FNS`` entry
+    with no such rule -- and stays green with the substitution deleted outright.
+
+    Both directions are needed. Wherever exponent-B kept an infinity the A-exponent
+    format must hold a NaN, *and* nothing may differ between the two formats anywhere
+    else; either half alone passes on an implementation that has stopped applying the
+    rule and started doing something else with the format.
+
+    Parametrised per table so each one has to exercise the rule on its own. Rolling them
+    together lets ``_vec_square`` -- which calls ``handle_infinite_numbers`` directly and
+    so keeps the rule even if ``_torch_unary_vec`` drops it -- stand in for the whole
+    ``_VECTOR_TORCH_FNS`` table.
     """
     golden = get_golden_generator(UnarySFPUGolden)
-    golden.data_format = DataFormat.Float16_b  # exponent-B: infinities survive
-    golden.dst_format = DataFormat.Float16_b
-    golden.dest_acc = DestAccumulation.No
     values = _population("specials").to(torch.float32)
-    produced_inf = False
-    for operation in VECTOR_OPS:
-        out = golden._vector_op(operation)(values)
-        if bool(out.isinf().any()):
-            produced_inf = True
-            break
-    assert produced_inf, (
-        "no vectorised op produces an infinity on the specials population, so the "
-        "Float16 inf->NaN branch of _torch_unary is untested"
+
+    exercised = []
+    for operation in _NAN_RULE_TABLES[table]:
+        exponent_b = _eval_under(golden, operation, values, DataFormat.Float16_b)
+        exponent_a = _eval_under(golden, operation, values, DataFormat.Float16)
+
+        infinite = exponent_b.isinf()
+        if bool(infinite.any()):
+            exercised.append(operation.name)
+            kept = infinite & ~exponent_a.isnan()
+            assert not bool(kept.any()), (
+                f"{operation.name}: {int(kept.sum())} of {int(infinite.sum())} "
+                "infinities under Float16_b were not substituted with NaN under "
+                "Float16, so the inf->NaN rule is no longer applied"
+            )
+
+        # NaN sign is compared here: the substitution's output is what the pack path
+        # later turns into a visible +inf/-inf, so a sign that varies with the format is
+        # a real disagreement.
+        differs = ~_bits_agree(exponent_a, exponent_b, nan_sign_matters=True)
+        elsewhere = differs & ~infinite
+        assert not bool(elsewhere.any()), (
+            f"{operation.name}: Float16_b and Float16 differ in "
+            f"{int(elsewhere.sum())} elements where Float16_b held no infinity, so "
+            "something other than the inf->NaN rule varies with the format"
+        )
+
+    assert exercised, (
+        f"no op in {table} produced an infinity under Float16_b on the specials "
+        "population, so the inf->NaN substitution is untested from this table and the "
+        "Float16 half of this file's matrix proves nothing about it"
+    )
+
+
+@pytest.mark.parametrize("operation", _FORMAT_INVARIANT_OPS, ids=lambda o: o.name)
+def test_ops_without_the_nan_rule_are_format_invariant(operation):
+    """The complement of the rule, pinned so a new op cannot land on the wrong side.
+
+    ``_VECTOR_PY_FNS`` and the non-``_torch_unary_vec`` half of ``_VECTOR_SPECIAL_OPS``
+    carry no format-dependent behaviour -- their scalar twins do not either. Asserting
+    that keeps ``_NAN_RULE_SPECIAL_OPS`` honest: an op added to the wrong table fails
+    here (invariance broken) or in the sibling test (rule never exercised), rather than
+    silently narrowing what the rule is checked against.
+    """
+    golden = get_golden_generator(UnarySFPUGolden)
+    values = _population("specials").to(torch.float32)
+    exponent_b = _eval_under(golden, operation, values, DataFormat.Float16_b)
+    exponent_a = _eval_under(golden, operation, values, DataFormat.Float16)
+    differs = ~_bits_agree(exponent_a, exponent_b, nan_sign_matters=True)
+    assert not bool(differs.any()), (
+        f"{operation.name} changes with the data format in {int(differs.sum())} "
+        "elements but is not listed as carrying the inf->NaN rule; if it does carry "
+        "it, add it to _NAN_RULE_SPECIAL_OPS"
     )
