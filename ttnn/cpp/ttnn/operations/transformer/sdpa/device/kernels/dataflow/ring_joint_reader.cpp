@@ -282,7 +282,7 @@ void kernel_main() {
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -391,6 +391,10 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
+    // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because
+    // argidx is final at this point; the compile-time sizes are derived below with the other CT args.
+    const uint32_t rotated_args_base = argidx;
+
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -462,6 +466,16 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
+
+    // Rotated per-ring-iteration Q distribution. Chunk-LIST LENGTH per iteration (base chunks plus
+    // one float slot), or 0 when the host declined the rotation. Per ring iteration the factory
+    // appends [row_slot_count, my_count, chunk ids x rotated_max_slots] at this fixed stride; when
+    // enabled, the static global_q_start/global_q_end range is superseded entirely.
+    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
+    // read it from there rather than tracking a per-kernel index into the block above.
+    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    constexpr uint32_t rotated_iter_stride = ::rotated_iter_stride(kRotatedReaderIterHeaderWords, rotated_max_slots);
 
     if constexpr (slot_from_metadata || kv_pad_from_metadata) {
         Noc meta_noc;
@@ -745,26 +759,54 @@ void kernel_main() {
             }
         }
 
-        // When K/V mcast is enabled, loop the per-chain max so receivers with less real Q work
-        // still participate in padded multicast handshakes without pushing compute-visible data.
-        uint32_t loop_q_count = q_per_core;
-        if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
-            loop_q_count = max_q_per_core;
-        }
-        if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
-            loop_q_count = gqa_max_q_per_core;
+        // Rotated: the factory precomputes this row's mcast slot count per ring iteration (its row
+        // max, so members with less real work still run the padded handshakes), superseding the
+        // static per-chain maxima. Indexed by ACTIVE ordinal -- see rotated_active_ordinal.
+        // Static: when K/V mcast is enabled, loop the per-chain max so receivers with less real Q
+        // work still participate in padded multicast handshakes without pushing visible data.
+        uint32_t loop_q_count;
+        uint32_t rotated_my_count = 0;
+        uint32_t rotated_ids_base = 0;
+        if constexpr (rotated_q_split_enabled) {
+            const uint32_t rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
+            const uint32_t rotated_iter_base =
+                ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
+            loop_q_count = get_arg_val<uint32_t>(rotated_iter_base);
+            rotated_my_count = get_arg_val<uint32_t>(rotated_iter_base + 1);
+            rotated_ids_base = rotated_iter_base + kRotatedReaderIterHeaderWords;
+        } else {
+            loop_q_count = q_per_core;
+            if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                loop_q_count = max_q_per_core;
+            }
+            if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
+                loop_q_count = gqa_max_q_per_core;
+            }
         }
         uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
-            const bool is_padded_iter = (q_iter >= q_per_core);
+            bool is_padded_iter;
+            uint32_t flat_q_index;
+            if constexpr (rotated_q_split_enabled) {
+                is_padded_iter = (q_iter >= rotated_my_count);
+                // Padded iterations only handshake; decode a valid owned chunk so downstream index
+                // math stays in range (its values are never used for reads or pushes). Every core
+                // owns at least one chunk per iteration and never more than the pushed list holds --
+                // otherwise the rotated_my_count - 1 here underflows, or the read runs past the list.
+                ASSERT(rotated_my_count >= 1 && rotated_my_count <= rotated_max_slots);
+                flat_q_index =
+                    get_arg_val<uint32_t>(rotated_ids_base + (is_padded_iter ? rotated_my_count - 1 : q_iter));
+            } else {
+                is_padded_iter = (q_iter >= q_per_core);
+                flat_q_index = global_q_start + q_iter;
+            }
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
-            const auto decoded_q =
-                decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
+            const auto decoded_q = decompose_global_q_index(flat_q_index, num_q_chunks, NH, use_zigzag_balancing);
             const uint32_t nb = decoded_q.nb;
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;
@@ -833,7 +875,10 @@ void kernel_main() {
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
-            const bool need_q_read = (q_per_core > 1) || !q_pushed;
+            // Rotated: this core's owned count varies per ring iteration, so the "single Q chunk
+            // stays fronted in L1" optimization never applies -- compute derives its q_per_core from
+            // the fixed slot count and would wait on a Q chunk the reader never re-pushed.
+            const bool need_q_read = rotated_q_split_enabled || (q_per_core > 1) || !q_pushed;
 
             ring_joint::SlidingQWorkPlan sliding_q_plan;
             if constexpr (has_sliding_window) {
