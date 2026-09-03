@@ -160,6 +160,50 @@ jobs:
       tests-yaml-path: ./tests/pipeline_reorg/ops_pnr_tests.yaml
       budget-subheading: package_and_release
 
+  # ===========================================================================
+  # Team: blaze
+  # test list: owned by tenstorrent/tt-blaze (its ci.yaml), not by this repo
+  # ===========================================================================
+  #
+  # Runs tt-blaze's FULL merge gate against this release build, so a tt-metal
+  # change that breaks tt-blaze surfaces while the release is being cut instead of
+  # at the next uplift. Deliberately unconditional -- every run of Package and
+  # release gets it, no path filter and no tag-version guard: the whole point is
+  # that the release the downstream repo will uplift to has been proven against
+  # that repo's own gate.
+  #
+  # tt-blaze does not build tt-metal, so it is handed THIS run's id: `build-artifact`
+  # above published the tarball and wheel there, and tt-blaze consumes them directly
+  # instead of resolving from its tt-metal pin. See blaze-merge-gate.yaml.
+  #
+  # Hangs off `build-artifact` only -- NOT the release tests -- so the blaze gate
+  # runs alongside release-demo-tests rather than after them. It waits on
+  # tt-blaze's constrained P150/BH Loudbox pool for up to 3 hours, so serializing
+  # it behind the demo tests would add those hours to every nightly.
+  #
+  # Restricted to the main-platform leg of the caller's matrix: tt-blaze consumes
+  # the 22.04/Release tarball specifically (its download-artifacts-from-run action
+  # pins that in the artifact name), and the other legs of this matrix publish
+  # tarballs it cannot use. If main-platform ever moves off 22.04 this fails loudly
+  # on "no plain 22.04/Release build artifact" rather than silently skipping.
+  blaze-merge-gate:
+    needs: [build-artifact]
+    if: ${{ inputs.platform == inputs.main-platform }}
+    permissions:
+      contents: read
+    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    secrets: inherit
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      # Artifacts belong to the TOP-LEVEL run, so `build-artifact`'s tarball and
+      # wheel are on the Package and release run id even though this is nested.
+      metal-run-id: ${{ github.run_id }}
+      # The commit `build-artifact` compiled. tt-blaze checks its tt-metal
+      # submodule out here so its JIT-compiled kernels match the libraries it
+      # links against.
+      metal-ref: ${{ github.sha }}
+      blaze-ref: main
+
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
   # missing ai_job_summary artifact is reconciled as INFRA_FAILURE.
