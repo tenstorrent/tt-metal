@@ -4,12 +4,11 @@
 
 """Device-perf for the V4 sliding-only attention layer over a chunked prefill, on 8x4.
 
-Chunked and not one shot: the per-chunk work is what a long prefill repeats. The state is allocated
-outside the profiled region.
+Chunked, since the per-chunk work is what a long prefill repeats. The state is allocated outside the
+profiled region.
 
-Timed with the realtime profiler, like test_ttnn_hca_perf.py, since the Blaze pipeline builds without
-Tracy. Every program contributes its MAX duration across chips, so these are NOT comparable to a Tracy
-merge, which averages collectives. HCA_PERF_BREAKDOWN=1 adds a per-op split.
+Timed with the realtime profiler, as the Blaze pipeline builds without Tracy. Every program
+contributes its MAX duration across chips. HCA_PERF_BREAKDOWN=1 adds a per-op split.
 """
 
 import os
@@ -33,14 +32,13 @@ _CHUNKS = 2
 _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
-# Measured, not targets. Taken on a host is_high_power() calls false, where the HCA gate nonetheless
-# lands inside its own 14kW-derived band, so these are comparable and the margin absorbs the rest.
+# Measured on a host is_high_power() calls false; the margin absorbs the difference.
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 5_124_000, id="flash"),  # both chunks -> 2.56 ms a chunk
-    pytest.param("pro", DeepSeekV4ProConfig, 8_192_000, id="pro"),  # both chunks -> 4.10 ms a chunk
+    pytest.param("flash", DeepSeekV4FlashConfig, 5_124_000, id="flash"),
+    pytest.param("pro", DeepSeekV4ProConfig, 8_192_000, id="pro"),
 ]
 
-# Perf is gated on the 14kW hosts. Set this to run anywhere for bring-up, where only "does it run" holds.
+# Perf is gated on the 14kW hosts. Set this to run anywhere for bring-up.
 _IGNORE_POWER = os.environ.get("HCA_PERF_IGNORE_POWER") == "1"
 _BREAKDOWN = os.environ.get("HCA_PERF_BREAKDOWN") == "1"
 

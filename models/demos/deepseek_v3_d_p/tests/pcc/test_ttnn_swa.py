@@ -4,11 +4,11 @@
 
 """PCC tests for the DeepSeek-V4 sliding-only attention layer (prefill), against the reference.
 
-Both V4 variants run. Pro has no sliding layer in the real checkpoint, but its dimensions are what
-stress the reductions, so it is kept as a width test.
+Both V4 variants run. Pro has no sliding layer in the real checkpoint, but its dimensions stress the
+reductions, so it is kept as a width test.
 
-A non-final chunk must end on a tile row; a final one may end anywhere. Device-perf for the same
-layer lives in tests/perf/test_ttnn_swa_perf.py.
+A non-final chunk must end on a tile row; a final one may end anywhere. Device-perf lives in
+tests/perf/test_ttnn_swa_perf.py.
 """
 
 import pytest
@@ -31,8 +31,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _SEED = 42
-# Shortest legal prompt, the pad granularity, one needing no padding, the chunk width, and HCA's two
-# ragged lengths: a single-shot prompt is a final chunk, which may end anywhere.
+# Shortest legal prompt, the pad granularity, one needing no padding, the chunk width, and two lengths
+# that end mid-tile: a single-shot prompt is a final chunk, which may end anywhere.
 _SHAPES = [128, 130, 1024, 2048, 4095, 5120]
 # A sliding layer has no cache write, so nothing may compile after the first chunk at all.
 _WRITE_COMPILES_PER_CHUNK = 0
@@ -60,9 +60,9 @@ def _config(model_config, num_hidden_layers=4):
     return cfg
 
 
-# (id, dimension constants, per-chunk floor, long-run floor, single-shot floor). Measured worst case
-# minus 1e-3. All three are equal because PCC does not decay with depth here: the only state crossing a
-# chunk boundary is one window, so nothing accumulates and the softmax never widens.
+# (id, dimension constants, per-chunk floor, long-run floor, single-shot floor). All three are equal
+# because the only state crossing a chunk boundary is one window, so error does not accumulate with
+# depth and the softmax never widens.
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.998, 0.998, 0.998),
     ("pro", DeepSeekV4ProConfig, 0.998, 0.998, 0.998),
@@ -127,14 +127,13 @@ def _build_reference(config):
         ref.q_a_norm.weight.uniform_(0.5, 1.5)
         ref.kv_norm.weight.uniform_(0.5, 1.5)
         ref.sinks.normal_(0.0, 1.0)
-    # The layer itself carries none: HCA reads its compressor's, a sliding layer's comes from the model.
+    # A sliding layer carries no rotary_emb of its own; the config determines it.
     ref.rotary_emb = DeepseekV4RotaryEmbedding(config)
     return ref
 
 
 def _reference_forward(ref, config, hidden, total, batch):
-    """One UNCHUNKED pass over the whole prompt, so the chunked path has to reproduce plain attention
-    rather than agree with a reference sharing its assumptions."""
+    """One unchunked pass over the whole prompt: plain attention, which the chunked path must reproduce."""
     sw = config.sliding_window
     position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
     with torch.no_grad():
@@ -148,8 +147,8 @@ def _reference_forward(ref, config, hidden, total, batch):
 
 
 class _RefCache:
-    """Minimal ``past_key_values`` for driving the reference chunk by chunk. ``DeepseekV4HCACache`` is
-    used for its update body, the plain shared-KV sliding-window one every V4 layer shares."""
+    """Minimal ``past_key_values`` for driving the reference chunk by chunk. ``DeepseekV4HCACache``
+    supplies the shared-KV sliding-window update body every V4 layer uses."""
 
     def __init__(self, layer):
         self.layers = [layer]
@@ -314,9 +313,8 @@ def test_swa_long_prefill_mesh(
 ):
     """The demo context, split two ways.
 
-    The reference is CHUNKED here, unlike the short scenarios: an unchunked one would materialize an
-    [S, S] mask, which does not fit at this length. The short scenarios are what pin chunked == plain
-    attention; this only shows it stays true that many chunks deep."""
+    The reference runs chunked: an unchunked one would materialize an [S, S] mask, which does not fit
+    at this length. What this test shows is that the carry stays correct that many chunks deep."""
     torch.manual_seed(_SEED)
 
     batch = 1
@@ -341,8 +339,8 @@ def test_swa_long_prefill_mesh(
         real = hidden[:, kv_actual : kv_actual + valid]
         chunk_pos = position_ids[:, kv_actual : kv_actual + valid]
 
-        # The reference cache returns [carry | chunk] from update(), so the mask must cover exactly
-        # those keys -- sw - 1 of history, which is what its slice keeps.
+        # The reference cache returns [carry | chunk] from update(), so the mask covers sw - 1 of
+        # history plus the chunk.
         carry = min(sw - 1, kv_actual)
         k_pos = torch.cat([torch.arange(kv_actual - carry, kv_actual), chunk_pos[0]])
         ref_mask = _sliding_mask(chunk_pos[0], k_pos, sw).view(1, 1, valid, -1).expand(batch, 1, -1, -1)

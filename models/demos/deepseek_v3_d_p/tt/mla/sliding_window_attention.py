@@ -3,13 +3,8 @@
 
 """DeepSeek-V4 sliding-only attention (``layer_types[i] == "sliding_attention"``), chunked prefill.
 
-A sliding layer is the reference's ``DeepseekV4Attention`` with ``compressor = None`` and the plain
-theta=10000 rope. Flash has two (layers 0 and 1); Pro has none.
-
-The window never reaches past the ``sliding_window`` rows before a chip's own first query, so each
-chip attends over ``[halo | its own rows]`` rather than over the whole slab like HCA. Rationale for
-the choices here -- the mask instead of ``sliding_window_size``, the full K/V gather, the SDPA chunk
-sizes -- is in ``V4_HCA_next_steps.MD``.
+Each chip attends over ``[halo | its own rows]``, where the halo is the ``sliding_window`` rows
+preceding its first query: that is as far back as the window reaches.
 """
 
 import torch
@@ -64,7 +59,6 @@ class TtSWA(LightweightModule):
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
-        # TODO: share the stems with TtHCA/TtCSA once TtCSA lands; see V4_HCA_next_steps.MD.
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
@@ -94,7 +88,7 @@ class TtSWA(LightweightModule):
             memory_config=memory_config,
         )
 
-        # Pre-divided: SDPA scales the sink as well as QK, the reference scales only QK.
+        # SDPA scales the sink along with QK, so the division here cancels that.
         sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
         self.sinks_sdpa = self.ops.from_torch(sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
 
@@ -105,8 +99,7 @@ class TtSWA(LightweightModule):
         self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
         self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
 
-        # o_a_proj is block-diagonal over o_groups and a TP chip owns whole groups, so this stays one
-        # batched weight and one batched matmul, no collective.
+        # Block-diagonal over o_groups, and a TP chip owns whole groups, so one batched matmul serves it.
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
         self.wo_a = self.ops.from_torch(
@@ -223,20 +216,19 @@ class TtSWA(LightweightModule):
         self._halo_bounds = tuple(
             self.ops.from_torch(t, mapper, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT) for t in (starts, ends)
         )
-        # ttnn.slice sizes its output as in_rows / num_devices: a divisor, not a mesh size.
+        # ttnn.slice sizes its output as in_rows / num_devices.
         self._halo_num_devices = (sw + chunk) // sw
 
     def _carry_key(self, real_len: int):
-        """Rounds down, which only the final chunk may do. Fine for prefill, which never reads that
-        carry, but not for migration -- see V4_HCA_next_steps.MD."""
+        """Rounds down, which only the final chunk may do. See V4_HCA_next_steps.MD for migration."""
         return (int(real_len) // TILE_HEIGHT) * TILE_HEIGHT
 
     def _build_carry_index(self, chunk: int):
         """Bounds for the carry slice, one pair per real_len a chunk can have.
 
-        The carry is the last ``sw`` keys of the ACCUMULATED prefix, cut out of ``[carry | chunk]``
-        as ``[real_len, real_len + sw)``. Out of the chunk alone that range would not exist for a
-        chunk shorter than the window; here it walks back into the previous carry by itself."""
+        The carry is the last ``sw`` keys of the accumulated prefix, which in ``[carry | chunk]`` is
+        ``[real_len, real_len + sw)``. For a chunk shorter than ``sw`` that range reaches back into the
+        previous carry."""
         sw = self.sliding_window
 
         def idx(vals):
@@ -252,8 +244,7 @@ class TtSWA(LightweightModule):
     def _attention(self, q, sliding_kv, cos, sin, carry, kv_actual: int, real_len: int):
         """``q`` [B, H/tp, S/sp, head_dim] + this chip's ``sliding_kv`` -> ``(attn, next_carry)``.
 
-        The gather covers the whole chunk though attention reads 768 rows of it, because the carry
-        slice needs the global slab."""
+        The gather covers the whole chunk because the carry slice needs the global slab."""
         batch, num_heads_local, seq_local, _ = q.shape
         sw = self.sliding_window
 
@@ -291,7 +282,7 @@ class TtSWA(LightweightModule):
             is_causal=False,
             scale=self.scaling,
             attention_sink=self.sinks_sdpa,
-            # A provided mask makes the reader stream a [q_chunk, k_chunk] tile, so wider blows L1.
+            # With a mask the reader streams a [q_chunk, k_chunk] tile, so wider sizes exhaust L1.
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=128,
@@ -308,7 +299,7 @@ class TtSWA(LightweightModule):
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
         rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
-        # V's rope is undone by the same rotation with sin's sign flipped, so cos is reused.
+        # V's rope is undone by the same rotation with sin's sign flipped.
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
 
@@ -424,7 +415,7 @@ class TtSWA(LightweightModule):
 
         out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)
 
-        # Reduce-scatter and not an all-reduce: it sums the partials and slices to hidden/tp at once.
+        # Reduce-scatter sums the partials and slices to hidden/tp in one op.
         if self.tp_factor > 1:
             out = ttnn.experimental.reduce_scatter_minimal_async(
                 out,
@@ -462,6 +453,6 @@ class TtSWA(LightweightModule):
         )
 
         state.kv_actual += real_len
-        # In place, not a rebind: the migration table records this address once.
+        # The migration table records this address once, so the write is in place.
         ttnn.kv_cache.fill_cache_for_user_(state.carry, next_carry, 0, update_idx=0)
         return self._o_proj(attn)
