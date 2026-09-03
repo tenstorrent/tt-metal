@@ -330,6 +330,9 @@ Every performance change on this path ships behind a switch, so any one of them 
 | Variable | Default | Effect |
 |---|---|---|
 | `GEMMA4_QKV_DECODE_PROGCFG` | `1` | Swept narrow-N program config for the decode QKV matmul. **Not bit-exact** against auto (it re-chooses the blocking, hence accumulation order) but closer to an fp32 reference. `0` restores auto. |
+| `GEMMA4_PREPROJ_DECODE_PROGCFG` | `1` | Same narrow-N tuned program config as `GEMMA4_QKV_DECODE_PROGCFG`, applied to the assistant's `pre_projection` decode matmul (K=2×backbone, N=hidden). **Not bit-exact** against auto. `0` restores auto (also restored if `GEMMA4_QKV_DECODE_PROGCFG=0`, since both share `dram_sharded.decode_1d_matmul_config`). |
+| `GEMMA4_PREPROJ_BFP8` | `1` | Load the assistant's `pre_projection` weight as `bfloat8_b` instead of the model-wide dtype. The matmul is DRAM-bandwidth-bound at decode, so this roughly halves its weight-read bytes. `0` keeps the model-wide dtype. Verify on token identity after enabling — it's the drafter's own input fusion. |
+| `GEMMA4_POSTPROJ_BFP8` | `1` | Same as `GEMMA4_PREPROJ_BFP8`, for the assistant's `post_projection` weight (the drafter's recurrent-hidden output, also DRAM-bandwidth-bound at decode). `0` keeps the model-wide dtype. |
 | `GEMMA4_PREFILL_MATMUL_LOFI` | `0` | LoFi on tall prefill matmuls. **Do not default this on** — it corrupts long-context generation, and a single-layer PCC cannot see the error accumulating through 60 layers × 64 prefill chunks into a 131072-token KV cache. Needs a full 128k demo gate. |
 | `GEMMA4_OPROJ_TUNED` | `0` | Tuned prefill `o_proj`. Shape-specific: a large 31B win and a 12B regression, because the pinned config's block-sharded output grid depends on `n`. Needs a per-variant gate before it can be a default. |
 | `GEMMA4_PREFILL_LONG_2D` | `1` | Cutoff-reshape 2D path above the tuned band. |

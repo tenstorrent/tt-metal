@@ -31,11 +31,14 @@ Constraints (first cut):
     a circular-buffer modulo (the assistant attention config doesn't carry one).
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.dram_sharded import decode_1d_matmul_config, decode_in0_l1_enabled, lm_head_decode_config
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -78,6 +81,7 @@ class Gemma4AssistantModel:
         tensor_cache_path=None,
         mesh_config=None,
         max_local_batch_size=1,
+        precision=None,
     ):
         self.mesh_device = mesh_device
         self.max_local_batch_size = max_local_batch_size
@@ -107,6 +111,19 @@ class Gemma4AssistantModel:
 
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
+        # Per-module dtype overrides from precision_overrides.json (see
+        # Gemma4Model for the target-model equivalent). Without this the
+        # drafter's attention/mlp weights silently stayed at ``dtype`` (bf16)
+        # regardless of what the table says for this checkpoint, since the
+        # assistant is a separate checkpoint keyed independently of the target.
+        from models.demos.gemma4.tt.precision import Gemma4Precision
+
+        if precision is None:
+            precision = Gemma4Precision()
+        shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        attention_dtype = precision.get("attention", dtype)
+        lm_head_dtype = precision.get("lm_head", dtype)
+
         # Decoder layers (reuse the target's layer, MoE disabled, KV-shared).
         self.layers = []
         for i in range(self.text_args.num_hidden_layers):
@@ -117,6 +134,8 @@ class Gemma4AssistantModel:
                 layer_idx=i,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
+                shared_mlp_dtype=shared_mlp_dtype,
+                attention_dtype=attention_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{i}" if tensor_cache_path else None,
                 mesh_config=mesh_config,
                 max_seq_len=self.text_args.max_seq_len,
@@ -140,7 +159,7 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True):
+        def _linear(key, mapper, transpose=True, dtype_override=None, cache_suffix=""):
             w = state_dict.get(key)
             if w is None:
                 return None
@@ -149,21 +168,74 @@ class Gemma4AssistantModel:
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=dtype_override if dtype_override is not None else dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_")),
+                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_") + cache_suffix),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        self.pre_projection = _linear("pre_projection.weight", None)
-        self.post_projection = _linear("post_projection.weight", None)
+        # pre_projection is DRAM-bandwidth-bound at decode (M=1 padded to a
+        # single tile, K=2*backbone, N=hidden): its whole cost is reading the
+        # weight, so bfp8 halves the bytes read vs the model-wide default
+        # (bf16). Opt out with GEMMA4_PREPROJ_BFP8=0. The cache filename gets
+        # a distinct suffix whenever this differs from the model-wide dtype so
+        # flipping the flag can never load a stale wrong-dtype tensorbin.
+        preproj_bfp8 = os.environ.get("GEMMA4_PREPROJ_BFP8", "1").lower() not in ("0", "false", "no")
+        preproj_dtype = ttnn.bfloat8_b if preproj_bfp8 else dtype
+        preproj_suffix = "_bfp8" if preproj_dtype != dtype else ""
+        self.pre_projection = _linear(
+            "pre_projection.weight", None, dtype_override=preproj_dtype, cache_suffix=preproj_suffix
+        )
+        # post_projection (hidden -> backbone) is pre_projection's output-side
+        # mirror and is just as DRAM-bandwidth-bound at decode (M=1 padded to a
+        # tile) -- bfp8 halves its weight-read bytes too. Its N (backbone,
+        # e.g. 5376) is wide relative to the compute grid, unlike
+        # pre_projection's N=hidden, so it does NOT get a decode_1d_matmul_config
+        # below: decode_1d_matmul_config's own docstring says wide-N decode
+        # matmuls are already at the DRAM-bandwidth ceiling under auto and a
+        # forced grid only costs time there.
+        postproj_bfp8 = os.environ.get("GEMMA4_POSTPROJ_BFP8", "1").lower() not in ("0", "false", "no")
+        postproj_dtype = ttnn.bfloat8_b if postproj_bfp8 else dtype
+        postproj_suffix = "_bfp8" if postproj_dtype != dtype else ""
+        self.post_projection = _linear(
+            "post_projection.weight", None, dtype_override=postproj_dtype, cache_suffix=postproj_suffix
+        )
         # lm_head tied to the assistant's own embed_tokens when a separate
-        # lm_head.weight isn't stored.
+        # lm_head.weight isn't stored. Follows precision_overrides.json's
+        # "lm_head" entry (bfp8 for the shipped variants), same override the
+        # target model's own lm_head gets.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
+        lm_head_suffix = "_bfp8" if lm_head_dtype != dtype else ""
+        self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype, cache_suffix=lm_head_suffix)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
+
+        # Narrow-N decode program config for pre_projection (K=2*backbone,
+        # N=hidden e.g. 10752x1024 on the 31B assistant): ttnn auto spreads N
+        # one tile per core on this shape and collapses the output subblock to
+        # 1x1, stalling the pipeline. Same tuned family as the target's fused
+        # QKV matmul (see attention/weights.py); NOT bit-exact vs auto (it
+        # re-chooses the blocking / accumulation order). Opt out independently
+        # of QKV's flag with GEMMA4_PREPROJ_DECODE_PROGCFG=0 (note
+        # decode_1d_matmul_config itself also honors GEMMA4_QKV_DECODE_PROGCFG).
+        preproj_progcfg = os.environ.get("GEMMA4_PREPROJ_DECODE_PROGCFG", "1").lower() not in ("0", "false", "no")
+        self._pre_proj_decode_config = (
+            decode_1d_matmul_config(mesh_device, 2 * self.backbone_hidden_size, self.hidden_size)
+            if preproj_progcfg
+            else None
+        )
+
+        # lm_head decode config: same tuned helper the TARGET model already
+        # uses for its own last-token lm_head (Gemma4Model.compute_logits ->
+        # lm_head_decode_config), just never wired up for the assistant's
+        # separate lm_head call. M is always one padded tile here (assistant
+        # decode is always single-token, per-layer position doesn't change the
+        # shape -- see the pre_projection config above), so this is computed
+        # once and reused for every step() regardless of sequence position.
+        self._lm_head_decode_config = lm_head_decode_config(
+            mesh_device, ttnn.TILE_SIZE, self.hidden_size, int(self.lm_head.shape[-1])
+        )
 
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
@@ -176,11 +248,18 @@ class Gemma4AssistantModel:
         embedding. Feeding the unscaled table (~62x too small) starves the
         ``pre_projection`` token branch and collapses drafter acceptance
         (measured 0.19 unscaled -> 1.44 scaled, matching the HF reference).
+
+        Requests TILE layout from ``embed_tokens`` directly (it tilizes inside
+        the embedding kernel) instead of a standalone ``ttnn.to_layout`` after
+        the lookup + TP all-gather — see ``Gemma4Model.embed_tokens``'s own
+        docstring: dropping that separate ``TilizeDeviceOperation`` measured
+        faster with bit-identical output on the main decode path, and RoPE's
+        cos/sin cache lookups already use the same ``layout=`` pattern.
         """
-        emb = self.target.embed_tokens(token_tt)
+        emb = self.target.embed_tokens(token_tt, layout=ttnn.TILE_LAYOUT)
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)
-        return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+        return emb
 
     def step(
         self,
@@ -216,11 +295,34 @@ class Gemma4AssistantModel:
         Returns:
             (logits [1,1,1,vocab or vocab/tp], next_hidden [1,1,1,backbone]).
         """
+        # Decode activations/outputs are tiny (one padded tile) at every matmul
+        # in this method -- landing them in L1 removes a DRAM round-trip on
+        # each side without touching any matmul's own program config. Same
+        # tradeoff as dram_sharded.decode_in0_l1_enabled elsewhere in the
+        # decode path; one flag covers all of them here.
+        decode_l1 = decode_in0_l1_enabled()
+        decode_out_memcfg = ttnn.L1_MEMORY_CONFIG if decode_l1 else ttnn.DRAM_MEMORY_CONFIG
+
         tok_embed = self._raw_token_embed(token_tt)
         inp = ttnn.concat([tok_embed, target_hidden], dim=-1)
         tok_embed.deallocate(True)
 
-        h = ttnn.linear(inp, self.pre_projection)
+        if decode_l1 and inp.memory_config().buffer_type != ttnn.BufferType.L1:
+            inp_l1 = ttnn.to_memory_config(inp, ttnn.L1_MEMORY_CONFIG)
+            inp.deallocate(True)
+            inp = inp_l1
+
+        if self._pre_proj_decode_config is not None:
+            program_config, compute_kernel_config = self._pre_proj_decode_config
+            h = ttnn.linear(
+                inp,
+                self.pre_projection,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=decode_out_memcfg,
+            )
+        else:
+            h = ttnn.linear(inp, self.pre_projection, memory_config=decode_out_memcfg)
         inp.deallocate(True)
 
         for i, layer in enumerate(self.layers):
@@ -238,15 +340,28 @@ class Gemma4AssistantModel:
                 position_idx_cache=pos_int32,
             )
 
-        normed = self.norm.forward(h)
+        # normed feeds BOTH lm_head and post_projection below -- land it in L1
+        # once here rather than letting each matmul's default (DRAM) round-trip
+        # it separately.
+        normed = self.norm.forward(h, interleaved_memory_config=decode_out_memcfg if decode_l1 else None)
         h.deallocate(True)
 
         logits = None
         if return_logits:
-            logits = ttnn.linear(normed, self.lm_head)
+            if self._lm_head_decode_config is not None:
+                program_config, out_memcfg, compute_kernel_config = self._lm_head_decode_config
+                logits = ttnn.linear(
+                    normed,
+                    self.lm_head,
+                    program_config=program_config,
+                    memory_config=out_memcfg,
+                    compute_kernel_config=compute_kernel_config,
+                )
+            else:
+                logits = ttnn.linear(normed, self.lm_head, memory_config=decode_out_memcfg)
             if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
-        next_hidden = ttnn.linear(normed, self.post_projection)
+        next_hidden = ttnn.linear(normed, self.post_projection, memory_config=decode_out_memcfg)
         normed.deallocate(True)
         return logits, next_hidden
