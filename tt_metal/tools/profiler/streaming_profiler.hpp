@@ -91,9 +91,10 @@ private:
     void start(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     // Stream mode (1) or NOC2AXI (0) for these DRISCs' NIUs, in one launch (see the .cpp).
     static void set_drisc_niu_mode(IDevice* device, const std::vector<CoreCoord>& drisc_logicals, uint32_t stream);
-    // Set PROFILER_TERMINATE on every worker so producers stop blocking on a full ring; required on every path
-    // where the relay does not come up.
-    void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
+    // Set PROFILER_ARMED on the cores the relays drain, once they are up; producers boot unarmed and never block
+    // on a full ring until then.
+    void arm_producers(DeviceCtx& ctx);
+    void report_unarmed(uint32_t device_id);
     bool wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget);
     void disarm_producer_backpressure(DeviceCtx& ctx);
     // State the boot_device() steps below hand each other.

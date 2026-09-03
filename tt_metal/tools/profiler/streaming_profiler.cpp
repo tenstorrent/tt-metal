@@ -399,35 +399,31 @@ void StreamingProfiler::set_drisc_niu_mode(
     g_bringup_step = who + ":done";
 }
 
-// Producers are armed by TT_METAL_DEVICE_PROFILER and block on a full ring, so a relay that fails to come up
-// wedges the workload; PROFILER_TERMINATE makes the producer proceed instead.
-void StreamingProfiler::disarm_producers(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id) {
-    const auto context_id = mesh_device->impl().get_context_id();
-    auto& cluster = MetalContext::instance(context_id).get_cluster();
-    const auto& hal = MetalContext::instance(context_id).hal();
+// Producers boot unarmed (BRISC FW clears PROFILER_ARMED) and only block on a full ring once armed here, so a
+// core no relay drains can never wedge device close. Arming follows the relays coming up; a relay that fails
+// leaves the whole device unarmed and its markers are overwritten instead.
+void StreamingProfiler::arm_producers(DeviceCtx& ctx) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
-    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+    const size_t n = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
     uint32_t one = 1;
-    uint32_t n = 0;
-    for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
-        for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
-            const CoreCoord v =
-                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord{lx, ly}, CoreType::WORKER);
-            cluster.write_core(
-                &one,
-                sizeof(uint32_t),
-                tt_cxy_pair(device_id, v),
-                prof_l1 + kernel_profiler::PROFILER_TERMINATE * sizeof(uint32_t));
-            n++;
-        }
+    for (size_t ci = 0; ci < n; ci++) {
+        const auto [vx, vy] = ctx.core_virt[ci];
+        cluster.write_core(
+            &one,
+            sizeof(uint32_t),
+            tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
+            prof_l1 + kernel_profiler::PROFILER_ARMED * sizeof(uint32_t));
     }
+}
+
+void StreamingProfiler::report_unarmed(uint32_t device_id) {
     log_warning(
         tt::LogMetal,
-        "[streaming profiler] Device {}: no DRISC relay -- disarmed ring back-pressure on {} cores "
-        "(markers are DROPPED, but the workload will not stall waiting for a consumer)",
-        device_id,
-        n);
+        "[streaming profiler] Device {}: no DRISC relay -- producers stay unarmed (markers are DROPPED, but the "
+        "workload will not stall waiting for a consumer)",
+        device_id);
 }
 
 // Head is relay-written and tail producer-written, so head == tail on every RISC means everything published
@@ -481,14 +477,14 @@ void StreamingProfiler::disarm_producer_backpressure(DeviceCtx& ctx) {
     const auto& hal = MetalContext::instance().hal();
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     const size_t n = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
-    uint32_t one = 1;
+    uint32_t zero = 0;
     for (size_t ci = 0; ci < n; ci++) {
         const auto [vx, vy] = ctx.core_virt[ci];
         cluster.write_core(
-            &one,
+            &zero,
             sizeof(uint32_t),
             tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
-            prof_l1 + kernel_profiler::PROFILER_TERMINATE * sizeof(uint32_t));
+            prof_l1 + kernel_profiler::PROFILER_ARMED * sizeof(uint32_t));
     }
 }
 
@@ -1006,7 +1002,7 @@ bool StreamingProfiler::boot_device(
             tt::LogMetal,
             "[streaming profiler] Device {}: no DRAM programmable cores (card FW below the DRISC gate?)",
             device_id);
-        disarm_producers(mesh_device, device_id);
+        report_unarmed(device_id);
         return false;
     }
 
@@ -1017,17 +1013,18 @@ bool StreamingProfiler::boot_device(
 
     ctx.device = mesh_device->get_device(coord);
     if (!choose_relay_banks(mesh_device, ctx, plan)) {
-        disarm_producers(mesh_device, device_id);
+        report_unarmed(device_id);
         return false;
     }
     reserve_spool(mesh_device, ctx, plan);
 
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
         if (!launch_relay(mesh_device, ctx, coord, plan, d)) {
-            disarm_producers(mesh_device, device_id);
+            report_unarmed(device_id);
             return false;
         }
     }
+    arm_producers(ctx);
     return true;
 }
 

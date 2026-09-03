@@ -149,9 +149,11 @@ enum SpscControlBuffer {
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // Host->kernel terminate: while clear a producer blocks on a full ring; while set it proceeds, so a dispatch
-    // core cannot wedge wait_until_cores_done() at device close.
-    PROFILER_TERMINATE = 2 * PROFILER_SPSC_MAX_RISC,
+    // Host->kernel arm: while set a producer blocks on a full ring, because a relay is draining this core; while
+    // clear it proceeds and overwrites. BRISC FW clears it once per session, and the host sets it only on the cores
+    // its relays serve, so a core nobody drains (dispatch cores, whose rings fill one launch at a time across
+    // processes) can never park in the stall path and wedge wait_until_cores_done() at device close.
+    PROFILER_ARMED = 2 * PROFILER_SPSC_MAX_RISC,
     // NoC coords packed (y << 16) | x, written once by BRISC FW at init. Coords, not the flat id: the flat id is a
     // dense rank over a sorted core map with no positional formula, computable only host-side.
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,

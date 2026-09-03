@@ -369,6 +369,9 @@ int main() {
     risc_init();
     device_setup();
     DEVICE_PRINT_INITIALIZE_LOCK();
+#if defined(PROFILE_KERNEL)
+    kernel_profiler::disarm_at_boot();
+#endif
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;

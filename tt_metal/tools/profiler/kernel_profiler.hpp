@@ -224,9 +224,9 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     // The relay can only free words up to the published tail, so waiting on unpublished words deadlocks.
     publish_tail();
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
-        invalidate_l1_cache();  // re-read the relay-updated head (and the terminate flag)
-        if (profiler_control_buffer[PROFILER_TERMINATE]) {
-            return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
+        invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
+        if (!profiler_control_buffer[PROFILER_ARMED]) {
+            return;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
         }
     }
     g_head_cache = profiler_control_buffer[HEAD_INDEX];
@@ -357,6 +357,10 @@ __attribute__((noinline)) void init_profiler(
 }
 
 __attribute__((noinline)) void finish_profiler() { publish_tail(); }
+
+// Once per FW boot, before any launch: the host arms only the cores its relays drain, and it does so after the
+// firmware is up, so this must not run again at the first launch or it would undo that arm.
+inline void disarm_at_boot() { profiler_control_buffer[PROFILER_ARMED] = 0; }
 
 // The constructor touches nothing but the wall clock; the whole zone ships at close with the start as member
 // state, 8 B per open zone. Hold exactly these two words: anything more is register pressure across the user
