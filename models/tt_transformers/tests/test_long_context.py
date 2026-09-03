@@ -16,6 +16,7 @@ with every configuration knob resolved to a constant. Run it with:
 
 import bz2
 import os
+import sys
 import time
 
 import pytest
@@ -142,9 +143,12 @@ def _benchmark_summary():
         v = row.get(key)
         return "-" if v is None else format(v, fmt)
 
+    show_acc = any("top1" in r for r in _RESULTS)
     header = (
         f"{'ctx':<6}{'prompt tok':>11}{'build s':>9}{'TTFT ms':>11}"
-        f"{'compile ms':>12}{'decode ms':>11}{'tok/s/u':>9}  {'rope':<12}{'mode':<7}status"
+        f"{'compile ms':>12}{'decode ms':>11}{'tok/s/u':>9}"
+        + (f"{'scored':>8}{'top-1 %':>9}{'top-5 %':>9}" if show_acc else "")
+        + f"  {'rope':<12}{'mode':<7}status"
     )
     lines = ["", "=" * len(header), "BENCHMARK SUMMARY", "=" * len(header), header, "-" * len(header)]
     for row in _RESULTS:
@@ -157,7 +161,12 @@ def _benchmark_summary():
             f"{cell(row, 'compile_ms', '.2f'):>12}"
             f"{cell(row, 'decode_ms', '.2f'):>11}"
             f"{cell(row, 'tok_s_user', '.1f'):>9}"
-            f"  {row.get('rope', '-'):<12}{row.get('mode', '-'):<7}{status}"
+            + (
+                f"{cell(row, 'scored', 'd'):>8}{cell(row, 'top1', '.2f'):>9}{cell(row, 'top5', '.2f'):>9}"
+                if show_acc
+                else ""
+            )
+            + f"  {row.get('rope', '-'):<12}{row.get('mode', '-'):<7}{status}"
         )
     lines.append("=" * len(header))
     logger.info("\n".join(lines))
@@ -166,6 +175,20 @@ def _benchmark_summary():
 TEMPERATURE = 0.0  # 0 == greedy (argmax)
 TOP_P = 0.08
 TOP_K = 32
+
+# --accuracy scores this many predictions, taken from the END of the reference.
+#
+# The count and the placement are separate decisions and the placement is the important one.
+# simple_text_demo splits its reference in half, which at 32k would score 16,384 predictions
+# sweeping contexts 16,384 -> 32,768 and cost ~25 minutes untraced. But what needs testing is
+# the depth we actually serve, and 1,024 predictions taken from the tail sit at contexts
+# 31,744 -> 32,768 -- the same number the old 1024-token check scored, at 30x the context, in
+# ~2 minutes rather than 25.
+#
+# Raise this to widen the swept range (useful for finding WHERE degradation starts rather than
+# WHETHER it is present at depth); the cost is linear and untraced steps are ~92 ms at 32k.
+# Clamped to half the reference so a short reference still behaves as it did before.
+ACCURACY_MAX_SCORED = 1024
 
 ENABLE_TRACE = True  # replay a recorded command stream instead of re-dispatching
 
@@ -183,8 +206,70 @@ with bz2.open(_CORPUS, "rt", encoding="utf-8") as _f:
     PROMPT = _f.read()
 
 
+class TokenAccuracy:
+    """Teacher-forced top-1/top-5 agreement against a full-precision reference.
+
+    Ported from simple_text_demo.py's TokenAccuracy, with one change: the reference path is
+    passed in rather than derived from the model name alone. That demo can only ever score at
+    1024 tokens of context -- it has no rotary-scaling path, so its context is capped at the
+    model's trained window -- and each context length here needs its own reference, sized to it.
+
+    How teacher forcing works: at every position the model's prediction is recorded and then
+    *discarded*, and the reference's token is fed forward instead. So the model is scored on
+    N independent one-step predictions from a known-good prefix, rather than being allowed to
+    wander down its own sequence where one early divergence would corrupt every later position.
+    """
+
+    def __init__(self, reference_path):
+        assert os.path.exists(reference_path), (
+            f"No reference at {reference_path}. Generate one sized for this context with:\n"
+            f"  HF_MODEL=$HF_MODEL python models/tt_transformers/tests/generate_reference_outputs.py "
+            f"--total_length <ctx> --model $HF_MODEL --output_file {reference_path}"
+        )
+        logger.info(f"Loading reference from {reference_path}")
+        data = torch.load(reference_path)
+        reference_tokens = data["reference_tokens"]
+        # Everything up to `split` primes the context; the tail after it is scored. Taking the
+        # tail rather than the second half is what puts the scored predictions at full depth:
+        # a 32768-token reference scoring 1024 predictions covers contexts 31744 -> 32768, not
+        # 16384 -> 32768. Never more than half, so a short reference behaves as it always did.
+        total = reference_tokens.shape[-1]
+        scored = min(ACCURACY_MAX_SCORED, total // 2)
+        split = total - scored
+        self.input_prompt = reference_tokens[0, :split]
+        self.reference_tokens = reference_tokens[0, split:]
+        self.top5_tokens = data["top5_tokens"][split - 1 :, :]
+        self.maxindex = len(self.reference_tokens) - 1
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+
+    def prompt_text(self, tokenizer):
+        return tokenizer.decode(self.input_prompt.tolist())
+
+    def collect_predicted_tokens(self, token):
+        """Record what the model predicted; return what it must be fed next."""
+        self.store_predicted_tokens.append(token)
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+
+    def compute_accuracy(self):
+        n = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        top1 = sum(self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i] for i in range(n))
+        top5 = sum(self.store_predicted_tokens[i] in self.top5_tokens[i, :] for i in range(n))
+        return top1 / n, top5 / n, n
+
+
+# --accuracy is slower per step than the performance run: teacher forcing forbids Metal trace,
+# so a step costs ~92 ms rather than ~27. At the default ACCURACY_MAX_SCORED of 1024 that is
+# ~2 minutes plus a long prefill, well inside the performance-mode limit -- the headroom here
+# exists so raising that cap does not silently turn into a timeout that reads like a hang. The
+# marker is evaluated at collection, before any fixture can see the option, so read argv.
+_ACCURACY_RUN = "--accuracy" in sys.argv
+TEST_TIMEOUT = 14400 if _ACCURACY_RUN else 1800
+
+
 @torch.no_grad()
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(TEST_TIMEOUT)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": True, "num_command_queues": 1}],
@@ -220,9 +305,31 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # none: trace left on dies in post-processing with "Device data mismatch"; 256 decode
     # steps left on overflows the device marker buffer and the CSV comes back incomplete.
     tracy_decode = request.config.getoption("--tracy_decode")
-    enable_trace = False if tracy_decode else ENABLE_TRACE
-    max_generated_tokens = TRACY_MAX_GENERATED_TOKENS if tracy_decode else MAX_GENERATED_TOKENS
-    row["mode"] = "tracy" if tracy_decode else "bench"
+    # --accuracy turns this into a token-accuracy test: the model is teacher-forced through a
+    # full-precision reference and scored on agreement, instead of being timed. Trace must be off
+    # (teacher forcing rewrites the token between steps, which a replayed command stream cannot
+    # see) and the prompt comes from the reference rather than the corpus, so the context the
+    # model is scored on is exactly the one the reference was built from.
+    accuracy = request.config.getoption("--accuracy")
+    assert not (accuracy and tracy_decode), "--accuracy and --tracy_decode are mutually exclusive"
+
+    token_acc = None
+    if accuracy:
+        ref_path = request.config.getoption("--accuracy_ref") or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "reference_outputs",
+            f"{os.environ['HF_MODEL'].split('/')[-1]}_{label}.refpt",
+        )
+        token_acc = TokenAccuracy(ref_path)
+
+    enable_trace = False if (tracy_decode or accuracy) else ENABLE_TRACE
+    if accuracy:
+        max_generated_tokens = len(token_acc.reference_tokens)
+    elif tracy_decode:
+        max_generated_tokens = TRACY_MAX_GENERATED_TOKENS
+    else:
+        max_generated_tokens = MAX_GENERATED_TOKENS
+    row["mode"] = "accuracy" if accuracy else ("tracy" if tracy_decode else "bench")
     if tracy_decode:
         logger.warning(
             f"[{label}] --tracy_decode: trace disabled, {max_generated_tokens} decode steps. The "
@@ -314,11 +421,16 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     #   encoded_prompts : unpadded token IDs
     #   decoding_pos    : true prompt length per user -> the first decode position
     #   prefill_lens    : padded length per user
+    # In accuracy mode the prompt is the reference's first half, and the chat template is off:
+    # generate_reference_outputs.py encodes the corpus with instruct=False, so templating here
+    # would shift every position relative to the reference and score a different sequence.
+    prompt_text = token_acc.prompt_text(tokenizer) if accuracy else PROMPT
+    instruct = False if accuracy else INSTRUCT
     input_tokens_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-        [PROMPT],
+        [prompt_text],
         tokenizer,
         [model_args],
-        INSTRUCT,
+        instruct,
         # MAX_GENERATED_TOKENS, not max_generated_tokens: this argument sets the PROMPT
         # budget (preprocess_inputs_prefill does `max_prefill_len -= max_generated_tokens`),
         # so passing --tracy_decode's cap of 2 would leave 33022 tokens for the prompt, which
@@ -328,6 +440,13 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
         max_prefill_len=max_seq_len,
     )
     input_tokens = torch.stack(input_tokens_pt).view(BATCH_SIZE, -1)
+    if accuracy:
+        assert len(encoded_prompts[0]) == len(token_acc.input_prompt), (
+            f"reference prompt is {len(token_acc.input_prompt)} tokens but re-encoded to "
+            f"{len(encoded_prompts[0])}. The reference is handed over as text and re-tokenized, "
+            "so a non-round-tripping tokenizer would shift every scored position. Refusing to "
+            "report accuracy against a misaligned reference."
+        )
     row["prompt_tokens"] = len(encoded_prompts[0])
     row["stage"] = "prefill"
     logger.info(f"Prompt is {decoding_pos[0]} tokens (padded to {prefill_lens[0]})")
@@ -390,6 +509,13 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     signpost("decode")
     logger.info("Decoding...")
     for iteration in range(max_generated_tokens):
+        # Teacher forcing, before the forward pass that consumes out_tok: score what the model
+        # predicted, then overwrite it with the reference's token. Without this the model walks
+        # its own sequence and a single early divergence corrupts every later position, which
+        # measures drift rather than per-step precision loss.
+        if accuracy:
+            out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+
         t_step = time.perf_counter()
         logits, _log_probs = generator.decode_forward(
             out_tok,
@@ -415,7 +541,10 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
         current_pos += 1
 
         token = int(out_tok[0].item())
-        if token in tokenizer.stop_tokens:
+        # In accuracy mode a stop token is just one more prediction to score -- the sequence is
+        # the reference's, not the model's, so there is nothing to stop. Breaking here would
+        # silently truncate the run and report agreement over a prefix.
+        if token in tokenizer.stop_tokens and not accuracy:
             logger.info(f"Hit EOS at iteration {iteration}")
             break
         generated_tokens.append(token)
@@ -429,8 +558,8 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
     # EOS iteration runs but its token is deliberately dropped (see Step 8).
     new_tokens = generated_tokens[len(encoded_prompts[0]) :]
     full_text = tokenizer.decode(generated_tokens)
-    prompt_text = tokenizer.decode(model_args.encode_prompt(PROMPT, instruct=INSTRUCT))
-    answer = full_text.replace(prompt_text, "", 1).strip()
+    echoed_prompt = tokenizer.decode(model_args.encode_prompt(prompt_text, instruct=instruct))
+    answer = full_text.replace(echoed_prompt, "", 1).strip()
 
     steady_times = decode_times[1:]
     avg_decode = sum(steady_times) / len(steady_times) if steady_times else float("nan")
@@ -442,7 +571,13 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
         row["decode_ms"] = avg_decode * 1000
         row["tok_s_user"] = 1 / avg_decode
 
-    logger.info(f"\n==PROMPT ({len(PROMPT)} chars, clipped)\n{PROMPT[:160]}...\n\n==OUTPUT\n{answer}\n")
+    # In accuracy mode the "output" is the reference's own continuation (teacher forcing fed it
+    # back every step), so printing it as the model's output would be actively misleading -- and
+    # the prompt is the reference's first half, not the corpus.
+    if accuracy:
+        logger.info(f"\n==PROMPT (reference first half, {len(encoded_prompts[0])} tokens)\n{prompt_text[:160]}...\n")
+    else:
+        logger.info(f"\n==PROMPT ({len(PROMPT)} chars, clipped)\n{PROMPT[:160]}...\n\n==OUTPUT\n{answer}\n")
     logger.info(f"=== Performance metrics [{label}] ===")
     logger.info(f"[{label}] Prompt tokens:          {len(encoded_prompts[0])}")
     logger.info(f"[{label}] Model build:            {build_time:.1f}s")
@@ -456,13 +591,34 @@ def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_se
         )
     logger.info(f"[{label}] Tokens generated:       {len(new_tokens)} (1 prefill + {len(decode_times)} decode steps)")
 
+    if accuracy:
+        top1, top5, scored = token_acc.compute_accuracy()
+        row["top1"], row["top5"], row["scored"] = top1 * 100, top5 * 100, scored
+        logger.info(f"[{label}] === Token accuracy ===")
+        logger.info(f"[{label}] Predictions scored:     {scored}")
+        logger.info(f"[{label}] Top-1 agreement:        {top1 * 100:.2f}%")
+        logger.info(f"[{label}] Top-5 agreement:        {top5 * 100:.2f}%")
+        logger.info(
+            f"[{label}] Context spanned:        {len(encoded_prompts[0])} -> "
+            f"{len(encoded_prompts[0]) + scored} tokens"
+        )
+
     # -- Step 10: gate the result --------------------------------------------
     # Without these the test only proves "did not crash": every metric above is
     # printed just as happily for a model emitting garbage. Mirrors the upstream
     # demo's special-token check (simple_text_demo.py:1443). `new_tokens` already
     # excludes the EOS token, which Step 8 drops rather than appends.
-    assert len(new_tokens) >= 2, f"model generated only {len(new_tokens)} token(s)"
-    special = sorted({t for t in new_tokens if t in tokenizer.all_special_ids})
-    assert not special, f"model produced special tokens in its output: {special[:8]}"
+    if accuracy:
+        # The generated sequence here is the reference's, not the model's, so the special-token
+        # gate below would be testing the corpus. What matters instead is that every position
+        # got scored -- a short run would silently report accuracy over a prefix.
+        assert scored == len(token_acc.reference_tokens), (
+            f"scored {scored} of {len(token_acc.reference_tokens)} reference positions; "
+            "the decode loop stopped early (EOS in the reference?)"
+        )
+    else:
+        assert len(new_tokens) >= 2, f"model generated only {len(new_tokens)} token(s)"
+        special = sorted({t for t in new_tokens if t in tokenizer.all_special_ids})
+        assert not special, f"model produced special tokens in its output: {special[:8]}"
 
     row["status"] = "ok"  # only after the output gate above has passed
