@@ -59,9 +59,12 @@ on:
         type: string
         default: ""
         description: >-
-          Commit to bake the source from, when checkout-source is on. Defaults to
-          this workflow's own commit. A caller testing a non-default ref must pass
-          the same one it gave build-artifact, or src/ and artifact/ disagree.
+          Commit to bake the source from, when checkout-source is on. Must be a
+          full 40-character sha, not a branch or tag: a movable ref would let a
+          re-run recompute the same tag while checking out different source, and
+          overwrite the image with it. Defaults to this workflow's own commit. A
+          caller testing a non-default ref must pass the same one it gave
+          build-artifact, or src/ and artifact/ disagree.
       runner-label:
         required: false
         type: string
@@ -114,7 +117,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Commit to bake the source from; defaults to this workflow's commit"
+        description: "Full 40-character commit sha to bake the source from; defaults to this workflow's commit"
       runner-label:
         required: false
         type: string
@@ -154,6 +157,12 @@ jobs:
           # download-artifact fetch every artifact in the run.
           if [ -z "$ARTIFACT_NAME" ]; then
             echo "::error::artifact-name is empty; the upstream build did not produce one"
+            exit 1
+          fi
+          # A branch or tag can move, so re-running would recompute the same tag
+          # while checking out different source and overwrite the image with it.
+          if [ -n "$SOURCE_REF" ] && ! printf '%s' "$SOURCE_REF" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::source-ref must be a full 40-character commit sha, got '$SOURCE_REF'"
             exit 1
           fi
           # Names end in <ref><sep><runid>, but packages joins with '-' and the
@@ -209,13 +218,13 @@ jobs:
           path: src
           submodules: recursive
 
-      # context: is the whole workspace, so without this the source checkout
-      # ships its own .git and every submodule's - multiple GB of context.
-      - name: Exclude .git from the build context
-        if: ${{ inputs.checkout-source }}
+      # context: is the whole workspace, so every .git in it is transferred. The
+      # Dockerfile checkout puts one at the root even when no source is checked
+      # out, and a source checkout adds its own plus every submodule's.
+      - name: Exclude git metadata from the build context
         run: |
           set -euo pipefail
-          printf 'src/.git\nsrc/**/.git\n' > "$GITHUB_WORKSPACE/.dockerignore"
+          printf '.git\n**/.git\n' > "$GITHUB_WORKSPACE/.dockerignore"
           cat "$GITHUB_WORKSPACE/.dockerignore"
 
       - name: Download the build artifact
