@@ -192,7 +192,7 @@
 
 - name: Qwen3.6 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
@@ -244,7 +244,7 @@
     # never surfaced -- the same test passes in the tiered e2e job, which runs no watcher.
     # Unset here (matching the Llama entries above) to unblock the suite. NOTE this hides
     # a real illegal NOC read rather than fixing it; tracked separately.
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-3.1-24B-Instruct-2503
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
@@ -449,7 +449,7 @@
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -515,7 +515,7 @@
 - name: Gemma-4-31B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -632,7 +632,7 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
@@ -673,7 +673,7 @@
 
 - name: MiniMax-M3 unit tests (BH Galaxy 8x4)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (Watcher data corruption on mesh open)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (Watcher data corruption on mesh open)
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp@8x4
     pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k "8x4"
@@ -690,7 +690,7 @@
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
 - name: GPT-OSS 20B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
@@ -748,7 +748,7 @@
 
 - name: DeepSeek-V3 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
@@ -768,7 +768,7 @@
 
 - name: DeepSeek-V3 module unit tests (host-side)
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export MESH_DEVICE=N150
     pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
       --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
@@ -955,7 +955,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
@@ -970,7 +970,7 @@
 
 - name: TT-DiT encoder unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
@@ -1033,7 +1033,7 @@
 
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
@@ -1049,7 +1049,7 @@
 
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
@@ -1082,7 +1082,7 @@
 
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
@@ -1106,7 +1106,7 @@
 
 - name: Stable Diffusion XL refiner unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
   model: sdxl
@@ -1126,7 +1126,7 @@
 
 - name: Stable Diffusion XL VAE unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
   model: sdxl
@@ -1146,7 +1146,7 @@
 
 - name: Stable Diffusion XL base unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
   model: sdxl
@@ -1166,7 +1166,7 @@
 
 - name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py || exit_code=$?
@@ -1189,7 +1189,7 @@
 
 - name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30  # blocked by #50886 (SDXL NOC CB overflow / PCC)
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py || exit_code=$?
@@ -1212,7 +1212,7 @@
 
 - name: TT-DiT Stable Diffusion 3.5 Large unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     pytest --timeout 300 models/tt_dit/tests/models/sd35/test_vae_sd35.py
     pytest --timeout 300 models/tt_dit/tests/models/sd35/test_attention_sd35.py
@@ -1250,7 +1250,7 @@
 - name: TT-DiT Qwen-Image unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
     pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
@@ -1265,7 +1265,7 @@
 
 - name: TT-DiT Motif-Image-6B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     pytest --timeout 300 models/tt_dit/tests/models/motif/test_attention_motif.py
     pytest --timeout 300 models/tt_dit/tests/models/motif/test_transformer_block_motif.py
@@ -1315,7 +1315,7 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
@@ -1575,7 +1575,7 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
   model: tt-transformers-common
@@ -1589,7 +1589,7 @@
 
 - name: TT-Transformers MLP module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
@@ -1611,7 +1611,7 @@
 
 - name: TT-Transformers RMSNorm module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
@@ -1633,7 +1633,7 @@
 
 - name: TT-Transformers RoPE module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
@@ -1655,7 +1655,7 @@
 
 - name: TT-Transformers LM head module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
@@ -1677,7 +1677,7 @@
 
 - name: TT-Transformers attention module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
     pytest models/common/tests/modules/attention/test_attention_1d.py \
@@ -1698,7 +1698,7 @@
 
 - name: TT-Transformers embedding module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
@@ -1720,7 +1720,7 @@
 
 - name: TT-Transformers sampling module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     fail=0
     pytest models/common/tests/modules/sampling/test_penalties_1d.py \
@@ -1749,7 +1749,7 @@
 
 - name: TT-Transformers RMSNorm 2D module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
@@ -1770,7 +1770,7 @@
 
 - name: TT-Transformers MLP 2D module unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/modules/mlp/test_mlp_2d.py \
@@ -1791,7 +1791,7 @@
 
 - name: TT-Transformers auto-compose 2D unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/test_auto_compose.py \
@@ -1811,7 +1811,7 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -1827,7 +1827,7 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -1847,7 +1847,7 @@
 
 - name: DeepSeek-V3 TG MoE tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30  # tests self-skip under watcher: #36312, #36314
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
