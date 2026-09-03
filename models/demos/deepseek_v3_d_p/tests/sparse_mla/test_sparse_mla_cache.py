@@ -25,11 +25,13 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     ReuseIndexer,
     TtIndexer,
     indexer_layer_is_reused,
+    normalized_hadamard_matrix,
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -41,6 +43,57 @@ from tests.ttnn.utils_for_testing import comp_pcc
 CACHE_DIR = Path("/tmp/DS_PREFILL_sparse_mla")
 SEQ_LEN = 256
 SP_AXIS, TP_AXIS = 0, 1
+
+
+# --------------------------------------------------------------------------------------------------
+# Host-only: the decode-compatible Hadamard is orthonormal, so applying it to both indexer operands
+# preserves their score while spreading values before cache quantization.
+# --------------------------------------------------------------------------------------------------
+def test_normalized_hadamard_preserves_indexer_scores():
+    h = normalized_hadamard_matrix(128).float()
+    identity = torch.eye(128)
+    torch.testing.assert_close(h.T @ h, identity, rtol=2e-3, atol=2e-3)
+
+    torch.manual_seed(0)
+    q = torch.randn(3, 128)
+    k = torch.randn(5, 128)
+    torch.testing.assert_close((q @ h) @ (k @ h).T, q @ k.T, rtol=2e-3, atol=2e-3)
+
+
+def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
+    with expect_error(AssertionError, "power of two"):
+        normalized_hadamard_matrix(96)
+
+
+@pytest.mark.parametrize("slots", [1, 2])
+def test_sp1_kvpe_slice_materializes_only_multi_slot_cache(monkeypatch, slots):
+    """A single-slot full-range slice must remain an alias; only slot selection needs new DRAM storage."""
+    import models.demos.deepseek_v3_d_p.tt.mla.mla as mla_module
+
+    storage = SimpleNamespace(shape=(slots, 1, 64, 128))
+    cache = SimpleNamespace(storage=storage, format="format", geometry="geometry")
+    slice_calls = []
+
+    def fake_slice(tensor, starts, ends, **kwargs):
+        slice_calls.append((tensor, starts, ends, kwargs))
+        return tensor if not kwargs else SimpleNamespace(shape=(1, 1, 64, 128))
+
+    monkeypatch.setattr(ttnn, "slice", fake_slice)
+    monkeypatch.setattr(mla_module, "MlaKvCache", lambda **kwargs: SimpleNamespace(**kwargs))
+    self = SimpleNamespace(sp_factor=1)
+
+    gathered = ttMLA._gather_kvpe_prefix(
+        self, cache, cache_batch_idx=slots - 1, populated_global=64, block_cyclic_chunk_local=64
+    )
+
+    if slots == 1:
+        assert not slice_calls
+        assert gathered.storage is storage
+    else:
+        _, starts, _, kwargs = slice_calls[0]
+        assert starts[0] == slots - 1
+        assert kwargs["memory_config"] == ttnn.DRAM_MEMORY_CONFIG
+        assert gathered.storage is not storage
 
 
 # --------------------------------------------------------------------------------------------------
@@ -219,12 +272,11 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
     [
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
+            fabric2d_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -300,12 +352,11 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
+            torus_xy_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

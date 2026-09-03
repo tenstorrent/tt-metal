@@ -26,8 +26,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    QuasarSfpuVariant,
+    generate_quasar_sfpu_format_variants,
     input_output_formats,
-    is_invalid_quasar_sfpu_format_combination,
     parametrize,
     runtime,
     select_perf_input_dimensions,
@@ -103,7 +104,7 @@ COMP_OPS = [
 
 # Extra (integer) formats only the comp family sweeps. Int32/Int16/Int8 (signed) and UInt8
 # (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
-# dest format, so the inference routes its data path through Int16 and sets FormatConfig.sfpu_math=
+# dest format, so the inference routes its data path through Int16 and sets FormatConfig.sfpu_src=
 # UInt16, the only stage the comp kernel reads as uint16.
 SFPU_COMP_EXTRA_FORMATS = input_output_formats(
     [
@@ -717,44 +718,6 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
-def quasar_unpack_to_dest(formats, dest_acc, is_typecast):
-    """Whether the input is written straight to Dest via UNPACR_DEST (vs the FPU SrcA→A2D datacopy).
-
-    Typecast routes every 32-bit-Dest case (EITHER endpoint 32-bit) through unpack-to-Dest, because a
-    narrow input cannot be FPU-datacopied into a 32-bit Dest (the int datacopy lands all-zeros). Other
-    unary ops only use unpack-to-Dest for a 32-bit input with dest_acc=Yes.
-    """
-    if is_typecast:
-        return formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
-    return formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-
-
-def _typecast_pack_src_format(
-    output_format: DataFormat, dest_acc: DestAccumulation
-) -> DataFormat:
-    """Format the packer must read Dest in for a typecast op.
-
-    The typecast SFPU op writes its OUTPUT format into Dest, so the packer must read Dest in the
-    output register format. Format inference derives pack_src from the input side (it assumes the
-    dest format equals the unpacked format), which is wrong for a format-converting op: e.g.
-    Int32->Float32 infers pack_src=Int32 and Float32->Int32 infers pack_src=Float32, both reading
-    the SFPU result in the wrong format. This returns the Dest register form of the output:
-     - 32-bit Dest (dest_acc=Yes, a 32-bit endpoint): Int32 for an integer output, Float32
-       otherwise; the pack gasket then narrows (e.g. Float32->Float16_b, Int32->UInt8).
-     - 16-bit Dest (dest_acc=No, both endpoints <=16-bit): the output sits in Dest in its own format.
-    """
-    if output_format.is_integer():
-        # Integer output: the packer reads the narrow int the SFPU stored, in its own format
-        # (NOT a 32-bit container, even in a 32-bit Dest). UInt16 has no Quasar packer encoding,
-        # so it is read as Int16 (non-negative values share the bit pattern -> golden matches).
-        return DataFormat.Int16 if output_format == DataFormat.UInt16 else output_format
-    if dest_acc == DestAccumulation.Yes:
-        # Float output in a 32-bit Dest: the value sits as Float32; the pack gasket narrows it
-        # to the final output (e.g. Float32 -> Float16_b).
-        return DataFormat.Float32
-    return output_format
-
-
 def generate_sfpu_unary_combinations(*, is_perf=False):
     """
     Build the unary-SFPU sweep across all operations and their format matrices.
@@ -765,8 +728,8 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
     because none of the preferred perf matrices are supported.
 
-    Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    approx_mode, input_dimensions) tuples.
+    Returns: list of (mathop, resolved format variant, dest_sync,
+    implied_math_format, approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -783,55 +746,35 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
             )
             else (ApproximationMode.No,)
         )
-        for fmt in formats_for_op(cfg):
-            in_fmt = fmt.input_format
-
-            # Typecast's dest width is determined by the format pair, not swept: a 32-bit
-            # endpoint (either side) forces a 32-bit dest, every other pair runs in 16-bit
-            # dest. Every other op sweeps both dest_acc modes for non-32-bit inputs.
-            is_typecast = cfg.mathop == MathOperation.Typecast
-            dest_acc_modes = (
-                (DestAccumulation.Yes,)
-                if in_fmt.is_32_bit() or (is_typecast and fmt.output_format.is_32_bit())
-                else (
-                    (DestAccumulation.No,)
-                    if is_typecast
-                    else (DestAccumulation.No, DestAccumulation.Yes)
-                )
+        format_variants = generate_quasar_sfpu_format_variants(
+            cfg.mathop, formats_for_op(cfg)
+        )
+        for variant in format_variants:
+            dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
+            implied_math_formats = (
+                (ImpliedMathFormat.Yes,)
+                if is_perf
+                else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
             )
-            for dest_acc in dest_acc_modes:
-                # Skip invalid format combinations for Quasar
-                if is_invalid_quasar_sfpu_format_combination(
-                    fmt, dest_acc, quasar_unpack_to_dest(fmt, dest_acc, is_typecast)
-                ):
-                    continue
-
-                dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-                implied_math_formats = (
-                    (ImpliedMathFormat.Yes,)
-                    if is_perf
-                    else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-                )
-                input_dims = (
-                    select_perf_input_dimensions(cfg.input_dims)
-                    if is_perf
-                    else cfg.input_dims
-                )
-                for dest_sync in dest_sync_modes:
-                    for implied_math_format in implied_math_formats:
-                        for approx_mode in approx_modes:
-                            for input_dimensions in input_dims:
-                                combinations.append(
-                                    (
-                                        cfg.mathop,
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        implied_math_format,
-                                        approx_mode,
-                                        runtime(input_dimensions),
-                                    )
+            input_dims = (
+                select_perf_input_dimensions(cfg.input_dims)
+                if is_perf
+                else cfg.input_dims
+            )
+            for dest_sync in dest_sync_modes:
+                for implied_math_format in implied_math_formats:
+                    for approx_mode in approx_modes:
+                        for input_dimensions in input_dims:
+                            combinations.append(
+                                (
+                                    cfg.mathop,
+                                    variant,
+                                    dest_sync,
+                                    implied_math_format,
+                                    approx_mode,
+                                    runtime(input_dimensions),
                                 )
+                            )
 
     return combinations
 
@@ -857,14 +800,16 @@ def test_eltwise_unary_sfpu_quasar(
     """
     (
         mathop,
-        formats,
-        dest_acc,
+        format_variant,
         dest_sync,
         implied_math_format,
         approx_mode,
         input_dimensions,
     ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
 
+    assert isinstance(format_variant, QuasarSfpuVariant)
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
     is_typecast = mathop == MathOperation.Typecast
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]
@@ -930,7 +875,7 @@ def test_eltwise_unary_sfpu_quasar(
         else src_A
     )
 
-    unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
+    unpack_to_dest = format_variant.unpack_to_dest
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -952,8 +897,8 @@ def test_eltwise_unary_sfpu_quasar(
             # every build must define them.
             (
                 TYPECAST_FORMATS(
-                    input_format=formats.input_format,
-                    output_format=formats.output_format,
+                    input_format=format_variant.sfpu_src,
+                    output_format=format_variant.sfpu_dst,
                 )
                 if is_typecast
                 else TYPECAST_FORMATS()
@@ -987,11 +932,7 @@ def test_eltwise_unary_sfpu_quasar(
         test_config_kwargs=test_config_kwargs,
     )
 
-    if is_typecast:
-        pack_src_for_output = _typecast_pack_src_format(formats.output_format, dest_acc)
-        for fc in configuration.formats_config:
-            fc.pack_src = pack_src_for_output
-            fc.pack_S_src = pack_src_for_output
+    format_variant.apply_formats(configuration.formats_config)
 
     if is_perf:
         configuration.run(perf_report)

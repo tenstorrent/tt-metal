@@ -26,6 +26,17 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+# --- Dispatch: randomized tensix programs (package-and-release health check) ---
+- name: runtime_release_sanity_dispatch
+  cmd: TT_METAL_SEED=0 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQProgramFixture.TensixTestRandomizedProgram'
+  skus:
+    wh_n150:
+      timeout: 10
+    bh_p150:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
 - name: runtime_sanity_device
   cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
@@ -73,7 +84,7 @@
     ./build/test/tt_metal/unit_tests_api --gtest_filter='-ProgramRunArgsTestQuasar.*:ProgramSpecTestQuasar.*:ProgramSpecHWTest.*' &&
     ./build/test/tt_metal/unit_tests_data_movement &&
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DevicePrintFixture.IdleEthTestPrint' &&
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherRingBufferIErisc' &&
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='*WatcherRingBufferTest.TestWatcherRingBuffer/IErisc' &&
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherStackUsage0' &&
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TestWatcherStackUsage16' &&
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='MeshDispatchFixture.TensixIdleEthTestSemaphores' &&
@@ -85,7 +96,7 @@
       timeout: 30
     sim_bh_p150:
       timeout: 30
-  owner_id: U08PR765YJ1 # Matt Craighead
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 - name: runtime_sim_galaxy_cpp_unit_tests (wormhole_b0)
@@ -97,7 +108,7 @@
   skus:
     sim_wh_galaxy:
       timeout: 10
-  owner_id: U08PR765YJ1 # Matt Craighead
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 - name: runtime_sim_galaxy_cpp_unit_tests (blackhole)
@@ -109,5 +120,5 @@
   skus:
     sim_bh_galaxy:
       timeout: 10
-  owner_id: U08PR765YJ1 # Matt Craighead
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

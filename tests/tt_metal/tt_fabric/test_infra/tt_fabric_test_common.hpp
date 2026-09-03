@@ -1706,22 +1706,12 @@ public:
 
     uint32_t get_max_num_links() const override {
         // Maximum num_links usable on this platform: the minimum, across all local devices, of the
-        // usable routing planes for that device. Shared by validate_num_links_supported and by the
-        // YAML max/all resolution so both stay consistent.
-        const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-        const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
-
+        // usable routing planes for that device (live minus dispatch-reserved). Shared by
+        // validate_num_links_supported and by the YAML max/all resolution so both stay consistent.
         uint32_t max_num_links = std::numeric_limits<uint32_t>::max();
-        std::vector<FabricNodeId> devices = get_local_node_ids();
-        for (const auto& device : devices) {
-            uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
-            // TODO: remove this once we have correct
-            if (num_pci_devices != num_devices && max_routing_planes > 0) {
-                max_routing_planes -= 1;
-            }
-            max_num_links = std::min(max_num_links, max_routing_planes);
+        for (const auto& device : get_local_node_ids()) {
+            max_num_links = std::min(max_num_links, get_max_routing_planes_for_device(device));
         }
-
         return (max_num_links == std::numeric_limits<uint32_t>::max()) ? 0 : max_num_links;
     }
 

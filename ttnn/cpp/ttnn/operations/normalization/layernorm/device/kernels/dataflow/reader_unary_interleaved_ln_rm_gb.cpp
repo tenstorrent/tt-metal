@@ -4,12 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -17,51 +17,36 @@
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t NCHt = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t tile_offset = get_arg_val<uint32_t>(3);
-
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
-
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in"),
-                       dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    // Welford-fp32 alias of cb_in (non-fused) or cb_x (fused). Shares SRAM with the
-    // primary CB but has its own read/write pointers, so we must push_back on it whenever we
-    // push to the primary CB. When welford_fp32_alias is 0, cb_x_welford falls back to the
-    // primary CB itself: cb_in (non-fused) or cb_x (fused).
-    constexpr uint32_t dfb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
-    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    uint32_t NCHt = get_arg(args::NCHt);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t tile_offset = get_arg(args::reader_start);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_x_welford(dfb_id_x_welford);
+    DataflowBuffer dfb_in0(dfb::in);
+    // Welford-fp32 alias of dfb_in (non-fused) or dfb_x (fused). Shares SRAM with the
+    // primary buffer but has its own read/write pointers, so we must push_back on it whenever we
+    // push to the primary buffer. Absent when the alias is inactive: compute then reads the
+    // primary buffer itself, and a duplicate push would double-count its semaphore.
+#if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
+    DataflowBuffer dfb_x_welford(dfb::x_welford);
+#endif
 #ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_in1(dfb::inb);
 #endif
 #ifdef FUSE_GAMMA
-    DataflowBuffer dfb_gamma(dfb_id_gamma);
+    DataflowBuffer dfb_gamma(dfb::gamma);
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer dfb_beta(dfb_id_beta);
+    DataflowBuffer dfb_beta(dfb::beta);
 #endif
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_in0.get_tile_size();
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t W = get_compile_time_arg_val(2);
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto blk = get_arg(args::block_size);  // needed for correctness of softmax/LN kernels
+    constexpr auto W = get_arg(args::W);
 
-    const auto src_a = TensorAccessor(src0_args, src_addr);
+    const auto src_a = TensorAccessor(tensor::src);
 
     // Byte offsets within a tile scale with the datum size (2B for bf16, 4B for fp32):
     //   row_bytes      = one tile-width row  = TILE_WIDTH (32) datums
@@ -73,7 +58,7 @@ void kernel_main() {
     const uint32_t gamma_row_bytes = tt::constants::TILE_WIDTH * gamma_datum_bytes;
     const uint32_t gamma_face_bytes = tt::constants::FACE_HW * gamma_datum_bytes;
     const uint32_t gamma_half_row_bytes = tt::constants::FACE_WIDTH * gamma_datum_bytes;
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
+    const auto addrg = TensorAccessor(tensor::gamma);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
@@ -81,37 +66,38 @@ void kernel_main() {
     const uint32_t beta_row_bytes = tt::constants::TILE_WIDTH * beta_datum_bytes;
     const uint32_t beta_face_bytes = tt::constants::FACE_HW * beta_datum_bytes;
     const uint32_t beta_half_row_bytes = tt::constants::FACE_WIDTH * beta_datum_bytes;
-    const auto addrb = TensorAccessor(beta_args, beta_addr);
+    const auto addrb = TensorAccessor(tensor::beta);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
-    const auto src_b = TensorAccessor(src1_args, b_addr);
+    const auto src_b = TensorAccessor(tensor::src_b);
 #endif
 
     // Generate constant tiles for layernorm compute
-    if constexpr (!use_welford) {
-        constexpr uint32_t dfb_in_2 = get_named_compile_time_arg_val("cb_scaler");
+#ifndef USE_WELFORD
+    {
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_in_2,
+            dfb::scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-        // Push count shared with the compute kernel's cb_scaler pop count (issue #48487).
+        // Push count shared with the compute kernel's dfb_scaler pop count (issue #48487).
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
         constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
         if constexpr (num_scaler_tiles == 2) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                dfb_in_2,
+                dfb::scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
                 dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
         }
     }
-    constexpr uint32_t eps_dfb_id = get_named_compile_time_arg_val("cb_eps");
-    const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
+#endif
+    const uint32_t eps = get_arg(args::eps);
+    DataflowBuffer dfb_eps(dfb::eps);
+    generate_bcast_col_scalar(dfb_eps, eps);
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    // read a ublock of tiles from src to the input buffer, and then push the ublock to unpacker
     uint32_t offs = 0;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -145,15 +131,15 @@ void kernel_main() {
             noc.async_read_barrier();
             dfb_in1.push_back(block.full_block_size());
 #else
-            // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
-            // read/write pointers. After the data lands in cb_in0, push cb_x_welford by the same
-            // amount so compute can wait_front on the alias separately for welford reads. Skipped
-            // when no alias is active (cb_x_welford == cb_in0; the duplicate push would
-            // double-count cb_in0's semaphore).
-            if constexpr (welford_fp32_alias) {
-                dfb_x_welford.reserve_back(block.full_block_size());
-                dfb_x_welford.push_back(block.full_block_size());
-            }
+            // Non-fused welford-fp32 alias: dfb_x_welford shares dfb_in0's memory but has its own
+            // read/write pointers. After the data lands in dfb_in0, push dfb_x_welford by the same
+            // amount so compute can wait_front on the alias separately for welford reads. Absent
+            // when no alias is active; the duplicate push would then double-count dfb_in0's
+            // semaphore.
+#ifdef WELFORD_FP32_ALIAS
+            dfb_x_welford.reserve_back(block.full_block_size());
+            dfb_x_welford.push_back(block.full_block_size());
+#endif
 #endif
         }  // wt loop
 

@@ -208,7 +208,8 @@ jobs:
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
-              "scope": "${{ inputs.summary-scope }}"
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": true
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

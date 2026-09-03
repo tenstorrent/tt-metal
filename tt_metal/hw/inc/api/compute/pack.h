@@ -85,11 +85,11 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
  * | Function   | output_tile_index| The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-template <bool out_of_order_output = false>
+template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -132,10 +132,11 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
@@ -155,9 +156,10 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
 pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
-    pack_block(ifrom_dst, icb, ntiles);
+    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
 }
 
 // clang-format off

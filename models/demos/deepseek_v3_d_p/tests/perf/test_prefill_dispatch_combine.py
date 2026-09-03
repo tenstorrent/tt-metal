@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end dispatch+combine perf worker for one Galaxy column replayed on LB 8x1.
+End-to-end dispatch+combine perf worker for one Galaxy column replayed on LB 8x1 TorusY.
 
 Runs TtDispatchModule → production layout transform (squeeze → TILE+bfp8 →
 unsqueeze) → TtCombineModule(init_zeros=True) in a single forward pass on
@@ -40,9 +40,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-# Geometry of the replay, not of any model: LB 8x1 stands in for ONE column of the Galaxy the
-# capture was taken on, which has 4 columns of 8 chips.
+# Geometry of the replay: LB 8x1 stands in for one 8-chip Galaxy column.
 GALAXY_NUM_DISPATCH_GROUPS = 4
 DISPATCH_GROUP_SIZE = 8
 CHUNK = 5 * 1024  # tokens per chunk in the chunked-prefill run the captures come from
@@ -51,6 +51,8 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 # One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
 _CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
+_TORUS_Y_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
+assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing from ALL_MESH_CONFIGS"
 
 
 # One chunk (5120 tokens) spread over the 8-chip dispatch group => seq_len_per_chip 640. Expert
@@ -77,20 +79,20 @@ _CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52"
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
+    "mesh_device, device_params, num_links",
+    _TORUS_Y_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     experts_per_chip_override,
     model,
 ):
@@ -104,6 +106,7 @@ def test_ttnn_dispatch_combine(
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
@@ -145,8 +148,7 @@ def test_ttnn_dispatch_combine(
         model=model,
         captured_indices_path=os.getenv("TT_DS_USE_CAPTURED_INDICES"),
     )
-
-    # get_gate_outputs produces 4-row outputs (Galaxy-global); slice to [0:1] for LB's single dispatch group.
+    # get_gate_outputs produces Galaxy-global rows; keep the selected proxy column only.
     expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
@@ -216,7 +218,7 @@ def test_ttnn_dispatch_combine(
     combine_module = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=1,  # LB has 1 physical dispatch group; we simulate one Galaxy col on it.
+        num_dispatch_groups=1,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,

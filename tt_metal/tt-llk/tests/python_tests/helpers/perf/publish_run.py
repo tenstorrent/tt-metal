@@ -27,8 +27,10 @@ _VALID_PIPELINES = ("PR", "nightly")
 def _run_csvs(csv_dir):
     """The combined per-test CSVs, excluding the .post / .counters side files.
 
-    Real runs nest one directory per test (``perf_data/<base>/<base>.csv``), so
-    the glob is recursive.
+    Real runs nest one directory per test
+    (``perf_data/runs/<tag>/<base>/<base>.csv``), so the glob is recursive. Point
+    ``csv_dir`` at ONE run — ``perf_data/latest`` or a specific ``runs/<tag>`` —
+    never at ``perf_data`` itself, or every retained run is swept into one batch.
     """
     return sorted(
         p

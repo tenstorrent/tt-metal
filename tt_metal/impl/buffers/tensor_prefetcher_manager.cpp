@@ -35,6 +35,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
+#include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"  // receiver_socket_md (for L1 layout sizing)
 
@@ -615,7 +616,7 @@ void TensorPrefetcherManager::start() {
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::CompileProgram(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
+        programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::LaunchProgram(
             devices_[d], *programs_[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);

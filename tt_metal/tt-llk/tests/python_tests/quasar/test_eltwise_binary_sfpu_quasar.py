@@ -6,11 +6,10 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BinarySFPUGolden,
     get_golden_generator,
-    quantize_mx_stimuli,
 )
 from helpers.llk_params import (
     ApproximationMode,
@@ -25,9 +24,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     InputOutputFormat,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_sfpu_format_variants,
     input_output_formats,
-    is_invalid_quasar_sfpu_format_combination,
     parametrize,
     runtime,
 )
@@ -98,14 +96,6 @@ def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
     return torch.cat(tiles), tile_cnt
 
 
-def _get_valid_implied_math_formats(fmt: FormatConfig):
-    """Valid IMPLIED_MATH_FORMAT settings for a format, shared by every binary
-    family: MX formats run only with ImpliedMathFormat.Yes; all others run both."""
-    if fmt.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def _run_sfpu_binary_llk_golden(
     formats,
     dest_acc,
@@ -122,6 +112,7 @@ def _run_sfpu_binary_llk_golden(
     is_perf=False,
     perf_report=None,
     dst_rounding_mode=DstRoundingMode.Default,
+    format_variant=None,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -158,6 +149,9 @@ def _run_sfpu_binary_llk_golden(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
+    unpack_to_dest = (
+        format_variant.unpack_to_dest if format_variant is not None else True
+    )
     test_config_kwargs = {
         "test_name": _CPP_SOURCE,
         "formats": formats,
@@ -166,7 +160,9 @@ def _run_sfpu_binary_llk_golden(
             APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
-            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            UNPACKER_ENGINE_SEL(
+                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+            ),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
@@ -197,7 +193,7 @@ def _run_sfpu_binary_llk_golden(
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
-        "unpack_to_dest": True,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
     }
 
@@ -206,6 +202,8 @@ def _run_sfpu_binary_llk_golden(
         run_types=run_types,
         test_config_kwargs=test_config_kwargs,
     )
+    if format_variant is not None:
+        format_variant.apply_formats(configuration.formats_config)
     if is_perf:
         configuration.run(perf_report)
         return
@@ -312,17 +310,11 @@ _DIV_SPECIAL_CASE_LANES = [
 
 
 def _get_valid_float_formats_dest_acc():
-    """Float16 + DestAccumulation.Yes is not supported."""
+    """Resolve all executable float binary format and path variants."""
     formats = input_output_formats(
         [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
     )
-    return [
-        (fmt, dest_acc)
-        for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats)
-        if not (
-            fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes
-        )
-    ]
+    return generate_quasar_sfpu_format_variants(MathOperation.SfpuElwadd, formats)
 
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
@@ -399,9 +391,7 @@ _FLOAT_OPS = [
 )
 @parametrize(
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
-    ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
@@ -418,7 +408,9 @@ def test_eltwise_binary_sfpu_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU float ops (add, sub, mul, div, atan2)."""
-    formats, dest_acc = formats_dest_acc
+    format_variant = formats_dest_acc
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     )
@@ -436,6 +428,7 @@ def test_eltwise_binary_sfpu_float_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        format_variant=format_variant,
     )
 
 
@@ -493,23 +486,9 @@ SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
     ],
 )
 SFPU_BINARY_MAX_MIN_INT32_FORMATS = input_output_formats([DataFormat.Int32], same=True)
-
-
-def max_min_float_dest_acc_for_format(fmt):
-    return (
-        (DestAccumulation.Yes,)
-        if fmt.input_format.is_32_bit()
-        else (DestAccumulation.No,)
-    )
-
-
-def max_min_int32_dest_acc_for_format(_fmt):
-    return (DestAccumulation.Yes,)
 
 
 def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
@@ -544,37 +523,31 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
 
 
 def _generate_max_min_combinations(
-    formats_list: List[FormatConfig],
-    dest_acc_for_format,
+    formats_list: List[InputOutputFormat],
     implied_math_formats=(ImpliedMathFormat.No, ImpliedMathFormat.Yes),
     input_dimensions_list=([32, 32],),
 ):
-    """Generate max/min (fmt, dest_acc, implied_math_format, is_max_op, input_dims) tuples."""
+    """Generate max/min resolved routes and the operation-specific axes."""
     combinations = []
-    for fmt in formats_list:
-        for dest_acc in dest_acc_for_format(fmt):
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
-                continue
-            for implied_math_format in implied_math_formats:
-                if implied_math_format not in _get_valid_implied_math_formats(fmt):
-                    continue
-                for is_max_op in [True, False]:
-                    for input_dimensions in input_dimensions_list:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                implied_math_format,
-                                is_max_op,
-                                input_dimensions,
-                            )
+    for format_variant in generate_quasar_sfpu_format_variants(
+        MathOperation.SfpuBinaryMax, formats_list
+    ):
+        for implied_math_format in implied_math_formats:
+            for is_max_op in [True, False]:
+                for input_dimensions in input_dimensions_list:
+                    combinations.append(
+                        (
+                            format_variant,
+                            implied_math_format,
+                            is_max_op,
+                            input_dimensions,
                         )
+                    )
     return combinations
 
 
 def _run_max_min(
-    formats,
-    dest_acc,
+    format_variant,
     implied_math_format,
     is_max_op,
     input_dimensions,
@@ -587,6 +560,8 @@ def _run_max_min(
     is_perf=False,
     perf_report=None,
 ):
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
     binary_op = "MAX" if is_max_op else "MIN"
     src0_idx, src1_idx, dst_idx = tile_indices
     num_faces = MAX_NUM_FACES
@@ -618,41 +593,24 @@ def _run_max_min(
             in0_int, in1_int, tile_indices, torch.int32
         )
         buffer_B_dummy = in1_int
-        disable_format_inference = False
     else:
         torch_fmt = format_dict[formats.input_format]
         in0 = in0.to(torch_fmt)
         in1 = in1.to(torch_fmt)
-        if formats.input_format.is_mx_format():
-            in0_g = quantize_mx_stimuli(
-                in0.flatten(), formats.input_format, num_faces
-            ).reshape(in0.shape)
-            in1_g = quantize_mx_stimuli(
-                in1.flatten(), formats.input_format, num_faces
-            ).reshape(in1.shape)
-        else:
-            in0_g, in1_g = in0, in1
-        in0_f32 = in0_g.to(torch.float32)
-        in1_f32 = in1_g.to(torch.float32)
+        in0_f32 = in0.to(torch.float32)
+        in1_f32 = in1.to(torch.float32)
         golden_f32 = (
             torch.maximum(in0_f32, in1_f32)
             if is_max_op
             else torch.minimum(in0_f32, in1_f32)
         )
         golden_tensor = golden_f32.to(output_torch_fmt)
-        if formats.output_format.is_mx_format():
-            golden_tensor = quantize_mx_stimuli(
-                golden_tensor.flatten(), formats.output_format, num_faces
-            ).reshape(golden_tensor.shape)
         buffer_A_combined, tile_cnt = _stage_binary_operands(
             in0, in1, tile_indices, in0.dtype
         )
         buffer_B_dummy = in1
-        disable_format_inference = formats.input_format.is_mx_format()
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = format_variant.unpack_to_dest
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -700,7 +658,6 @@ def _run_max_min(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(
@@ -708,6 +665,7 @@ def _run_max_min(
         run_types=run_types,
         test_config_kwargs=test_config_kwargs,
     )
+    format_variant.apply_formats(configuration.formats_config)
     if is_perf:
         configuration.run(perf_report)
         return
@@ -725,7 +683,6 @@ def _run_max_min(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=max_min_float_dest_acc_for_format,
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
@@ -738,14 +695,13 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU max/min (float + MX)."""
-    formats, dest_acc, implied_math_format, is_max_op, input_dimensions = (
+    """Binary SFPU max/min for the non-redundant floating-point formats."""
+    format_variant, implied_math_format, is_max_op, input_dimensions = (
         formats_dest_acc_implied_math_is_max_input_dims
     )
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
     _run_max_min(
-        formats,
-        dest_acc,
+        format_variant,
         implied_math_format,
         is_max_op,
         input_dimensions,
@@ -763,7 +719,6 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=max_min_int32_dest_acc_for_format,
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
@@ -778,14 +733,14 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
-    formats, dest_acc, _implied_math_format, is_max_op, input_dimensions = (
+    format_variant, _implied_math_format, is_max_op, input_dimensions = (
         formats_dest_acc_implied_math_is_max_input_dims
     )
+    formats = format_variant.formats
     iinfo = torch.iinfo(format_dict[formats.input_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
     _run_max_min(
-        formats,
-        dest_acc,
+        format_variant,
         ImpliedMathFormat.No,
         is_max_op,
         input_dimensions,

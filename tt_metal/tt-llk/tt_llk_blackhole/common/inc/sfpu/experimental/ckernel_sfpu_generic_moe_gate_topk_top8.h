@@ -196,8 +196,8 @@ inline void _generic_moe_gate_top8_sort_to_instance_()
     }
 }
 
-template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort>
-inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale)
+template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort, bool do_extra_scale = false>
+inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     _generic_moe_gate_top8_sort_to_instance_<num_total_experts>();
     _generic_moe_gate_top8_merge_instances_();
@@ -216,7 +216,7 @@ inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale)
 
     if constexpr (normalize)
     {
-        _generic_moe_gate_normalize_<8, generic_moe_gate_scores_tile>(eps, scale);
+        _generic_moe_gate_normalize_<8, generic_moe_gate_scores_tile, do_extra_scale>(eps, scale, extra_scale);
     }
 
     if constexpr (zero_tail)

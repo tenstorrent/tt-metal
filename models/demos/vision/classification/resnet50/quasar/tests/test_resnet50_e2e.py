@@ -14,11 +14,13 @@ Layer4 route (the new part): every layer4 conv runs HEIGHT_SHARDED through the S
 deadlock and the full-N HEIGHT_SHARDED weights overflow. conv2 (3x3, K=144) K-spills the split matmul; the s2
 downsample takes the split via force_1x1_nonmm_split. Validated op-by-op by test_conv2d_layer4_l1_fit.py.
 
-Still host-fallbacked (separate, unfixed bugs -- NOT layer4):
-  * stem conv1 (folded 4x4): DRAM-slice slice_write per-core TILE-pad mismatch.
-  * downsample (all): the layer3_module1 512->1024 s2 @28x28 is BLOCK_SHARDED -> fused conv_bmm 0x19 (the s2
-    downsamples also N-halve in HS). The LAYER4 downsample has a working device path (split), but _CONV_ON_DEVICE
-    is a single global flag, so all downsamples are host-computed here for now.
+FULLY ON DEVICE now (previously host-fallbacked; fixed):
+  * stem conv1 (folded 4x4): the DRAM-slice slice_write per-core/width TILE-pad mismatch is fixed in
+    op_slicing.cpp (recover true 4D shape before slice_write); verified by test_conv2d_stem.py.
+  * maxpool: _MAXPOOL_ON_DEVICE=True after the unpack_tilizeA_B operandB(scaler) BD reprogram fix.
+  * downsamples (all): every s2 1x1 downsample runs HEIGHT_SHARDED through force_1x1_nonmm_split (the SPLIT
+    plain-matmul route), so no N-halving and no fused conv_bmm multi-K hang. layer3_module1 @28 is routed HS
+    on Quasar; verified by test_conv2d_layer3_downsample_split.py.
 
 REQUIRES (until the K-spill 0x10000 has its full real fix): run with the DPRINT mask on --
   unset TT_METAL_LLK_ASSERTS; TT_METAL_DPRINT_CORES=all
@@ -56,10 +58,13 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
     # No TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3 -> the model runs the FULL network including layer4/avgpool/fc.
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # HS convs -> split path (off the fused conv_bmm 0x19)
     os.environ["RESNET_PCC_LOG"] = "1"  # per-op [GOLDENPCC] so the FIRST diverging op is visible on failure
-    # Host-fallback the stem + all downsamples (see module docstring): they have separate unfixed 2-core bugs.
+    # ALL convs now run ON DEVICE (last host bypass removed):
+    #   - stem: DRAM-slice width tile-pad slice_write fixed (op_slicing.cpp); verified by test_conv2d_stem.py.
+    #   - maxpool: _MAXPOOL_ON_DEVICE=True (unpack_tilizeA_B operandB BD fix).
+    #   - downsamples: all take the HEIGHT_SHARDED force_1x1_nonmm_split SPLIT plain-matmul route (Program B
+    #     full GEMM, no N-halving, no fused conv_bmm multi-K hang). layer3_module1 @28 routed HS on Quasar;
+    #     verified by test_conv2d_layer3_downsample_split.py::..._hs_split (and layer2 @56 / layer4 @14).
     _saved_cod = dict(_rn._CONV_ON_DEVICE)
-    _rn._CONV_ON_DEVICE["stem"] = False
-    _rn._CONV_ON_DEVICE["downsample"] = False
     try:
         test_infra = create_test_infra(
             device,

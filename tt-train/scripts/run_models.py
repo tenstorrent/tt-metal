@@ -333,9 +333,13 @@ def main() -> int:
     df_md = df.to_markdown(index=False)
     print("Summary:")
     print(df_md)
-    if "GITHUB_STEP_SUMMARY" in os.environ:
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
-            print(df_md, file=fh)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        if os.path.exists(summary_path):
+            with open(summary_path, "a") as fh:
+                print(df_md, file=fh)
+        else:
+            print(f"GITHUB_STEP_SUMMARY file not found: {summary_path}")
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0
