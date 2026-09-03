@@ -4744,12 +4744,33 @@ def _model_root_for_report(repo_root):
 
 
 def _read_baseline_profile_for_report(repo_root):
-    """The newest baseline profile JSON for THIS run, or None. Used to derive the roofline residual at
-    render time rather than reading a stale artifact."""
+    """THIS RUN's baseline profile, or None. Never another run's.
+
+    It used to rglob the WHOLE runs/ tree and take the newest file by mtime. A run that writes no
+    profile under runs/ -- which this one did not: runs/latest has no profiles/ directory at all --
+    then silently inherited whichever run last did. Measured on voxtral 2026-09-03: the final report
+    priced every stage from a capture taken on 2026-08-28, six days earlier, and because that build
+    ran HiFi4 while this one had been moved to LoFi/HiFi2 by its own fidelity wins, the fidelity
+    ladder marked HiFi4 "in use" on all three stacks and the per-stage roofs moved with it. The LIVE
+    report, which reads the state file, was correct throughout -- so the two reports of one run
+    disagreed, and the wrong one was the final.
+
+    The state file is the owner: perf_mcp writes it for this run and keys it by (model, task), so it
+    cannot be another model's or another run's. runs/latest is a bounded fallback -- it names the run
+    that is happening -- and beyond that None, which renders as "not measured" rather than as a
+    confident picture of a different run.
+    """
     try:
-        _runs = repo_root / PERF_DIR / "runs"
-        cands = sorted(_runs.rglob("baseline_profile.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return json.loads(cands[0].read_text()) if cands else None
+        _m = _perf_mcp()
+        if _m is not None:
+            _p = _m._read_baseline_profile()
+            if _p:
+                return _p
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _one = repo_root / PERF_DIR / "runs" / "latest" / "profiles" / "baseline_profile.json"
+        return json.loads(_one.read_text()) if _one.is_file() else None
     except Exception:  # noqa: BLE001
         return None
 
