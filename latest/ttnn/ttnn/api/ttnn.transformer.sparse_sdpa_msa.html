@@ -7,6 +7,7 @@
   <title>ttnn.transformer.sparse_sdpa_msa &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.sparse_sdpa_msa.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.sparse_sdpa_msa</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.transformer.sparse_sdpa_msa</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.sparse_sdpa_msa.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -363,39 +364,39 @@ QK-norm are applied upstream.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> (<em>ttnn.Tensor</em>) – [1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
-H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.</p></li>
-<li><p><strong>k</strong> (<em>ttnn.Tensor</em>) – [B, n_kv, T, d] TILE bf16|bfloat8_b (B&gt;1 only when indexed)</p></li>
-<li><p><strong>v</strong> (<em>ttnn.Tensor</em>) – [B, n_kv, T, v_dim] TILE bf16|bfloat8_b</p></li>
-<li><p><strong>indices</strong> (<em>ttnn.Tensor</em>) – [1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
-Each row must contain a valid block, and valid block ids must be &lt; T / block_size.</p></li>
+<li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
+H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, n_kv, T, d] TILE bf16|bfloat8_b (B&gt;1 only when indexed)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, n_kv, T, v_dim] TILE bf16|bfloat8_b</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>indices</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
+Each row must contain a valid block, and valid block ids must be &lt; T / block_size.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – defaults to d to the power of -0.5.</p></li>
-<li><p><strong>block_size</strong> (<em>int</em>) – KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.</p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">defaults to d to the power of -0.5.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.</span></p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
-It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.</p></li>
-<li><p><strong>chunk_start_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – global position of query row 0. When set, enforces a token-level
+<li><p><span class="tt-api-param-name"><strong>cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
+It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_start_idx</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">global position of query row 0. When set, enforces a token-level
 causal mask on the diagonal block (the query’s own block); toggling set/unset (None vs int)
-selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.</p></li>
-<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – SP mesh axis used to derive the per-device chunk_start
-(chunk_start_idx + rank*S) under sequence parallelism. Host-side only.</p></li>
-<li><p><strong>block_cyclic_sp_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – when set (with block_cyclic_chunk_local), the K/V cache is
+selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">SP mesh axis used to derive the per-device chunk_start
+(chunk_start_idx + rank*S) under sequence parallelism. Host-side only.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_cyclic_sp_axis</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">when set (with block_cyclic_chunk_local), the K/V cache is
 striped block-cyclic across SP on this mesh axis; the gather remaps each logical block id to its
-physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.</p></li>
-<li><p><strong>block_cyclic_chunk_local</strong> (<em>int</em><em>, </em><em>optional</em>) – per-shard chunk length (chunk_size_global / sp). Required
-iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).</p></li>
+physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_cyclic_chunk_local</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">per-shard chunk length (chunk_size_global / sp). Required
+iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – [1, H, S, v_dim] ROW-MAJOR, dtype = q.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">[1, H, S, v_dim] ROW-MAJOR, dtype = q.</span></p>
 </dd>
 </dl>
 <p>Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet

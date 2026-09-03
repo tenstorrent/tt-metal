@@ -7,6 +7,7 @@
   <title>ttnn.open_device &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.open_device.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -297,11 +300,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.open_device</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.open_device</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.open_device.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -324,18 +325,18 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>device_id</strong> (<em>int</em>) – The device ID to open.</p></li>
-<li><p><strong>l1_small_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the L1 small buffer. Defaults to <cite>ttnn.device.DEFAULT_L1_SMALL_SIZE</cite>.</p></li>
-<li><p><strong>trace_region_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the trace region. Defaults to <cite>ttnn.device.DEFAULT_TRACE_REGION_SIZE</cite>.</p></li>
-<li><p><strong>num_command_queues</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of command queues to open. Defaults to 1.</p></li>
-<li><p><strong>dispatch_core_config</strong> (<em>ttnn.device.DispatchCoreConfig</em><em>, </em><em>optional</em>) – The dispatch core config to use. Defaults to a hardware-specific value.</p></li>
-<li><p><strong>worker_l1_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.</p></li>
+<li><p><span class="tt-api-param-name"><strong>device_id</strong> (<em>int</em>)</span><span class="tt-api-param-desc">The device ID to open.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>l1_small_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The size of the L1 small buffer. Defaults to <cite>ttnn.device.DEFAULT_L1_SMALL_SIZE</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>trace_region_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The size of the trace region. Defaults to <cite>ttnn.device.DEFAULT_TRACE_REGION_SIZE</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_command_queues</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The number of command queues to open. Defaults to 1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dispatch_core_config</strong> (<em>ttnn.device.DispatchCoreConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The dispatch core config to use. Defaults to a hardware-specific value.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>worker_l1_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><em>ttnn.Device</em> – The device with the given device_id.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Device</em></span><span class="tt-api-param-desc">The device with the given device_id.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

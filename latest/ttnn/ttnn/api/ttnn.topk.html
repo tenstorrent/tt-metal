@@ -7,6 +7,7 @@
   <title>ttnn.topk &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.topk.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -327,11 +330,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.topk</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.topk</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.topk.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -361,28 +362,28 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor. Must be on the device.</p></li>
-<li><p><strong>k</strong> (<em>number</em>) – the number of top elements to look for.</p></li>
-<li><p><strong>dim</strong> (<em>number</em>) – the dimension to reduce.</p></li>
-<li><p><strong>largest</strong> (<em>bool</em>) – whether to return the largest or the smallest elements. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>sorted</strong> (<em>bool</em>) – whether to return the elements in sorted order. Defaults to <cite>True</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor. Must be on the device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>number</em>)</span><span class="tt-api-param-desc">the number of top elements to look for.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>number</em>)</span><span class="tt-api-param-desc">the dimension to reduce.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>largest</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">whether to return the largest or the smallest elements. Defaults to <cite>True</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sorted</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">whether to return the elements in sorted order. Defaults to <cite>True</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<em>tuple</em><em>[</em><em>ttnn.Tensor</em><em>, </em><em>ttnn.Tensor</em><em>]</em><em>, </em><em>optional</em>) – A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to (<cite>None</cite>, <cite>None</cite>).</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Core range set to run the operation on. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>indices_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Input tensor containing pre-computed index values. When provided, the operation returns the labels held in this tensor for the selected elements instead of generating positional indices. It must have the same logical shape as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, be in TILE layout, and be UINT16, UINT32, or INT32. Its width must match the resolved output index dtype: a UINT16 tensor is rejected when 32-bit indices are required (reduced dimension above 65535, or a <cite>float32</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>), and a UINT32/INT32 tensor widens the output indices to 32-bit. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – EXPERIMENTAL, best effort only – do not rely on this for correctness. Asks the LLK’s stable bitonic network to break exact-value ties by lowest index rather than by array position. The stable network is an open issue (tenstorrent/tt-metal#33492): it can still return incorrect indices for tied values, and every stable case in the LLK test suite is currently skipped, so a caller passing <cite>True</cite> may get either tie-break. Only Wormhole B0 and Blackhole implement it at all; other architectures raise. Off by default. Defaults to <cite>False</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>tuple</em><em>[</em><em>ttnn.Tensor</em><em>, </em><em>ttnn.Tensor</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to (<cite>None</cite>, <cite>None</cite>).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Core range set to run the operation on. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>indices_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Input tensor containing pre-computed index values. When provided, the operation returns the labels held in this tensor for the selected elements instead of generating positional indices. It must have the same logical shape as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, be in TILE layout, and be UINT16, UINT32, or INT32. Its width must match the resolved output index dtype: a UINT16 tensor is rejected when 32-bit indices are required (reduced dimension above 65535, or a <cite>float32</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>), and a UINT32/INT32 tensor widens the output indices to 32-bit. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">EXPERIMENTAL, best effort only – do not rely on this for correctness. Asks the LLK’s stable bitonic network to break exact-value ties by lowest index rather than by array position. The stable network is an open issue (tenstorrent/tt-metal#33492): it can still return incorrect indices for tied values, and every stable case in the LLK test suite is currently skipped, so a caller passing <cite>True</cite> may get either tie-break. Only Wormhole B0 and Blackhole implement it at all; other architectures raise. Off by default. Defaults to <cite>False</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>tuple[ttnn.Tensor, ttnn.Tensor]</em> – a tuple of (values_tensor, indices_tensor).</p>
+<p><span class="tt-api-param-name"><em>tuple[ttnn.Tensor, ttnn.Tensor]</em></span><span class="tt-api-param-desc">a tuple of (values_tensor, indices_tensor).</span></p>
 </dd>
 </dl>
 <div class="admonition note">

@@ -7,6 +7,7 @@
   <title>ttnn.transformer.scaled_dot_product_attention_decode &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.scaled_dot_product_attention_decode.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.scaled_dot_product_attention_decode</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.transformer.scaled_dot_product_attention_decode</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.scaled_dot_product_attention_decode.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -361,31 +362,31 @@ The implementation is Flash-Decode and it currently only supports MQA on decodin
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>) – the input tensor [1 x b x nh x dh]</p></li>
-<li><p><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
-<li><p><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor [1 x b x nh x dh]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor [b x nkv x   s x dh]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor [b x nkv x   s x dh]</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>is_causal</strong> (<em>bool</em>) – whether the attention is is_causal. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>attn_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the input tensor [b x 1 x s x s]. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos</strong> (<em>List</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – list of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – [b] tensor of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of sliding window for sliding window attention. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>share_cache</strong> (<em>bool</em><em>, </em><em>optional</em>) – KV cache sharing across batch for decode. <cite>True</cite> enables, <cite>False</cite> disables. Defaults to <cite>None</cite> (distinct program-cache key from explicit <cite>False</cite>).</p></li>
+<li><p><span class="tt-api-param-name"><strong>is_causal</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">whether the attention is is_causal. Defaults to <cite>True</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>attn_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the input tensor [b x 1 x s x s]. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cur_pos</strong> (<em>List</em><em> of </em><em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">list of integers of length b. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cur_pos_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[b] tensor of integers of length b. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The size of sliding window for sliding window attention. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>share_cache</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">KV cache sharing across batch for decode. <cite>True</cite> enables, <cite>False</cite> disables. Defaults to <cite>None</cite> (distinct program-cache key from explicit <cite>False</cite>).</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor [1 x b x pnh x dh].</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor [1 x b x pnh x dh].</span></p>
 </dd>
 </dl>
 <p>“Accepts a <cite>SDPAMultiCoreProgramConfig</cite> which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over <cite>b</cite> and K/V/Mask’s <cite>s</cite> dimension.”

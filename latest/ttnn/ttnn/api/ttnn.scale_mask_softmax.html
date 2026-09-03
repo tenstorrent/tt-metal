@@ -7,6 +7,7 @@
   <title>ttnn.scale_mask_softmax &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.scale_mask_softmax.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -324,11 +327,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.scale_mask_softmax</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.scale_mask_softmax</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.scale_mask_softmax.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -362,25 +363,25 @@ are applied before the softmax operation for efficiency.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor to process.</p></li>
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Scaling factor to multiply with input tensor.</p></li>
-<li><p><strong>mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Attention mask tensor to add to scaled input.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">The input tensor to process.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Scaling factor to multiply with input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Attention mask tensor to add to scaled input.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. If not provided, inherits from input tensor.</p></li>
-<li><p><strong>is_causal_mask</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether the mask is a causal mask. Defaults to False.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation.</p></li>
-<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to True.</p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the output tensor. If not provided, inherits from input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>is_causal_mask</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Whether the mask is a causal mask. Defaults to False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Compute kernel configuration for the operation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Whether to use numerically stable softmax computation. Defaults to True.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – Output tensor with the fused scale-mask-softmax operation applied.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">Output tensor with the fused scale-mask-softmax operation applied.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

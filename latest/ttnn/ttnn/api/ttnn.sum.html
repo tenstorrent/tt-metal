@@ -7,6 +7,7 @@
   <title>ttnn.sum &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.sum.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -327,11 +330,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.sum</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.sum</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.sum.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -354,28 +355,28 @@ If no dimension is provided, sum is computed over all dimensions yielding a sing
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor. Must be on the device.</p></li>
-<li><p><strong>dim</strong> (<em>number</em><em> or </em><em>tuple</em>) – dimension value(s) to reduce over.</p></li>
-<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – keep the original dimension size(s). Defaults to <cite>False</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor. Must be on the device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>number</em><em> or </em><em>tuple</em>)</span><span class="tt-api-param-desc">dimension value(s) to reduce over.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">keep the original dimension size(s). Defaults to <cite>False</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>) – A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.</p></li>
-<li><p><strong>correction</strong> (<em>bool</em><em>, </em><em>optional</em>) – <strong>Deprecated.</strong> This parameter is deprecated and will be removed in a future release. It has no impact on the result.</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Subcore grids to use for the operation. Defaults to <cite>None</cite>, which will use all cores.</p></li>
-<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – FLOAT32 only. <cite>False</cite> (default) uses the accurate SFPU path (full float32 accumulation); <cite>True</cite> uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with <cite>fp32_dest_acc_en=True</cite> and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.</p></li>
-<li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – layout of the output tensor. Defaults to <cite>None</cite>, which keeps the layout the chosen path produces naturally (see the Note below). <cite>ttnn.TILE_LAYOUT</cite> or <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.</p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Compute kernel configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>correction</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc"><strong>Deprecated.</strong> This parameter is deprecated and will be removed in a future release. It has no impact on the result.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Subcore grids to use for the operation. Defaults to <cite>None</cite>, which will use all cores.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">FLOAT32 only. <cite>False</cite> (default) uses the accurate SFPU path (full float32 accumulation); <cite>True</cite> uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with <cite>fp32_dest_acc_en=True</cite> and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">layout of the output tensor. Defaults to <cite>None</cite>, which keeps the layout the chosen path produces naturally (see the Note below). <cite>ttnn.TILE_LAYOUT</cite> or <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

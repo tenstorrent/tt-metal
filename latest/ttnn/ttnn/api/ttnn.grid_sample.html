@@ -7,6 +7,7 @@
   <title>ttnn.grid_sample &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.grid_sample.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -314,11 +317,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.grid_sample</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.grid_sample</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.grid_sample.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -343,10 +344,8 @@ and implementing spatial transformer networks.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor of shape (N, H_in, W_in, C) - channel last format</p></li>
-<li>
-<p><strong>grid</strong> (<em>ttnn.Tensor</em>) – </p>
-<p>Sampling grid with flexible batching support.</p>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor of shape (N, H_in, W_in, C) - channel last format</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>grid</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc"><p>Sampling grid with flexible batching support.</p>
 <ul>
 <li>
 <p>Standard mode (use_precomputed_grid=False):</p>
@@ -373,36 +372,30 @@ a larger precomputed grid from (N, H_grid, W_grid*K, 6) to (N, H_grid, W_grid, 6
 </ul>
 </li>
 </ul>
-</li>
+</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>mode</strong> (<em>str</em>) – Interpolation mode.</p></li>
-<li><p><strong>padding_mode</strong> (<em>str</em>) – How to handle out-of-bounds coordinates. Currently only “zeros” is supported.</p></li>
-<li><p><strong>align_corners</strong> (<em>bool</em>) – Whether to align corners when mapping normalized coordinates to pixel indices.</p></li>
-<li>
-<p><strong>use_precomputed_grid</strong> (<em>bool</em>) – </p>
-<p>Whether to use precomputed grid coordinates.</p>
+<li><p><span class="tt-api-param-name"><strong>mode</strong> (<em>str</em>)</span><span class="tt-api-param-desc">Interpolation mode.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>padding_mode</strong> (<em>str</em>)</span><span class="tt-api-param-desc">How to handle out-of-bounds coordinates. Currently only “zeros” is supported.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>align_corners</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">Whether to align corners when mapping normalized coordinates to pixel indices.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_precomputed_grid</strong> (<em>bool</em>)</span><span class="tt-api-param-desc"><p>Whether to use precomputed grid coordinates.</p>
 <p>When False (default): grid should be normalized coordinates in [-1, 1]</p>
 <p>When True: grid should be preprocessed using ttnn.prepare_grid_sample_grid()</p>
-</li>
-<li>
-<p><strong>batch_output_channels</strong> (<em>bool</em>) – </p>
-<p>Controls how grid batching factor K affects output dimensions.</p>
+</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>batch_output_channels</strong> (<em>bool</em>)</span><span class="tt-api-param-desc"><p>Controls how grid batching factor K affects output dimensions.</p>
 <p>When False (default): extend W dimension - output shape (N, H_grid, W_grid*K, C).
 The K coordinate sets produce K spatial outputs, expanding the width dimension.</p>
 <p>When True: batch output channels - output shape (N, H_grid, W_grid, C*K).
 The K coordinate sets produce K channel groups, expanding the channel dimension.</p>
 <p>Setting this argument to True requires for K (grid batching factor) to be larger than one.
 Note: K doesn’t disappear when batch_output_channels=False, it just gets distributed to the width dimension.</p>
-</li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration for the operation.</p></li>
-<li>
-<p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p>
-<p>Compute kernel configuration.
+</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output memory configuration for the operation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc"><p>Compute kernel configuration.
 Notable fields:</p>
 <ul>
 <li><p>fp32_dest_acc_en: Use FP32 destination accumulation (higher precision; halves DEST tile capacity).</p></li>
@@ -410,7 +403,7 @@ Notable fields:</p>
 fp32_dest_acc_en requires it).</p></li>
 </ul>
 <p>Defaults to <cite>None</cite> (arch-specific defaults).</p>
-</li>
+</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -422,8 +415,8 @@ fp32_dest_acc_en requires it).</p></li>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>When batch_output_channels=False (default): (N, H_grid, W_grid*K, C) - W dimension extended</p></li>
-<li><p>When batch_output_channels=True: (N, H_grid, W_grid, C*K) - channels batched</p></li>
+<li><p><span class="tt-api-param-name">When batch_output_channels=False (default): (N, H_grid, W_grid*K, C)</span><span class="tt-api-param-desc">W dimension extended</span></p></li>
+<li><p><span class="tt-api-param-name">When batch_output_channels=True: (N, H_grid, W_grid, C*K)</span><span class="tt-api-param-desc">channels batched</span></p></li>
 </ul>
 <p>Where K is the grid batching factor.</p>
 </div>

@@ -7,6 +7,7 @@
   <title>ttnn.transformer.chunk_gated_delta_rule &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.chunk_gated_delta_rule.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.chunk_gated_delta_rule</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.transformer.chunk_gated_delta_rule</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.chunk_gated_delta_rule.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -359,41 +360,41 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> (<em>ttnn.Tensor</em>) – [B, T, H,  K]</p></li>
-<li><p><strong>k</strong> (<em>ttnn.Tensor</em>) – [B, T, H,  K]</p></li>
-<li><p><strong>v</strong> (<em>ttnn.Tensor</em>) – [B, T, HV, V]</p></li>
-<li><p><strong>g</strong> (<em>ttnn.Tensor</em>) – [B, T, HV]   log-space decay</p></li>
-<li><p><strong>beta</strong> (<em>ttnn.Tensor</em>) – [B, T, HV]</p></li>
+<li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV, V]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]   log-space decay</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – defaults to K**-0.5.</p></li>
-<li><p><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – [B, HV, K, V].</p></li>
-<li><p><strong>output_final_state</strong> (<em>bool</em>) – default False.</p></li>
-<li><p><strong>chunk_size</strong> (<em>int</em>) – default 64.</p></li>
-<li><p><strong>use_qk_l2norm</strong> (<em>bool</em>) – default False.</p></li>
-<li><p><strong>output_head_major</strong> (<em>bool</em>) – default False. When True, o is returned head-major as
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">defaults to K**-0.5.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[B, HV, K, V].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_final_state</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">default 64.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_qk_l2norm</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_head_major</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False. When True, o is returned head-major as
 [B*HV, T, V] in TILE layout (skips the token&lt;-&gt;head permute round-trip);
-otherwise token-major [B, T, HV, V] ROW_MAJOR.</p></li>
+otherwise token-major [B, T, HV, V] ROW_MAJOR.</span></p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – </p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>ones</strong> (<em>eye</em><em>, </em><a class="reference internal" href="ttnn.tril.html#ttnn.tril" title="ttnn.tril"><em>tril</em></a><em>,</em>) – [1,1,C,C] fp32 TILE constant tiles (identity,
+<li><p><span class="tt-api-param-name"><strong>ones</strong> (<em>eye</em><em>, </em><a class="reference internal" href="ttnn.tril.html#ttnn.tril" title="ttnn.tril"><em>tril</em></a><em>,</em>)</span><span class="tt-api-param-desc">[1,1,C,C] fp32 TILE constant tiles (identity,
 lower-triangular ones, all-ones). Caller-supplied so they are device-resident before
 trace capture and their lifetime is device-scoped. Traced callers MUST pass these
 (an internal build does a host upload, illegal under trace); if omitted they are
-built eagerly.</p></li>
-<li><p><strong>masks</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
-tril/ones.</p></li>
+built eagerly.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>masks</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
+tril/ones.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>tuple[ttnn.Tensor, Optional[ttnn.Tensor]]</em> –     o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-final_state [B, HV, K, V] (if output_final_state).</p>
+<p><span class="tt-api-param-name"><em>tuple[ttnn.Tensor, Optional[ttnn.Tensor]]</em></span><span class="tt-api-param-desc">    o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
+final_state [B, HV, K, V] (if output_final_state).</span></p>
 </dd>
 </dl>
 </dd>

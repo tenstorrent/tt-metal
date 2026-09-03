@@ -7,6 +7,7 @@
   <title>ttnn.prepare_conv_transpose2d_weights &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.prepare_conv_transpose2d_weights.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -321,11 +324,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.prepare_conv_transpose2d_weights</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.prepare_conv_transpose2d_weights</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.prepare_conv_transpose2d_weights.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -349,26 +350,26 @@ The exact format of the weights and bias tensors depends on the input tensor par
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – the weight tensor in PyTorch Conv2d format.</p></li>
-<li><p><strong>input_memory_config</strong> (<em>ttnn.MemoryConfig</em>) – the memory configuration for the input tensor.</p></li>
-<li><p><strong>input_layout</strong> (<em>ttnn.Tensor</em>) – the layout of the input tensor.</p></li>
-<li><p><strong>weights_format</strong> (<em>ttnn.Tensor</em>) – the format of the weights tensor. Currently only supports IOHW. (in_channels, out_channels, kernel_height, kernel_width)</p></li>
-<li><p><strong>int</strong> – in_channels:  number of input channels.</p></li>
-<li><p><strong>int</strong> – out_channels:  number of output channels.</p></li>
-<li><p><strong>int</strong> – batch_size:  batch size.</p></li>
-<li><p><strong>int</strong> – input_height:  height of the input tensor.</p></li>
-<li><p><strong>int</strong> – input_width:  width of the input tensor.</p></li>
-<li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>  , </em><em>int</em><em>]</em>) – size of the convolving kernel.</p></li>
-<li><p><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – stride of the cross-correlation.</p></li>
-<li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
-<li><p><strong>output_padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – additional size added to one side of each dimension in the output. Must match the value passed to conv_transpose2d so weight preparation and the op agree on the output size and slicing. Default: [0, 0].</p></li>
-<li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – spacing between kernel elements.</p></li>
-<li><p><strong>has_bias</strong> (<em>bool</em>) – whether the convolution has a bias term.</p></li>
-<li><p><strong>groups</strong> (<em>int</em>) – number of blocked connections from input channels to output channels.</p></li>
-<li><p><strong>input_dtype</strong> (<em>ttnn.DataType</em>) – the data type of the input tensor.</p></li>
-<li><p><strong>output_dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>None</em>) – the data type of the output tensor. Default None (uses input_dtype)</p></li>
-<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. Default: None</p></li>
-<li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – configuration for compute kernel. Default: None</p></li>
+<li><p><span class="tt-api-param-name"><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the weight tensor in PyTorch Conv2d format.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_memory_config</strong> (<em>ttnn.MemoryConfig</em>)</span><span class="tt-api-param-desc">the memory configuration for the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_layout</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the layout of the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weights_format</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the format of the weights tensor. Currently only supports IOHW. (in_channels, out_channels, kernel_height, kernel_width)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>int</strong></span><span class="tt-api-param-desc">in_channels:  number of input channels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>int</strong></span><span class="tt-api-param-desc">out_channels:  number of output channels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>int</strong></span><span class="tt-api-param-desc">batch_size:  batch size.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>int</strong></span><span class="tt-api-param-desc">input_height:  height of the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>int</strong></span><span class="tt-api-param-desc">input_width:  width of the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>  , </em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">size of the convolving kernel.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">stride of the cross-correlation.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>)</span><span class="tt-api-param-desc">zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">additional size added to one side of each dimension in the output. Must match the value passed to conv_transpose2d so weight preparation and the op agree on the output size and slicing. Default: [0, 0].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">spacing between kernel elements.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>has_bias</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">whether the convolution has a bias term.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>groups</strong> (<em>int</em>)</span><span class="tt-api-param-desc">number of blocked connections from input channels to output channels.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_dtype</strong> (<em>ttnn.DataType</em>)</span><span class="tt-api-param-desc">the data type of the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>None</em>)</span><span class="tt-api-param-desc">the data type of the output tensor. Default None (uses input_dtype)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>)</span><span class="tt-api-param-desc">configuration for convolution. Default: None</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>)</span><span class="tt-api-param-desc">configuration for compute kernel. Default: None</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>

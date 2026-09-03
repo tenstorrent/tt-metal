@@ -7,6 +7,7 @@
   <title>ttnn.narrow &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.narrow.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -356,11 +359,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.narrow</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.narrow</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.narrow.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -398,16 +399,16 @@ full shards, or spans multiple shards with the same page offset.</p></li>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>*</em>) – Input tensor. Must be on device.</p></li>
-<li><p><strong>dim</strong> (<em>*</em>) – Dimension along which to narrow. Supports negative indexing.</p></li>
-<li><p><strong>start</strong> (<em>*</em>) – Starting index (inclusive). Supports negative indexing.</p></li>
-<li><p><strong>length</strong> (<em>*</em>) – Length of the narrowed dimension. Must be &gt; 0.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Input tensor. Must be on device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Dimension along which to narrow. Supports negative indexing.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>start</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Starting index (inclusive). Supports negative indexing.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>length</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Length of the narrowed dimension. Must be &gt; 0.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><em>ttnn.Tensor</em> – A view of the input tensor with <code class="docutils literal notranslate"><span class="pre">shape[dim]</span> <span class="pre">==</span> <span class="pre">length</span></code>.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">A view of the input tensor with <code class="docutils literal notranslate"><span class="pre">shape[dim]</span> <span class="pre">==</span> <span class="pre">length</span></code>.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

@@ -7,6 +7,7 @@
   <title>Low Level Kernels &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/sfpu/llk.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -291,12 +294,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-      <li class="breadcrumb-item active">Low Level Kernels</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
+  <li class="breadcrumb-item active">Low Level Kernels</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/sfpu/llk.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -817,11 +817,14 @@ operands. For the integer operations, the second operand may also be a
 <p>The modifying variants, <code class="docutils literal notranslate"><span class="pre">OP=</span></code>, are available.</p>
 <p>Conditional operators are provided – <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>,
 <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> &amp; <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>. These produce a <code class="docutils literal notranslate"><span class="pre">vBool</span></code> result, which may be used
-directly or indirectly in a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> conditional. Both operands must
+directly in a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> conditional. Both operands must
 be related vector types, or the second operand may be an appropriate
 scalar operator, or, for integral comparisons, may be a <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type.</p>
 <p><code class="docutils literal notranslate"><span class="pre">vBool``s</span> <span class="pre">may</span> <span class="pre">be</span> <span class="pre">combined</span> <span class="pre">with</span> <span class="pre">``&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code> and <code class="docutils literal notranslate"><span class="pre">!</span></code>
 operations. Note that these are not short-circuiting.</p>
+<p>You may create predicate functions that return a <code class="docutils literal notranslate"><span class="pre">vBool</span></code>, but they
+must be invoked inside a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> (or <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>) condition.  Do not
+store the return value and then interrogate it later.</p>
 <p>Note: There is currently a compiler defect regarding signed and
 unsigned integer comparisons, where ordering comparisons are only
 correct when the two operands are within 2^31 of eachother. Also,
@@ -1030,39 +1033,83 @@ hyperbolic tangents. <code class="docutils literal notranslate"><span class="pre
 Not available on Wormhole, and <cite>sqrt</cite> and <cite>tanh</cite> not available on
 Blackhole.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">lut</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l1</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l2</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">lut_sign</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l1</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l2</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1">// Wormhole, Blackhole</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">lut</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vLut8si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">vLut8si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">vLut8si</span><span class="w"> </span><span class="n">si2</span><span class="p">,</span>
+<span class="w">           </span><span class="n">LutSign</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">lut</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16si</span><span class="w"> </span><span class="n">si2</span><span class="p">,</span>
+<span class="w">           </span><span class="n">LutSign</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">lut</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vLut32si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">vLut32si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">vLut132si</span><span class="w"> </span><span class="n">si2</span><span class="p">,</span>
+<span class="w">           </span><span class="n">LutSign</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="n">LutMode</span><span class="w"> </span><span class="n">Mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp16x6_HWM3</span><span class="o">&gt;</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="n">lut</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16ss</span><span class="w"> </span><span class="n">s01</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16ii</span><span class="w"> </span><span class="n">i01</span><span class="p">,</span>
+<span class="w">            </span><span class="n">vLut16ss</span><span class="w"> </span><span class="n">s23</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16ii</span><span class="w"> </span><span class="n">i23</span><span class="p">,</span>
+<span class="w">            </span><span class="n">vLut16ss</span><span class="w"> </span><span class="n">s45</span><span class="p">,</span><span class="w"> </span><span class="n">vLut16ii</span><span class="w"> </span><span class="n">i45</span><span class="p">,</span>
+<span class="w">            </span><span class="n">LutSign</span><span class="w"> </span><span class="n">signedness</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
+
+<span class="c1">// Quasar</span>
+<span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp8x3</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lut_init</span><span class="w"> </span><span class="p">(</span><span class="n">sLut8si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">sLut8si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">sLut8si</span><span class="w"> </span><span class="n">si2</span><span class="p">);</span>
+<span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp16x3</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lut_init</span><span class="w"> </span><span class="p">(</span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si2</span><span class="p">);</span>
+<span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp32x3</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lut_init</span><span class="w"> </span><span class="p">(</span><span class="n">sLut32si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">sLut32si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span><span class="w"> </span><span class="n">sLut32si</span><span class="w"> </span><span class="n">si2</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="n">LutMode</span><span class="w"> </span><span class="n">Mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp16x6_HWM3</span><span class="o">&gt;</span>
+<span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">Mode</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lut_init</span><span class="w"> </span><span class="p">(</span><span class="n">sLut16ss</span><span class="w"> </span><span class="n">s01</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16ii</span><span class="w"> </span><span class="n">i01</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">sLut16ss</span><span class="w"> </span><span class="n">s23</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16ii</span><span class="w"> </span><span class="n">i23</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">sLut16ss</span><span class="w"> </span><span class="n">s45</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16ii</span><span class="w"> </span><span class="n">i45</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="n">LutMode</span><span class="w"> </span><span class="n">Mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutMode</span><span class="o">::</span><span class="n">Fp16x6_HWM3</span><span class="o">&gt;</span>
+<span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">Mode</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lut_init</span><span class="w"> </span><span class="p">(</span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si0</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si1</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si2</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si3</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si4</span><span class="p">,</span><span class="w"> </span><span class="n">sLut16si</span><span class="w"> </span><span class="n">si5</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="n">LutMode</span><span class="w"> </span><span class="n">Mode</span><span class="o">&gt;</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="n">lut</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">LutSign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="n">LutMode</span><span class="w"> </span><span class="n">Mode</span><span class="o">&gt;</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="n">lut</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">LutCookie</span><span class="o">&lt;</span><span class="n">Mode</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">LutSign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LutSign</span><span class="o">::</span><span class="n">Retain</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">l0</span></code>, <code class="docutils literal notranslate"><span class="pre">l1</span></code>, <code class="docutils literal notranslate"><span class="pre">l2</span></code> each contain 2 8-bit floating point values <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> with <code class="docutils literal notranslate"><span class="pre">A</span></code> in bits 15:8 and <code class="docutils literal notranslate"><span class="pre">B</span></code> in bits 7:0. The 8-bit format is:</p>
+<p>Compute a multiply-add driven by a 3 or 6-entry lookup table.  Each table entry
+consists of a slope (<code class="docutils literal notranslate"><span class="pre">s</span></code>) and an intercept (<code class="docutils literal notranslate"><span class="pre">i</span></code>). The absolute value of the
+incoming <cite>v</cite> determines which lookup table entry to use.</p>
+<p>The three-entry tables use the first entry for values &lt;1.0, otherwise
+the second entry for &lt;2.0 and the third entry otherwise. The six entry
+tables use &lt;0.5, &lt;1.0, &lt;1.5, &lt;2.0 as cutoffs for the first 4 entries
+and then either &lt;3.0 or &lt;4.0 for the 5th entry, otherwise the 6th
+entry is used. <code class="docutils literal notranslate"><span class="pre">LutMode::Fp16x6_HWM3</span></code> uses 3.0 and
+<code class="docutils literal notranslate"><span class="pre">LutMode::Fp16x6_HWM4</span></code> uses 4.0.</p>
+<p>The table entries themselves are created from pairs floating point or
+integer values representing either the slope and intercept, a pair of
+slopes or a pair of intercepts. Both scalar (<code class="docutils literal notranslate"><span class="pre">s</span></code>) and vector (<code class="docutils literal notranslate"><span class="pre">v</span></code>)
+variants are available. Floating point values are converted after
+rounding to nearest representable value, with ties rounding away from
+zero. Integer values are reinterpretted directly as the encoded
+coefficients. (This arrangement is determined by the underlying
+instruction, <code class="docutils literal notranslate"><span class="pre">sfplut</span></code> or <code class="docutils literal notranslate"><span class="pre">sfplut32fp</span></code>.)</p>
+<p>The optional <code class="docutils literal notranslate"><span class="pre">LutSign</span></code> operand determines whether the result sign is
+copied from the source value (<code class="docutils literal notranslate"><span class="pre">LutSign::Retain</span></code>), or is that
+determined by the computation (<code class="docutils literal notranslate"><span class="pre">LutSign::Update</span></code>).</p>
+<p>The Quasar API uses an initialization and evaluation scheme, which
+matches how the hardware holds the constant table. It makes more use
+of the <code class="docutils literal notranslate"><span class="pre">LutMode</span></code> enumeration, whose values are:</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>0xFF represents the value 0, otherwise</p></li>
-<li><p>bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fp8x3</span></code>       // 3 entry 8-bit constants</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fp16x3</span></code>      // 3 entry 16-bit constants</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fp32x3</span></code>      // 3 entry 32-bit constants</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fp16x6_HWM3</span></code> // 6 entry 16-bit constants cutoff 3.0</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fp16x6_HWM4</span></code> // 6 entry 16-bit constants cutoff 4.0</p></li>
 </ul>
 </div>
 </blockquote>
-<p>Floating point representations of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> (19-bit on GS and 32-bit on WH) are constructed by:</p>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p>Using the sign bit</p></li>
-<li><p>Generating an 8-bit exponent as (127 – exponent_extender)</p></li>
-<li><p>Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s</p></li>
-</ul>
-</div>
-</blockquote>
-<p><code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> are selected from one of <code class="docutils literal notranslate"><span class="pre">l0</span></code>, <code class="docutils literal notranslate"><span class="pre">l1</span></code> or <code class="docutils literal notranslate"><span class="pre">l2</span></code> based on the value in <code class="docutils literal notranslate"><span class="pre">v</span></code> as follows:</p>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">l0</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> &lt; 0</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">l1</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> == 0</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">l2</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> &gt; 0</p></li>
-</ul>
-</div>
-</blockquote>
+<p>The Quasar 16-bit 6-entry initialization may be done in two forms,
+either passing <code class="docutils literal notranslate"><span class="pre">ss</span></code> and <code class="docutils literal notranslate"><span class="pre">ii</span></code> pairs as with the Blackhole and
+Wormhole scheme, or passing a sequence of <code class="docutils literal notranslate"><span class="pre">si</span></code> values, which more
+closely matches the table format and the 3-entry routines.  The
+intialization routines return an empty-class cookie, whose only use is
+to convey type information implicitly to the <code class="docutils literal notranslate"><span class="pre">lut</span></code> evaluation
+routine.  It may be ignored, with the loss of consistency checking, if
+one uses the cookieless evaluator.</p>
+<p>Note that the 8- and 16-bit formats use a bespoke representation, and
+the 8 bit format in particular has a range of (-2.0, +2.0).</p>
+<p>On Quasar, use of these routines conflicts with use of the <code class="docutils literal notranslate"><span class="pre">vConst</span></code>
+constants.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">Vec</span><span class="w"> </span><span class="n">subvec_shflror1</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 <span class="n">Vec</span><span class="w"> </span><span class="n">subvec_shflshr1</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>

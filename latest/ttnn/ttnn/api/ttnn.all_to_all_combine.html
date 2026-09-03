@@ -7,6 +7,7 @@
   <title>ttnn.all_to_all_combine &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.all_to_all_combine.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -321,11 +324,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.all_to_all_combine</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.all_to_all_combine</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.all_to_all_combine.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -356,29 +357,29 @@ T = total number of tokens = B * S</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor containing the tokens to combine. The tensor is expected to be [B, S, 1, H] ([B/D[A], S, 1, H] per device) where each row is a token. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.</p></li>
-<li><p><strong>expert_metadata_tensor</strong> (<em>ttnn.Tensor</em>) – the expert metadata tensor containing the ranking of the experts for each token. The tensor is expected to be [B, S, 1, K] ([B/D[A], S, 1, K] per device) where each value in the row is the expert index inside the mapping table. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.</p></li>
-<li><p><strong>expert_mapping_tensor</strong> (<em>ttnn.Tensor</em>) – the one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [D, 1, E, D] ([1, 1, E, D] per device) where each value in the row is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor containing the tokens to combine. The tensor is expected to be [B, S, 1, H] ([B/D[A], S, 1, H] per device) where each row is a token. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>expert_metadata_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the expert metadata tensor containing the ranking of the experts for each token. The tensor is expected to be [B, S, 1, K] ([B/D[A], S, 1, K] per device) where each value in the row is the expert index inside the mapping table. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>expert_mapping_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [D, 1, E, D] ([1, 1, E, D] per device) where each value in the row is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>local_reduce</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether or not the tokens are locally reduce prior to combining. The expectation is that the expert output tokens corresponding to the dispatched token are already reduced. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>num_links</strong> (<em>number</em><em>, </em><em>optional</em>) – the number of cross-device links to use for combining the tokens. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – the topology to use when combining the tokens. Defaults to <cite>None</cite>, for which the topology is determined automatically.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration for the output tensors. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – the cluster axis to combine along. Defaults to <cite>None</cite>, though we assert out when it is not specified.</p></li>
-<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – the subdevice id for the subdevice on which we allocate the worker cores. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the optional output tensor to use for the combined tokens. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_shard_dim</strong> (<em>int</em><em>, </em><em>optional</em>) – the dimension to shard the output tokens along. Defaults to <cite>1</cite>, which is the batch dimension.</p></li>
+<li><p><span class="tt-api-param-name"><strong>local_reduce</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">whether or not the tokens are locally reduce prior to combining. The expectation is that the expert output tokens corresponding to the dispatched token are already reduced. Defaults to <cite>False</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_links</strong> (<em>number</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the number of cross-device links to use for combining the tokens. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the topology to use when combining the tokens. Defaults to <cite>None</cite>, for which the topology is determined automatically.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output memory configuration for the output tensors. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the cluster axis to combine along. Defaults to <cite>None</cite>, though we assert out when it is not specified.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the subdevice id for the subdevice on which we allocate the worker cores. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the optional output tensor to use for the combined tokens. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_shard_dim</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the dimension to shard the output tokens along. Defaults to <cite>1</cite>, which is the batch dimension.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.</span></p>
 </dd>
 </dl>
 <p>Supported dtypes and layouts:</p>

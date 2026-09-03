@@ -7,6 +7,7 @@
   <title>tilize &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/tilize.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -291,13 +294,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">tilize</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li><li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+  <li class="breadcrumb-item active">tilize</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/tilize.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -316,44 +315,12 @@
 <p>Initializes the tilize operation. Should be called once at the beginning of a kernel.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>Input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>block  </p></td>
-<td><p>Size of tile block to work on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt; 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>Output circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">block  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -365,60 +332,14 @@
 <dd>
 <p>Short initializes the tilize operation with reduction.</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>neginf_srcA  </p></td>
-<td><p>NegInf source A flag  </p></td>
-<td><p>bool  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>zero_srcA_reduce  </p></td>
-<td><p>Zero source A for reduce flag  </p></td>
-<td><p>bool  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb0  </p></td>
-<td><p>Input circular buffer A identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb1_scaler  </p></td>
-<td><p>Input circular buffer for scaler  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>block  </p></td>
-<td><p>Size of tile block to work on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt; 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">neginf_srcA  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">zero_srcA_reduce  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb0  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb1_scaler  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">block  </span></p>
+</div>
 
 <p>Unpack face geometry for operand A comes from circular-buffer metadata (JIT unpack_tile_* arrays), e.g. set_unpack_face_geometry / set_tile_dims on the host. </p>
 </dd>
@@ -432,52 +353,13 @@
 <p>Re-initializes the tilize operation and reconfigures the unpacker with CB data type.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>old_icb  </p></td>
-<td><p>Previous input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>new_icb  </p></td>
-<td><p>New input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>block  </p></td>
-<td><p>Size of tile block to work on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt; 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>Output circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">old_icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">new_icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">block  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -490,60 +372,14 @@
 <p>Performs the tilize operation on a block.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>Input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>block  </p></td>
-<td><p>Size of tile block to work on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt; 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>Output circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>input_tile_index  </p></td>
-<td><p>Index of the input tile in the icb  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt;= 0  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>output_tile_index  </p></td>
-<td><p>Index of the output tile in the ocb  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt;= 0  </p></td>
-<td><p>False  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">block  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">input_tile_index  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">output_tile_index  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -556,84 +392,17 @@
 <p>Unpacks and tilizes a block from two input CBs.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>neginf_srcA  </p></td>
-<td><p>NegInf source A flag  </p></td>
-<td><p>bool  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>reload_srcB  </p></td>
-<td><p>Reload source B flag  </p></td>
-<td><p>std::uint32_t  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>zero_srcA  </p></td>
-<td><p>Zero source A flag  </p></td>
-<td><p>bool  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Template  </p></td>
-<td><p>zero_srcA_reduce  </p></td>
-<td><p>Zero source A for reduce flag  </p></td>
-<td><p>bool  </p></td>
-<td><p>true/false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb0  </p></td>
-<td><p>Input circular buffer A identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb1  </p></td>
-<td><p>Input circular buffer B identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>block  </p></td>
-<td><p>Size of tile block to work on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt; 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>tile_idx_b  </p></td>
-<td><p>Tile index for source B  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>&gt;= 0  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">neginf_srcA  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">reload_srcB  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">zero_srcA  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Template  </span><span class="tt-api-param-desc">zero_srcA_reduce  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb0  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb1  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">block  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">tile_idx_b  </span></p>
+</div>
 
 <p>Operand A face geometry is read from circular-buffer unpack metadata. </p>
 </dd>
@@ -648,36 +417,11 @@
 <p>NOTE: This function is not in line with our programming model, and will be removed by the end of 2025 as a part of tt-metal#22904. NOTE: Does nothing on Quasar because there is no persistent tilize unpack/pack state to undo.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>Input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>Output circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+</div>
 
 </dd>
 </dl>
@@ -691,44 +435,12 @@
 <p>NOTE: This function is not in line with our programming model, and will be removed by the end of 2025 as a part of tt-metal#22904.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>old_icb  </p></td>
-<td><p>Previous input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>new_icb  </p></td>
-<td><p>New input circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>Output circular buffer identifier  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Param Type  </span><span class="tt-api-param-desc">Name  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">old_icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">new_icb  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">Function  </span><span class="tt-api-param-desc">ocb  </span></p>
+</div>
 
 </dd>
 </dl>

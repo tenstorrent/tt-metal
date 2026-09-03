@@ -7,6 +7,7 @@
   <title>noc_async_read &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
@@ -289,13 +292,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
-          <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
-      <li class="breadcrumb-item active">noc_async_read</li>
+  <li><a href="../../../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../../index.html">APIs</a></li><li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li><li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
+  <li class="breadcrumb-item active">noc_async_read</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_async_read.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -315,54 +314,14 @@
 <p>The source node can be either a DRAM bank, a Tensix core or a PCIe controller.</p>
 <p>Return value: None</p>
 <p></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Data type  </p></th>
-<th class="head"><p>Valid range  </p></th>
-<th class="head"><p>required  </p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>src_noc_addr  </p></td>
-<td><p>Encoding of the source NOC location (x,y)+address  </p></td>
-<td><p>uint64_t  </p></td>
-<td><p>Results of <em>get_noc_addr</em> calls  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>dst_local_l1_addr  </p></td>
-<td><p>Address in local L1 memory  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0..1MB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>size  </p></td>
-<td><p>Size of data transfer in bytes  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0..1MB  </p></td>
-<td><p>True  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>noc  </p></td>
-<td><p>Which NOC to use for the transaction  </p></td>
-<td><p>uint8_t  </p></td>
-<td><p>0 or 1  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>max_page_size (template argument)  </p></td>
-<td><p>Maximum size of a single transaction in bytes  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Any uint32_t number  </p></td>
-<td><p>False  </p></td>
-</tr>
-</tbody>
-</table>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">src_noc_addr  </span><span class="tt-api-param-desc">Encoding of the source NOC location (x,y)+address  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">dst_local_l1_addr  </span><span class="tt-api-param-desc">Address in local L1 memory  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">size  </span><span class="tt-api-param-desc">Size of data transfer in bytes  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">noc  </span><span class="tt-api-param-desc">Which NOC to use for the transaction  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">max_page_size (template argument)  </span><span class="tt-api-param-desc">Maximum size of a single transaction in bytes  </span></p>
+</div>
 
 </dd>
 </dl>

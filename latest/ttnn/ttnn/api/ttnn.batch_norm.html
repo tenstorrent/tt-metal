@@ -7,6 +7,7 @@
   <title>ttnn.batch_norm &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.batch_norm.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -326,11 +329,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.batch_norm</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.batch_norm</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.batch_norm.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -364,28 +365,28 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor of shape <cite>[N, C, H, W]</cite>.</p>
+<p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor of shape <cite>[N, C, H, W]</cite>.</span></p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>eps</strong> (<em>float</em><em>, </em><em>optional</em>) – Epsilon value. Defaults to <cite>1e-05</cite>.</p></li>
-<li><p><strong>momentum</strong> (<em>float</em><em>, </em><em>optional</em>) – Momentum value. Defaults to <cite>0.1</cite>.</p></li>
-<li><p><strong>running_mean</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the running_mean of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running mean value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>running_var</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the running_var of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running variance value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the weight or gamma value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias or beta value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>training</strong> (<em>bool</em><em>, </em><em>optional</em>) – Selection between training mode and inference (evaluation) mode. Defaults to <cite>False</cite> (Inference mode).</p></li>
-<li><p><strong>output</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Must have the same dtype as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – device compute kernel configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>eps</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Epsilon value. Defaults to <cite>1e-05</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>momentum</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Momentum value. Defaults to <cite>0.1</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>running_mean</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the running_mean of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running mean value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>running_var</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the running_var of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running variance value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the weight or gamma value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the bias or beta value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>training</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Selection between training mode and inference (evaluation) mode. Defaults to <cite>False</cite> (Inference mode).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Must have the same dtype as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">device compute kernel configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

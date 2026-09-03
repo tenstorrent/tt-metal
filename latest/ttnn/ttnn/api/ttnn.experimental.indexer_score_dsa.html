@@ -7,6 +7,7 @@
   <title>ttnn.experimental.indexer_score_dsa &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.indexer_score_dsa.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -333,11 +336,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.experimental.indexer_score_dsa</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.experimental.indexer_score_dsa</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.experimental.indexer_score_dsa.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -363,32 +364,35 @@ raw-dot, per-GQA-group indexer, use <code class="docutils literal notranslate"><
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> – [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</p></li>
-<li><p><strong>k</strong> – [B, 1, T, D] bf16 or bfp8_b tiled, single shared head</p></li>
-<li><p><strong>weights</strong> – [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-pre-folded)</p></li>
-<li><p><strong>chunk_start_idx</strong> – absolute global position of rank 0’s query row 0
+<li><p><span class="tt-api-param-name"><strong>q</strong></span><span class="tt-api-param-desc">[B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong></span><span class="tt-api-param-desc">[B, 1, T, D] bf16 or bfp8_b tiled, single shared head</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>weights</strong></span><span class="tt-api-param-desc">[B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
+pre-folded)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_start_idx</strong></span><span class="tt-api-param-desc">absolute global position of rank 0’s query row 0
 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
 visible to query s iff t &lt;= chunk_start + s). OMIT on a mesh -&gt;
 deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
-whole mesh if unset). Single device: set to history + rank*Sq per rank.</p></li>
-<li><p><strong>program_config</strong> – work-unit knobs (q_chunk_size, k_chunk_size,
+whole mesh if unset). Single device: set to history + rank*Sq per rank.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong></span><span class="tt-api-param-desc">work-unit knobs (q_chunk_size, k_chunk_size,
 head_group_size; elements, tile-aligned). Defaults always fit
-L1; raise head_group_size (0 = all resident) for performance.</p></li>
-<li><p><strong>compute_kernel_config</strong> – optional DeviceComputeKernelConfig. Only
+L1; raise head_group_size (0 = all resident) for performance.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong></span><span class="tt-api-param-desc">optional DeviceComputeKernelConfig. Only
 math_fidelity is honored (default: HiFi2, or LoFi when q and k
 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
-stay false (the custom LLK is validated for bf16 DEST half-sync).</p></li>
-<li><p><strong>cache_batch_idx</strong> – optional int. Selects the batch slot of a shared
+stay false (the custom LLK is validated for bf16 DEST half-sync).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>cache_batch_idx</strong></span><span class="tt-api-param-desc">optional int. Selects the batch slot of a shared
 [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
 banks). Re-applied each dispatch, so switching slots does not
-recompile.</p></li>
-<li><p><strong>kv_len</strong> – optional int. Valid prefix of a k allocated at its full T;
+recompile.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>kv_len</strong></span><span class="tt-api-param-desc">optional int. Valid prefix of a k allocated at its full T;
 the rest is masked out. Tile-aligned, in (0, T], with
-chunk_start_idx + Sq &lt;= kv_len. Re-applied each dispatch, so a
+chunk_start_idx &lt; kv_len – the chunk must BEGIN inside the valid
+prefix, but its causal window MAY end past kv_len (and past T):
+those trailing rows are pad queries with no keys to attend.
+Re-applied each dispatch, so a
 serving loop growing kv_len (&lt;= T) reuses one program – no
-recompile. Only output columns [0, kv_len) are written.</p></li>
-<li><p><strong>seq_shard_axes</strong> – the mesh axes the query seq is sharded over, outermost
+recompile. Only output columns [0, kv_len) are written.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>seq_shard_axes</strong></span><span class="tt-api-param-desc">the mesh axes the query seq is sharded over, outermost
 (SP ring) first: [] = linear device order (single device / whole-mesh
 ring, chunk_start_idx used as-is), [sp] = 1D SP ring, [sp, tp] = 2D SP
 ring + TP sub-shard. The SP axis (seq_shard_axes[0]) sets each device’s
@@ -399,23 +403,23 @@ SECOND axis the query seq is block-cyclically sub-sharded over; set it
 so the exact geometry adds tp_rank*Sq to each device’s block-cyclic
 position, keeping the causal mask correct under rotated (mid-slab) starts
 — unlike the flat [] path, which is linear-approximate there. The TP axis
-must be in range and distinct from the SP axis.</p></li>
-<li><p><strong>block_cyclic_sp_axis</strong> – optional int. The MESH AXIS the K cache was striped
+must be in range and distinct from the SP axis.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_cyclic_sp_axis</strong></span><span class="tt-api-param-desc">optional int. The MESH AXIS the K cache was striped
 over (chunked prefill + SP all-gather leaves [B,1,T,D] k in per-SP-shard
 slab / block-cyclic physical order). <code class="docutils literal notranslate"><span class="pre">sp</span></code> is DERIVED from the mesh
 shape on that axis, so a caller cannot pass an sp that disagrees with
 the device. The reader reads the permuted cache back in natural token
 order (invP per tile) so scores come out token-ordered and the causal
 mask/pool stay exact. Unset (or sp==1) = contiguous K (no remap). Pair
-with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.</p></li>
-<li><p><strong>block_cyclic_chunk_local</strong> – optional int, REQUIRED with block_cyclic_sp_axis.
+with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>block_cyclic_chunk_local</strong></span><span class="tt-api-param-desc">optional int, REQUIRED with block_cyclic_sp_axis.
 The per-shard chunk length (chunk_size_global / sp). Cross-checked
 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp&gt;1 (seq sharded
 across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
 linearization over all devices (linear-approximate under a mid-slab
 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
-2D geometry (see seq_shard_axes above).</p></li>
+2D geometry (see seq_shard_axes above).</span></p></li>
 </ul>
 </dd>
 </dl>

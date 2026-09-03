@@ -7,6 +7,7 @@
   <title>ttnn.rms_norm_pre_all_gather &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.rms_norm_pre_all_gather.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -326,11 +329,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.rms_norm_pre_all_gather</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.rms_norm_pre_all_gather</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.rms_norm_pre_all_gather.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -365,25 +366,25 @@ Its output should be combined across devices with <a class="reference internal" 
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p>
+<p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to BFLOAT16.</p></li>
-<li><p><strong>residual_input_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the residual input tensor. Defaults to None.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration. Defaults to None.</p></li>
-<li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – the program configuration. Defaults to None.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration. Defaults to None.</p></li>
-<li><p><strong>use_2d_core_grid</strong> (<em>bool</em><em>, </em><em>optional</em>) – the 2D core grid. Defaults to None.</p></li>
-<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – FLOAT32 only. <code class="docutils literal notranslate"><span class="pre">False</span></code> (default) uses the accurate SFPU path (full float32 accumulation); <code class="docutils literal notranslate"><span class="pre">True</span></code> uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. No effect for non-FLOAT32 inputs. Defaults to False.</p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the data type of the output tensor. Defaults to BFLOAT16.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>residual_input_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the residual input tensor. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the compute kernel configuration. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the program configuration. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the memory configuration. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_2d_core_grid</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the 2D core grid. Defaults to None.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">FLOAT32 only. <code class="docutils literal notranslate"><span class="pre">False</span></code> (default) uses the accurate SFPU path (full float32 accumulation); <code class="docutils literal notranslate"><span class="pre">True</span></code> uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. No effect for non-FLOAT32 inputs. Defaults to False.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition note">

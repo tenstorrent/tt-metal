@@ -7,6 +7,7 @@
   <title>ttnn.rotate &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.rotate.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -314,11 +317,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.rotate</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.rotate</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.rotate.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -343,28 +344,28 @@ fill value.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor of shape (N, H, W, C) in NHWC format</p></li>
-<li><p><strong>angle</strong> (<em>float</em>) – Rotation angle in degrees. Positive values rotate counter-clockwise</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor of shape (N, H, W, C) in NHWC format</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>angle</strong> (<em>float</em>)</span><span class="tt-api-param-desc">Rotation angle in degrees. Positive values rotate counter-clockwise</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>center</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>float</em><em>, </em><em>float</em><em>]</em><em>]</em>) – Rotation center point as (x, y) in pixel coordinates,
+<li><p><span class="tt-api-param-name"><strong>center</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>float</em><em>, </em><em>float</em><em>]</em><em>]</em>)</span><span class="tt-api-param-desc">Rotation center point as (x, y) in pixel coordinates,
 where x is the horizontal/width coordinate and y is
 the vertical/height coordinate. Default: tensor center
-at ((W-1)/2, (H-1)/2)</p></li>
-<li><p><strong>fill</strong> (<em>float</em>) – Fill value for areas outside the rotated tensor. Default: 0.0</p></li>
-<li><p><strong>expand</strong> (<em>bool</em>) – If True, return error. Only False is supported (same output dimensions). Default: False</p></li>
-<li><p><strong>interpolation_mode</strong> (<em>str</em>) – Interpolation method - “nearest” (sharp, faster) or “bilinear” (smooth, slower). Default: “nearest”</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration. Default: DRAM_INTERLEAVED</p></li>
+at ((W-1)/2, (H-1)/2)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>fill</strong> (<em>float</em>)</span><span class="tt-api-param-desc">Fill value for areas outside the rotated tensor. Default: 0.0</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>expand</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">If True, return error. Only False is supported (same output dimensions). Default: False</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>interpolation_mode</strong> (<em>str</em>)</span><span class="tt-api-param-desc">Interpolation method - “nearest” (sharp, faster) or “bilinear” (smooth, slower). Default: “nearest”</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Output memory configuration. Default: DRAM_INTERLEAVED</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – Rotated tensor of shape (N, H, W, C) - same as input</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">Rotated tensor of shape (N, H, W, C) - same as input</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">

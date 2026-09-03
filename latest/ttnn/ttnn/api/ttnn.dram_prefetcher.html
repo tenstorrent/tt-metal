@@ -7,6 +7,7 @@
   <title>ttnn.dram_prefetcher &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.dram_prefetcher.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -312,11 +315,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.dram_prefetcher</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.dram_prefetcher</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.dram_prefetcher.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -339,17 +340,17 @@ This utilizes a global circular buffer to push data on consumer cores.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>) – A list of tensor objects to be pre-fetched.</p></li>
-<li><p><strong>tensor_addrs</strong> (<em>ttnn.Tensor</em>) – A tensor (row major layout) that contains memory addresses corresponding to the tensor locations in DRAM. The format should be as follows: [t1_l1, t2_l1, …, t1_l2, t2_l2, …, t1_l3, t2_l3, …]</p></li>
-<li><p><strong>num_layers</strong> (<em>int</em>) – The number of layers in the pipeline or the model for which tensors need to be pre-fetched.</p></li>
-<li><p><strong>global_cb</strong> (<em>GlobalCircularBuffer</em>) – A global cb object, used internally to manage data movement across dram reader cores, and downstream consumer cores.</p></li>
-<li><p><strong>enable_performance_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – If set to true, the operation will be optimized for performance. May lead to ND behavior on wormhole 4U systems!</p></li>
+<li><p><span class="tt-api-param-name"><strong>tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>)</span><span class="tt-api-param-desc">A list of tensor objects to be pre-fetched.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>tensor_addrs</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">A tensor (row major layout) that contains memory addresses corresponding to the tensor locations in DRAM. The format should be as follows: [t1_l1, t2_l1, …, t1_l2, t2_l2, …, t1_l3, t2_l3, …]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>num_layers</strong> (<em>int</em>)</span><span class="tt-api-param-desc">The number of layers in the pipeline or the model for which tensors need to be pre-fetched.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>global_cb</strong> (<em>GlobalCircularBuffer</em>)</span><span class="tt-api-param-desc">A global cb object, used internally to manage data movement across dram reader cores, and downstream consumer cores.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>enable_performance_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If set to true, the operation will be optimized for performance. May lead to ND behavior on wormhole 4U systems!</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><em>ttnn.Tensor</em> – empty tensor (TODO: Should return None)</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">empty tensor (TODO: Should return None)</span></p>
 </dd>
 </dl>
 </dd>

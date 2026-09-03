@@ -7,6 +7,7 @@
   <title>ttnn.kv_cache.fill_cache_for_user_ &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.kv_cache.fill_cache_for_user_.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -316,11 +319,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.kv_cache.fill_cache_for_user_</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.kv_cache.fill_cache_for_user_</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.kv_cache.fill_cache_for_user_.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -343,20 +344,20 @@ optionally offset along the sequence dimension by <code class="xref py py-attr d
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>cache</strong> (<em>ttnn.Tensor</em>) – the cache tensor to be written to.</p></li>
-<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – the input tensor to be written to the cache.</p></li>
-<li><p><strong>batch_index</strong> (<em>int</em>) – the index into the cache tensor.</p></li>
+<li><p><span class="tt-api-param-name"><strong>cache</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the cache tensor to be written to.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor to be written to the cache.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>batch_index</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the index into the cache tensor.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>update_idx</strong> (<em>int</em>) – seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.</p>
+<p><span class="tt-api-param-name"><strong>update_idx</strong> (<em>int</em>)</span><span class="tt-api-param-desc">seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.</span></p>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 </dd>

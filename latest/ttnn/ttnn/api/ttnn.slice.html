@@ -7,6 +7,7 @@
   <title>ttnn.slice &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
     <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.slice.html" />
@@ -19,6 +20,8 @@
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+        <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
@@ -356,11 +359,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.slice</li>
+  <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+  <li class="breadcrumb-item active">ttnn.slice</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.slice.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -382,20 +383,20 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor.</p></li>
-<li><p><strong>slice_start</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – Start indices of input tensor. Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">input_tensor_shape[i])</span></code>.</p></li>
-<li><p><strong>slice_end</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>) – End indices of input tensor (exclusive). Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">input_tensor_shape[i]]</span></code>.</p></li>
-<li><p><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Step size for each dim. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code> (step = 1 for all dims).</p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_start</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">Start indices of input tensor. Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">input_tensor_shape[i])</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_end</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">End indices of input tensor (exclusive). Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">input_tensor_shape[i]]</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Step size for each dim. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code> (step = 1 for all dims).</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. Defaults to the input tensor’s memory config.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Pre-allocated output tensor. Its shape must match the slice output. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
-<li><p><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>) – Fill value for implicit tile padding on tiled tensors. Padding is undefined by default.</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the output tensor. Defaults to the input tensor’s memory config.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Pre-allocated output tensor. Its shape must match the slice output. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Fill value for implicit tile padding on tiled tensors. Padding is undefined by default.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">sub core grids for the operation. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 </dl>
@@ -407,7 +408,7 @@
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
