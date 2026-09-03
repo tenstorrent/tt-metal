@@ -59,6 +59,27 @@ def test_serialization(tmp_path, shape, tt_dtype):
     assert passing
 
 
+def test_large_read_only_file_backed_tensor_upload(tmp_path, device):
+    # Deliberately ungated. Uploading a read-only file mapping must produce the right tensor on every
+    # system: with device-read-only pinning it takes the pinned path, and without it (older KMD, no
+    # IOMMU, or pinning disabled) try_pin returns nullptr and the upload falls back to a copy. Gating
+    # this on the KMD version would have left the fallback path -- the one every current CI runner
+    # takes -- with no coverage at all.
+    # 1024 * 9216 * 4 bytes = 36 MiB, above Metal's 32 MiB pinned H2D threshold.
+    shape = (1, 1, 1024, 9216)
+    # Position-dependent values, not a constant fill: a uniform buffer compares equal even if the pinned
+    # path transfers the wrong offset, repeats a page, or drops the mapping's base offset.
+    torch_tensor = torch.arange(1024 * 9216, dtype=torch.float32).reshape(shape)
+    host_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.float32)
+    file_name = tmp_path / "large_read_only.tensorbin"
+    ttnn.dump_tensor(str(file_name), host_tensor)
+
+    # load_tensor opens the file O_RDONLY and maps it PROT_READ | MAP_PRIVATE before uploading.
+    device_tensor = ttnn.load_tensor(str(file_name), device=device)
+    result = ttnn.to_torch(device_tensor)
+    assert torch.equal(result, torch_tensor)
+
+
 core_ranges = ttnn.num_cores_to_corerangeset(56, [8, 7], True)
 
 
