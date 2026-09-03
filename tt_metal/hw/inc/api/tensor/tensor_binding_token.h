@@ -9,6 +9,11 @@
 #include "internal/llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
+namespace binding_details {
+template <const auto& Token>
+struct LLKOperandExtractor;
+}
+
 namespace tensor_accessor {
 
 // TensorBindingToken:
@@ -49,6 +54,9 @@ struct TensorBindingToken {
     constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
 private:
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
+
     binding_details::LLKMetadata llk_metadata_;
 };
 

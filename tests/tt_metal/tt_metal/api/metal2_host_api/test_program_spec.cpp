@@ -5070,19 +5070,44 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
-TEST_F(ProgramSpecTestGen1, ScratchpadFormatAloneSucceeds) {
+// LLKOperandFrom pulls experimental/2_0/llk_operand.h (Blackhole-only). Fold checks that name the
+// alias must JIT under a Blackhole mock; WH Gen1 cannot include that header.
+class ProgramSpecTestBlackhole : public ::testing::Test {
+protected:
+    void SetUp() override {
+        slow_dispatch_override_.emplace();
+        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+    }
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
+};
+
+// Fold checks for LLKOperandFrom (SPEC Part II).
+using LLKOperandInterop = ProgramSpecTestBlackhole;
+
+TEST_F(LLKOperandInterop, ScratchpadFormatAloneSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using PadOp = LLKOperandFrom<scratch::pad>;
+    static_assert(PadOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(PadOp::descriptor.shape.face_r_dim == 16);
+    static_assert(PadOp::descriptor.shape.face_c_dim == 16);
+    static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
     (void)pad;
 }
 )"};
@@ -5094,24 +5119,22 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndTileSucceeds) {
+TEST_F(LLKOperandInterop, ScratchpadFormatAndTileSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 1);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using PadOp = LLKOperandFrom<scratch::pad>;
+    static_assert(PadOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(PadOp::descriptor.shape.face_r_dim == 16);
+    static_assert(PadOp::descriptor.shape.face_c_dim == 16);
+    static_assert(PadOp::descriptor.shape.num_faces_r_dim == 1);
+    static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
     (void)pad;
 }
 )"};
@@ -5124,24 +5147,22 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndFaceGeometrySucceeds) {
+TEST_F(LLKOperandInterop, ScratchpadFormatAndFaceGeometrySucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 1);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using PadOp = LLKOperandFrom<scratch::pad>;
+    static_assert(PadOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(PadOp::descriptor.shape.face_r_dim == 1);
+    static_assert(PadOp::descriptor.shape.face_c_dim == 16);
+    static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
     (void)pad;
 }
 )"};
@@ -5154,57 +5175,51 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBDefaultTileCompiles) {
+TEST_F(LLKOperandInterop, DFBDefaultTileCompiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 void kernel_main() {
     DataflowBuffer in(dfb::input_dfb);
-    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using InOp = LLKOperandFrom<dfb::input_dfb>;
+    static_assert(InOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(InOp::descriptor.shape.face_r_dim == 16);
+    static_assert(InOp::descriptor.shape.face_c_dim == 16);
+    static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
     (void)in;
 }
 )"};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBFaceGeometryCompiles) {
+TEST_F(LLKOperandInterop, DFBFaceGeometryCompiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.dataflow_buffers[0].unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 void kernel_main() {
     DataflowBuffer in(dfb::input_dfb);
-    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 1);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using InOp = LLKOperandFrom<dfb::input_dfb>;
+    static_assert(InOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(InOp::descriptor.shape.face_r_dim == 1);
+    static_assert(InOp::descriptor.shape.face_c_dim == 16);
+    static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
     (void)in;
 }
 )"};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-// An L1-sharded tensor whose page tile is exactly `tile_shape`, so to_llk_mem_descriptor sees a
+// An L1-sharded tensor whose page tile is exactly `tile_shape`, so LLKOperandFrom sees a
 // non-default face grid.
 TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 2> tile_shape) {
     return MakeShardedTensorParameter(
@@ -5215,97 +5230,73 @@ TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 
         Tile{tile_shape});
 }
 
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1TensorDefaultCompiles) {
+TEST_F(LLKOperandInterop, L1TensorDefaultCompiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.tensor_parameters = {MakeShardedTensorParameter("a", tt::tt_metal::Shape{1, 1, 32, 32}, {32, 32}, 2)};
     BindTensorParameterToKernel(spec.kernels[1], "a", "a");
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using AOp = LLKOperandFrom<tensor::a>;
+    static_assert(AOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(AOp::descriptor.shape.face_r_dim == 16);
+    static_assert(AOp::descriptor.shape.face_c_dim == 16);
+    static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
     (void)a;
 }
 )"};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor16x32Compiles) {
+TEST_F(LLKOperandInterop, L1Tensor16x32Compiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {16, 32})};
     BindTensorParameterToKernel(spec.kernels[1], "a", "a");
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 1);
-    static_assert(desc.shape.num_faces_c_dim == 2);
+    using AOp = LLKOperandFrom<tensor::a>;
+    static_assert(AOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(AOp::descriptor.shape.face_r_dim == 16);
+    static_assert(AOp::descriptor.shape.face_c_dim == 16);
+    static_assert(AOp::descriptor.shape.num_faces_r_dim == 1);
+    static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
     (void)a;
 }
 )"};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor32x16Compiles) {
+TEST_F(LLKOperandInterop, L1Tensor32x16Compiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {32, 16})};
     BindTensorParameterToKernel(spec.kernels[1], "a", "a");
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/llk_operand_from_tokens.h"
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
-    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
-    static_assert(desc.shape.face_r_dim == 16);
-    static_assert(desc.shape.face_c_dim == 16);
-    static_assert(desc.shape.num_faces_r_dim == 2);
-    static_assert(desc.shape.num_faces_c_dim == 1);
+    using AOp = LLKOperandFrom<tensor::a>;
+    static_assert(AOp::descriptor.format == DataFormat::Float16_b);
+    static_assert(AOp::descriptor.shape.face_r_dim == 16);
+    static_assert(AOp::descriptor.shape.face_c_dim == 16);
+    static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
+    static_assert(AOp::descriptor.shape.num_faces_c_dim == 1);
     (void)a;
 }
 )"};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
-}
-
-TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDramTensorFailsCompile) {
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
-    spec.tensor_parameters = {MakeMinimalTensorParameter("a")};
-    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
-    spec.kernels[1].source = KernelSpec::SourceCode{R"(
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
-void kernel_main() {
-    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
-    (void)desc;
-}
-)"};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DRAM")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
