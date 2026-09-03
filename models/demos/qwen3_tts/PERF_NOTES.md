@@ -144,6 +144,98 @@ Numerics: the ReLU fold is **bit-exact** (bf16 round-to-nearest preserves sign a
 cascade is not bit-exact but is strictly *more* accurate: it removes a bf16 rounding step per
 branch, so the fp32 path now runs end to end.
 
+### 2.4 Talker decode attention — fused SDPA + decode SDPA config + layout round-trips
+
+The Talker decode layer carried 54 device ops. Eighteen of them did no arithmetic that the
+model needs, and the one real attention op ran a config built for prefill. All measured on
+the **deployed** graph — `cur_pos_tensor` + a full `[1, heads, 1, kv_max]` mask, K/V written
+by `paged_fused_update_cache`, attention over the whole 352-deep cache — via
+`test_qwen3_tts_profile_single_layer.py -k talker_layer_decode_traced`. The pre-existing
+`-k talker_layer_decode` case does **not** exercise that graph: with `cur_pos_tensor=None` it
+takes the eager fallback, which slices the cache to `start_pos+1` and so runs attention over
+one position instead of 352.
+
+| # | change | ops | device time |
+|---|---|---|---|
+| 1 | fused SDPA on every SKU (was N150-only) | -9 | -44 us |
+| 2 | padded-N QKV slice writes the `nlp_create_qkv_heads` shard spec (was N150-only) | -2 | -6 us |
+| 3 | decode RoPE keeps K in the cache layout (`k_keep_decode_layout`) | -2 | ~-4 us |
+| 4 | decode-shaped SDPA program config | 0 | **-55 us** |
+| 5 | `scale` folded into the q_norm gain, so SDPA stops rescaling the mask | -1 | -6 us |
+| 6 | SDPA writes the concat-heads shard spec directly | -1 | -1 us |
+| 7 | padded-N output slice reads the width-sharded matmul output | -2 | -2 us |
+| 8 | V skips the S->I it never needed | -1 | -1 us |
+| | **total (median of 3 captures)** | **54 -> 36** | **552 -> 437 us** |
+
+The four CCL rows measured 20-25 us in every one of those six captures, so none of this is
+CCL luck. Per token that is 28 x 115 us = **3.2 ms** of Talker device time.
+
+**(1) Fused SDPA everywhere.** `9b76da7abce` moved N150 off the manual fp32 BMM chain
+(typecast Q/K/V, GQA `repeat_interleave`, QK / scale / mask / softmax / PV, typecast back) and
+left every other card on it. On N300 that chain was 11 ops / 134 us of the layer. Fused SDPA is
+GQA-native and bf16 throughout, so the expansion and the dtype hops both go.
+`QWEN3_TTS_TALKER_MANUAL_SDPA=1` restores the old graph for A/B.
+
+**(4) The decode SDPA program config — the single largest win, and free.** Decode was reusing
+`sdpa_prefill_program_config` (`q_chunk_size=64`, `k_chunk_size=64`). Decode has **one** query
+row, so `q_chunk_size=64` pads it to two tiles and doubles every chunk. Swept in isolation at
+the model's shape (Sq=1, Sk=352, dh=128, 8 local heads), device time from the profiler CSV:
+
+| q_chunk | k_chunk=32 | 64 | 128 | 352 |
+|---|---|---|---|---|
+| 64 (shipped) | 99.9 us | 81.9 us | 71.0 us | 68.2 us |
+| **32** | 51.8 us | 38.6 us | 30.6 us | **26.8 us** |
+
+`q_chunk=64, k_chunk=64` = 81.9 us reproduced the in-model 82 us exactly. Cost tracks the
+*chunk-padded* KV length `ceil(S/k) * k` plus ~1.2 us per chunk — which is why k=320 (2 chunks,
+640 padded rows, 60.9 us) is worse than k=128 (3 chunks, 384 rows, 30.6 us) and an exact
+divisor always wins. `decode_sdpa_k_chunk()` encodes that; `k_chunk=1312` exceeds the program
+size limit, so it caps at 672. Grid size is irrelevant here (8x8 38.6, 8x4 37.5, 4x4 37.9) and
+so is fidelity (HiFi4 38.5, HiFi2 37.0, LoFi 36.9) — do not trade PCC for 1.5 us.
+
+**(5) The mask rescale.** `ttnn::scaled_dot_product_attention` folds `scale` into the softmax
+exponent, so its wrapper pre-multiplies the additive mask by `1/scale` on **every call**
+(`sdpa.cpp`). Our mask is pure `{0, -inf}` and therefore scale-invariant, so that 6 us DRAM
+pass computes nothing. Passing `scale=1.0` skips it; the softmax scale rides in the q_norm gain
+instead, a load-time constant (RoPE is a rotation, so scaling Q before it is the same as
+scaling the scores after). The folded gain gets its own weight-cache key so a stale cache file
+cannot supply the unscaled one.
+
+**(3, 6, 7, 8) Layout round-trips.** Four places converted a layout that the next op already
+accepted:
+- decode RoPE transposed K back to `[1, n_kv, 1, dh]` and attention immediately transposed it
+  to `[1, 1, n_kv, dh]` — the same tensor, and `_rope_decode_memcfg(dh)` is byte-identical to
+  `paged_k_input_mem_config`. Both transposes go (bit-exact; gated in
+  `test_qwen3_tts_rope_decode.py::test_k_keep_decode_layout`).
+- SDPA accepts a height-sharded output and `nlp_concat_heads`' input spec is exactly that.
+- `ttnn.slice` reads a width-sharded input and writes any layout (verified bit-exact), so the
+  padded-N trim after a DRAM-sharded matmul needs no `ShardedToInterleaved` first —
+  `unpad_dram_sharded_out`.
+- V's only consumer is the transpose into the paged-cache layout, and `transpose` does take
+  HEIGHT_SHARDED (bit-exact). `rms_norm` genuinely does not, so Q/K keep theirs.
+
+Not gated by device: (2)-(8) are layout/config changes with no SKU dependency, and (1) has the
+env fallback. Prefill seq=32 also picks up (2): 32 -> 29 ops (its window is CCL-dominated, so
+read the op count, not the time).
+
+**Default ON, and (1) shares a risk with the CP arm that is deliberately default OFF — read
+this before trusting the frame count.** A paired demo run (N300, "Hello, how are you today?",
+seed 42, `--use-2cq`, same tree, only these changes differing) generated **17 -> 14 frames**;
+the first three code-0 tokens are identical and it diverges at the fourth. `dccf18b66c4` saw
+the same direction on the CP arm (3/3 seeds, fewer frames) and held that arm behind a flag
+because n=3 could not separate a real regression from sampler chaos — 3.4 is explicit that PCC
+cannot predict generation length here. Two reasons this arm still ships on:
+the Talker's fused-SDPA path is **not new code** — `9b76da7abce` made it the N150 default and
+listened to the result, so this extends an already-shipped path to N300 rather than enabling an
+unlistened one; and the numerics move the *right* way on every gate available
+(`attention_decode` 0.999785 -> 0.999786, `talker_chain` 0.974803 -> 0.975272, and the manual
+chain vs fused layer A/B on N300 is PCC 0.999988). Still: `QWEN3_TTS_TALKER_MANUAL_SDPA=1`
+restores the pre-fusion graph, and the honest gate is the same one 6.4 asks of the CP — a
+frame-count sweep over >=8 seeds plus a listen/WER check. Items (2)-(4) and (6)-(8) are
+bit-exact and carry none of this risk.
+
+---
+
 ---
 
 ## 3. Measured results
@@ -537,6 +629,9 @@ export TT_VISIBLE_DEVICES=0 \
 | `nlp_create_qkv_heads_decode` instead of the sharded prefill-style split | 13.3 us vs 2 us | Much worse here. Its value is feeding a full decode-layout attention pipeline, which this model does not use. |
 | Running the CodePredictor at TP=1 (replicated) on N300 to delete all CCLs | est. matmul growth +103 us vs CCL saving -107 us | Net ~zero for a large, risky change. |
 | DRAM-sharding the CP QKV matmul | ~2 us | N is padded 2048 -> 2304, so it needs an S2I + slice that eats the gain. |
+| `ttnn.transformer.scaled_dot_product_attention_decode` for Talker decode | PCC **0.50** vs 1.00 | Its cross-chunk flash-decode reduction is wrong at dh=128 as soon as the cache spans more than one `k_chunk` — single chunk 0.999995, two full chunks 0.702, 11 chunks 0.504 against an fp32 reference in isolation. And we cannot stay inside one chunk: the op requires `k_chunk_size` to be a **power of two** (`sdpa_decode.cpp:67`) *and* to divide `k_shape[2]`, so kv=352 (=32x11) admits only `k_chunk=32`, i.e. 11 chunks. `models/tt_transformers` documents the same cliff for Gemma-2 at dh=256. Revisit only if kv_max is padded to a power of two (then `k_chunk=kv_max` is single-chunk and correct) — it would also need `nlp_concat_heads_decode` and a new wo in0 spec. The prefill-form SDPA at `q_chunk=32` is 26.8 us and correct. |
+| SDPA fidelity HiFi4 -> HiFi2 for decode | 38.5 -> 37.0 us | 4 % of one op for a real PCC loss (0.99998 -> 0.99988). The decode SDPA is not math-bound. |
+| Bigger `k_chunk` without checking divisibility | k=320: 60.9 us vs k=128: 30.6 us | Cost is the chunk-*padded* KV length, so a chunk that does not divide the cache is worse than a smaller one that does. |
 
 ---
 
@@ -560,6 +655,15 @@ form is only correct for exactly two chips — and verify with medians of 3+ cap
 `mlp.py` is shared, so check whether any non-Talker caller reaches those lines before
 switching them wholesale.
 
+> **Recheck the size of the prize first — the ~197 us above no longer reproduces.** Across the
+> six `talker_layer_decode_traced` captures behind 2.4, the four CCL rows measured 20-25 us
+> each, i.e. **~85 us per layer (19 % of 437 us)**, not 197. Against `tp_all_reduce_2chip`'s
+> measured 34 us of CCL + ~4 us of slice/add per site, the headroom is ~4 us/site — about
+> -8 us/layer, close to the noise floor, and it trades two ops (reduce_scatter + all_gather)
+> for three (all_gather + slice + add). The 197 us figure came from captures where a single
+> `all_gather` swung to 66-70 us; that swing is real (see 4) but it is not the steady state.
+> Measure both forms in the same session before spending the change.
+
 ### 6.2 Reduce the remaining CCL cost
 
 Even in the 1-CCL form the all-gather is 34-70 us for 64 KB, on **1 core**. This is pure
@@ -582,16 +686,32 @@ then run `test_qwen3_tts_pcc.py` and listen to the demo output. Note `sdpa_kcfg`
 and should stay high-fidelity: the code documents that QK-norm amplifies K by ~68x and q.k
 dot products can overflow bf16, which is why the SDPA chain runs in fp32.
 
-### 6.4 The CP's manual fp32 SDPA chain
+### 6.4 Finish the CP's SDPA switch — the mask rescale, then promote the flag
 
-~37 us/layer of `repeat_interleave` (which lowers to untilize + concat + tilize) plus five
-typecasts, to expand KV heads for GQA and move between bf16 and fp32.
+`dccf18b66c4` already put the CP on fused SDPA with `k_chunk_size=32` behind
+`QWEN3_TTS_CP_FUSED_SDPA` (**default OFF**, 270 -> 222 ops / 1703 -> 1538 us per
+`cp_decode_step`). Two things remain, in this order:
 
-`ttnn.transformer.scaled_dot_product_attention_decode` handles GQA natively without
-`repeat_interleave` and supports fp32 accumulation via `fp32_dest_acc_en`. Bigger refactor,
-real overflow risk — read the comment above the SDPA chain before starting.
+1. **The mask rescale, which that commit did not take.** `scale=1.0` with the softmax scale
+   folded into the CP's q_norm gain stops ttnn's wrapper pre-multiplying the CP mask by
+   `1/scale` on every call — 2.4 measured 6 us/layer on the Talker, and the CP runs 75 layer
+   evaluations per frame. Same recipe, same `q_norm` fold, its own weight-cache key.
+2. **Promote the flag**, per that commit's own plan: `test_qwen3_tts_cp_sdpa_parity.py`
+   (committed, never executed) clean, then a frame-count sweep over >=8 seeds plus a
+   listen/WER check.
 
-### 6.5 Talker prefill buckets 64 and 128
+Do **not** reach for `scaled_dot_product_attention_decode` on either model — it is
+numerically broken at these shapes (see 5).
+
+### 6.5 The Talker's *masked prefill* SDPA config
+
+2.4 fixed the decode SDPA config and left the masked-prefill one (`prefill_attn_mask`, Sq =
+bucket, Sk = kv_max) on `q_chunk=64 / k_chunk=64`. `q_chunk=64` is right there — Sq is a real
+sequence — but `k_chunk=64` leaves kv=352 as 6 chunks (384 padded rows) where 352 is 1 chunk.
+Prefill runs once per utterance, so this is time-to-first-audio only; TTFT already went
+141.9 -> 134.1 ms from the fused-SDPA switch.
+
+### 6.6 Talker prefill buckets 64 and 128
 
 `attention.py` has `use_dram_shard_qkv = seq_len <= 32`, with a TODO: buckets 64 and 128 need
 their own per-`m` shard configs to engage the DRAM-sharded QKV and the sharded
@@ -600,7 +720,7 @@ their own per-`m` shard configs to engage the DRAM-sharded QKV and the sharded
 
 Prefill runs once per utterance, so this matters for time-to-first-audio, not steady state.
 
-### 6.6 Lower value
+### 6.7 Lower value
 
 - **CP `o_proj` DRAM-sharded** — ~5 us/layer net after the S2I + slice for the 1024 -> 1152 pad.
 - **Hoist the cos/sin reshard out of the layer.** `apply_rope_qk` reshards cos/sin per layer
@@ -619,7 +739,9 @@ Prefill runs once per utterance, so this matters for time-to-first-audio, not st
 | `tt/code_predictor.py` | N300 fast path (`_n300_cp_opt`) + `apply_rope_qk` |
 | `tt/mesh_utils.py` | `is_n300`, `tp_all_reduce_2chip` |
 | `tt/speaker_encoder.py` | ECAPA host fusion (`_se_host_fuse`, `_res2net_cascade_torch`, `_conv1d_same_padding_torch_ncl`) |
-| `tests/test_qwen3_tts_rope_decode.py` | RoPE bit-exactness + routing guard |
+| `tests/test_qwen3_tts_rope_decode.py` | RoPE bit-exactness + routing guard + `k_keep_decode_layout` |
+| `tt/mlp.py`, `tt/dram_sharded_matmul.py` | `unpad_dram_sharded_out` (padded-N trim off the sharded output) |
+| `tests/test_qwen3_tts_profile_single_layer.py` | `-k talker_layer_decode_traced` — the deployed decode window |
 | `tests/test_qwen3_tts_cp_n300_opt.py` | CP fast path A/B + Metal-trace replay guard |
 | `tests/test_qwen3_tts_speaker_encoder_host_fuse.py` | ECAPA op-count spy + cascade equality vs reference |
 | `qwen3_tts_block_report.sh` (repo root) | regenerates the block report |
