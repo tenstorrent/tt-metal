@@ -44,8 +44,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //
 // Keyword args:
 //   compute_kernel_config: optional matmul math fidelity / accumulator config.
-//   activation: Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 /
-//     gpt-oss).
+//   activation: Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 /
+//     gpt-oss), SituGlu (Kimi K3) or ClampedSiluGlu (DeepSeek V4).
 //   gate_biases/up_biases/down_biases: optional per-local-expert biases
 //     (gpt-oss), all three lists together or none, one entry per local expert.
 //

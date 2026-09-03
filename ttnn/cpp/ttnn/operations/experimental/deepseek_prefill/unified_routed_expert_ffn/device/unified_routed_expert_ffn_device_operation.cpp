@@ -28,10 +28,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
-    if (op.activation == RoutedExpertActivation::SituGlu) {
+    if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
         TT_FATAL(
             t.x.device()->arch() == tt::ARCH::BLACKHOLE,
-            "unified_routed_expert_ffn: SiTU-GLU is implemented for Blackhole only, got arch {}",
+            "unified_routed_expert_ffn: SiTU-GLU and clamped SiLU-GLU are implemented for Blackhole only, got arch {}",
             t.x.device()->arch());
     }
     // x layout/dtype depends on x_is_row_major:

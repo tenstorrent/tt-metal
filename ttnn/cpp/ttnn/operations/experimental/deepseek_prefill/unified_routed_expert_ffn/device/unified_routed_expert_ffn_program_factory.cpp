@@ -845,6 +845,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     } else if (op.activation == RoutedExpertActivation::SituGlu) {
         // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
         compute_defines["SITU_GLU"] = "1";
+    } else if (op.activation == RoutedExpertActivation::ClampedSiluGlu) {
+        // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
+        // into the kernel.
+        compute_defines["CLAMPED_SILU_GLU"] = "1";
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary

@@ -19,7 +19,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
     nb::enum_<RoutedExpertActivation>(mod, "RoutedExpertActivation")
         .value("Silu", RoutedExpertActivation::Silu)
         .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
-        .value("SituGlu", RoutedExpertActivation::SituGlu);
+        .value("SituGlu", RoutedExpertActivation::SituGlu)
+        .value("ClampedSiluGlu", RoutedExpertActivation::ClampedSiluGlu);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -51,7 +52,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
-                or SituGlu (tanh-capped, Kimi K3; Blackhole only).
+                SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
+                (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
