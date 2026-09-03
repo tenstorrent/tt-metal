@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....layers.linear import ColParallelLinear
-from ....layers.module import Module
+from ....layers.module import Module, is_preparing_for_routing
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
@@ -243,11 +243,16 @@ class MiniMaxH3Attention(Module):
         rename_substate(state, "to_out.0", "to_out")
 
         if self.vsa_config is not None:
-            # The base H3 checkpoint carries no gate: zero-init it, which makes the compressed
-            # branch contribute nothing (and lets forward skip it entirely, identically).
-            if "to_gate_compress.weight" not in state:
-                state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
-            self.gate_compress_is_zero = not bool(state["to_gate_compress.weight"].any())
+            gate = state.get("to_gate_compress.weight")
+            if gate is None and not is_preparing_for_routing():
+                # The base H3 checkpoint carries no gate: zero-init it, which makes the compressed
+                # branch contribute nothing (and lets forward skip it entirely, identically). Only on
+                # a load -- while routing, the absent key means this caller is not carrying a gate,
+                # not that the model needs one.
+                gate = torch.zeros(self.inner_dim, self.hidden_size)
+                state["to_gate_compress.weight"] = gate
+            if gate is not None:
+                self.gate_compress_is_zero = not bool(gate.any())
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.

@@ -26,12 +26,16 @@ Two contracts the caller must honour:
 * The tensors handed in are deltas, so the routed result is a delta. Any transform that is not
   linear in the tensor would break that -- none in tt_dit are, they are all reshapes, permutes and
   concatenations.
+* A hook that synthesises a default for a key the checkpoint omits must skip that while routing
+  (``Module.is_preparing_for_routing``). The state here is partial by design, and an invented key
+  becomes a destination with no source behind it for the caller to attribute.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..layers.module import preparing_for_routing
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -66,7 +70,8 @@ def route(root: Module, state: Mapping[str, torch.Tensor]) -> tuple[list[RoutedT
     """
     routed: list[RoutedTensor] = []
     unresolved: list[str] = []
-    _route_inner(root, dict(state), prefix="", routed=routed, unresolved=unresolved)
+    with preparing_for_routing():
+        _route_inner(root, dict(state), prefix="", routed=routed, unresolved=unresolved)
     return routed, unresolved
 
 
