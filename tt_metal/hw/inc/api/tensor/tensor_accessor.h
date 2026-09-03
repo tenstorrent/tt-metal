@@ -136,6 +136,56 @@ public:
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
+    // Contiguity APIs:
+    // Page-id step between memory-contiguous pages. Constant for the accessor. Usually 1, but
+    // tensor_shape[-1] for a one-page-wide shard (what row-major width/block sharding gives).
+    uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_dim()]; }
+
+    // How many pages from page_id are contiguous in memory, page_id included. They are the page ids
+    // { page_id + k * contiguous_page_stride() }, at { get_noc_addr(page_id) + k * aligned_page_size }.
+    // The step is the *aligned* page size, so a bulk read also carries the pad between pages.
+    // Padding never shortens a run: the count is the same whether or not the page size is aligned,
+    // so a caller that needs tightly packed pages has to fall back to per-page transfers.
+    // end_page_id caps the answer, 0 means the whole tensor.
+    // A run can stop before the shard ends; use shard_pages() to walk a whole shard.
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id = 0) const {
+        const uint32_t end = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
+        ASSERT(page_id < end);
+        ASSERT(end <= dspec().tensor_volume());
+
+        const int d = contiguous_dim();
+
+        // Dims inside d hold one shard page each, so the walk starts at d.
+        uint32_t coords = page_id;
+        for (int i = dspec().rank() - 1; i > d; --i) {
+            coords /= dspec().tensor_shape()[i];
+        }
+
+        uint32_t run = 1;
+        uint32_t block = 1;  // run entries per step of dim i
+        for (int i = d; i >= 0; --i) {
+            const uint32_t extent = dspec().tensor_shape()[i];
+            const uint32_t shard_extent = dspec().shard_shape()[i];
+            const uint32_t page_coord = coords % extent;
+            coords /= extent;
+
+            const uint32_t to_shard_edge = shard_extent - page_coord % shard_extent;
+            const uint32_t to_tensor_edge = extent - page_coord;
+            run += ((to_shard_edge < to_tensor_edge ? to_shard_edge : to_tensor_edge) - 1) * block;
+
+            // Carry into the next dim only if the shard covers this one exactly, else an edge or pad breaks it.
+            if (shard_extent != extent) {
+                break;
+            }
+            block *= extent;
+        }
+
+        // end is in page ids, the run steps by stride.
+        const uint32_t stride = dspec().tensor_strides()[d];
+        const uint32_t room = (end - page_id + stride - 1) / stride;
+        return run < room ? run : room;
+    }
+
     // Shard NOC APIs
     FORCE_INLINE
     std::uint64_t get_shard_noc_addr(
@@ -360,6 +410,19 @@ private:
         return {bank_shard.bank_id, bank_page_offset};
     }
 
+    // Innermost dim the shard spans more than one page of. Stepping any dim inside it leaves the
+    // shard, so the run walks this one. Depends only on shapes, hence constant per accessor.
+    int contiguous_dim() const {
+        const int rank = static_cast<int>(dspec().rank());
+        ASSERT(rank > 0);  // callers index tensor_strides() with the result
+        for (int i = rank - 1; i >= 0; --i) {
+            if (dspec().shard_shape()[i] > 1) {
+                return i;
+            }
+        }
+        return rank - 1;
+    }
+
     FORCE_INLINE
     uint16_t get_bank_x(uint16_t packed_xy_coord) const { return (packed_xy_coord >> 8) & 0xFF; }
 
@@ -430,6 +493,17 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
     FORCE_INLINE
     const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+
+    // Contiguity APIs:
+    // Pages round-robin across banks, so within a bank every num_banks'th page id is contiguous.
+    uint32_t contiguous_page_stride() const { return IsDram ? NUM_DRAM_BANKS : NUM_L1_BANKS; }
+
+    // See the sharded overload. end_page_id is required: an interleaved accessor has no shape.
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+        ASSERT(page_id < end_page_id);
+        const uint32_t stride = contiguous_page_stride();
+        return (end_page_id - page_id + stride - 1) / stride;
+    }
 
     // Locality APIs
     FORCE_INLINE
@@ -672,17 +746,32 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        }) {}
+        }),
+        num_contiguous_pages_fn([](const void* accessor, uint32_t page_idx, uint32_t end_page_id) {
+            return static_cast<const Accessor*>(accessor)->num_contiguous_pages(page_idx, end_page_id);
+        }),
+        contiguous_page_stride_(accessor.contiguous_page_stride()) {}
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
     }
 
+    // end_page_id has no default: the wrapper hides the layout, so there is no tensor volume to use.
+    uint32_t num_contiguous_pages(uint32_t page_idx, uint32_t end_page_id) const {
+        return num_contiguous_pages_fn(accessor_ptr, page_idx, end_page_id);
+    }
+
+    // Constant per wrapped accessor, so it rides along as a value, not a second thunk.
+    uint32_t contiguous_page_stride() const { return contiguous_page_stride_; }
+
 private:
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+    using NumContiguousPagesFn = uint32_t (*)(const void*, uint32_t, uint32_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
+    NumContiguousPagesFn num_contiguous_pages_fn = nullptr;
+    uint32_t contiguous_page_stride_ = 0;
 };
 
 namespace tensor_accessor::detail {
