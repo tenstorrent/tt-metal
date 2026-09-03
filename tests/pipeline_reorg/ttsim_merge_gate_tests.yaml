@@ -1,0 +1,36 @@
+# TTSim merge-gate matrix (Quasar simulator coverage, sim_* SKUs only, no HW).
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (ttsim -> merge_gate).
+# The sanity counterpart lives in tests/pipeline_reorg/runtime_sanity_tests.yaml
+# (ttsim -> sanity), which keeps the wider/slower Quasar coverage; this list is the
+# merge-gate subset and is held to the 15-min merge-gate ceiling.
+#
+# runtime-sanity-tests-impl.yaml serves both lists (selected by its test-category
+# input) and invokes setup-ttsim for every sim_* SKU. See
+# .github/actions/setup-ttsim/action.yml and .github/sku_config.yaml.
+#
+# Some of these may fail today due to a known libttsim_qsr.so NOC_API_V2 gap in the
+# simulator itself, not this CI wiring — see #54794.
+# QuasarMultiSemaphorePipeline and QuasarMultipleClustersMultiSemaphorePipeline are
+# excluded: both are disabled on tt-metal main.
+- name: runtime_sim_quasar_cpp_unit_tests
+  cmd: >-
+    f=HostOnlyTest.Bfp8Conversion;
+    f=$f:UnitMeshFixture.InterleavedL1Buffer;
+    f=$f:UnitMeshFixture.UnalignedReadWriteCore;
+    f=$f:QuasarMeshDeviceSingleCardFixture.DmLoopback;
+    f=$f:QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
+    f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
+    f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
+    f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
+    ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$f
+  skus:
+    sim_quasar:
+      timeout: 15
+  owner_id: U08PR765YJ1 # Matt Craighead
+  team: ttsim

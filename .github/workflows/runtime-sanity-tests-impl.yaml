@@ -16,6 +16,21 @@ on:
       enabled-skus:
         required: true
         type: string
+      test-category:
+        required: false
+        type: string
+        default: sanity
+        description: >-
+          sanity: full runtime sanity matrix (HW + sim); merge_gate: the ttsim Quasar
+          merge-gate subset. Selects the tests yaml and the verify_time_budget.py key.
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       ref:
         required: false
         type: string
@@ -38,7 +53,7 @@ jobs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'merge_gate' && './tests/pipeline_reorg/ttsim_merge_gate_tests.yaml' || './tests/pipeline_reorg/runtime_sanity_tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,19 +67,25 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "sanity"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:
     needs: load-test-matrix
