@@ -179,7 +179,9 @@ def argmax_torch_ttnn_cases():
         _argmax_nc_nd_rank4(),
         _argmax_nc_nd_rank5(),
     ):
-        tensor_shape, tensor_layout, dim, _keepdim, dtype = case
+        # Slice rather than unpack the whole tuple: _case() grew an error_msg field on main
+        # while this branch was open, and a positional unpack breaks on every such addition.
+        tensor_shape, tensor_layout, dim, _keepdim, dtype = case[:5]
         if _routes_to_rvv(tensor_shape, tensor_layout, dim, dtype):
             yield pytest.param(*case, marks=skip_rvv_routed_on_sim)
         else:
