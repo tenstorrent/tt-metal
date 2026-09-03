@@ -125,10 +125,13 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // tensor the kernel reads each dispatch, which is the whole point.
         tensor_args.has_batch_index_metadata(),
         // batch_slot_num_layers / batch_slot_layer_idx are deliberately NOT hashed. They are RUNTIME
-        // arguments: this op is shape-identical across layers, so every layer shares ONE cached program
-        // (that is why input_batch_index is hash-excluded too). Hashing the layer index would give one
-        // program PER LAYER, and each program allocates two global semaphores -- which exhausts a
-        // tightly budgeted L1_SMALL region (GLM: 1152 B total) at the second or third layer.
+        // arguments, re-patched every dispatch, so this shape-identical op keeps ONE cached program
+        // across layers (that is why input_batch_index is hash-excluded too). The binding constraint is
+        // the LAYER INDEX: hashing it would give one program PER LAYER, and each program allocates two
+        // global semaphores -- which exhausts a tightly budgeted L1_SMALL region (GLM: 1152 B total) at
+        // the second or third layer. The layer COUNT is constant per cache and would fork only per
+        // distinct cache depth; it is left unhashed so one program also serves caches of different
+        // depth, and so both terms share a single patch site.
         // Freezing them into a captured program is still correct: they are layer-constant, and each
         // layer is its own op instance in the captured graph. Only the per-REQUEST user id needs a tensor.
         // Same reasoning as the slot-select flag: reading the extent on-device changes the reader binary,

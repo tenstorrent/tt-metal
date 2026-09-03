@@ -51,9 +51,13 @@ enum class ReaderRtArg : std::size_t {
     // Metadata slot select only. Always present so the scalar and metadata forms share one
     // runtime-argument layout; 0 and unread on the scalar path.
     //   BatchIndexMetaAddress -- address of the 1-element uint32 slot-id (user id) tensor.
-    //   BatchSlotNumLayers / BatchSlotLayerIdx -- the recomposition terms. RUNTIME, not compile-time,
-    //   so all layers share one cached program: per-layer programs would allocate per-layer global
-    //   semaphores and exhaust L1_SMALL. Layer-constant, so a capture may freeze them.
+    //   BatchSlotNumLayers / BatchSlotLayerIdx -- the recomposition terms, both re-patched every
+    //   dispatch. LayerIdx must be runtime: it varies per layer, and hashing it would give one program
+    //   per layer, each allocating two more global semaphores than L1_SMALL affords. NumLayers is
+    //   constant per cache and could have been compile-time; it stays runtime so the two travel as one
+    //   block with one patch site, and so a single cached program can serve caches of different depth
+    //   (a 78-layer KVPE cache and a 21-layer index cache) instead of forking per depth. Both are
+    //   constant within a captured op instance, so a capture may freeze them.
     BatchIndexMetaAddress,
     BatchSlotNumLayers,
     BatchSlotLayerIdx,
