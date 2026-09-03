@@ -36,7 +36,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     dispatch_buffer_used_tokens,
     extract_mesh_config,
-    get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
@@ -98,6 +97,84 @@ def _upload_dispatch_buffer(
     full = ttnn.pad(prefix, [(0, 0), (0, 0), (0, capacity_tokens - used_tokens), (0, 0)], pad_value)
     ttnn.deallocate(prefix)
     return full
+
+
+# Which index of `ttnn.get_device_tensors` holds which (dispatch group, chip), per mesh shape. Read
+# off the mesh once per process rather than assumed -- see `_ep_shard_order`.
+_EP_SHARD_ORDER = {}
+
+
+def _ep_shard_order(mesh_device):
+    """The (dispatch group, chip) each shard of `ttnn.get_device_tensors` belongs to, in shard order.
+
+    `get_device_tensors` hands back shards in the tensor's own coordinate order, and that order is
+    not part of its contract, so this reads it off the mesh instead of assuming row-major: hand the
+    EP mapper a tensor whose every element is its own (group, chip), pull the shards back, and see
+    where each one landed. A few hundred bytes and one round trip, cached per mesh shape because the
+    mapper depends on nothing else.
+
+    The permutation assert is the real check: if this ever stopped being a bijection onto the mesh,
+    the alternative is an output tensor assembled from the right data in the wrong places.
+    """
+    dispatch_group_size, num_dispatch_groups = mesh_device.shape[0], mesh_device.shape[1]
+    key = (dispatch_group_size, num_dispatch_groups)
+    if key in _EP_SHARD_ORDER:
+        return _EP_SHARD_ORDER[key]
+
+    # Laid out like the combine output's leading two dims -- (group, chip) -- so the EP mapper sends
+    # each element to the device that will hold that (group, chip) of the output. The trailing 32 is
+    # only to keep a row-major page a sensible size.
+    marker = torch.arange(num_dispatch_groups * dispatch_group_size, dtype=torch.int32)
+    marker = marker.reshape(num_dispatch_groups, dispatch_group_size, 1, 1).repeat(1, 1, 1, ttnn.TILE_SIZE)
+    tt_marker = ttnn.from_torch(
+        marker,
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    order = []
+    for shard in ttnn.get_device_tensors(tt_marker):
+        value = int(ttnn.to_torch(shard).flatten()[0].item())
+        order.append((value // dispatch_group_size, value % dispatch_group_size))
+    ttnn.deallocate(tt_marker)
+
+    expected = sorted((g, c) for g in range(num_dispatch_groups) for c in range(dispatch_group_size))
+    assert sorted(order) == expected, f"EP shard order is not a permutation of the mesh: {order}"
+
+    logger.debug(f"[ep shard order] {key} -> {order}")
+    _EP_SHARD_ORDER[key] = order
+    return order
+
+
+def _download_ep_output(tt_output, mesh_device):
+    """Bring an EP-sharded combine output to host, without the mesh composer.
+
+    `to_torch(mesh_composer=...)` on this tensor is almost all host work: measured at 8x4, the whole
+    call is 14.85s, of which the device-to-host transfer is 0.31s (2.24 GiB at 7.2 GB/s) and the
+    other 14.51s is stitching 32 shards into one rank-5 tensor. Converting those shards one at a
+    time costs 2.91s, so copying them into a preallocated destination -- one pass over 2.24 GiB at
+    memory speed -- gets the same tensor for about a quarter of the time.
+
+    Same result, not an approximation: every shard is copied in full, into the place the composer
+    would have put it. The shape assert downstream and the PCC check itself are what would catch a
+    misplacement.
+    """
+    shards = ttnn.get_device_tensors(tt_output)
+    order = _ep_shard_order(mesh_device)
+    assert len(shards) == len(order), f"{len(shards)} shards from a {len(order)}-device mesh"
+
+    dispatch_group_size, num_dispatch_groups = mesh_device.shape[0], mesh_device.shape[1]
+    out = None
+    for shard, (group, chip) in zip(shards, order):
+        local = ttnn.to_torch(shard)
+        assert (
+            local.shape[0] == 1 and local.shape[1] == 1
+        ), f"expected a (1, 1, ...) per-device shard, got {local.shape}"
+        if out is None:
+            out = torch.empty((num_dispatch_groups, dispatch_group_size, *local.shape[2:]), dtype=local.dtype)
+        out[group, chip] = local[0, 0]
+    return out
 
 
 def run_combine(
@@ -403,9 +480,7 @@ def run_combine(
         return
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = get_ep_mesh_composer(mesh_device)
-
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    tt_output_torch = _download_ep_output(tt_output, mesh_device)
     _release_device_tensors()
     if use_fp8_output:
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
