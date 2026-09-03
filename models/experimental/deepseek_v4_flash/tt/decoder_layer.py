@@ -7,7 +7,7 @@ from .attention import (
     DeepSeekV4Attention,
     _StaticLayerCache,
 )
-from .common import DeepSeekV4Module, _HIFI4, _profile, _region
+from .common import DeepSeekV4Module, _HIFI4, _profile
 from .hyperconnection import DeepSeekV4HyperConnection
 from .layers import DeepSeekV4RMSNorm
 from .moe import DeepSeekV4SparseMoeBlock
@@ -178,50 +178,40 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
+        hash_token: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
+        """Single-token decode: same graph as :meth:`decode_static` (the capture).
 
-        Everything outside attention (hyper-connections, norms, MoE / MLP) is
-        per-token; attention runs against the paged in-place ``scache``.
+        Host ``input_ids`` are uploaded only for hash-routed layers, as the static
+        path's on-device ``hash_token``.
         """
-        with _region("ATTN_HC"):
-            post, comb, collapsed = self.attn_hc(hidden_streams)
-        with _region("INPUT_NORM"):
-            normed = self.input_layernorm(collapsed)
-        with _region("ATTENTION"):
-            attn_out = self.self_attn.decode(
-                normed,
-                cos,
-                sin,
-                neg_sin,
-                cos_win,
-                sin_win,
-                mask,
-                scache,
-                sliding_pos,
-                compress_pos,
-                paged=paged,
-                pool_compressor=pool_compressor,
-                sdpa_cur_pos=sdpa_cur_pos,
-                win_slot=win_slot,
-                win_row=win_row,
+        if hash_token is None and input_ids is not None and self.mlp.is_hash:
+            t = hidden_streams.shape[0]
+            hash_token = ttnn.from_torch(
+                torch.as_tensor(input_ids).reshape(1, t).long().to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=(ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None),
             )
-        with _region("ATTN_MIX"):
-            hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
-        # Spent after the mix. Leaving them in L1 is the difference between fused_experts'
-        # static CBs fitting and the clash reported in eager decode (decode_static already
-        # drops them for the same reason).
-        ttnn.deallocate(normed)
-        ttnn.deallocate(attn_out)
-        _profile(self.device)
-        with _region("FFN_HC"):
-            post, comb, collapsed = self.ffn_hc(hidden_streams)
-        with _region("POST_NORM"):
-            normed = self.post_attention_layernorm(collapsed)
-        with _region("MOE"):
-            mlp_out = self.mlp(normed, input_ids=input_ids)
-        with _region("FFN_MIX"):
-            return self._mix(post, comb, mlp_out, hidden_streams)
+        return self.decode_static(
+            hidden_streams,
+            cos,
+            sin,
+            neg_sin,
+            cos_win,
+            sin_win,
+            mask,
+            scache,
+            sliding_pos,
+            compress_pos,
+            hash_token=hash_token,
+            paged=paged,
+            pool_compressor=pool_compressor,
+            sdpa_cur_pos=sdpa_cur_pos,
+            win_slot=win_slot,
+            win_row=win_row,
+        )
 
     def decode_static(
         self,
