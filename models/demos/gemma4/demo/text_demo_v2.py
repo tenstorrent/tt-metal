@@ -1044,14 +1044,11 @@ def _run_spec_decode(
         # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
         # built, not after -- setting the env here was too late to be read.)
 
-    # Fused MTP owns this process's one CCL capture. Traced prefill interleaved
-    # with that capture deadlocks Wormhole. Spec prefill stays eager; decode
-    # tracing is still ``spec._use_trace`` below.
     prefill_enable_trace, device_sampling_params = _prepare_demo_prefill_warmup(
         generator=generator,
         tt_kv_cache=tt_kv_cache,
         sampling_params=sampling_params,
-        enable_trace=False,
+        enable_trace=enable_trace,
         max_seq_len=max_seq_len,
         model_args_list=model_args_list,
         batch_size=batch_size,
@@ -1310,7 +1307,7 @@ def _run_spec_decode_batched(
         generator=generator,
         tt_kv_cache=tt_kv_cache,
         sampling_params=sampling_params,
-        enable_trace=False,
+        enable_trace=enable_trace,
         max_seq_len=max_seq_len,
         model_args_list=model_args_list,
         batch_size=B,
