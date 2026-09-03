@@ -20,6 +20,15 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+struct TopKCoreDistribution {
+    std::uint16_t num_cores;         // Local cores plus the final aggregation core
+    std::uint16_t local_input_size;  // Width elements each local core sorts
+    std::uint16_t remainder;         // Width elements left for the final core to sort itself
+    std::uint16_t final_input_size;  // Width elements the final core merges
+    std::uint16_t selected_x;        // Chosen core-grid width
+    std::uint16_t selected_y;        // Chosen core-grid height
+};
+
 /**
  * Core Configuration Utility
  *
@@ -35,10 +44,8 @@ namespace ttnn::prim {
  * @param l1_size L1 memory size per core
  * @param value_tile_size Memory size of value tiles
  * @param index_tile_size Memory size of index tiles
- * @return Tuple of (num_cores, split_size, remainder, final_input_size, selected_x, selected_y)
  */
-static inline std::tuple<std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t, std::uint16_t>
-cores_utilized(
+static inline TopKCoreDistribution cores_utilized(
     std::uint32_t width,
     std::uint32_t min_dim,
     std::uint32_t max_dim,
@@ -61,13 +68,13 @@ cores_utilized(
         k,
         core_range.str());
     const auto& config = config_opt.value();
-    return {
-        config.num_cores + 1,
-        config.split_size,
-        config.rem,
-        config.final_input_size,
-        config.selected_x,
-        config.selected_y};
+    return TopKCoreDistribution{
+        .num_cores = static_cast<std::uint16_t>(config.num_cores + 1),
+        .local_input_size = static_cast<std::uint16_t>(config.split_size),
+        .remainder = static_cast<std::uint16_t>(config.rem),
+        .final_input_size = static_cast<std::uint16_t>(config.final_input_size),
+        .selected_x = static_cast<std::uint16_t>(config.selected_x),
+        .selected_y = static_cast<std::uint16_t>(config.selected_y)};
 }
 
 tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory::create_descriptor(
@@ -149,7 +156,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const std::uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
-    const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
+    const auto [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
         input_shape[args.dim],       // Total width dimension
         64,                          // Minimum elements per core (LLK requirement)
         input_shape[args.dim] / 2,   // Maximum elements per core (load balancing)
@@ -442,6 +449,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         gathered_indices_cb_index                   // Final TopK indices destination
     };
 
+    // Dataflow kernels only: in fused mode the index CBs are not created on the cores these run on
+    // (output_ind lives on the final core alone), so the guard has to remove the DataflowBuffer
+    // declarations, not just skip a branch. The compute kernels take the flag as a compile-time arg.
     KernelDescriptor::Defines fused_defines;
     if (fused_stable_keys) {
         fused_defines.emplace_back("TOPK_FUSED_STABLE_KEYS", "1");
@@ -521,6 +531,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
         static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
+        static_cast<std::uint32_t>(fused_stable_keys),    // Fused packed [bf16|u16] keys sorted unstably
     };
 
     // fp32: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
@@ -542,7 +553,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
-    compute_local_desc.defines = fused_defines;
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the transpose/sort datapath without truncation. Fused keys are 32-bit words and need
     // 32-bit DEST for the same reason (and for the exact bf16->fp32 value widening the fuse relies on).
@@ -571,6 +581,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
         static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
+        static_cast<std::uint32_t>(fused_stable_keys),    // Fused packed [bf16|u16] keys sorted unstably
     };
 
     // Final-core value CBs (gathered input + final workspace) also unpack to fp32 dest.
@@ -591,7 +602,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     compute_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
-    compute_final_desc.defines = fused_defines;
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the merge datapath without truncation. Fused keys are 32-bit words and need 32-bit DEST.
     compute_final_desc.config = ComputeConfigDescriptor{

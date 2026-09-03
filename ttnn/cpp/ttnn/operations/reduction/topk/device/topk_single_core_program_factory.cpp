@@ -313,10 +313,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         // A compute kernel's legacy default optimization level is O3, while the Metal 2.0
         // default is O2 for every kernel kind, so it has to be stated to keep the level.
-        .compiler_options =
-            {.defines = rank_stamped_stable ? KernelSpec::CompilerOptions::Defines{{"TOPK_RANK_STAMPED_STABLE", "1"}}
-                                            : KernelSpec::CompilerOptions::Defines{},
-             .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         // The four workspace buffers are touched by this kernel alone, which both fills and
         // drains each of them, so each is bound at both endpoints under one accessor name.
         .dfb_bindings =
@@ -389,6 +386,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"output_tiles", Ktiles},                             // K value in tiles
                 {"largest", static_cast<uint32_t>(args.largest)},     // Sort order: largest (true) or smallest (false)
                 {"stable_sort", static_cast<uint32_t>(args.stable)},  // Stable sort: ties keep the lowest index
+                // Rank-stamped stable mode: local-rank tags in the value lo16 carry the tie order,
+                // so the network itself runs unstable.
+                {"rank_stamped", static_cast<uint32_t>(rank_stamped_stable)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core"}},
         // A 32-bit dest register is needed in two independent cases: a UInt32 index output (wide
