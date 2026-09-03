@@ -15,6 +15,7 @@ Single-chip native GQA shape: H=64, n_kv=4, S=640, T=56320, topk=16, d=v_dim=128
 """
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -93,3 +94,96 @@ def test_msa_perf_prod_single_chip_gqa(device, kv_dtype, expected_ms):
         f"gqa H={H} n_kv={n_kv} kv_dtype={kv_dtype}",
     )
     assert tuple(out.shape) == (1, H, S, d)
+
+
+def _paged_msa_memory_config(device, page_size, width):
+    cores = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(device.dram_grid_size().x)
+    ]
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, page_size, width],
+            grid=ttnn.CoreRangeSet(cores),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_msa_paged_perf_matches_contiguous(device, kv_dtype):
+    """Paged tile remapping must preserve production MSA throughput and numerical output."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for sparse_sdpa_msa perf checks (needs IOMMU)")
+    d, H, n_kv, S, T, topk, page_size = 128, 16, 1, 640, 56320, 16, 32
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=17)
+
+    def upload(tensor, dtype, layout, memory_config):
+        return ttnn.from_torch(
+            tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+
+    tt_q = upload(q.to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
+    tt_idx = upload(indices.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
+    tt_k = upload(k.to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
+    tt_v = upload(v.to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
+    paged_mem = _paged_msa_memory_config(device, page_size, d)
+    tt_paged_k = upload(
+        k.reshape(T // page_size, 1, page_size, d).to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, paged_mem
+    )
+    tt_paged_v = upload(
+        v.reshape(T // page_size, 1, page_size, d).to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, paged_mem
+    )
+    tt_table = upload(
+        torch.arange(T // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def invoke(k_tensor, v_tensor, **paging):
+        return ttnn.transformer.sparse_sdpa_msa(
+            tt_q,
+            k_tensor,
+            v_tensor,
+            tt_idx,
+            scale=d**-0.5,
+            block_size=128,
+            **paging,
+        )
+
+    paging = dict(
+        kv_cache_num_layers=1,
+        kv_cache_layer_idx=0,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    contiguous_out = invoke(tt_k, tt_v)
+    paged_out = invoke(tt_paged_k, tt_paged_v, **paging)
+    ttnn.synchronize_device(device)
+    assert torch.equal(
+        ttnn.to_torch(contiguous_out), ttnn.to_torch(paged_out)
+    ), "identity page mapping must be bit-exact with contiguous MSA"
+
+    contiguous_ns, paged_ns = [], []
+    for _ in range(5):
+        _, contiguous_record = profile_realtime_program(device, lambda: invoke(tt_k, tt_v))
+        _, paged_record = profile_realtime_program(device, lambda: invoke(tt_paged_k, tt_paged_v, **paging))
+        contiguous_ns.append(contiguous_record["duration_ns"])
+        paged_ns.append(paged_record["duration_ns"])
+    contiguous_ms = sorted(contiguous_ns)[len(contiguous_ns) // 2] / 1e6
+    paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
+    ratio = paged_ms / contiguous_ms
+    logger.info(
+        f"sparse_sdpa_msa {kv_dtype} paged perf: contiguous={contiguous_ms:.3f} ms, "
+        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+    )
+    assert ratio <= 1.10, f"paged sparse_sdpa_msa regressed production device time by {(ratio - 1) * 100:.2f}%"

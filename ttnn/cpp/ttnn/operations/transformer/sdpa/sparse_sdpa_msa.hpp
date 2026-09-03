@@ -34,6 +34,11 @@ namespace ttnn::transformer {
 // SP (chunked prefill, post-AllGather); the gather kernels remap logical block ids to physical in-kernel instead
 // of the caller reordering to natural order. sp is read from the mesh on that axis; chunk_local is the per-shard
 // chunk length (= chunk_size_global / sp), which must equal q_isl or tp*q_isl.
+// `page_bundle_indices` enables separate paged K/V pools. Logical block ids remain unchanged; the uint16 table
+// maps logical kv_cache_page_size-token pages to physical bundles. Each pool is TILE, ND-sharded one page per
+// shard, and shaped [physical_bundles * kv_cache_num_layers * n_kv, 1, kv_cache_page_size, feature_dim], with
+// physical pages ordered [bundle][layer][kv_head]. Paged mode is incompatible with cache_batch_idx and
+// block-cyclic remapping.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -46,6 +51,10 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::transformer

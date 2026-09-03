@@ -144,6 +144,140 @@ def _tile(t, device, dtype=ttnn.bfloat16):
     )
 
 
+def _paged_msa_memory_config(device, page_size, width):
+    cores = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(device.dram_grid_size().x)
+    ]
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, page_size, width],
+            grid=ttnn.CoreRangeSet(cores),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def _make_paged_msa_pools(k, v, page_size, num_layers=3, layer_idx=1, extra_bundles=3, seed=101):
+    """Scatter natural [1,n_kv,T,D] K/V into [bundle][layer][kv_head] physical pages."""
+    assert k.shape[:3] == v.shape[:3] and k.shape[2] % page_size == 0
+    n_kv, logical_bundles = k.shape[1], k.shape[2] // page_size
+    physical_bundles = logical_bundles + extra_bundles
+    gen = torch.Generator().manual_seed(seed)
+    k_pool = torch.randn(physical_bundles * num_layers * n_kv, 1, page_size, k.shape[3], generator=gen)
+    v_pool = torch.randn(physical_bundles * num_layers * n_kv, 1, page_size, v.shape[3], generator=gen)
+    order = torch.randperm(physical_bundles, generator=gen)[:logical_bundles].tolist()
+    for logical_bundle, physical_bundle in enumerate(order):
+        start = logical_bundle * page_size
+        for layer in range(num_layers):
+            for kv_head in range(n_kv):
+                flat_page = (physical_bundle * num_layers + layer) * n_kv + kv_head
+                if layer == layer_idx:
+                    k_pool[flat_page, 0] = k[0, kv_head, start : start + page_size]
+                    v_pool[flat_page, 0] = v[0, kv_head, start : start + page_size]
+    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    return k_pool, v_pool, table
+
+
+def _upload_paged_msa(device, k_pool, v_pool, table, page_size, kv_dtype=ttnn.bfloat16):
+    def upload(pool):
+        return ttnn.from_torch(
+            pool.to(torch.bfloat16),
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_paged_msa_memory_config(device, page_size, pool.shape[-1]),
+        )
+
+    tt_table = _rm(table, device, ttnn.uint16)
+    return upload(k_pool), upload(v_pool), tt_table
+
+
+def _run_paged_msa(device, q, k_pool, v_pool, indices, table, page_size, num_layers, layer_idx, kv_dtype):
+    tt_k, tt_v, tt_table = _upload_paged_msa(device, k_pool, v_pool, table, page_size, kv_dtype)
+    out = ttnn.transformer.sparse_sdpa_msa(
+        _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_k,
+        tt_v,
+        _rm(indices.to(torch.int32), device, ttnn.uint32),
+        scale=q.shape[-1] ** -0.5,
+        block_size=BLK_KV,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    return ttnn.to_torch(out), (tt_k, tt_v, tt_table)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "page_size,kv_dtype,v_dim",
+    [(32, ttnn.bfloat16, 128), (64, ttnn.bfloat16, 64), (32, ttnn.bfloat8_b, 128), (64, ttnn.bfloat8_b, 64)],
+    ids=["page32_bf16", "page64_bf16_v64", "page32_bfp8", "page64_bfp8_v64"],
+)
+def test_msa_paged_kv_noncontiguous_accuracy(device, page_size, kv_dtype, v_dim):
+    """Logical MSA blocks may cross nonmonotonic physical pages, layers, and KV-head pages."""
+    H, n_kv, S, T, topk = 64, 4, 33, 2048, 16
+    num_layers, layer_idx = 3, 1
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, causal=False, seed=page_size)
+    v = v[..., :v_dim].contiguous()
+    k_pool, v_pool, table = _make_paged_msa_pools(k, v, page_size, num_layers, layer_idx, seed=page_size + 40)
+    out, _ = _run_paged_msa(device, q, k_pool, v_pool, indices, table, page_size, num_layers, layer_idx, kv_dtype)
+    gold = sparse_attention_ref_msa(q, k, v, indices, _D**-0.5)
+    score = pcc(out, gold)
+    assert score > DEVICE_PCC, f"paged MSA PCC {score:.5f} ({kv_dtype}, page_size={page_size}, v_dim={v_dim})"
+
+
+@run_for_blackhole()
+def test_msa_paged_cache_hit_repatches_addresses(device):
+    """Fresh K/V/table addresses with identical geometry must reuse one program without stale pointers."""
+    H, n_kv, S, T, topk, page_size = 64, 4, 33, 2048, 16, 32
+    num_layers, layer_idx = 2, 1
+    device.clear_program_cache()
+    keep_alive = []
+    for seed in (211, 212):
+        q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, causal=False, seed=seed)
+        k_pool, v_pool, table = _make_paged_msa_pools(k, v, page_size, num_layers, layer_idx, seed=seed + 20)
+        out, tensors = _run_paged_msa(
+            device, q, k_pool, v_pool, indices, table, page_size, num_layers, layer_idx, ttnn.bfloat16
+        )
+        keep_alive.extend(tensors)
+        score = pcc(out, sparse_attention_ref_msa(q, k, v, indices, _D**-0.5))
+        assert score > DEVICE_PCC, f"paged cache-hit MSA PCC {score:.5f} (seed={seed})"
+    assert device.num_program_cache_entries() == 1, "paged K/V/table address changes must reuse one program"
+
+
+@run_for_blackhole()
+def test_msa_paged_validation(device, expect_error):
+    H, n_kv, S, T, topk, page_size = 64, 4, 32, 2048, 16, 32
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, causal=False, seed=301)
+    k_pool, v_pool, table = _make_paged_msa_pools(k, v, page_size, num_layers=2, layer_idx=1)
+    tt_k, tt_v, tt_table = _upload_paged_msa(device, k_pool, v_pool, table, page_size)
+    args = dict(
+        kv_cache_num_layers=2,
+        kv_cache_layer_idx=1,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    tt_q = _rm(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = _rm(indices.to(torch.int32), device, ttnn.uint32)
+    with expect_error(RuntimeError, "incompatible with cache_batch_idx"):
+        ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, cache_batch_idx=0, **args)
+    with expect_error(RuntimeError, "incompatible with block-cyclic"):
+        ttnn.transformer.sparse_sdpa_msa(
+            tt_q, tt_k, tt_v, tt_idx, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S, **args
+        )
+    with expect_error(RuntimeError, "page height"):
+        ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "kv_cache_page_size": 64})
+    with expect_error(RuntimeError, "smaller than"):
+        ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "kv_cache_layer_idx": 2})
+    with expect_error(RuntimeError, "uint16"):
+        bad_table = _rm(table.to(torch.int32), device, ttnn.uint32)
+        ttnn.transformer.sparse_sdpa_msa(tt_q, tt_k, tt_v, tt_idx, **{**args, "page_bundle_indices": bad_table})
+
+
 def _msa_op(device, q, k_tt, v_tt, indices):
     out = ttnn.transformer.sparse_sdpa_msa(
         _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),

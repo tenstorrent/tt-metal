@@ -52,14 +52,23 @@ void kernel_main() {
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(26);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(27);
 
+    constexpr bool paged_kv = get_compile_time_arg_val(28) != 0;
+    constexpr uint32_t kv_cache_page_size = get_compile_time_arg_val(29);
+    constexpr uint32_t kv_cache_num_layers = get_compile_time_arg_val(30);
+    constexpr uint32_t kv_cache_layer_idx = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_page_bundle = get_compile_time_arg_val(32);
+    constexpr uint32_t page_bundle_count = get_compile_time_arg_val(33);
+
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<28, 0>();
+    constexpr auto q_args = TensorAccessorArgs<34, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
         TensorAccessorArgs<k_args.next_compile_time_args_offset(), k_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<v_args.next_compile_time_args_offset(), v_args.next_common_runtime_args_offset()>();
+    constexpr auto page_bundle_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
@@ -78,6 +87,7 @@ void kernel_main() {
     }
     // Per-device global position of this core's query row 0 (chunk_start_idx + rank*S); patched at dispatch.
     const uint32_t chunk_start_local = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(10) : 0;
+    const uint32_t page_bundle_addr = get_arg_val<uint32_t>(11);
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
@@ -87,6 +97,22 @@ void kernel_main() {
     const auto k = TensorAccessor(k_args, k_addr);
     const auto v = TensorAccessor(v_args, v_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
+    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_addr);
+    experimental::CB page_bundle_cb(cb_page_bundle);
+    uint32_t page_bundle_l1 = 0;
+    if constexpr (paged_kv) {
+        page_bundle_cb.reserve_back(1);
+        page_bundle_l1 = page_bundle_cb.get_write_ptr();
+        noc.async_read(
+            page_bundle_reader,
+            CoreLocalMem<uint16_t>(page_bundle_l1),
+            page_bundle_count * sizeof(uint16_t),
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+        page_bundle_cb.push_back(1);
+    }
 
     // Reader-internal scratch for one token's block-id row (reserved once, reused).
     idx_cb.reserve_back(1);
@@ -211,11 +237,36 @@ void kernel_main() {
             kreq_cb.push_back(1);
 
             sparse_sdpa_msa::TridRing ring{noc};  // K/V upper halves share one ring.
-            for (uint32_t i = k_half; i < k_tiles_per_block; ++i) {
-                ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, i * k_tile_bytes);
-            }
-            for (uint32_t i = v_half; i < v_tiles_per_block; ++i) {
-                ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, i * v_tile_bytes);
+            constexpr uint32_t block_tile_rows = block_size / tt::constants::TILE_HEIGHT;
+            constexpr uint32_t k_feature_tiles = k_tiles_per_block / block_tile_rows;
+            constexpr uint32_t v_feature_tiles = v_tiles_per_block / block_tile_rows;
+            if constexpr (paged_kv) {
+                // Odd/even tiles keep both NoCs active across every physical page/bank.
+                for (uint32_t row = 0; row < block_tile_rows; ++row) {
+                    const uint32_t tile_row_base = sparse_sdpa_msa::
+                        cache_tile_id<true, kv_cache_page_size, kv_cache_num_layers, kv_cache_layer_idx>(
+                            0, block_id * block_tile_rows + row, 0, k_feature_tiles, n_kv, kv_group, page_bundle_l1);
+                    for (uint32_t feature = 1; feature < k_feature_tiles; feature += 2) {
+                        const uint32_t i = row * k_feature_tiles + feature;
+                        ring.read(k, k_cb, k_tile_bytes, tile_row_base + feature, i * k_tile_bytes);
+                    }
+                }
+                for (uint32_t row = 0; row < block_tile_rows; ++row) {
+                    const uint32_t tile_row_base = sparse_sdpa_msa::
+                        cache_tile_id<true, kv_cache_page_size, kv_cache_num_layers, kv_cache_layer_idx>(
+                            0, block_id * block_tile_rows + row, 0, v_feature_tiles, n_kv, kv_group, page_bundle_l1);
+                    for (uint32_t feature = 1; feature < v_feature_tiles; feature += 2) {
+                        const uint32_t i = row * v_feature_tiles + feature;
+                        ring.read(v, v_cb, v_tile_bytes, tile_row_base + feature, i * v_tile_bytes);
+                    }
+                }
+            } else {
+                for (uint32_t i = k_half; i < k_tiles_per_block; ++i) {
+                    ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, i * k_tile_bytes);
+                }
+                for (uint32_t i = v_half; i < v_tiles_per_block; ++i) {
+                    ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, i * v_tile_bytes);
+                }
             }
             ring.drain();           // this NoC's upper halves landed
             kack_cb.wait_front(1);  // writer's lower halves landed in the same L1
