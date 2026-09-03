@@ -85,8 +85,8 @@ void validate_runtime_args(
     // through the wrong bank table.
     TT_FATAL(
         tensor_args.actual_start.memory_config() == tensor_args.actual_end.memory_config(),
-        "metadata tensors actual_start and actual_end must share a memory config because one "
-        "TensorAccessor serves both reads (got buffer types {} and {})",
+        "moe_padding_config does not currently support actual_start and actual_end having different memory "
+        "configs, because one TensorAccessor serves both reads (got buffer types {} and {})",
         tensor_args.actual_start.memory_config().buffer_type(),
         tensor_args.actual_end.memory_config().buffer_type());
 }

@@ -29,12 +29,13 @@ void validate_standard_tile(const Matmul_RS::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.rs.input_tensor;
     TT_FATAL(
         input.layout() == Layout::TILE,
-        "llama_rs_matmul requires TILE layout on the reduce-scatter input, but it has {} layout",
+        "llama_rs_matmul does not currently support a non-TILE reduce-scatter input, but it has {} layout",
         input.layout());
     const auto tile = input.tensor_spec().tile();
     TT_FATAL(
         tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
-        "llama_rs_matmul requires a standard 32x32 tile on the reduce-scatter input, got {}x{}",
+        "llama_rs_matmul does not currently support tiles other than 32x32 on the reduce-scatter input, got "
+        "{}x{}",
         tile.get_height(),
         tile.get_width());
 }

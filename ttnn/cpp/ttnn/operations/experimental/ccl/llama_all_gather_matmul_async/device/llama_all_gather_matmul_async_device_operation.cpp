@@ -43,13 +43,14 @@ void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
         TT_FATAL(
             tensor.layout() == Layout::TILE,
-            "llama_all_gather_matmul_async requires TILE layout, but {} has {} layout",
+            "llama_all_gather_matmul_async does not currently support non-TILE layouts, but {} has {} layout",
             name,
             tensor.layout());
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
-            "llama_all_gather_matmul_async requires standard 32x32 tiles, but {} has a {}x{} tile",
+            "llama_all_gather_matmul_async does not currently support tiles other than 32x32, but {} has a "
+            "{}x{} tile",
             name,
             tile.get_height(),
             tile.get_width());

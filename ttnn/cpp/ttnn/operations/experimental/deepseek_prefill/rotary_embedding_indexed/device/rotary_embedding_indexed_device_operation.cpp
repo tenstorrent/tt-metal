@@ -91,13 +91,14 @@ void validate_runtime_args(
         // being reported here. The layout is already being read, so this costs one comparison.
         TT_FATAL(
             tensor.layout() == Layout::TILE,
-            "rotary_embedding_indexed requires TILE layout, but {} has {} layout",
+            "rotary_embedding_indexed does not currently support non-TILE layouts, but {} has {} layout",
             name,
             tensor.layout());
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
-            "rotary_embedding_indexed requires standard 32x32 tiles, but {} has a {}x{} tile",
+            "rotary_embedding_indexed does not currently support tiles other than 32x32, but {} has a {}x{} "
+            "tile",
             name,
             tile.get_height(),
             tile.get_width());

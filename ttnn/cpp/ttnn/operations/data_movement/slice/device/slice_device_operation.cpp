@@ -110,7 +110,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     // directly, so re-check it here where the factory is actually chosen.
     TT_FATAL(
         !args.use_tensor_args || tensor_args.input.layout() == Layout::TILE,
-        "Tensor-args slice requires a TILE layout input, but got {}",
+        "Tensor-args slice does not currently support non-TILE inputs, but got {} layout",
         tensor_args.input.layout());
     TT_FATAL(
         tensor_args.input.padded_shape().rank() == args.slice_start.rank() &&
@@ -169,7 +169,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         const auto tile = tensor_args.input.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
-            "slice requires standard 32x32 tiles, got {}x{}",
+            "slice does not currently support tiles other than 32x32, got {}x{}",
             tile.get_height(),
             tile.get_width());
         if (tensor_args.preallocated_output.has_value()) {

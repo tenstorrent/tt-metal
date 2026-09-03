@@ -120,7 +120,8 @@ void validate_runtime_args(
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
-            "update_padded_kv_cache requires standard 32x32 tiles, but {} has a {}x{} tile",
+            "update_padded_kv_cache does not currently support tiles other than 32x32, but {} has a {}x{} "
+            "tile",
             name,
             tile.get_height(),
             tile.get_width());
@@ -175,8 +176,9 @@ void validate_runtime_args(
             // address resolved through the wrong bank table.
             TT_FATAL(
                 meta.memory_config() == meta_memory_config,
-                "metadata tensor {} must share slot_idx's memory config because one TensorAccessor serves "
-                "every metadata read (got buffer types {} and {})",
+                "update_padded_kv_cache does not currently support metadata tensors with different memory "
+                "configs: one TensorAccessor serves every metadata read, so {} must match slot_idx (got "
+                "buffer types {} and {})",
                 name,
                 meta.memory_config().buffer_type(),
                 meta_memory_config.buffer_type());

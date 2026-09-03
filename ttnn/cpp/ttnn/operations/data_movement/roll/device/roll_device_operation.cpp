@@ -36,7 +36,7 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
         const auto tile = input.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
-            "roll requires standard 32x32 tiles, got {}x{}",
+            "roll does not currently support tiles other than 32x32, got {}x{}",
             tile.get_height(),
             tile.get_width());
     }

@@ -52,7 +52,7 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
         const auto tile = input_tensor_a.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
-            "reshape_on_device requires standard 32x32 tiles, got {}x{}",
+            "reshape_on_device does not currently support tiles other than 32x32, got {}x{}",
             tile.get_height(),
             tile.get_width());
         TT_FATAL(

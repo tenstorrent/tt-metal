@@ -78,7 +78,8 @@ void validate_runtime_args(
         const auto tile = cache.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
-            "zero_padded_kv_cache requires standard 32x32 tiles, but cache has a {}x{} tile",
+            "zero_padded_kv_cache does not currently support tiles other than 32x32, but cache has a {}x{} "
+            "tile",
             tile.get_height(),
             tile.get_width());
     }
@@ -101,7 +102,10 @@ void validate_runtime_args(
             // A sharded metadata tensor changes the shape and length of the accessor block the kernels
             // append, and both sibling ops reject it; the hashed memory config keeps it off a cached
             // program but would still let it compile on a fresh miss.
-            TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
+            TT_FATAL(
+                !meta.is_sharded(),
+                "zero_padded_kv_cache does not currently support sharded metadata tensors, but {} is sharded",
+                name);
             TT_FATAL(
                 meta.logical_volume() == 1,
                 "metadata tensor {} must be a single element (got {})",
@@ -116,8 +120,8 @@ void validate_runtime_args(
         // through the wrong bank table.
         TT_FATAL(
             tensor_args.slot_idx->memory_config() == tensor_args.valid_global->memory_config(),
-            "metadata tensors slot_idx and valid_global must share a memory config because one "
-            "TensorAccessor serves both reads (got buffer types {} and {})",
+            "zero_padded_kv_cache does not currently support slot_idx and valid_global having different "
+            "memory configs, because one TensorAccessor serves both reads (got buffer types {} and {})",
             tensor_args.slot_idx->memory_config().buffer_type(),
             tensor_args.valid_global->memory_config().buffer_type());
     }

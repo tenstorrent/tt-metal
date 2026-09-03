@@ -31,7 +31,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         const auto tile = input_tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
-            "interleaved_to_sharded_partial requires standard 32x32 tiles, got {}x{}",
+            "interleaved_to_sharded_partial does not currently support tiles other than 32x32, got {}x{}",
             tile.get_height(),
             tile.get_width());
     }
