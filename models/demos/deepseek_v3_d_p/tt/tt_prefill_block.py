@@ -401,6 +401,7 @@ class TtPrefillBlock(LightweightModule):
                 activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+                clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
                 **_dense_ffn_kwargs,
             )
 
@@ -483,6 +484,7 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
             shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
             shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+            shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
