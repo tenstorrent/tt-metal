@@ -11,7 +11,7 @@ from typing import Dict
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
-from .operand import OperandRegistry
+from .operand import reset_bfd_state
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -39,11 +39,6 @@ class UnpackKernelGenerator:
             [op.unpack(self.config.global_config) for op in self.config.pipeline]
         )
 
-        buf_desc_init = ""
-        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
-            reg = self.config.operand_registry
-            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_inputs())
-
         code = (
             f"\n"
             f"#ifdef LLK_TRISC_UNPACK\n"
@@ -52,7 +47,6 @@ class UnpackKernelGenerator:
             f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
-            f"{buf_desc_init}"
             f"{unpack_calls}"
             f"}}\n"
             f"\n"
@@ -137,11 +131,6 @@ class PackKernelGenerator:
             [op.pack(self.config.global_config) for op in self.config.pipeline]
         )
 
-        buf_desc_init = ""
-        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
-            reg = self.config.operand_registry
-            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_outputs())
-
         code = (
             f"\n"
             f"#ifdef LLK_TRISC_PACK\n"
@@ -150,7 +139,6 @@ class PackKernelGenerator:
             f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
-            f"{buf_desc_init}"
             f"{pack_calls}"
             f"}}\n"
             f"\n"
@@ -169,6 +157,7 @@ class FusedKernelGenerator:
         self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
+        reset_bfd_state()
         return {
             "unpack": self.unpack_gen.generate(),
             "math": self.math_gen.generate(),
@@ -195,7 +184,7 @@ class FusedKernelGenerator:
             )
 
         quasar_include = (
-            '#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
+            '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
             if self.config.global_config.architecture == ChipArchitecture.QUASAR
             else '#include "operand.h"\n'
         )
