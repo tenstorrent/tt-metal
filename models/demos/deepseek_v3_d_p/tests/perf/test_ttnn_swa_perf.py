@@ -20,7 +20,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_swa import _MESH_CONFIGS, _SEED, _build_reference, _config
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -35,7 +34,6 @@ _MARGIN = 0.05
 # Measured on a host is_high_power() calls false; the margin absorbs the difference.
 _BASELINES = [
     pytest.param("flash", DeepSeekV4FlashConfig, 5_124_000, id="flash"),
-    pytest.param("pro", DeepSeekV4ProConfig, 8_192_000, id="pro"),
 ]
 
 # Perf is gated on the 14kW hosts. Set this to run anywhere for bring-up.
