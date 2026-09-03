@@ -202,37 +202,75 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# GLM-5.2 per-chunk baseline medians (seconds), same (num_layers, n_chunks, num_iters) keying and same
-# traced/untraced split as the Kimi tables above.
+# GLM-5.2 per-chunk baseline medians (seconds), same (num_layers, n_chunks, num_iters) keying as the Kimi
+# tables above. TRACED ONLY -- there is deliberately no untraced counterpart; see the note below the table.
 #
-# UNCALIBRATED PLACEHOLDERS: every entry is 0.0. An all-zero row is treated as "no baseline yet" by
-# glm_chunked_perf_gate, so the gated config stays RECORD-ONLY -- print_duration_table prints the
-# measured per-chunk median/stddev table and asserts nothing. Fill these in from the table CI prints,
-# and the gate arms itself with no further code change.
-#
-# Do NOT expect a Kimi-shaped ramp. Kimi's traced baseline climbs 0.519 -> 0.855 s because chunk c
-# attends to KV[0:c*CHUNK]. GLM's DSA indexer selects a FIXED top-k capacity regardless of prefix
-# length, so both GLM curves are flat with depth and tracing shows up as a uniform shift, not a change
-# of shape. Local L78/11-chunk measurements (single galaxy, single run each, NOT a CI baseline):
-# untraced 1.713-1.758 s/chunk, traced 0.738-0.759 s/chunk.
+# Do NOT expect a Kimi-shaped ramp. Kimi's traced baseline climbs 0.519 -> 0.855 s (+65%) because chunk c
+# attends to KV[0:c*CHUNK]. GLM's DSA indexer selects a FIXED top-k capacity regardless of prefix length,
+# so tracing shows up mostly as a uniform shift. "Mostly", not entirely: the first CI traced run still
+# ramps 0.639 -> 0.702 s (+10%) monotonically from chunk 1, since the indexer must still SCORE the whole
+# prefix before the fixed-capacity top-k selects from it -- only the attention that follows is
+# depth-independent. A future GLM curve that is dead flat, or that ramps like Kimi's, is the surprise.
 #
 # Recalibrate from the per-chunk median across several independent green Galaxy runs, not from one run.
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-traced]
-    (78, 11, 10): [0.0]
-    * 11,
+    # (55k / code_debug). Per-chunk medians of run 33743294300 / job 100612454484 verbatim, over the 9
+    # post-warmup iterations.
+    #
+    # ONE run, which the file's own guidance says to avoid -- accepted here for the same reason the Kimi
+    # traced table was cut from one run: a traced replay's only noise source is the device, and this run's
+    # per-chunk stddev is 0.000-0.002 s (<=0.3%), an order of magnitude inside the 3% band. The untraced
+    # twin gets no such allowance. Cross-check against the next green run and re-center if any chunk
+    # disagrees by more than ~1%.
+    #
+    # Faster than the local pre-CI measurements quoted above (0.738-0.759 s/chunk): those were a single
+    # galaxy on plain FABRIC_2D, this is the torus-xy CI config.
+    (78, 11, 10): [
+        0.641,
+        0.639,
+        0.655,
+        0.649,
+        0.664,
+        0.664,
+        0.662,
+        0.668,
+        0.684,
+        0.689,
+        0.702,
+    ],
 }
-GLM_UNTRACED_BASELINE_CHUNK_TIMES_S = {
-    # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-notrace]
-    (78, 11, 10): [0.0]
-    * 11,
-}
-# Provisional bands, carried over from the Kimi defaults until the GLM baselines are cut. GLM's measured
-# spread is much tighter than Kimi's (traced per-chunk stddev 0.000-0.002 s, untraced 0.009-0.026 s at
-# ten_iters, vs Kimi's untraced ~0.33 s), so these can likely be tightened -- decide that WITH the
-# calibration data, not before it.
+# There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose. It existed as an all-zero placeholder that
+# glm_chunked_perf_gate read as "not calibrated yet", i.e. a table whose only function was to be skipped
+# — and the untraced GLM run is not a gate candidate to begin with, so the placeholder implied a plan that
+# should not be carried out.
+#
+# The measurement says why. Run 33743294300 / job 100612454398 (L78, 11 chunks, ten_iters, the config a
+# gate would key on) measured per-chunk MEDIANS of 1.672-2.032 s with per-chunk STDDEV of 0.148-0.427 s --
+# 9-25% of a ~1.68 s chunk. Chunk 3 came in at 2.032 s against ~1.68 s everywhere else, from ordinary
+# host-dispatch jitter rather than anything about chunk 3. UNTRACED_PERF_MARGIN is 5%, about +/-0.084 s
+# here: a band comfortably inside a single standard deviation. Such a gate fails on noise far more often
+# than on a regression, and a perf gate that cries wolf gets muted, which costs the coverage it was
+# supposed to add.
+#
+# This is not GLM-specific pessimism -- it is what "untraced" means. Every iteration re-dispatches every
+# op from host and pays a fresh op2op gap, so the spread is a property of eager dispatch (Kimi's untraced
+# stddev reaches ~0.33 s for the same reason). Kimi can still gate that path only because its centre was
+# cut from a set of green runs and re-checked against 32 of them.
+#
+# So the untraced GLM config stays RECORD-ONLY: print_duration_table prints its per-chunk median/stddev
+# and asserts nothing, which is the honest report for a number this noisy. Traced is where the regression
+# signal actually lives (stddev <=0.3%, and it is the path serving runs), and it is gated below.
+#
+# To gate untraced later, the prerequisite is evidence, not a table: collect ten_iters medians from
+# SEVERAL independent green Galaxy runs, take the median-of-runs per chunk, and size the band from the
+# observed cross-run spread instead of inheriting Kimi's 5%. Then add the table back plus its own margin
+# constant and restore the untraced branch in glm_chunked_perf_gate.
+#
+# Traced band: carried over from the Kimi default. Measured per-chunk stddev is 0.000-0.002 s (<=0.3%), so
+# 3% could likely be tightened -- leave it until a second green run is in, since with the baseline cut
+# from one run the band is absorbing run-to-run drift that has not been measured yet.
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
-GLM_UNTRACED_PERF_MARGIN = UNTRACED_PERF_MARGIN
 # The ONLY variant these baselines describe. glm_5_1 shares the perf test's parametrization and its 78
 # layers, so without this it would match the same table key and be gated against GLM-5.2's numbers --
 # a different model, different weights, different golden trace. It stays record-only.
@@ -1914,22 +1952,23 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
 def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
     """GLM counterpart of kimi_chunked_perf_gate: returns ``(baseline_chunk_times_s, margin)``.
 
-    Same two conditions as the Kimi gate -- use_trace picks WHICH table and WHICH default band (a traced
-    baseline can never arm an untraced run, or the reverse), and only preload_isl == 0 is gated, since the
-    recorded runs start from an empty cache.
+    As in the Kimi gate, only preload_isl == 0 is gated, since the recorded runs start from an empty
+    cache. Two conditions differ:
 
-    Two extra conditions:
+      use_trace -- only the TRACED path has a baseline. Unlike Kimi, GLM has no untraced table at all,
+                   so an untraced run is always record-only; the reasoning is in the long comment above
+                   GLM_TRACED_PERF_MARGIN (short version: the untraced per-chunk stddev is 9-25%, which
+                   swamps any band worth setting). This is a deliberate absence, not a gap to fill in
+                   passing -- read that comment before adding one back.
+      variant   -- the baseline was measured on GLM_PERF_GATED_VARIANT only. glm_5_1 shares this test's
+                   parametrization AND its layer count, so it would match the same (num_layers, n_chunks,
+                   num_iters) key and get silently gated against another model's numbers. It is a
+                   different model (different weights, its own golden trace), so any agreement would be
+                   luck; it stays record-only until it has a table of its own.
 
-      variant  -- the baselines were measured on GLM_PERF_GATED_VARIANT only. glm_5_1 shares this test's
-                  parametrization AND its layer count, so it would match the same (num_layers, n_chunks,
-                  num_iters) key and get silently gated against another model's numbers. It is a
-                  different model (different weights, its own golden trace), so any agreement would be
-                  luck; it stays record-only until it has a table of its own.
-      all-zero -- an uncalibrated placeholder row returns None so the run stays record-only. Without
-                  this, the zero-filled tables would arm a band of zero width around a zero baseline and
-                  fail every chunk of every gated run -- turning a not-yet-calibrated config into a red
-                  CI job that reports nothing useful. Replace the zeros with real medians and the gate
-                  arms itself. (To make an uncalibrated config fail loudly instead, drop `any(baseline)`.)
+    An all-zero row is also read as "not calibrated yet" and returns None. No such row ships today, but
+    the guard stays so that adding a placeholder key leaves the run record-only rather than arming a
+    zero-width band around a zero baseline and failing every chunk of it.
     """
     variant_name = getattr(variant, "name", None)
     if variant_name != GLM_PERF_GATED_VARIANT:
@@ -1938,20 +1977,22 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
             f"(only {GLM_PERF_GATED_VARIANT!r} does) — run stays record-only"
         )
         return None, perf_margin
-    table, default_margin = (
-        (GLM_TRACED_BASELINE_CHUNK_TIMES_S, GLM_TRACED_PERF_MARGIN)
-        if use_trace
-        else (GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, GLM_UNTRACED_PERF_MARGIN)
-    )
-    baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    if not use_trace:
+        logger.info(
+            "[perf gate] GLM untraced runs are record-only by design: eager dispatch measures 9-25% "
+            "per-chunk stddev, so any band worth gating sits inside the noise — see the comment above "
+            "GLM_TRACED_PERF_MARGIN before adding an untraced baseline"
+        )
+        return None, perf_margin
+    baseline = GLM_TRACED_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
     if baseline is not None and not any(baseline):
         logger.info(
-            f"[perf gate] GLM baseline for (L{num_layers}, {n_chunks} chunks, {num_iters} iters, "
-            f"{'traced' if use_trace else 'notrace'}) is an uncalibrated placeholder (all zeros) — "
-            "run stays record-only; fill the table from the printed per-chunk medians to arm the gate"
+            f"[perf gate] GLM traced baseline for (L{num_layers}, {n_chunks} chunks, {num_iters} iters) "
+            "is an uncalibrated placeholder (all zeros) — run stays record-only; fill the table from the "
+            "printed per-chunk medians to arm the gate"
         )
         baseline = None
-    return baseline, (default_margin if perf_margin is None else perf_margin)
+    return baseline, (GLM_TRACED_PERF_MARGIN if perf_margin is None else perf_margin)
 
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
@@ -2273,8 +2314,9 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Both modes are gated, each against its own table and its own band -- see glm_chunked_perf_gate.
-    # While the tables hold the zero placeholders this resolves to None (record-only) and only prints.
+    # Only the TRACED mode is gated. Untraced resolves to None (record-only, prints the table and asserts
+    # nothing) because its per-chunk stddev is far wider than any band worth setting -- see
+    # glm_chunked_perf_gate and the comment above GLM_TRACED_PERF_MARGIN.
     baseline_chunk_times_s, resolved_perf_margin = glm_chunked_perf_gate(
         variant, use_trace, num_layers, n_chunks, num_iters, preload_isl
     )
