@@ -262,26 +262,119 @@ def _prepare_tt_inputs(
             mesh_axes=[..., None, sp_axis],
         )
 
+    def upload_replicated_indices(arr: torch.Tensor) -> ttnn.Tensor:
+        # The assembly and output-selection gathers run on SP-replicated tensors, so their index
+        # tensors are replicated too -- `upload_row_metadata` without the shard.
+        return from_torch(
+            arr.to(torch.int32).reshape(1, 1, 1, -1),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[..., None, None],
+        )
+
+    # The new forward takes fixed-capacity streams plus gather indices, exactly as the pipeline
+    # builds them: every true length rides in index content, not in a shape. Here the caps are the
+    # stream sizes rounded up to a tile -- the smallest that exercises the production gather path.
+    tile = ttnn.TILE_SIZE
+
+    def rup(n: int) -> int:
+        return ((n + tile - 1) // tile) * tile
+
+    def pad_stream(t: torch.Tensor, cap: int) -> torch.Tensor:  # [B, n, C] -> [B, cap, C]
+        if t.shape[1] == cap:
+            return t
+        return torch.cat([t, torch.zeros(t.shape[0], cap - t.shape[1], t.shape[2], dtype=t.dtype)], dim=1)
+
+    l_cap, v_cap, a_cap = rup(num_text), rup(num_video), rup(num_audio)
+    video_cond = [b["input"] for b in cond_blocks if b["modality"] == "video"]
+    audio_cond = [b["input"] for b in cond_blocks if b["modality"] == "audio"]
+    cv_total = sum(b["rows"] for b in cond_blocks if b["modality"] == "video")
+    ca_total = sum(b["rows"] for b in cond_blocks if b["modality"] == "audio")
+    kv_cap = rup(cv_total) if cv_total else 0
+    ka_cap = rup(ca_total) if ca_total else 0
+
+    # Source-table row offsets, mirroring forward's concat order [text | cond video | cond audio |
+    # audio | video]; a condition segment exists only when its stream is passed.
+    cursor = l_cap
+    off_cv, cursor = cursor, cursor + kv_cap
+    off_ca, cursor = cursor, cursor + ka_cap
+    off_audio, cursor = cursor, cursor + a_cap
+    off_video = cursor
+
+    # assembly_indices: packed order [text | cond blocks in order | audio | video | pad], each cond
+    # block gathered from its modality arena with a per-modality cursor. Pad rows point at row 0.
+    asm = torch.zeros(padded_len, dtype=torch.int64)
+    asm[:num_text] = torch.arange(num_text)
+    pos, cv_cur, ca_cur = num_text, 0, 0
+    for block in cond_blocks:
+        rows = block["rows"]
+        if block["modality"] == "video":
+            base, cv_cur = off_cv + cv_cur, cv_cur + rows
+        else:
+            base, ca_cur = off_ca + ca_cur, ca_cur + rows
+        asm[pos : pos + rows] = torch.arange(base, base + rows)
+        pos += rows
+    asm[pos : pos + num_audio] = torch.arange(off_audio, off_audio + num_audio)
+    pos += num_audio
+    asm[pos : pos + num_video] = torch.arange(off_video, off_video + num_video)
+
+    # Output selection: global packed row of each target row, entries past the true count pointing at
+    # the modality's first target row.
+    audio_start = num_text + cv_total + ca_total
+    video_start = audio_start + num_audio
+    v_out = torch.full((v_cap,), video_start, dtype=torch.int64)
+    v_out[:num_video] = torch.arange(video_start, video_start + num_video)
+    a_out = torch.full((a_cap,), audio_start, dtype=torch.int64)
+    a_out[:num_audio] = torch.arange(audio_start, audio_start + num_audio)
+
+    # Window boundaries fencing the true prompt tokens off from the arena's pad tail, exactly as
+    # the pipeline builds them (`_prompt_windows`): SDPA's windowed mode synthesizes the mask on
+    # device from the three boundaries.
+    prompt_windows = None
+    if l_cap != num_text:
+        prompt_windows = from_torch(
+            torch.tensor([0, num_text, l_cap], dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None],
+        )
+
+    def cond_arena(inputs: list[torch.Tensor], cap: int) -> ttnn.Tensor | None:
+        if not inputs:
+            return None
+        return bf16_tensor(pad_stream(torch.cat(inputs, dim=1), cap).unsqueeze(0), device=mesh_device)
+
+    # The step-invariant streams go through `prepare_static_sources` once, exactly as the pipeline
+    # calls it; `tt` holds the per-step `forward` arguments.
+    tt_static = dict(
+        prompt_1BLP=bf16_tensor(pad_stream(prompt_input, l_cap).unsqueeze(0), device=mesh_device),
+        prompt_windows=prompt_windows,
+        condition_video_1BKC=cond_arena(video_cond, kv_cap),
+        condition_audio_1BKC=cond_arena(audio_cond, ka_cap),
+    )
     tt = dict(
-        video_1BVC=bf16_tensor(video_input.unsqueeze(0), device=mesh_device),
-        audio_1BAC=bf16_tensor(audio_input.unsqueeze(0), device=mesh_device),
-        prompt_1BLP=bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device),
-        condition_blocks=[
-            (bf16_tensor(block["input"].unsqueeze(0), device=mesh_device), block["modality"]) for block in cond_blocks
-        ]
-        or None,
+        video_1BVC=bf16_tensor(pad_stream(video_input, v_cap).unsqueeze(0), device=mesh_device),
+        audio_1BAC=bf16_tensor(pad_stream(audio_input, a_cap).unsqueeze(0), device=mesh_device),
+        assembly_indices=upload_replicated_indices(asm),
+        video_out_indices=upload_replicated_indices(v_out),
+        audio_out_indices=upload_replicated_indices(a_out),
         timestep=from_torch(timestep.reshape(1, 1, num_timesteps, 1), device=mesh_device, dtype=ttnn.float32),
         adaln_indices=upload_row_metadata(ts_idx * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)),
         timestep_indices=upload_row_metadata(ts_idx),
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         logical_n=logical_length_tensor(mesh_device, seq_len),
+        pad_to=padded_len,
     )
 
     return SimpleNamespace(
         seq_len=seq_len,
         padded_len=padded_len,
         num_timesteps=num_timesteps,
+        num_video=num_video,
+        num_audio=num_audio,
         position_ids=position_ids,
         tags=tags,
         ts_idx=ts_idx,
@@ -291,6 +384,7 @@ def _prepare_tt_inputs(
         timestep=timestep,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        tt_static=tt_static,
         tt=tt,
     )
 
@@ -443,6 +537,7 @@ def test_minimax_h3_transformer(
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     logger.info("Running TT model")
+    tt_model.prepare_static_sources(**inputs.tt_static)
     tt_video_out, tt_audio_out = tt_model(**inputs.tt)
 
     def compose_replicated(t: ttnn.Tensor) -> torch.Tensor:
@@ -456,8 +551,9 @@ def test_minimax_h3_transformer(
             torch.testing.assert_close(flat[0], flat[d], rtol=0, atol=0, msg=f"replica {d} diverged")
         return flat[:1]
 
-    tt_video_out = compose_replicated(tt_video_out)
-    tt_audio_out = compose_replicated(tt_audio_out)
+    # The forward returns arena-capacity rows, true target rows leading; slice to the true counts.
+    tt_video_out = compose_replicated(tt_video_out)[:, :num_video]
+    tt_audio_out = compose_replicated(tt_audio_out)[:, :num_audio]
 
     logger.info("Checking video output")
     assert_quality(torch_video_out, tt_video_out, pcc=MIN_PCC)
@@ -587,6 +683,9 @@ def test_minimax_h3_transformer_real_weights(
         f"{inputs.padded_len // sp_factor} rows/device), cond blocks={[(b['modality'], b['rows']) for b in cond_blocks]}"
     )
 
+    # Once per request, as the pipeline runs it; `forward` reads the stored prefix every call.
+    tt_model.prepare_static_sources(**inputs.tt_static)
+
     def forward():
         out = tt_model(**inputs.tt)
         ttnn.synchronize_device(mesh_device)
@@ -606,7 +705,8 @@ def test_minimax_h3_transformer_real_weights(
             tensor,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=[0, 1], mesh_shape=tuple(mesh_device.shape)),
         )
-        out = out.reshape(-1, *out.shape[2:])[0].float()
+        # The forward returns arena-capacity rows, true target rows leading; slice to the true count.
+        out = out.reshape(-1, *out.shape[2:])[0].float()[:rows]
         assert out.shape == (rows, channels), f"{name}: got {tuple(out.shape)}, want {(rows, channels)}"
         assert torch.isfinite(out).all(), f"{name}: contains NaN or Inf"
         std, absmax = out.std().item(), out.abs().max().item()

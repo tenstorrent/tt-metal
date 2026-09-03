@@ -188,8 +188,8 @@ def test_ref2va_end_to_end(case, mesh_device, reset_seeds):
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
     assert (
-        pipeline.last_padded_len == _EXPECTED_PADDED_LEN[case]
-    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {_EXPECTED_PADDED_LEN[case]}"
+        pipeline.last_seq_len.padded == _EXPECTED_PADDED_LEN[case]
+    ), f"{case} ran at padded_len {pipeline.last_seq_len.padded}, not the probed {_EXPECTED_PADDED_LEN[case]}"
 
     frames = to_uint8_frames(output)
     # Artifacts before the checks, so a failing check still leaves frames to inspect.

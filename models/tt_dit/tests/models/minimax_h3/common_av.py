@@ -480,10 +480,13 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     """
     warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
     pipeline.warmup(prompt=prompt, **warmup_kwargs)
-    warm_padded_len = pipeline.last_padded_len
 
+    # `warmup` walks the whole bucket ladder, so `last_seq_len` afterwards is the last (smallest)
+    # rung it touched, not this request's rung. The quiet compile pass runs the *real* request, so
+    # it establishes the rung the measured call will run at -- take the reference from there.
     with pipeline.quiet():
         pipeline(prompt, seed=seed, **warmup_kwargs)
+    warm_padded_len = pipeline.last_seq_len.padded
 
     ttnn.synchronize_device(pipeline.mesh_device)
     if ttnn.using_distributed_env():
@@ -497,10 +500,17 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    assert pipeline.last_padded_len == warm_padded_len, (
-        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
-        f"{pipeline.last_padded_len}; this number is not warm"
+    measured = pipeline.last_seq_len.padded
+    assert measured == warm_padded_len, (
+        f"the compile pass ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{measured}; this number is not warm"
     )
+    # The real warmth check under bucketing: the rung the measured call ran at must hold a live
+    # capture, so it replayed rather than paying an untraced generation plus recapture.
+    if pipeline.trace_denoise:
+        assert pipeline._rung_captured(measured), (
+            f"the measured call ran at padded_len {measured}, which has no captured trace; " f"this number is not warm"
+        )
     return output
 
 
@@ -553,8 +563,10 @@ def log_pipeline_perf(
         if num_forwards and num_forwards != num_inference_steps:
             step_line += f" ({num_forwards} denoise steps)"
         lines.append(step_line)
-    if pipeline.last_padded_len is not None:
-        lines.append(f"Padded Length: {pipeline.last_padded_len}")
+    if pipeline.last_seq_len is not None:
+        logical, padded = pipeline.last_seq_len.logical, pipeline.last_seq_len.padded
+        waste = 100.0 * (padded - logical) / padded if padded else 0.0
+        lines.append(f"sequence_length:{logical}, padd:{padded}, waste:{waste:.1f}%")
     lines.append(
         f"DiT Configuration: sp={pipeline.sp_factor} axis {pipeline.sp_axis}, "
         f"tp={pipeline.tp_factor} axis {pipeline.tp_axis}"
