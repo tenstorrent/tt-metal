@@ -118,6 +118,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION,          // Simulator Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
@@ -852,6 +853,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
         case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
             this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
+        // TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION
+        // Set the NOC API version for the simulator.
+        // Default: 2 (use NOC API v2)
+        // Usage: export TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION=1
+        case EnvVarID::TT_METAL_SIMULATOR_QUASAR_NOC_API_VERSION:
+            this->simulator_quasar_noc_api_version = std::stoi(value);
+            TT_FATAL(
+                this->simulator_quasar_noc_api_version == 1 || this->simulator_quasar_noc_api_version == 2,
+                "Invalid NOC API version: {}",
+                this->simulator_quasar_noc_api_version);
             break;
 
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
