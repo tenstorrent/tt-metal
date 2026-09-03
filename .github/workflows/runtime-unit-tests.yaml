@@ -144,8 +144,44 @@ jobs:
       tracy: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
+  bake-test-env:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical ghcr ref: harbor-prefix only reaches bake layer contexts, never
+      # this output, so the GitHub-hosted producer can pull it.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
   runtime-unit-tests:
-    needs: [check-harbor, build-artifact, resolve-skus]
+    # bake-test-env is needed for its output but deliberately not in `if`: a failed
+    # bake yields an empty ref and the legs fall back to the artifact path, rather
+    # than skipping and counting as success in workflow-status.
+    needs: [check-harbor, build-artifact, resolve-skus, bake-test-env]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
+    uses: ./.github/workflows/runtime-unit-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      prebuilt-image: ${{ needs.bake-test-env.outputs.image }}
+
+  # TEMPORARY, remove before review. The artifact-path arm: same run, same build,
+  # same SKU as the job above, differing only in prebuilt-image being unset, so
+  # setup timings can be compared without a cross-run baseline.
+  ab-artifact-arm:
+    needs: [check-harbor, build-artifact, resolve-skus, bake-test-env]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     uses: ./.github/workflows/runtime-unit-tests-impl.yaml
     secrets: inherit
