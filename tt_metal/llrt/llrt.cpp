@@ -88,16 +88,15 @@ tt::tt_metal::CoreCoord logical_core_from_ethernet_core(
 
 tt_metal::HalProgrammableCoreType get_core_type(
     tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& virtual_core) {
-    auto& env_impl = env;
-    auto& cluster = env_impl.get_cluster();
+    auto& cluster = env.get_cluster();
     bool is_eth_core = cluster.is_ethernet_core(virtual_core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
     // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
     if (is_eth_core) {
-        auto active_eth_cores = env_impl.get_control_plane().get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores = env_impl.get_control_plane().get_inactive_ethernet_cores(chip_id);
+        auto active_eth_cores = env.get_control_plane().get_active_ethernet_cores(chip_id);
+        auto inactive_eth_cores = env.get_control_plane().get_inactive_ethernet_cores(chip_id);
         is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(env, chip_id, virtual_core));
         is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(env, chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
@@ -121,10 +120,9 @@ tt_metal::HalProgrammableCoreType get_core_type(
 
 void send_reset_go_signal(
     tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip, const tt::tt_metal::CoreCoord& virtual_core) {
-    auto& env_impl = env;
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip, virtual_core);
-    const auto& hal = env_impl.get_hal();
-    const auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    const auto& cluster = env.get_cluster();
     uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
@@ -145,10 +143,9 @@ void write_launch_msg_to_core(
     tt_metal::dev_msgs::launch_msg_t::View msg,
     tt_metal::dev_msgs::go_msg_t::ConstView go_msg,
     bool send_go) {
-    auto& env_impl = env;
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip, core);
-    const auto& hal = env_impl.get_hal();
-    const auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    const auto& cluster = env.get_cluster();
 
     msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
@@ -168,11 +165,10 @@ ll_api::memory read_mem_from_core(
     const tt::tt_metal::CoreCoord& core,
     const ll_api::memory& mem,
     uint64_t local_init_addr) {
-    auto& env_impl = env;
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = env_impl.get_hal().relocate_dev_addr(addr, local_init_addr);
-        env_impl.get_cluster().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
+        uint64_t relo_addr = env.get_hal().relocate_dev_addr(addr, local_init_addr);
+        env.get_cluster().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }
@@ -185,9 +181,8 @@ bool test_load_write_read_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
-    auto& env_impl = env;
-    auto& cluster = env_impl.get_cluster();
-    const auto& hal = env_impl.get_hal();
+    auto& cluster = env.get_cluster();
+    const auto& hal = env.get_hal();
     TT_ASSERT(
         cluster.is_worker_core(core, chip_id) or cluster.is_ethernet_core(core, chip_id) or
         cluster.is_dispatch_core(core, chip_id) or
@@ -231,9 +226,8 @@ bool test_load_multicast_write_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
-    auto& env_impl = env;
-    auto& cluster = env_impl.get_cluster();
-    const auto& hal = env_impl.get_hal();
+    auto& cluster = env.get_cluster();
+    const auto& hal = env.get_hal();
     TT_ASSERT(cluster.is_worker_core(start_core, chip_id) and cluster.is_worker_core(end_core, chip_id));
 
     uint64_t local_init_addr =
@@ -274,10 +268,9 @@ namespace {
 
 bool check_if_riscs_on_specified_core_done(
     tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& core, int run_state) {
-    auto& env_impl = env;
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip_id, core);
-    const auto& hal = env_impl.get_hal();
-    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
     uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
@@ -307,8 +300,7 @@ bool check_if_riscs_on_specified_core_done(
 
 void print_aerisc_training_status(
     tt::tt_metal::MetalEnvImpl& env, tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core) {
-    auto& env_impl = env;
-    const auto& hal = env_impl.get_hal();
+    const auto& hal = env.get_hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
@@ -316,7 +308,7 @@ void print_aerisc_training_status(
         get_core_type(env, device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         return;
     }
-    auto& cluster = env_impl.get_cluster();
+    auto& cluster = env.get_cluster();
     const tt_cxy_pair target(device_id, virtual_core);
     auto read_u32 = [&](uint32_t addr) {
         uint32_t v = 0;
@@ -396,11 +388,10 @@ void wait_until_cores_done(
     std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores,
     int timeout_ms) {
     auto& env = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
-    auto& env_impl = env;
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    const auto& rtoptions = env_impl.get_rtoptions();
+    const auto& rtoptions = env.get_rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
     // timeout_ms == 0 means infinite wait on sim; on silicon it means use configured operation timeout.
     // Callers that need a bounded wait on sim (e.g. dispatch-core teardown) pass an explicit timeout_ms > 0.
@@ -468,9 +459,9 @@ void wait_for_idle(
     ChipId device_id,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores) {
     std::unordered_set<tt::tt_metal::CoreCoord> not_done_cores;
-    auto& env_impl = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
-    const auto& hal = env_impl.get_hal();
-    const auto& cluster = env_impl.get_cluster();
+    auto& env = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
+    const auto& hal = env.get_hal();
+    const auto& cluster = env.get_cluster();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         const auto& logical_cores_of_type = logical_cores[index];
@@ -493,9 +484,8 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
-    auto& env_impl = env;
-    const auto& hal = env_impl.get_hal();
-    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
@@ -589,9 +579,8 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     tt::ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
     int timeout_ms) {
-    auto& env_impl = env;
-    const auto& hal = env_impl.get_hal();
-    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
@@ -635,9 +624,8 @@ void return_to_base_firmware_and_wait_for_heartbeat(
 void set_metal_eth_fw_run_flag(
     tt::tt_metal::MetalEnvImpl& env, tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, bool enable) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    auto& env_impl = env;
-    const auto& hal = env_impl.get_hal();
-    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
