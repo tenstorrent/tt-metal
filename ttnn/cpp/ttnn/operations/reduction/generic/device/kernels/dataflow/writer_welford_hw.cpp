@@ -5,19 +5,19 @@
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
-// cb_partial. The compute kernel either writes 32 per-column statistics or,
+// dfb::partial. The compute kernel either writes 32 per-column statistics or,
 // on the SFPU leaf-combine path, one precombined 32-column leaf per tile.
 // This kernel combines those equal-sized populations across W, applies
-// Bessel's correction, and writes the combined scalar into cb_combined for
+// Bessel's correction, and writes the combined scalar into dfb::combined for
 // the compute kernel to apply
-// sqrtf (if std) and re-pack in the output format. cb_combined is
+// sqrtf (if std) and re-pack in the output format. dfb::combined is
 // normally fp32, but for variance output to bf16 the program
 // factory may declare it as bf16 to save SRAM with no precision loss
 // since data is packed to bf16 output anyways and there is no math before
 // the final pack. combined_is_bf16 compile-time arg selects the path.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
-// output tile into cb_out (in the correct output data format), then
+// output tile into dfb::out (in the correct output data format), then
 // NOC-writes it to DRAM.
 
 #include <cstdint>
@@ -192,7 +192,7 @@ void kernel_main() {
                 auto means_addr = dfb_partial.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
-                // cb_partial is Float32: each element is 4 bytes.
+                // dfb::partial is Float32: each element is 4 bytes.
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
@@ -274,8 +274,8 @@ void kernel_main() {
             final_var = combined.variance_sum * inv_num_partials;
         }
 
-        // Write the combined scalar into a tile in cb_combined.  The compute
-        // kernel will unpack this and re-pack into cb_out in the correct
+        // Write the combined scalar into a tile in dfb::combined. The compute
+        // kernel will unpack this and re-pack into dfb::out in the correct
         // output data format (using the packer hardware).
         if constexpr (combined_is_bf16) {
             auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
