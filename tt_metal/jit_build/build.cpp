@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -106,6 +107,17 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
             ec.message(),
             link_ec.message());
     }
+}
+
+TelemetryToken& binary_size_telemetry_token(const std::string& target_name) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, TelemetryToken*> tokens;
+    std::lock_guard lock(mutex);
+    auto [it, inserted] = tokens.try_emplace(target_name, nullptr);
+    if (inserted) {
+        it->second = &BuildCacheTelemetry::inst().register_metric("kernel_binary_size." + target_name, "bytes");
+    }
+    return *it->second;
 }
 
 }  // namespace
@@ -915,6 +927,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
             target->write_build_state_hash(target_out_dir);
+        }
+
+        std::error_code elf_size_ec;
+        const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
+        if (!elf_size_ec) {
+            binary_size_telemetry_token(target->target_name_).record(static_cast<double>(elf_size));
         }
     }
 

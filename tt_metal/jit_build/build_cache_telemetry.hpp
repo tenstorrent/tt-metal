@@ -32,18 +32,20 @@ struct TelemetryTokenData {
 class TelemetryToken {
 public:
     TelemetryToken() = default;
-    explicit TelemetryToken(std::string name);
+    explicit TelemetryToken(std::string name, std::string unit = "ms");
 
     void record(double value);
     TelemetryTokenData snapshot() const;
 
     const std::string& name() const { return name_; }
+    const std::string& unit() const { return unit_; }
 
 private:
     friend class BuildCacheTelemetry;
     void set_recording_enabled(bool enabled);
 
     std::string name_;
+    std::string unit_{"ms"};
     std::atomic<bool> recording_enabled_{true};
     mutable std::mutex data_mutex_;
     TelemetryTokenData data_;
@@ -95,7 +97,7 @@ public:
     // leaving tokens allocated. Callers must not take ownership. While telemetry
     // is disabled, TelemetryToken::record() is a no-op; snapshot() still reflects
     // aggregates recorded while enabled.
-    TelemetryToken& register_metric(const std::string& name);
+    TelemetryToken& register_metric(const std::string& name, std::string unit = "ms");
 
     void dump_metrics() const;
 
