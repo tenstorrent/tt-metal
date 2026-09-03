@@ -7,33 +7,9 @@
 #include <cstdint>
 
 #include "llk_math_common.h"
-
-// [#55076 / 0x19 DIAGNOSTIC -- DO NOT UPSTREAM]
-// Waypoints inside _llk_math_matmul_block_ to pinpoint which Tensix instruction the MATH RISC wedges
-// on. The kernel-side markers only bound it to "somewhere inside matmul_block" (MACQ), and mapping the
-// reported PC needs TRISC1's runtime text base, which is assigned per-build by the host
-// (kernel_text_offsets[processor_index] in tt_metal/impl/program/program.cpp) and cannot be derived
-// statically. Waypoints sidestep that: the last one written names the site directly.
-// __has_include guard so the standalone tt-llk test build (which has no tt-metal debug headers on its
-// include path) is unaffected; WAYPOINT is already a no-op unless WATCHER_ENABLED.
-#if __has_include("api/debug/waypoint.h")
-#include "api/debug/waypoint.h"
-#endif
-#ifndef WAYPOINT
-#define WAYPOINT(x)
-#endif
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
-
-// [#55076 / 0x19] Where the DEST section base gets programmed.
-//   false (STOCK): _llk_math_matmul_block_ writes cfg[DEST_TARGET_REG_CFG_MATH_SECn_Offset] on every
-//                  call -- the original behaviour, and the store MATH was proven to park on (SDW1).
-//   true          : hoisted to _llk_math_matmul_init_ instead. Value-preserving (a block always
-//                  targets dest tile 0, so it rewrote what _llk_math_dest_section_done_ had just
-//                  written on the bank flip) and it moved the wedge SDW1 -> MB2, but did not fix.
-// Default STOCK so a waveform captures the unmodified failure.
-constexpr bool kHoistDestBaseToInit = false;
 
 /**
  * @brief Initializes addrmod for matrix multiply operation.
@@ -357,9 +333,6 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
     constexpr std::uint8_t matmul_op_addr_mod      = _llk_math_matmul_op_addr_mod_<ENABLE_2X_FORMAT>();
     constexpr std::uint8_t matmul_op_last_addr_mod = _llk_math_matmul_op_last_addr_mod_<ENABLE_2X_FORMAT>();
     constexpr static std::uint32_t matmul_op       = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, matmul_op_addr_mod, 0);
-    // NOTE: this clears only the ITERATED operand. The REUSED one is cleared separately by the
-    // TTI_SETRWC(CLR_B/CLR_A) in _llk_math_matmul_block_ below, so the two are already balanced --
-    // do not "fix" this to CLR_AB, that double-clears the reused operand's bank.
     const std::uint32_t matmul_op_last =
         reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, matmul_op_last_addr_mod, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, matmul_op_last_addr_mod, 0);
 
@@ -504,12 +477,6 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
     }
 
-    // [#55076 / 0x19] See kHoistDestBaseToInit at the top of this file.
-    if constexpr (kHoistDestBaseToInit)
-    {
-        _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
-    }
-
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
@@ -548,21 +515,8 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
  */
 inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    // [#55076 diagnostic] MB0 = entered matmul_block.
-    WAYPOINT("MB0");
-
-    // [#55076 / 0x19] Per-call DEST section base write. Waypointing proved MATH deadlocks parked on
-    // exactly this store (last marker SDW1): _llk_math_dest_section_done_ (llk_math_common.h:357)
-    // issues STALLWAIT(STALL_CFG, wait: MATH, WAIT_SFPU) before its own base write, stalling the CFG
-    // resource until math is idle; the MATH RISC then runs ahead into the next subblock and this
-    // store blocks behind that stall. Set kHoistDestBaseToInit=true to move it to init instead.
-    if constexpr (!kHoistDestBaseToInit)
-    {
-        _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
-    }
-
-    // MB1 = past the dest-base programming.
-    WAYPOINT("MB1");
+    // Matmul Block, reset the dest addr to 0 for fused kernels
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
 
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
@@ -572,57 +526,11 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            // [#55076 diagnostic] MB2 = about to launch the MVMUL MOP for this (t, rut).
-            WAYPOINT("MB2");
-
             ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-
-            // MB3 = the MOP launch (TTI_MOP) was accepted into the instruction buffer. If MATH's last
-            // waypoint is MB2 the RISC wedged pushing the MOP itself (ibuf full because the MVMULs are
-            // stalled); if MB3, the MVMULs were queued and it wedged on what follows.
-            WAYPOINT("MB3");
 
             // Clear srcB or srcA at end of reuse (once per u block row)
             if (rut == (rut_dim - 1))
             {
-                // [#55076 / 0x19] Drain the MU pipeline before releasing the reused operand's Src bank.
-                //
-                // This is the Quasar port of tt-metal PR #55107 ("[LLK] Drain the math pipeline in the
-                // remaining Dest->Src bank waits"), which fixed WH+BH and explicitly EXCLUDED Quasar. On
-                // Tensix the Src bank pointer advances only in the EPILOGUE of the preceding Matrix-Unit
-                // instruction, so a bank op issued while the last MVMULs of the MOP are still in flight
-                // acts on the pre-flip bank.
-                //
-                // Quasar is structurally more exposed than WH/BH here. On WH/BH this clear is folded into
-                // the MOP itself via tmp.set_end_op(TT_OP_SETRWC(...)) (tt_llk_wormhole_b0/llk_lib/
-                // llk_math_matmul.h:483-487, tt_llk_blackhole/...:441-445), so the MOP sequencer emits it
-                // after the last MVMUL. Quasar instead issues it from the RISC as a separate TTI right
-                // after run_bank0_sw_cntl() launches the MOP -- same thread and therefore in-order at
-                // issue, but with nothing forcing the in-flight MVMULs to have finished reading SrcB
-                // before the dvalid clear / bank flip takes effect.
-                //
-                // Fits the observed wedge: TRISC0 UPMW (unpacker blocked in its MOP because the Src bank
-                // it wants was never properly released), TRISC1 MACQ (math blocked inside matmul_block),
-                // TRISC2 PPAK (downstream). Fits "needs >= 3 subblocks" -- Src is double-banked, so the
-                // third call is the first bank REUSE. Fits the timing sensitivity and DPRINT masking.
-                // And it is Src, not Dest: the serialization test (MDRD) proved math still stalls with
-                // the packer provably drained, so Dest was never the contended resource.
-                //
-                // RESULT 2026-09-02 20:36: tested, hang unchanged (UPMW/MACQ/PPAK, PC 0x381bc -> 0x381b8,
-                // so the rebuild DID pick this up -- the PC moved, unlike the two earlier LLK edits that
-                // the JIT cache silently skipped). Eliminated. Gated off rather than deleted: it costs a
-                // pipeline drain per u-block row, but #55107 is a genuine WH/BH fix that Quasar was
-                // excluded from, so this may still be a latent correctness gap worth revisiting.
-                // RETEST 2026-09-03: the earlier "no change" result was INVALID. At that point MATH
-                // wedged at SDW1 -- on the DEST-section-base CFG store, which is upstream of this
-                // SETRWC -- so the drain was never reached in the wedged iteration. With that store
-                // hoisted out of the loop, MATH now reaches MB2 (the MOP launch), so this is finally
-                // on the executed path and genuinely testable.
-                constexpr bool kDrainMathBeforeSrcBankClear = false; // WAVE: off = stock LLK
-                if constexpr (kDrainMathBeforeSrcBankClear)
-                {
-                    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::MATH);
-                }
                 if (reuse_a)
                 {
                     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_AB_F);
@@ -631,8 +539,6 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
                 {
                     TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB_F);
                 }
-                // MB4 = past the Src bank clear for this u-block row.
-                WAYPOINT("MB4");
             }
         }
 
@@ -647,8 +553,5 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }
-    // MB5 = past every u-block row, matmul_block fully issued. If MATH's last waypoint is MB5 then
-    // it is NOT wedged inside matmul_block and MACQ was only RISC run-ahead -- look downstream.
-    WAYPOINT("MB5");
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }

@@ -126,33 +126,7 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
     // Set Source counter to L1 base + offset
     // UNP_DEST shares UNP_A's hardware path, so use UNP_A for counter instructions
     constexpr std::uint32_t CNT_SEL = (UNP_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNP_SEL;
-
-    // [Quasar RTL 18->11 bit truncation workaround, from amokan/fused_conv]
-    // The source-address offset was programmed via the TT_SET_SRC_TILE_FACE_ROW_IDX instruction immediate,
-    // whose RTL field truncates the 18-bit value to 11 bits -- so once l1_tile_idx's datum offset exceeds
-    // 11 bits the source L1 address wraps to the wrong tile (a root cause of the fused block-sharded conv
-    // ERROR_TRISC1 0x0119). Program the offset through the full-width TILIZE_SRC_ADDR_OFFSET CFG register
-    // (20-bit field, MASK 0x1ffffe00) instead, and pass 0 to the still-needed counter instruction.
-    const std::uint32_t src_addr_offset_datums =
-        l1_tile_idx *
-        (TILE_C_DIM / FACE_C_DIM); // should be tensor_shape.num_faces_c_dim, but it is not available here yet, this will work only for 32x32 tiles
-    // amokan/fused_conv's commit 1 added this STALLWAIT, then commit 2 ("Remove stallwait") dropped it -- safe
-    // in the single-shot conv tilize, but the standalone tilize op drives this fn in a PER-TILE loop
-    // (llk_unpack_tilize_api.h): without the stall, the next tile's cfg_rmw config write races the previous
-    // tile's in-flight UNPACR_TILIZE MOP (MMIO-vs-MOP), corrupting the unpack -> NEO_SEMAPHORES
-    // WAIT_ON_UNINITIALIZED on the standalone tilize (regressed bottleneck_1x1_64to64). Re-add: block the CFG
-    // write until this unpacker resource is idle so the offset lands cleanly before the MOP reads it.
-    constexpr std::uint32_t STALL_UNP_RES = (CNT_SEL == p_unpacr::UNP_A) ? p_stall::UNPACK0 : p_stall::UNPACK1;
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, STALL_UNP_RES);
-    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
-    {
-        cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
-    }
-    else
-    {
-        cfg_rmw(THCON_UNPACKER1_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
-    }
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, 0);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, l1_tile_idx);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CNT_SEL, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, 0); // Clear face counter (block path leaves it non-zero)
 

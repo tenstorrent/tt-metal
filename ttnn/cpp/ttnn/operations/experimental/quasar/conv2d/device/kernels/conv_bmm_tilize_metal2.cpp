@@ -34,30 +34,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-// [block-sharded 0x19 A/B discriminator] MATH-thread markers around the matmul subblock loop and the
-// partials reload, to tell whether the ERROR_TRISC1 0x0119 is the pre-existing MATH<->PACK DEST bank-recycle
-// deadlock (stalls in the matmul at the first bank0 reuse, subblock 2, on the FIRST K-block with rl=0) or the
-// option-2 dedicated-partials reload read (stalls at RLOAD_RD on a later K-block with rl=1). Remove once
-// localized.
-#include "api/debug/dprint.h"
-
-// [#55076 / 0x19] DIAGNOSTIC STATE -- all switches below default to STOCK, so a build of this file
-// reproduces the unmodified failure and is safe to hand to a waveform capture. Full write-up and the
-// waypoint trigger-value table are in qsr_x19_rtl_findings.md (§4p covers wave capture).
-//
-//   conv_bmm_tilize_metal2.cpp
-//     kStallwaitWaitsJustForPackDestRead  false   §4c  tested, no effect (write confirmed landed)
-//     kDisableReplayBankedMode            false   §4n  tested, no effect (write confirmed landed)
-//     kFenceMathRiscToPipePerSubblock     false   §4m  CSR fence; ON proves the pipe never drains
-//     kPrintKernelTextAndDfbAddrs         false   §4g  DPRINT destabilises Quasar; leave off
-//   tt-llk/tt_llk_quasar/llk_lib/llk_math_matmul.h
-//     kHoistDestBaseToInit                false   §4k  ON moves the wedge SDW1 -> MB2
-//     kDrainMathBeforeSrcBankClear        false   §4l  ON (with the above) moves it MB2 -> MP0
-//
-// Stock wedge signature: TRISC0 UPMW / TRISC1 MACQ / TRISC2 PPAK, MATH stalled in matmul_block at
-// subblock 1 of ~98. WAYPOINT markers stay compiled in: each is a single L1 store of a compile-time
-// constant to the watcher mailbox, so they are near-zero perturbation and double as wave triggers.
-// The TRISC named in the error code is NOT the culprit -- it is whichever had a read outstanding.
 
 // In-place matmul-partials accumulate: re-accumulate each inner-K block into the SAME L1 region by
 // "rewinding" the partials buffer's producer/consumer position back to the start of the output block.
@@ -180,9 +156,11 @@ void tilize_in(
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer& in_cb) {
     in_cb.wait_front(in_block_w);
-    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_block now forwards to plain tilize_block on
-    // Quasar (tilize.h ARCH_QUASAR branch), so the name resolves and the guard is no longer needed.
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
+                     // activation_reuse path, which the resnet conv factories force OFF. Guard the
+                     // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+#endif
     in_cb.pop_front(in_block_w);
 }
 
@@ -223,8 +201,9 @@ inline void tilize_in_reuse_split_reader(
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
-    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_init_with_dt forwards to the plain path.
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
+#endif
 
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
@@ -280,8 +259,9 @@ inline void tilize_in_reuse_split_reader(
     PACK((out_cb.evil_set_write_ptr(out_cb_addr_init)));
 #endif
     out_cb.push_back(out_cb_tiles);
-    // [from amokan/fused_conv] Un-guarded on Quasar: fast_tilize_uninit forwards to the plain path.
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
+#endif
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -448,138 +428,8 @@ void kernel_main() {
     });
 #endif
 
-#ifdef ARCH_QUASAR
-    // [#55076 / 0x19] STALLWAIT-on-packer semantics -- candidate root cause of the MATH<->PACK wedge.
-    //
-    // _llk_pack_dest_semaphore_section_done_ (llk_pack_common.h) gates the SEMGET that releases MATH's
-    // tile_regs_acquire() behind TTI_STALLWAIT(STALL_MATH, -, -, p_stall::PACK) -- i.e. behind
-    // p_stall::PACK0 == i_packer_busy. In the Quasar RTL:
-    //     tt_tdma.sv:4798  pack_busy = pack_busy_pre | pack_instrn_thrd_first_vld | packer_pipe_stage_busy
-    // and the comment at tt_tdma.sv:1742 says that middle term comes from i_pack_instrn_vld "which is
-    // blocked" -- the clock-gating logic deliberately substitutes pack_busy_pre to dodge it, but
-    // tt_sync_exu gets the full version (tt_instruction_thread.sv:1763-1767, :1787). So a STALLWAIT
-    // waiting for packer-completely-idle can be held up by a pack instruction that is itself blocked,
-    // and nothing behind that STALLWAIT can unblock it -> the SEMGET never issues -> MATH sits in
-    // SEMWAIT(STALL_ON_MAX) forever. Matches the observed state: PACK's last waypoint is RBD (inside the
-    // pack section) in every repro, MATH is wedged, and it needs >= 3 out_subblocks (the first subblock
-    // where MATH actually has to wait on PACK at all).
-    //
-    // The RTL has a chicken bit for exactly this case, reset value 0
-    // (ws-tensix-quasar_rtl/src/hardware/tensix/registers/rdl/t6_debug_regs.rdl:1995-2006):
-    //     "Normally, when issuing a STALLWAIT that waits for the packer, the STALLWAIT will wait until
-    //      the packer is completely idle. Sometimes this is what you want, but the most common case when
-    //      we're waiting for the packer is when we're waiting for the dest bank to be ready for new math
-    //      outputs. So, as a performance improvement, you can turn on this bit and STALLWAIT will only
-    //      wait for packer dest reads to be finished."
-    // "waiting for the dest bank to be ready for new math outputs" is precisely what the LLK is doing
-    // here, so the LLK wants this bit set and is currently getting the completely-idle behaviour.
-    //
-    // CHICKEN_BITS is a Neo-local register shared by all four TRISCs on the Neo, so one write covers the
-    // whole Neo. Do it from PACK so it is ordered ahead of every pack STALLWAIT in PACK's own program
-    // order. Flip kStallwaitWaitsJustForPackDestRead to false to get the old behaviour back.
-    PACK({
-        // RESULT 2026-09-02: tested true, hang was byte-identical, and the ASSERT below did NOT fire --
-        // so the write did land and this is a genuine negative, not an unmodelled register. Turned back
-        // off to remove a variable. Flip to true to retest.
-        constexpr bool kStallwaitWaitsJustForPackDestRead = false;
-        if constexpr (kStallwaitWaitsJustForPackDestRead) {
-            RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__STALLWAIT_WAITS_JUST_FOR_PACK_DEST_READ_bm;
-            // Read back so the posted MMIO write has retired before the first pack STALLWAIT issues.
-            volatile uint32_t chicken_bits_readback = RISCV_DEBUG_REGS->CHICKEN_BITS;
-            (void)chicken_bits_readback;
-        }
-
-        // [#55076 / 0x19] REPLAY banked-mode chicken bit -- directly indicated by the MFNR result.
-        //
-        // The per-unit fence (§4m/§4n) proved via CSR polling that `replay` busy never clears: the
-        // REPLAY unit is the stuck one. CHICKEN_BITS.replay_disable_banked_mode is a 4-bit
-        // per-TRISC field at bit 5 with RESET VALUE 0x1 (t6_debug_regs.rdl:2016), i.e. only TRISC0
-        // ships with banked mode disabled -- MATH (TRISC1) runs the replay unit in Quasar-native
-        // DOUBLE-BANKED mode. The RDL describes the bit as "Disables the double-banking mode in the
-        // replay unit. When double-banking is disabled, the replay unit will appear to have 64
-        // entries as it did in BH."
-        //
-        // The matmul is by far the heaviest replay user here (_llk_math_matmul_load_replay_ loads 15
-        // MVMULs into slot 0, and every matmul_block replays them FIDELITY_PHASES times), so forcing
-        // the BH-compatible non-banked behaviour on all TRISCs is a one-bit test of whether the
-        // banked replay path is what wedges. Setting the full field mask disables banking everywhere.
-        constexpr bool kDisableReplayBankedMode = false;  // WAVE: off = stock HW config
-        if constexpr (kDisableReplayBankedMode) {
-            RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__REPLAY_DISABLE_BANKED_MODE_bm;
-            volatile uint32_t replay_cb_readback = RISCV_DEBUG_REGS->CHICKEN_BITS;
-            ASSERT(
-                (replay_cb_readback & T6_DEBUG_REGS__CHICKEN_BITS__REPLAY_DISABLE_BANKED_MODE_bm) ==
-                T6_DEBUG_REGS__CHICKEN_BITS__REPLAY_DISABLE_BANKED_MODE_bm);
-        }
-    });
-#endif
-
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-
-#ifdef ARCH_QUASAR
-    // [#55076 / 0x19] WHAT IS AT L1 0x36cc4?
-    //
-    // Watcher reports "PC 0x00036cc4" for this fault, but 0x36cc4 is NOT in any code region on
-    // Quasar (dev_mem_map.h: TRISC firmware 0x11e00-0x16e00, TRISC kernels at MEM_KERNEL_BASE
-    // 0x400000 -- and the kernel ELF confirms .text = 0x400000-0x401dfc). 0x36cc4 = 224452 sits
-    // above MEM_PACKET_HEADER_POOL_BASE (0x303f0), i.e. in the L1 kernel-config / heap region where
-    // the DFB configs and interfaces live. So watcher's "PC" label is wrong for this sub-error --
-    // quasar_error_data_is_pc() returns true for ERROR_TRISC0..3 (debug_helpers.hpp:126-135) but
-    // error_handling.h:82-86 describes MEM_READ_NO_RESPONSE as "a read went out and nothing
-    // answered ... Look at the TARGET rather than the core ... the load still completes, with zero
-    // data, so the kernel carries on with a bogus value and whatever breaks next is a knock-on."
-    //
-    // That reframes the whole failure: the compute-side wedge may be the knock-on, and the root
-    // cause an unanswered L1 read at 0x36cc4 -- on TRISC0/UNPACK, whose last waypoint (RBD) sits
-    // immediately after reserve_back_impl's read of
-    //   local_dfb_interface_.tc_slots[tc_idx].packed_tile_counter
-    // (dataflow_buffer.inl:143-145), which is exactly a read into this region.
-    //
-    // Print the DFB interface addresses once at init so we can see which structure -- if any --
-    // 0x36cc4 falls inside, and whether it is a live allocation or a gap. Init-only, so run this
-    // once with TT_METAL_DPRINT_CORES set; it does not perturb the loop.
-    // ERR_DATA is confirmed (HW team) to be the last committed RISC PC, and TRISC code executes from
-    // L1 -- so 0x36cc4 / 0x3713c ARE real PCs. They are absent from the kernel ELF only because the
-    // ELF is linked at MEM_KERNEL_BASE 0x400000 while the text actually runs from a lower L1 base.
-    // (Confirmation that it is code: the PC moved 0x36cc4 -> 0x3713c, +0x478, when the only change
-    // was adding the DPRINT below -- i.e. it shifted with the code.)
-    //
-    // Print &kernel_main to recover the link->runtime delta so reported PCs can be looked up in the
-    // objdump directly:
-    //   * prints ~0x35xxx  => text is relocated at load; delta = 0x400000 - printed, and
-    //                         PC_link = PC_reported + delta.
-    //   * prints ~0x400xxx => text is NOT relocated (an address window maps fetches into L1), so the
-    //                         delta must come from the host's kernel-text L1 allocation instead.
-    //
-    // Provisional mapping, pending that number: if the faulting load is the DFB-interface read right
-    // after WAYPOINT("RBD") -- objdump 0x4019f0 sw (RBD), 0x4019f8 lw armed_mask, 0x4019fc lbu
-    // local_dfb.tc_idx -- then the runtime base is ~0x352c8 and PC 0x36cc4 lands on 0x4019f8/0x4019fc.
-    // That is consistent but circular until &kernel_main pins the base independently.
-    // ANSWERED 2026-09-02: KTEXT kernel_main = 0x36C20 and the ELF links it at 0x400950, so
-    //   PC_link = PC_runtime + 0x3C9D30   (TRISC0 text base 0x362D0)
-    // DFBADDR came back act=0x8020AC wts=0x802104 tilized=0x8021B4 partials=0x80220C out=0x802264 --
-    // all in TRISC local data RAM (MEM_LOCAL_BASE 0x802000), evenly spaced 88B apart and sane, which
-    // rules out a bad DFB-interface address. Note the delta above is TRISC0-only; each TRISC has its
-    // own kernel slot, so re-measure per thread if a TRISC1/2 PC needs mapping.
-    // Left off by default: DPRINT itself destabilises Quasar (it tripped a watcher assert on 2026-09-02
-    // 19:50 and changes the failure). Flip to true only to re-measure.
-    UNPACK({
-        constexpr bool kPrintKernelTextAndDfbAddrs = false;
-        if constexpr (!kPrintKernelTextAndDfbAddrs) {
-        } else {
-            DPRINT_UNPACK("KTEXT kernel_main={}\n", (uint32_t)reinterpret_cast<uintptr_t>(&kernel_main));
-            DPRINT_UNPACK(
-                "DFBADDR act={} wts={} mmin0={} tilized={} partials={} out={}\n",
-                (uint32_t)&get_local_dfb_interface(in0_cb_id),
-                (uint32_t)&get_local_dfb_interface(in1_cb_id),
-                (uint32_t)&get_local_dfb_interface(mm_in0_cb_id),
-                (uint32_t)&get_local_dfb_interface(tilized_in0_cb_id),
-                (uint32_t)&get_local_dfb_interface(matmul_partials_cb),
-                (uint32_t)&get_local_dfb_interface(out_cb_id));
-        }
-    });
-#endif
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -762,34 +612,7 @@ void kernel_main() {
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
-#ifdef ARCH_QUASAR
-                    // TEN-4746 (#48552): this was a bare cb_mm_in0.wait_front (above) -> pop_front, which
-                    // traps the Quasar unpacker -- POP_TILES can retire before the WAIT_TILES it follows,
-                    // because nothing orders them. Every other wait/pop pair in this kernel already
-                    // interposes a REAL unpack TDMA (see the matmul_partials drains at ~1019 and ~1050);
-                    // this path was missed. NOP/TTI_NOP are INSUFFICIENT (LLK-team guidance +
-                    // abhullar/pop-wait-fix 69014037a).
-                    //
-                    // Same idiom as those sites: reconfig srcA to the CB being drained, dummy copy_tile of
-                    // tile 0, then restore srcA and re-init the matmul (copy_init clobbers the matmul MOP).
-                    // The copy's result is discarded -- this exists only to order POP after WAIT.
-                    //
-                    // PR #54948 replaces this whole idiom with a dummy_unpack(dfb_id) helper (an UNPACR_NOP
-                    // that reads nothing, so no reconfig/re-init and no DEST traffic). Once that lands,
-                    // collapse this block to `dummy_unpack(mm_in0_cb_id);` and drop the reconfig pair.
-                    reconfig_data_format_srca(in1_cb_id, mm_in0_cb_id);
-                    copy_init(mm_in0_cb_id);
-                    tile_regs_acquire();
-                    copy_tile(mm_in0_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-#endif
                     cb_mm_in0.pop_front(in0_block_num_tiles);
-#ifdef ARCH_QUASAR
-                    reconfig_data_format_srca(mm_in0_cb_id, in1_cb_id);
-                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                     continue;
                 }
 #endif
@@ -842,115 +665,6 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        DPRINT_MATH(
-                            "SUB k={} i0={} i1={} rl={}\n",
-                            in0_block_w_i,
-                            in0_subblock_i,
-                            in1_subblock_i,
-                            (uint32_t)enable_reload);
-#ifdef ARCH_QUASAR
-                        // [#55076 / 0x19 A/B PROBE] See qsr_x19_rtl_findings.md §4b. WAYPOINT is a single
-                        // 32-bit store of a compile-time constant into the watcher mailbox
-                        // (api/debug/waypoint.h:34-41) -- orders of magnitude lighter than DPRINT, and the
-                        // cost is already being paid (the RBW/RBD we see today come from the same macro), so
-                        // it perturbs the race far less than the per-subblock DPRINTs that are known to mask
-                        // this bug. Watcher must be on; with watcher off every WAYPOINT compiles to nothing.
-                        //
-                        // MP<n> below publishes MATH_PACK *and* doubles as "MATH is at/inside
-                        // tile_regs_acquire". Reading the interpretation table off the final waypoint line:
-                        //
-                        //   MATH last = MP2   -> blocked in tile_regs_acquire's SEMWAIT(STALL_ON_MAX) with the
-                        //                        semaphore at max. STORY B: PACK is primary; PACK's own marker
-                        //                        (PWAT/PPAK/PREL/PPSH) then says exactly where it is stuck.
-                        //   MATH last = MP0/1 -> blocked in acquire with the semaphore NOT at max. Should be
-                        //                        impossible (UnpackToDestEn is false here, so acquire is just
-                        //                        the one SEMWAIT) -> would mean the RTL STALL_ON_MAX compare is
-                        //                        wrong after all; re-open Q1/Q5 with a waveform.
-                        //   MATH last = MACQ  -> blocked in matmul_block, i.e. SrcA/SrcB. Src bank recycle.
-                        //   MATH last = MMVM  -> blocked in tile_regs_commit: STALLWAIT(-,WAIT_SFPU,MATH) on
-                        //                        i_math_busy, or the SEMPOST itself. STORY A -> the shared
-                        //                        tt_stall_scoreboard FIFO (findings §3a).
-                        //   MATH last = MCMT  -> past commit; blocked heading into the next subblock.
-                        //
-                        // CAVEAT: waypoints track the RISC's program position, not Tensix retirement -- the
-                        // RISC runs ahead until its instruction buffer fills, so the marker is at or slightly
-                        // past the true stall. The semaphore_read below is a RISC MMIO read into the sync unit
-                        // and tends to fence against the stalled pipe (that ordering is exactly why
-                        // MEM_READ_NO_RESPONSE fires at all), which pulls the MATH marker back close to the
-                        // real stall point. Read MP<n> as authoritative and the marker as a bound.
-                        MATH({
-                            const uint32_t mp = ckernel::semaphore_read(ckernel::trisc::semaphore::MATH_PACK);
-                            if (mp == 0) {
-                                WAYPOINT("MP0");
-                            } else if (mp == 1) {
-                                WAYPOINT("MP1");
-                            } else if (mp == 2) {
-                                WAYPOINT("MP2");
-                            } else {
-                                WAYPOINT("MPX");
-                            }
-                        });
-
-                        // [#55076 / 0x19] "Slow but correct" fence: stop the MATH RISC running ahead.
-                        //
-                        // Every fix that moved the wedge so far removed one CFG access from the
-                        // per-iteration path, and each bought roughly one more subblock
-                        // (i0=1 -> i0=2). That is the signature of a FINITE QUEUE being filled, not a
-                        // single blocking instruction: the RISC races ahead of its Tensix pipe, and a
-                        // CFG access issued while _llk_math_dest_section_done_'s
-                        // STALLWAIT(STALL_CFG, wait: MATH) is pending cannot retire, so the queue fills
-                        // and the RISC wedges.
-                        //
-                        // These waiters poll csr_read<CSR::tensix_busy_status> (ckernel.h:576, :587+) --
-                        // a core-internal CSR read, NOT an MMIO/CFG access, so unlike a STALLWAIT or a
-                        // cfg store they cannot themselves be blocked by the stalled fabric. Spinning
-                        // here holds the RISC at the top of each subblock until its pipe has fully
-                        // drained, so it can never get more than one subblock ahead and the queue never
-                        // fills.
-                        //
-                        // EXPENSIVE: this serialises the MATH RISC against its own pipe every subblock
-                        // and gives up all RISC run-ahead. It is the "even if it is slow" option, not a
-                        // shippable fix -- the real fix is whatever the HW team finds for why the pipe
-                        // stops draining (see qsr_x19_rtl_findings.md §4j).
-                        //
-                        // If MATH's last waypoint is MFN0, the pipe never drains even with nothing
-                        // queued behind it -- that is the cleanest possible evidence for §3a (the
-                        // tt_stall_scoreboard leak) and should go straight to the HW team.
-#ifdef ARCH_QUASAR
-                        MATH({
-                            constexpr bool kFenceMathRiscToPipePerSubblock = false;  // WAVE: off = natural run-ahead
-                            if constexpr (kFenceMathRiscToPipePerSubblock) {
-                                // RESULT 2026-09-03 11:52: MATH spun here forever (last waypoint MFN0)
-                                // at i0=1. These are CSR polls, so they CANNOT be blocked by the
-                                // fabric -- this is not a stuck access, the Tensix pipe genuinely never
-                                // goes idle. Run-ahead / queue-fill is therefore eliminated as the
-                                // cause. Split one marker per unit so the last one NAMES the unit whose
-                                // busy bit never clears:
-                                //   MFNM -> mop  never idle: the MOP sequencer never finishes issuing
-                                //   MFNF -> fpu  never idle: an MVMUL never retires
-                                //   MFNC -> cfg  never idle: the CFG exu never drains
-                                // RESULT 2026-09-03 11:59: MFNM -- `mop` busy never clears.
-                                // The matmul MOP is not flat: _llk_math_matmul_mop_config_ builds it as
-                                // ckernel_template(1, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len,
-                                // ...), matmul_op), so the MVMUL body comes out of the REPLAY buffer.
-                                // A stuck MOP is therefore either the outer sequencer or the replay
-                                // unit under it. Split them:
-                                //   MFNR -> replay busy never clears: the REPLAY unit is the stuck one
-                                //   MFNM -> replay drains but mop does not: the outer MOP sequencer,
-                                //           i.e. it cannot issue matmul_op (MVMUL blocked on SrcA/SrcB)
-                                WAYPOINT("MFNR");
-                                ckernel::wait_replay_idle();
-                                WAYPOINT("MFNM");
-                                ckernel::wait_mop_idle();
-                                WAYPOINT("MFNF");
-                                ckernel::wait_fpu_idle();
-                                WAYPOINT("MFNC");
-                                ckernel::wait_cfg_idle();
-                                WAYPOINT("MFN1");
-                            }
-                        });
-#endif
-#endif
                         if (enable_reload) {
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                             copy_init(matmul_partials_cb);
@@ -959,63 +673,15 @@ void kernel_main() {
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            DPRINT_MATH("RLOAD_RD\n");
                             copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
-                            DPRINT_MATH("RLOAD_OK\n");
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                             matmul_block_init(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             tile_regs_acquire();
                         }
-#ifdef ARCH_QUASAR
-                        MATH(WAYPOINT("MACQ"));  // [#55076 probe] past tile_regs_acquire
-
-                        // [#55076 / 0x19 SERIALIZATION TEST] See qsr_x19_rtl_findings.md §4d-§4e.
-                        // The probe showed MATH stalled INSIDE matmul_block (MACQ) while PACK was
-                        // simultaneously stalled waiting for packer0 to go idle (PPAK) -- i.e. the FPU
-                        // cannot finish a DEST write and the packer cannot finish a DEST read, at the same
-                        // time. Not the semaphore (the SEMWAIT already passed), not dvalid (disabled), not
-                        // SrcA/SrcB (UNPACK had delivered), not i_math_busy. That leaves the DEST access
-                        // path both stalled clients contend for: tt_dest_prearb, whose four
-                        // tt_flopped_rr_arb groups are all instantiated ENABLE_LIVELOCK_PREVENTION(0)
-                        // (tt_dest_prearb.sv:786/:851/:885/:920) despite having coprime jostle periods
-                        // wired up, over an all-or-nothing multi-resource acquisition (:972-978).
-                        //
-                        // This spin tests the TRIGGER rather than the mechanism: MATH refuses to start its
-                        // MVMULs until the packer has drained every prior section, so a MATH DEST write is
-                        // never in flight at the same time as a packer DEST read. If concurrency is the
-                        // trigger, the hang must clear regardless of what the arbiter is doing.
-                        //
-                        // Why the semaphore instead of STALLWAIT(PACK0): "wait until MATH_PACK == 0" is not
-                        // expressible as a SEMWAIT (STALL_ON_ZERO waits *while* it is zero), and
-                        // STALLWAIT(PACK0) has the classic wait-for-something-that-has-not-started hole --
-                        // it passes if the packer is momentarily idle before its next pack begins.
-                        //
-                        // No deadlock risk: MATH only reaches here after its own acquire, and PACK needs
-                        // MATH_PACK > 0 to pack -- which MATH already posted for the previous section, so
-                        // PACK always drains to 0 and releases this spin. First iteration sees 0 already.
-                        //
-                        // EXPENSIVE -- this serializes MATH and PACK and gives up DEST double-buffering, so
-                        // it is a diagnostic, not a fix. Set to false to disable.
-                        MATH({
-                            // RESULT 2026-09-02: tested true -> MATH reached MDRD (MATH_PACK really did
-                            // drain to 0, so the packer was provably idle and no packer DEST read was in
-                            // flight) and then still stalled in the MVMUL loop. That REFUTES the
-                            // concurrency trigger and with it the §4e arbiter-livelock hypothesis: MATH
-                            // cannot complete a DEST write even with the DEST port entirely to itself.
-                            // Left off; flip to true to reproduce.
-                            constexpr bool kSerializeMathVsPackDest = false;
-                            if constexpr (kSerializeMathVsPackDest) {
-                                WAYPOINT("MDRN");  // stalled here => PACK never drained the prior section
-                                while (ckernel::semaphore_read(ckernel::trisc::semaphore::MATH_PACK) != 0) {
-                                }
-                                WAYPOINT("MDRD");  // drained; no packer DEST reads should be in flight now
-                            }
-                        });
-#endif
 
                         uint32_t dst_index = 0;
                         uint32_t in0_index = in0_index_subblock_offset;
@@ -1045,9 +711,6 @@ void kernel_main() {
                             in1_index += in1_block_w;
                         }
                         // [#48552] all MVMULs for this subblock completed (MATH survived the matmul_block loop).
-#ifdef ARCH_QUASAR
-                        MATH(WAYPOINT("MMVM"));  // [#55076 probe] past the MVMUL loop, entering commit
-#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
@@ -1059,17 +722,11 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-#ifdef ARCH_QUASAR
-                        MATH(WAYPOINT("MCMT"));  // [#55076 probe] past tile_regs_commit
-#endif
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
-#ifdef ARCH_QUASAR
-                            PACK(WAYPOINT("PWAT"));  // [#55076 probe] past tile_regs_wait (SEMWAIT ON_ZERO)
-#endif
 
                             if constexpr (packer_l1_acc) {
                                 if (in0_block_w_i == 0) {
@@ -1106,21 +763,8 @@ void kernel_main() {
                             pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 #endif
 
-#ifdef ARCH_QUASAR
-                            PACK(WAYPOINT("PPAK"));  // [#55076 probe] past the PACR0_TILE_INC MOP(s)
-#endif
-
                             tile_regs_release();
-#ifdef ARCH_QUASAR
-                            // Past _llk_pack_dest_semaphore_section_done_: STALLWAIT(PACK0) + ZEROACC + the
-                            // SEMGET that releases MATH. If PACK's last marker is PPAK, it is stuck in that
-                            // STALLWAIT/SEMGET -- Story B with the packer as primary.
-                            PACK(WAYPOINT("PREL"));
-#endif
                             curr_out_cb.push_back(out_subblock_num_tiles);
-#ifdef ARCH_QUASAR
-                            PACK(WAYPOINT("PPSH"));  // [#55076 probe] past PUSH_TILES
-#endif
                         }
 
                         in1_index_subblock_offset += out_subblock_w;

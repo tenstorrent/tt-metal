@@ -768,17 +768,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
 
-    // [tt-metal #51270 item 2] The weights writer drives weight_block_height_num_outer from out_conv_c_blocks
-    // (output N-split), but the compute consumes conv_act_c_blocks (activation K-split) weight-K-height blocks
-    // (in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w). When these differ -- "input/output shard grids
-    // differ in channel dimension", e.g. a reshard-to-BLOCK_SHARDED on a non-square/degenerate grid where the
-    // input and output shard specs pick different orientations -- the writer under/over-produces weight tiles
-    // and the matmul's in1 unpack reads an unwritten L1 slot (MEM_READ_NO_RESPONSE / ERROR_TRISC1). Log both so
-    // a block-sharded hang can be triaged against this host-side count mismatch before chasing the LLK
-    // MATH<->PACK DEST-recycle handshake. If act != out here, this is the likely cause and the writer weight
-    // K-height count should follow conv_act_c_blocks.
-    log_debug(tt::LogOp, "conv c_blocks: act={} out={}", conv_act_c_blocks, out_conv_c_blocks);
-
     const ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -1181,13 +1170,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
-    // [from amokan/fused_conv] Packer-L1-accumulate re-enabled on Quasar. It had been forced off because the
-    // Quasar packer-L1-acc pack path (PACR0_TILE_INC in-place accumulate + the QSR_RESTORE_WR / g_dfb ring
-    // rewind between K-blocks) mis-addressed the matmul_partials CB -> OOB L1 write -> ERROR_TRISC1 0x19. That
-    // mis-addressing is the same 18->11 bit source-offset truncation now worked around in llk_unpack_tilize.h
-    // (full-width TILIZE_SRC_ADDR_OFFSET CFG register), so the FPU-reload fallback is no longer required and
-    // the perf optimization is restored.
-    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
+    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
+    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
+    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
+    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
+    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
+    // (copy_block reload + re-accumulate), which IS ported/validated on Quasar. This only
+    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
+    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
+    const bool packer_l1_acc_en = false;
+    (void)ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -1293,21 +1286,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // arise here.
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    //
-    // [option 2 — no partials/output alias on Quasar] On WH/BH the one-block matmul_partials CB is aliased
-    // onto the output allocation (borrowed) to save one output-block of L1, and metal1.0 placed it at the
-    // END of the output region via CBInfo::address_offset so the scratch overlaps only the block finalized
-    // last. The Metal-2.0 borrowed-DFB API (DataflowBufferSpec::borrowed_from) has no offset field — it can
-    // only place the borrowed view at OFFSET 0 (the start) of the output. Front placement makes the partials
-    // scratch clobber output block 0 the moment a several-block output advances to block 1, corrupting /
-    // deadlocking the multi-block height- and block-sharded convs (exactly the ones that don't match WH/BH).
-    // Rather than reintroduce an offset mechanism, give matmul_partials its OWN L1 DFB on Quasar: the DFB
-    // below then skips borrowed_from (own allocation), and the compute kernel takes its !partials_cb_uses_
-    // output path, which rewinds the dedicated partials ring (RESTORE_PARTIALS) between K-blocks and never
-    // touches OUT. Costs one output-block of L1 per compute node; a larger Quasar grid absorbs it. WH/BH keep
-    // the aliased+offset scheme (their CBDescriptor path still carries address_offset).
-    const bool partials_cb_uses_output = !is_conv_1d_depthwise_conv && !arch_is_quasar &&
-                                         get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    const bool partials_cb_uses_output =
+        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
     const bool reader_indices_globally_allocated =
