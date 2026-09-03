@@ -488,19 +488,17 @@ inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
 #endif
 
 // Arch-specific _impl bodies for DataflowBuffer member functions
-#if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
+#ifdef ARCH_QUASAR
 #include "internal/tt-2xx/dataflow_buffer.inl"
 #else
 #include "internal/tt-1xx/dataflow_buffer.inl"
 #endif
 
 #ifndef COMPILE_FOR_TRISC
-#if defined(ARCH_QUASAR) && !defined(NOC_API_V1)
+#ifdef ARCH_QUASAR
 #include "internal/tt-2xx/noc_zero_l1.inl"
 #else
 #include "internal/tt-1xx/noc_zero_l1.inl"
 #endif
-#if !defined(ARCH_QUASAR) || !defined(NOC_API_V1)
 #include "internal/noc_zero_dram.inl"
-#endif
 #endif
