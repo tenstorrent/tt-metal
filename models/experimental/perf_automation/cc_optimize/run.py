@@ -4646,6 +4646,11 @@ def _emit_summary(
             else:
                 _block = mod.optimize_block(_demo, 0, text, when)
             _written = mod.upsert_report_section(_demo, _key, _block)
+            # ...and beside the model's own bringup/trace-gate/emit-e2e sections, which live in the
+            # model directory and never move. Unconditional here because _emit_summary IS the final
+            # render -- it renders with finalized=True and runs once, after the loop -- while the
+            # live per-round render is perf_mcp's, which must keep going to the run directory alone.
+            _publish_optimize_section(mod, _demo, _key, _block)
             # The RESOLVED path, not an assumed one: the report now lands in the git-ignored run
             # directory (see summary.report_path), so printing model_root/RUN_REPORT.md would send
             # a reader to a file that no longer updates -- exactly the confusion this change fixes.
@@ -4741,6 +4746,59 @@ def _model_root_for_report(repo_root):
         return Path(root) if root else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _main_tree_demo_dir(demo_dir):
+    """`demo_dir` as it exists in the MAIN checkout, or None when this is already the main checkout.
+
+    An optimize run works in a throwaway worktree under /tmp, so every path it holds -- including the
+    model directory -- points inside a copy that is deleted when the run ends. The worktree records
+    where it came from: .tt_hw_planner_session.json carries `source_repo`, written by the isolation
+    layer that created it, which is the only place that fact exists.
+    """
+    try:
+        _d = Path(demo_dir).resolve()
+        for _anc in [_d] + list(_d.parents):
+            _sess = _anc / ".tt_hw_planner_session.json"
+            if not _sess.is_file():
+                continue
+            _src = str((json.loads(_sess.read_text()) or {}).get("source_repo") or "").strip()
+            if not _src:
+                return None
+            _main = Path(_src).resolve()
+            if _main == _anc:
+                return None  # running in place; the model dir already IS the main one
+            return _main / _d.relative_to(_anc)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _publish_optimize_section(mod, demo_dir, key, block) -> None:
+    """Put the finished optimize section in the model's OWN report, beside bring-up.
+
+    ONE REPORT PER MODEL. bringup, trace-gate and emit-e2e all upsert into
+    <model_dir>/RUN_REPORT.md; optimize is the only one that does not, because report_path redirects
+    it to the git-ignored run directory. That redirect is right DURING the run -- a report in the
+    model directory is swept into the run's first commit and every later git_revert restores the
+    stale blob, which rewound a live report from 30 attempts back to 7 -- but it leaves the model
+    holding two reports that each know half the story, and the optimize half is the one nobody can
+    find beside the others.
+
+    Published at the END, when the loop is over and no revert can follow, and into the MAIN tree,
+    because the worktree's copy of the model directory is about to be deleted. Best-effort: this runs
+    after the report that matters is already written, so a failure here must cost nothing.
+    """
+    try:
+        _target = _main_tree_demo_dir(demo_dir) or Path(demo_dir)
+        if not Path(_target).is_dir():
+            return
+        _at = mod.upsert_report_section(_target, key, block)
+        if _at:
+            print(f"  [optimize/cc] {key} section published beside the model's other sections: {_at}")
+    except Exception as _exc:  # noqa: BLE001
+        # LOUD ENOUGH TO FIX. Silent here means the model quietly keeps two half-reports again.
+        print(f"  [optimize/cc] could not publish the {key} section to the model directory: {_exc}")
 
 
 def _read_baseline_profile_for_report(repo_root):
