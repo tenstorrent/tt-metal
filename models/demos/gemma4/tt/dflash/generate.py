@@ -34,7 +34,7 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.dflash.context import compute_context
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward
-from models.demos.gemma4.tt.dflash.lm_head import compute_dflash_logits
+from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim, compute_dflash_argmax
 from models.demos.gemma4.tt.dflash.rope_cache import build_dflash_rope_cache_2d, gather_rope_on_device
 from models.demos.gemma4.tt.dflash.verify import dflash_verify, greedy_accept_from_posterior
 
@@ -125,14 +125,21 @@ def dflash_generate(
         return logits
 
     prefill_logits, context_padded = _tap_context(model, weights, config, _prefill)
-    logits_torch = (
-        ttnn.to_torch(ttnn.get_device_tensors(prefill_logits)[0]) if is_mesh else ttnn.to_torch(prefill_logits)
-    )
-    ttnn.deallocate(prefill_logits)
+    # prefill_logits is a 32-row tile (get_last_token slices to the tile containing
+    # ctx_len-1, see model.py) -- slice down to just that one real row on device before
+    # arguing, so the (262144-wide) vocab is never read to host.
     tile_start = ((ctx_len - 1) // 32) * 32
-    real_first_token = int(
-        torch.argmax(logits_torch.float().reshape(1, -1, logits_torch.shape[-1])[0, ctx_len - 1 - tile_start]).item()
+    row = ctx_len - 1 - tile_start
+    vocab = prefill_logits.shape[-1]
+    row_logits = ttnn.slice(prefill_logits, [0, 0, row, 0], [1, 1, row + 1, vocab])
+    ttnn.deallocate(prefill_logits)
+    real_first_id_tt = argmax_last_dim(row_logits, 1)
+    ttnn.deallocate(row_logits)
+    real_first_torch = (
+        ttnn.to_torch(ttnn.get_device_tensors(real_first_id_tt)[0]) if is_mesh else ttnn.to_torch(real_first_id_tt)
     )
+    ttnn.deallocate(real_first_id_tt)
+    real_first_token = int(real_first_torch.reshape(-1)[0].item())
 
     context_tt = _slice_seq(context_padded, ctx_len)
     ttnn.deallocate(context_padded)
@@ -184,11 +191,14 @@ def dflash_generate(
                 layer_configs,
             )
             final_out = weights.norm(drafter_out)
-            drafter_logits = compute_dflash_logits(
-                final_out, lm_head_weight, mesh_device, config.final_logit_softcapping
+            draft_ids_tt = compute_dflash_argmax(
+                final_out, lm_head_weight, mesh_device, mesh_config, ccl_manager, config.final_logit_softcapping
             )
-            drafter_logits = drafter_logits.reshape(1, verify_size, -1)
-            draft_tokens = torch.argmax(drafter_logits, dim=-1)[0, 1:].tolist()
+            draft_ids_torch = (
+                ttnn.to_torch(ttnn.get_device_tensors(draft_ids_tt)[0]) if is_mesh else ttnn.to_torch(draft_ids_tt)
+            )
+            ttnn.deallocate(draft_ids_tt)
+            draft_tokens = draft_ids_torch.reshape(-1).tolist()[1:]
         else:
             draft_tokens = []
 
