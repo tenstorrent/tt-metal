@@ -208,6 +208,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        # Spent after the mix. Leaving them in L1 is the difference between fused_experts'
+        # static CBs fitting and the clash reported in eager decode (decode_static already
+        # drops them for the same reason).
+        ttnn.deallocate(normed)
+        ttnn.deallocate(attn_out)
         _profile(self.device)
         with _region("FFN_HC"):
             post, comb, collapsed = self.ffn_hc(hidden_streams)
