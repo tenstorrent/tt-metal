@@ -576,17 +576,20 @@ mkdir -p "$OUTPUT_DIR"
 
 # test_tt_fabric resolves report paths against its own root_dir unless it is
 # given an absolute path, which under Docker is a container-internal directory
-# that --rm destroys on exit. Hand it an absolute path here so rank 0 writes
-# the reports straight into the output dir instead.
+# that --rm destroys on exit. Stage each run's reports under /tmp, which is
+# writable on every host and mounted by mpi-docker, then retrieve them below.
 OUTPUT_DIR_ABS="$(cd "$OUTPUT_DIR" && pwd)"
-SUMMARY_REPORT="$OUTPUT_DIR_ABS/pairwise_validation_summary.log"
-DETAIL_REPORT="$OUTPUT_DIR_ABS/pairwise_validation_detailed.log"
+RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+REPORT_RUN_ID="${RUN_TIMESTAMP}_$$"
+SUMMARY_REPORT="/tmp/tt_fabric_pairwise_validation_summary_${REPORT_RUN_ID}.log"
+DETAIL_REPORT="/tmp/tt_fabric_pairwise_validation_detailed_${REPORT_RUN_ID}.log"
 
 # Drop leftovers so a report from a previous run into the same output dir
 # cannot be mistaken for this run's.
-rm -f "$SUMMARY_REPORT" "$DETAIL_REPORT"
+rm -f \
+    "$OUTPUT_DIR_ABS/pairwise_validation_summary.log" \
+    "$OUTPUT_DIR_ABS/pairwise_validation_detailed.log"
 
-RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$OUTPUT_DIR_ABS/fabric_tests_${RUN_TIMESTAMP}.log"
 Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
 
@@ -641,12 +644,6 @@ fi
 if [[ -n "$NUM_PACKETS" ]]; then
     EXTRA_BINARY_ARGS+=(--num-packets "$NUM_PACKETS")
 fi
-
-# Rank 0 writes the reports, and under Docker it needs the output dir visible
-# at the same absolute path inside its container. mpi-docker mounts only $HOME,
-# /tmp and hugepages by default. Requires $OUTPUT_DIR to be on storage the rank
-# 0 host can see (e.g. NFS) when that host is not this one.
-DOCKER_VOLUME_ARGS=(--volume "$OUTPUT_DIR_ABS")
 
 # Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several
 # hosts; we launch one MPI rank per host and let OpenMPI round-robin the ranks
@@ -1180,7 +1177,6 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
             --mpi-interface "$MPI_IF" \
-            "${DOCKER_VOLUME_ARGS[@]}" \
             "${Z_DOCKER_MPI_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
@@ -1227,7 +1223,6 @@ elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
         --mpi-interface "$MPI_IF" \
-        "${DOCKER_VOLUME_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$SINGLE_HOST" \
@@ -1244,7 +1239,6 @@ else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
         --mpi-interface "$MPI_IF" \
-        "${DOCKER_VOLUME_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$HOSTS" \
@@ -1256,48 +1250,47 @@ echo "=========================================="
 echo "Tests completed at $(date)"
 echo "Results logged to: $LOG_FILE"
 
-# rank 0 is the only rank that writes the pairwise-validation reports, and only
-# when a hang is detected. It is frequently not this host, and $OUTPUT_DIR is
-# not necessarily shared storage, so bring the files back here to guarantee that
-# every artifact for this run lands on the machine the operator ran this from.
-# rank 0 logs the absolute path it wrote; use that rather than assuming one.
-mapfile -t WRITTEN_REPORTS < <(
-    sed -nE 's/.*(Summary|Detailed) report written to: ([^ ]+\.log).*/\2/p' "$LOG_FILE" 2>/dev/null | sort -u
-)
-
-# --tag-output prefixes rank 0's lines with "[1,0]<stream>: [host:pid]".
-RANK0_HOST="$(sed -nE 's/^\[1,0\]<std(out|err)>: \[([^]:]+):[0-9]+\].*/\2/p' "$LOG_FILE" 2>/dev/null | head -1)"
-if [[ -z "$RANK0_HOST" ]]; then
-    RANK0_HOST="${HOSTS%%,*}"
-fi
-
-# Same ssh options mpirun is launched with, plus BatchMode/ConnectTimeout so an
-# unreachable rank 0 fails fast instead of blocking the script on a prompt.
-SCP_OPTS=(
-    -q
-    -o BatchMode=yes
-    -o StrictHostKeyChecking=false
-    -o UserKnownHostsFile=/dev/null
-    -o LogLevel=ERROR
-    -o ConnectTimeout=15
-)
-
-for report in "${WRITTEN_REPORTS[@]}"; do
-    dest="$OUTPUT_DIR_ABS/$(basename "$report")"
-    if [[ "$report" == "$dest" && -f "$dest" ]]; then
-        echo "Hang report: $dest"
-    elif [[ -f "$report" ]] && cp "$report" "$dest"; then
-        echo "Hang report: $dest"
-    elif scp "${SCP_OPTS[@]}" "$RANK0_HOST:$report" "$dest" 2>/dev/null; then
-        echo "Hang report: $dest (fetched from rank 0 host $RANK0_HOST)"
+# Rank 0 is the only rank that writes pairwise-validation reports, and only
+# when a hang is detected. The reports were staged at known, per-run /tmp paths
+# so they can be copied locally or fetched without parsing paths from log text.
+if [[ "$TEST_BINARY" == *test_tt_fabric ]] &&
+    grep -q "confirmed hung cluster-wide" "$LOG_FILE" 2>/dev/null; then
+    # --tag-output prefixes rank 0's lines with "[1,0]<stream>: [host:pid]".
+    RANK0_HOST="$(sed -nE 's/^\[1,0\]<std(out|err)>: \[([^]:]+):[0-9]+\].*/\2/p' "$LOG_FILE" 2>/dev/null | head -1)"
+    if [[ -n "$RANK0_HOST" ]]; then
+        echo "Rank 0 host (from tagged output): $RANK0_HOST"
     else
-        echo "WARNING: rank 0 ($RANK0_HOST) wrote $report but it could not be retrieved." >&2
-        echo "         Retrieve it with: scp $RANK0_HOST:$report $OUTPUT_DIR_ABS/" >&2
+        RANK0_HOST="${HOSTS%%,*}"
+        echo "Rank 0 host not found in tagged output; assuming first configured host: $RANK0_HOST"
     fi
-done
 
-if [[ ${#WRITTEN_REPORTS[@]} -eq 0 ]] && grep -q "confirmed hung cluster-wide" "$LOG_FILE" 2>/dev/null; then
-    echo "WARNING: a hang was detected but rank 0 never logged a report write." >&2
+    # Same ssh options mpirun is launched with, plus BatchMode/ConnectTimeout
+    # so an unreachable rank 0 fails fast instead of prompting or blocking.
+    SCP_OPTS=(
+        -q
+        -o BatchMode=yes
+        -o StrictHostKeyChecking=false
+        -o UserKnownHostsFile=/dev/null
+        -o LogLevel=ERROR
+        -o ConnectTimeout=15
+    )
+    REPORT_SOURCES=("$SUMMARY_REPORT" "$DETAIL_REPORT")
+    REPORT_NAMES=("pairwise_validation_summary.log" "pairwise_validation_detailed.log")
+
+    for i in "${!REPORT_SOURCES[@]}"; do
+        report="${REPORT_SOURCES[$i]}"
+        dest="$OUTPUT_DIR_ABS/${REPORT_NAMES[$i]}"
+        if [[ -f "$report" ]] && cp "$report" "$dest"; then
+            rm -f "$report"
+            echo "Hang report: $dest"
+        elif scp "${SCP_OPTS[@]}" "$RANK0_HOST:$report" "$dest" 2>/dev/null; then
+            ssh "${SCP_OPTS[@]}" "$RANK0_HOST" rm -f -- "$report" 2>/dev/null || true
+            echo "Hang report: $dest (fetched from rank 0 host $RANK0_HOST)"
+        else
+            echo "WARNING: expected rank 0 ($RANK0_HOST) report could not be retrieved: $report" >&2
+            echo "         Retrieve it with: scp $RANK0_HOST:$report $dest" >&2
+        fi
+    done
 fi
 
 print_fabric_final_summary "$LOG_FILE"
