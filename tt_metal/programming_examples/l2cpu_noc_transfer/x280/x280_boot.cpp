@@ -42,13 +42,17 @@ constexpr uint64_t kArcPll4Cntl5 = 0x20514;
 constexpr uint64_t kArcL2cpuReset = 0x30014;
 constexpr int kTileIndex = 0;  // L2CPU0 = NOC0 (8,3), reset bit 4
 
+// ARC peripheral registers (PLL4, reset unit) live in ARC APB space; the offsets
+// below are APB offsets (e.g. reset unit = ARC_RESET_UNIT_OFFSET 0x30000, so
+// kArcL2cpuReset 0x30014 = reset unit + 0x14). UMD renamed read_from_arc ->
+// read_from_arc_apb (same {ptr, offset, size} signature).
 uint32_t arc_rd32(TTDevice* dev, uint64_t off) {
     uint32_t v = 0;
-    dev->read_from_arc(&v, off, sizeof(v));
+    dev->read_from_arc_apb(&v, off, sizeof(v));
     return v;
 }
 
-void arc_wr32(TTDevice* dev, uint64_t off, uint32_t v) { dev->write_to_arc(&v, off, sizeof(v)); }
+void arc_wr32(TTDevice* dev, uint64_t off, uint32_t v) { dev->write_to_arc_apb(&v, off, sizeof(v)); }
 
 void print_status(Cluster& cluster, TTDevice* dev, const CoreCoord& l2cpu) {
     uint32_t pll1 = arc_rd32(dev, kArcPll4Cntl1);
