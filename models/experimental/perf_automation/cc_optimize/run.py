@@ -4752,22 +4752,30 @@ def _main_tree_demo_dir(demo_dir):
     """`demo_dir` as it exists in the MAIN checkout, or None when this is already the main checkout.
 
     An optimize run works in a throwaway worktree under /tmp, so every path it holds -- including the
-    model directory -- points inside a copy that is deleted when the run ends. The worktree records
-    where it came from: .tt_hw_planner_session.json carries `source_repo`, written by the isolation
-    layer that created it, which is the only place that fact exists.
+    model directory -- points inside a copy that is deleted when the run ends.
+
+    THE ANSWER IS OWNED ELSEWHERE. scripts.tt_hw_planner.agentic.persistence already reads the
+    worktree's session record to find the tree it came from, and returns None for a root that has
+    none -- which is exactly "not a worktree". Asking it per ancestor locates the worktree root and
+    resolves the main tree in one step, and means the session file is never named here: a second
+    place spelling that filename is how the two drift when it is renamed.
+
+    Guarded like every other reach from perf_automation into the planner, so this module still
+    imports where the planner is not on the path; there the run is not isolated anyway.
     """
+    try:
+        from scripts.tt_hw_planner.agentic.persistence import _read_source_repo_from_session as _source_of
+    except Exception:  # noqa: BLE001
+        return None
     try:
         _d = Path(demo_dir).resolve()
         for _anc in [_d] + list(_d.parents):
-            _sess = _anc / ".tt_hw_planner_session.json"
-            if not _sess.is_file():
+            _main = _source_of(_anc)
+            if _main is None:
                 continue
-            _src = str((json.loads(_sess.read_text()) or {}).get("source_repo") or "").strip()
-            if not _src:
-                return None
-            _main = Path(_src).resolve()
+            _main = Path(_main).resolve()
             if _main == _anc:
-                return None  # running in place; the model dir already IS the main one
+                return None  # the session names its own root: this IS the main tree
             return _main / _d.relative_to(_anc)
     except Exception:  # noqa: BLE001
         return None
