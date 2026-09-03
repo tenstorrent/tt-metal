@@ -77,7 +77,7 @@ QUASAR_CAPTURE_TYPES = (
         "SRCA_STALL_MATH",
     ]
     + [f"THREAD_INSTRUCTIONS_{t}" for t in range(4)]
-    + ["L1_CLIENT_UNPACK3_SBANK_POP"]
+    + ["L1_CLIENT_UNPACK0_PORT3_SBANK_POP"]
 )
 
 QUASAR_EXPECTED_METRICS = [
@@ -88,7 +88,7 @@ QUASAR_EXPECTED_METRICS = [
     "XSEARCH Instrn Avail Rate T0",
     "INSTISSUE Instrn Avail Rate T3",
     "CFG Instrn Avail Rate T3",
-    "L1_CLIENT_UNPACK3_SBANK_POP Rate",
+    "L1_CLIENT_UNPACK0_PORT3_SBANK_POP Rate",
 ]
 
 
@@ -129,10 +129,10 @@ def test_l1_client_labels_cover_all_subport_ranges():
     assert quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_UNUSED"
     assert quasar_l1_client_label(3 * 8 + 5) == "L1_CLIENT_TRISC3_FLEX_WORK_CARRY"
     assert quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"
-    assert quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_SBANK_POP"
-    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK19_ISSUE_WORK_CARRY"
-    assert quasar_l1_client_label(25 * 8 + 2) == "L1_CLIENT_PACK0_ISSUE_STALL_CARRY"
-    assert quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK11_PENDING_REQS_CARRY"
+    assert quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_PORT0_SBANK_POP"
+    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK3_PORT4_ISSUE_WORK_CARRY"
+    assert quasar_l1_client_label(25 * 8 + 2) == "L1_CLIENT_PACK0_PORT0_ISSUE_STALL_CARRY"
+    assert quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK3_PORT2_PENDING_REQS_CARRY"
 
 
 def test_quasar_capture_produces_quasar_metrics_per_op():
@@ -211,16 +211,16 @@ def test_l1_client_carry_rates_scale_by_lane_count():
             "value": 100,
             "ref cnt": 10000,
         }
-        for name in ("L1_CLIENT_UNPACK0_SBANK_POP", "L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY")
+        for name in ("L1_CLIENT_UNPACK0_PORT0_SBANK_POP", "L1_CLIENT_UNPACK0_PORT0_ISSUE_STALL_CARRY")
     ]
     df = pd.DataFrame(rows)
     per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
-    pop = list(per_op["L1_CLIENT_UNPACK0_SBANK_POP Rate"]["avg"].values())[0]
-    carry = list(per_op["L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    pop = list(per_op["L1_CLIENT_UNPACK0_PORT0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(per_op["L1_CLIENT_UNPACK0_PORT0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
     assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
     agg, _ = compute_device_only_metrics(df, "quasar")
-    pop = list(agg["L1_CLIENT_UNPACK0_SBANK_POP Rate"]["avg"].values())[0]
-    carry = list(agg["L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    pop = list(agg["L1_CLIENT_UNPACK0_PORT0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(agg["L1_CLIENT_UNPACK0_PORT0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
     assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
 
 

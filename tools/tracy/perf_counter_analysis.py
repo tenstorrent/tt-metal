@@ -305,16 +305,23 @@ QUASAR_L1_CLIENT_EVENT_NAMES = (
 
 
 def quasar_l1_client_label(sel):
-    """Human label for the l1_client event counter selection (subport*8 + event)."""
+    """Human label for the l1_client event counter selection (subport*8 + event).
+
+    Unpack subports decompose as 4 units x 5 read ports and pack as 4 units x 3 write ports;
+    an emulator sweep under a matmul lit units 0-2 on both sides with unit 3 idle, matching
+    that decomposition.
+    """
     subport, event = divmod(int(sel), 8)
     if subport < 4:
         port = f"TRISC{subport}"
     elif subport == 4:
         port = "THCON"
     elif subport < 25:
-        port = f"UNPACK{subport - 5}"
+        unit, rd_port = divmod(subport - 5, 5)
+        port = f"UNPACK{unit}_PORT{rd_port}"
     else:
-        port = f"PACK{subport - 25}"
+        unit, wr_port = divmod(subport - 25, 3)
+        port = f"PACK{unit}_PORT{wr_port}"
     return f"L1_CLIENT_{port}_{QUASAR_L1_CLIENT_EVENT_NAMES[event]}"
 
 
