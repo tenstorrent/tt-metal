@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -165,6 +166,11 @@ class TtPrefillRuntime:
         self._trace_captured = False
         self._kv_cache = None
         self._trace_request_id = 0
+        #   _llama4_scale_by_offset — Mistral only: one pre-built query-scale buffer per deterministic
+        #                       k * chunk_size offset, filled by _prepare_llama4_scale_offsets() at
+        #                       compile time and device-to-device copied into _trace_metadata's buffer
+        #                       per chunk. Empty for every other variant (and off the traced path).
+        self._llama4_scale_by_offset: dict[int, ttnn.Tensor] = {}
 
         self._build_model(state_dict)
 
@@ -561,6 +567,54 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
         )
 
+    def _prepare_llama4_scale_offsets(self, chunk: int) -> None:
+        """Pre-build one query-scale device buffer per chunk offset, so the traced path can refresh
+        without touching host (https://github.com/tenstorrent/tt-metal/issues/55126).
+
+        No-op unless the model allocated a scale buffer, which is Mistral only (``llama_4_scaling_beta``
+        set). Everything here stays inside that branch: Kimi / GLM / DeepSeek / MiniMax keep a
+        ``llama4_scale`` of None and never reach this code, which is why this was chosen over deriving
+        the scale on-device -- that would touch the shared ChunkMetadata record and put every variant's
+        traced path in the blast radius of a Mistral-only fix.
+
+        WHY PRE-BUILT AND NOT REFRESHED PER CHUNK. ``refresh_llama4_scale`` builds a
+        [1, heads_local, chunk, width] torch tensor on host, tilizes, shards and copies it. Memoising it
+        on ``actual_start`` fixes short context (46,668 vs 47,178 tok/s pre-temperature) and regresses
+        long context 3x (4.130 s -> 13.291 s at 102,400), because at 102,400 the offset advances every
+        chunk so the memo never hits and 20 host rebuilds land on the critical path. Offsets are
+        deterministic (``k * chunk_size``), so paying all of them once here turns a per-chunk host
+        rebuild into a per-chunk device-to-device copy.
+
+        COST. Each buffer is [1, heads_local, chunk_global, width] bf16 sharded on dim 2 over the SP
+        axis: at 8x4 with chunk 5120 that is 8 x 640 x 320 x 2 = 3,276,800 B = 3.28 MB per device per
+        offset (both dims are tile multiples, so no tile padding inflates it). max_seq_len/chunk offsets,
+        so 62.5 MiB per device at 102,400 and 159 MiB at 261,120. ONE set, not one per layer: the
+        traced path already shares a single ChunkMetadata.llama4_scale across all layers, and the
+        contents are layer-invariant anyway (llama4_scale_host takes only mesh- and model-level
+        arguments). The per-layer x36 growth in ttMLA._llama4_scale's NOTE ON RESIDENCY is about the
+        EAGER host-scalar cache and does not apply here.
+        """
+        self._llama4_scale_by_offset = {}
+        if self._trace_metadata.llama4_scale is None:
+            return
+        n_offsets = self.config.max_seq_len // chunk
+        t0 = time.perf_counter()
+        for k in range(n_offsets):
+            offset = k * chunk
+            # Populated at allocation: one host build per offset, not two.
+            self._llama4_scale_by_offset[offset] = self.model.rope_setup.make_llama4_scale_buffer(chunk, offset)
+        ttnn.synchronize_device(self.mesh_device)
+        # Per-device bytes from the buffer's own logical shape / the SP factor it is sharded over, so
+        # the number logged cannot drift from the geometry _llama4_scale_geometry actually chose.
+        shape = list(self._trace_metadata.llama4_scale.shape)
+        per_dev_bytes = math.prod(shape) * 2 // self.config.mesh_shape[self.config.sp_axis]
+        logger.info(
+            f"[trace] pre-built {n_offsets} llama4 query-scale buffers "
+            f"(offsets 0..{(n_offsets - 1) * chunk} step {chunk}, "
+            f"{n_offsets * per_dev_bytes / 1e6:.1f} MB/device) in "
+            f"{(time.perf_counter() - t0) * 1000.0:.0f} ms"
+        )
+
     def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
@@ -578,6 +632,7 @@ class TtPrefillRuntime:
             self._meta1_dev(chunk),
             self.model.rope_setup.make_llama4_scale_buffer(chunk),
         )
+        self._prepare_llama4_scale_offsets(chunk)
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
         self._trace_metadata_msg = self._meta3_dev((0, 0, chunk))
@@ -716,11 +771,36 @@ class TtPrefillRuntime:
             # strips asserts, and stripping THIS one does not crash -- it re-enables the silent
             # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
             if self._trace_metadata.llama4_scale is not None:
-                raise RuntimeError(
-                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
-                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
-                    "through the host-scalar path until the scale is carried in the metadata record"
+                # Mistral's query temperature. The three scalars above are read on-device, but the
+                # host DOES know this chunk's offset -- prefill_runner passes slot_id/actual_start/
+                # actual_end as real ints, they are simply not consulted for the scalars -- so the
+                # offset is available to SELECT a buffer even though it is not used to BUILD one.
+                #
+                # Device-to-device copy into the captured address, from the set pre-built in
+                # _prepare_llama4_scale_offsets. No torch tensor, no PCIe transfer. The copy is
+                # enqueued on cq 0 and SubDeviceTraceController replays on cq 0, so it is ordered
+                # ahead of every layer's multiply in the replay that follows and behind every
+                # multiply in the replay before it. That ordering is what makes an in-place refresh
+                # safe here, and it is the part _llama4_scale's docstring flags as unvalidated for
+                # the host-write path (copy_host_to_device_tensor does not carry the same guarantee).
+                assert actual_start is not None, (
+                    "use_trace: the llama4 query scale needs this chunk's actual_start on host to pick "
+                    "its pre-built buffer. The traced path reads the SCALARS on-device, but the caller "
+                    "still passes the offset (prefill_runner does); a None here means a caller that "
+                    "does not, and replaying with a stale scale would silently apply the previous "
+                    "chunk's temperature"
                 )
+                src = self._llama4_scale_by_offset.get(actual_start)
+                if src is None:
+                    raise RuntimeError(
+                        f"no pre-built llama4 query-scale buffer for actual_start={actual_start}. "
+                        f"Offsets are pre-built at compile() for k * {self.config.chunk_size} up to "
+                        f"max_seq_len={self.config.max_seq_len}; this offset is off that grid or past "
+                        f"the end. Raising rather than falling back to a host refresh on purpose: the "
+                        f"fallback is what regresses long context 3x (see "
+                        f"_prepare_llama4_scale_offsets)."
+                    )
+                ttnn.copy(src, self._trace_metadata.llama4_scale)
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
