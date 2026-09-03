@@ -596,7 +596,18 @@ def _slice_sampling_params_row(sampling_params, i: int):
     from dataclasses import fields, replace
 
     def _at(value):
-        if value is None or not isinstance(value, (list, tuple)):
+        # ``TTSamplingParams`` types every per-user field as ``torch.Tensor |
+        # list[...]`` (vllm_tt_plugin/model_input.py), and the plugin currently
+        # hands us the list form. A tensor must still be indexed, not passed
+        # through whole: a whole tensor would read as "one value per lane" and
+        # silently give this request the batch's other rows' params.
+        if value is None:
+            return value
+        if isinstance(value, torch.Tensor):
+            if value.ndim == 0:
+                return value.item()
+            return value[i].item() if i < value.shape[0] else value[0].item()
+        if not isinstance(value, (list, tuple)):
             return value
         return value[i] if i < len(value) else value[0]
 

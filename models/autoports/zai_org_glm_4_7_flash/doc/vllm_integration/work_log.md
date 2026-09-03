@@ -455,3 +455,103 @@ isolation but fail inside the 74-test sequence against one long-lived server
 (`test_top1_is_greedy`, `test_mixed_params_batch`, `test_uniform_seed_deterministic[32-0]`).
 The full-profile result is therefore not a clean per-test signal, and the gate
 will stay red on that alone. Needs its own investigation.
+
+**Commits.** tt-metal `9faa3d324dc` (branch `ttmodelmanager/glm47-flash-probe`);
+vllm-tt-plugin `9f2ec5d` (branch `ttmodelmanager/glm47-flash-registration`,
+branched off main rather than committing to the default branch). Neither pushed.
+
+---
+
+## VS-008: prefill sampling params reached a lane nothing reads
+
+**Symptom.** 11 plugin sampling tests failed: `test_temperature_varied_in_batch`
+(x5), `test_topk` (x3), and the three `*_penalty_mixed_batch`. Identical
+unseeded requests at `temperature=2.0` all produced the *same* first token, and
+the same token on re-runs. Whole outputs varied; only the first token did not.
+
+**Root cause.** A request's sampling parameters were written to a sampler lane
+that is never read.
+
+1. The plugin hands per-row lists (`vllm_tt_plugin/model_runner.py`, `.tolist()`),
+   so `_slice_sampling_params_row` yields row *i*'s **scalar**.
+2. `format_sampling_params` wraps that scalar to a 1-element list
+   (`models/common/sampling/generator.py:500`), so `active_len = 1` (`:528`).
+3. Each per-user field is emitted as `[request value] + 31 * default`
+   (`_pad_per_user`, `:537`). Those defaults are **greedy** (temp 1.0, k 1, p 1.0).
+4. `TTSampling.reset_params` rewrites **all 32 rows** from those lists; its
+   `empty_slots` argument is never used to merge (`tt_sampling.py:593-640`).
+5. Prefill's sampler tile is indexed by prompt **position**, not by user: the
+   first token is read from lane `(seq-1) % 32`
+   (`tt/model.py::prefill_forward_last_logits_device`). For any prompt longer
+   than one token that is a padded, greedy lane.
+
+So the request's own temperature/top_k/top_p/penalties sat on lane 0, which
+nothing reads, and **every first token was sampled greedily regardless of what
+the client asked for**. A correctness defect, not just a variety one.
+
+Hardware instrumentation (7 identical requests, `seq=4`) confirmed it exactly:
+`row=3` for every request (slot-independent), `row_eq_slot` true only for
+`user_id=3`, every request returning token 50 (`'S'`), lane 0 varying across
+calls while lanes 1-7 stayed frozen.
+
+The shared formatter states the assumption this model breaks
+(`generator.py:539`: "a one-user batch has always meant lane 0"); tt_transformers
+satisfies it by placing request *i* at row `empty_slots[i]`.
+
+**Fix.** `_broadcast_per_user_fields` (`tt/generator.py`) expands a single
+request's scalar per-user fields to all 32 lanes before `format_sampling_params`,
+so whichever lane prefill reads carries that request's params. Applied in
+`apply_prefill_sampling_state` (vLLM path) and `set_sampling_params` (the
+high-level `generate()` path, which had the same latent bug). `seed` is
+deliberately excluded (lane-scoped by design); `enable_log_probs`/`num_logprobs`
+are already broadcast by the formatter. Decode is untouched: its params arrive
+as per-lane lists and its row index is the slot, which is correct.
+
+Host-only change: no device ops, no new programs. No blast radius, because
+`reset_params` already rewrote all 32 rows on every prefill; only the contents
+of lanes 1-31 change. `force_argmax` cannot flip as a result: it is gated on
+`_allow_force_argmax_sampling` (`tt_sampling.py:137`), set only from
+`args.model_config["SAMPLING_AG_CONFIG"]` (`:255`) and otherwise False (`:261`),
+and this model's `_SamplingArgs` defines no `model_config`.
+
+Also **R2**: `_slice_sampling_params_row`'s `_at` now indexes `torch.Tensor`
+params. `TTSamplingParams` types every per-user field as `Tensor | list`
+(`model_input.py:29-37`); a tensor previously passed through whole, which would
+have handed one request the whole batch's values. Latent today only because the
+plugin `.tolist()`s.
+
+**Evidence (one p150, `--max-model-len 8192`, tests in isolation).**
+
+| test | before | after |
+|---|---|---|
+| `test_temperature_varied_in_batch` | FAIL (5) | **PASS (5)** |
+| `test_topk` | FAIL (3) | **PASS (3)** |
+| `test_repetition/presence/frequency_penalty_mixed_batch` | FAIL (3) | **PASS (3)** |
+| `test_mixed_params_batch` | PASS | PASS |
+| `test_top1_is_greedy` | PASS | PASS |
+| `test_uniform_seed_deterministic` | PASS (6) | PASS (6) |
+| `test_specific_seed_reproducible` / `batch1_seed_reproducible` / `different_seeds` / `uniform_noseed_varied` / `min_p` | PASS | PASS |
+
+Host: 5 new VS-008 regression tests pass; `models/common/tests/test_sampling.py -k seed` 9/9.
+Full suite at 8192: **17 failed / 56 passed -> 13 failed / 60 passed**.
+
+**What this unmasked (VS-009, next item).** Four seed-reproducibility tests
+(`test_specific_seed_reproducible`, `test_uniform_seed_deterministic`,
+`test_seeding`, `test_same_seeds_reproduce_across_batches`) now fail *in
+isolation* where they previously passed. They were passing for the wrong reason:
+the read lane was greedy, so the draw was deterministic and "reproducible"
+trivially held. With the lane now honouring temperature, the seed must actually
+control the draw, and it does not. Confirmed directly against the live server:
+
+```
+FIRST TOKEN ONLY (max_tokens=1, temperature=2.0)
+  seed=0    run1='17'  run2='46'  DIFFER
+  seed=42   run1='5'   run2='4'   DIFFER
+  seed=123  run1='18'  run2='12'  DIFFER
+```
+
+The seed analogue of this same bug: the prefill seed does not reach the lane the
+token is read from. `apply_prefill_state` does pass `replicate_seeds=True`
+(which broadcasts the device seed across lanes) so the mechanism is not yet
+established; it needs its own investigation. Not a VS-008 regression: the
+defect predates it and VS-008 is a net improvement (17 -> 13 failures).

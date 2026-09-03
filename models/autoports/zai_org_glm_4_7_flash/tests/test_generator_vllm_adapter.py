@@ -349,3 +349,78 @@ def test_rejects_batch_size_over_32(expect_error):
         GLM47FlashForCausalLM.initialize_vllm_model(
             hf_config=None, mesh_device=None, max_batch_size=33, max_seq_len=1024
         )
+
+
+# --------------------------------------------------------------------------- VS-008
+# Prefill lane broadcast. Host-only: these assert the params a request would
+# reach the device with, not a device draw.
+
+
+def _lane_view(sampling_params, lanes=MAX_BATCH_SIZE):
+    """The per-lane temperature/top_k the sampler would receive."""
+    from models.common.sampling import format_sampling_params
+
+    f = format_sampling_params(sampling_params, lanes)
+    return f.temperature[:lanes], f.top_k[:lanes]
+
+
+def test_scalar_prefill_params_would_reach_only_lane_zero_without_broadcast():
+    """The bug VS-008 fixes, pinned so a regression is visible here.
+
+    A scalar request formats to `[value] + 31 * default`, and the defaults are
+    greedy. Prefill reads lane (seq-1) % 32, so for any prompt longer than one
+    token the request's own params were never the ones that sampled.
+    """
+    temp, top_k = _lane_view(SamplingParams(temperature=2.0, top_k=10, top_p=0.95))
+    assert temp[0] != temp[1], "lane 0 should differ from the padded lanes (that is the bug)"
+    assert top_k[1] == 1 and top_k[3] == 1, f"padded lanes are greedy: {top_k[:4]}"
+
+
+def test_broadcast_makes_every_prefill_lane_carry_the_request_params():
+    """After the broadcast, whichever lane prefill reads holds the request's params."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import _broadcast_per_user_fields
+
+    params = SamplingParams(temperature=2.0, top_k=10, top_p=0.95, presence_penalty=0.5)
+    temp, top_k = _lane_view(_broadcast_per_user_fields(params, MAX_BATCH_SIZE))
+
+    assert len(set(temp)) == 1, f"temperature must be uniform across lanes, got {sorted(set(temp))}"
+    assert len(set(top_k)) == 1, f"top_k must be uniform across lanes, got {sorted(set(top_k))}"
+    assert top_k[0] == 10
+    # Every lane a prefill could read, not just lane 0.
+    assert top_k[3] == 10 and top_k[MAX_BATCH_SIZE - 1] == 10
+
+
+def test_broadcast_leaves_real_per_lane_batches_alone():
+    """A caller describing a genuine multi-lane batch is not overwritten."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import _broadcast_per_user_fields
+
+    per_lane = SamplingParams(temperature=[0.5, 1.5], top_k=[3, 7], top_p=1.0)
+    out = _broadcast_per_user_fields(per_lane, MAX_BATCH_SIZE)
+    assert out.temperature == [0.5, 1.5], "existing per-lane lists must pass through untouched"
+    assert out.top_k == [3, 7]
+    assert out.top_p == [1.0] * MAX_BATCH_SIZE, "scalars alongside lists are still broadcast"
+
+
+def test_broadcast_never_touches_the_seed():
+    """seed is lane-scoped by design: broadcasting it means every lane draws alike."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator import _broadcast_per_user_fields
+
+    out = _broadcast_per_user_fields(SamplingParams(temperature=1.0, top_k=1, top_p=1.0, seed=42), MAX_BATCH_SIZE)
+    assert out.seed == 42, "seed must stay scalar/lane-scoped, not become a 32-lane list"
+
+
+def test_slice_row_indexes_tensor_params(expect_error):
+    """R2: TTSamplingParams types per-user fields as Tensor | list; a tensor must
+    be indexed, not passed through whole (which would hand this request the
+    whole batch's values)."""
+    from models.autoports.zai_org_glm_4_7_flash.tt.generator_vllm import _slice_sampling_params_row
+
+    batch = SamplingParams(
+        temperature=torch.tensor([0.5, 1.5, 2.5]),
+        top_k=torch.tensor([3, 7, 11]),
+        top_p=torch.tensor([0.9, 0.8, 0.7]),
+    )
+    row = _slice_sampling_params_row(batch, 1)
+    assert row.temperature == pytest.approx(1.5)
+    assert row.top_k == 7
+    assert row.top_p == pytest.approx(0.8)

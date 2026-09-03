@@ -144,6 +144,59 @@ def _reject_user_id_kwarg(kwargs) -> None:
     _reject_swallowed_kwargs(kwargs)
 
 
+#: Fields ``format_sampling_params`` treats as per-user (one value per sampler
+#: lane). ``seed`` is deliberately absent: it is lane-scoped on purpose there,
+#: and broadcasting it would mean "every lane draws the same token".
+#: ``enable_log_probs``/``num_logprobs`` are absent too: that function already
+#: broadcasts them to every lane.
+_PER_USER_SAMPLING_FIELDS = (
+    "temperature",
+    "top_k",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "repetition_penalty",
+)
+
+
+def _broadcast_per_user_fields(sampling_params, lanes: int):
+    """Describe ONE request's params on all ``lanes`` sampler lanes.
+
+    ``format_sampling_params`` derives its active-lane count from
+    ``len(temperature)`` and pads the rest with defaults, and those defaults are
+    *greedy* (temp 1.0, k 1, p 1.0). Its contract assumes the one lane a
+    single-user call describes is the lane that gets sampled ("a one-user batch
+    has always meant lane 0").
+
+    This model breaks that assumption: prefill's sampler tile is indexed by
+    prompt *position*, not by user, and the first token is read from lane
+    ``(seq-1) % 32`` (``tt/model.py``'s ``prefill_forward_last_logits_device``).
+    For any prompt longer than one token that is a padded, greedy lane, so the
+    request's own temperature/top_k/top_p/penalties were written to lane 0 and
+    never read -- every first token came out greedy regardless of what was
+    asked for (work log VS-008).
+
+    Prefill runs one request at a time and only the one read lane matters, so
+    the fix is to make every lane carry this request's values. That is the same
+    shape as ``apply_prefill_state(replicate_seeds=True)`` already uses for the
+    seed on this path. A caller who already passes per-lane lists is describing
+    a real multi-lane batch and is left untouched.
+    """
+    from dataclasses import replace
+
+    if sampling_params is None:
+        return sampling_params
+    updates = {}
+    for name in _PER_USER_SAMPLING_FIELDS:
+        value = getattr(sampling_params, name, None)
+        if value is None or isinstance(value, (list, tuple)):
+            continue  # already per-lane (or unset and defaulted downstream)
+        updates[name] = [value] * lanes
+    if not updates:
+        return sampling_params
+    return replace(sampling_params, **updates)
+
+
 def _new_counters() -> Dict[str, int]:
     return {
         "model_trace_replays": 0,
@@ -259,7 +312,12 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         if self.sampling is None:
             self._sampling_params = sampling_params
             return
-        formatted = format_sampling_params(sampling_params, self.sampling.tt_sampling.max_batch_size)
+        lanes = self.sampling.tt_sampling.max_batch_size
+        # Same lane-vs-position mismatch as the vLLM path: generate()'s first
+        # token comes from _prefill_and_sample_first, which reads lane
+        # (seq-1) % 32. Without this, a scalar temperature/top_k set here lands
+        # on lane 0 only and the first token is sampled greedily (work log VS-008).
+        formatted = format_sampling_params(_broadcast_per_user_fields(sampling_params, lanes), lanes)
         self.sampling.reset_sampling_params(formatted)
         self._sampling_params = sampling_params
 
@@ -1179,7 +1237,13 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         """
         if self.sampling is None:
             return
-        formatted = format_sampling_params(sampling_params, self.sampling.tt_sampling.max_batch_size)
+        lanes = self.sampling.tt_sampling.max_batch_size
+        # Prefill's sampler tile is indexed by prompt position, not by user, and
+        # the first token is read from lane (seq-1) % 32 -- not from empty_slots.
+        # Describe every lane with this request's params so the read lane carries
+        # them; otherwise the padded (greedy) defaults decide the first token.
+        sampling_params = _broadcast_per_user_fields(sampling_params, lanes)
+        formatted = format_sampling_params(sampling_params, lanes)
         self.sampling.apply_prefill_state(
             sampling_params=formatted, prompt_tokens=prompt_tokens, empty_slots=list(empty_slots)
         )
