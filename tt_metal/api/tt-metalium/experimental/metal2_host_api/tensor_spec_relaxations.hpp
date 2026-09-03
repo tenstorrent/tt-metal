@@ -53,8 +53,8 @@ struct TensorSpecRelaxations {
     // shape.
     //
     // Notes:
-    //  - This setting strictly subsumes match_padded_shape_only -- if both are set,
-    //    dynamic_tensor_shape wins.
+    //  - This setting takes precedence over match_padded_shape_only -- if both are
+    //    set, dynamic_tensor_shape wins.
     //  - dynamic_tensor_shape requires that the logical rank remain constant. To
     //    further relax the logical rank, additionally set relax_logical_rank.
     //  - dynamic_tensor_shape assumes that an interleaved row-major tensor's page

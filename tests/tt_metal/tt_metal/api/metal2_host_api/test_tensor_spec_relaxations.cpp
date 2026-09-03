@@ -94,8 +94,8 @@ TEST(TensorSpecRelaxations, CPU_PaddedShapeOnlyToleratesLogicalWithinPadding) {
     EXPECT_NE(hash_tensorspec_with_relaxation(a, padded), hash_tensorspec_with_relaxation(diff_padded, padded));
 }
 
-// Precedence: dynamic_tensor_shape subsumes match_padded_shape_only when both are set.
-TEST(TensorSpecRelaxations, CPU_DynamicSubsumesPaddedShapeOnly) {
+// Precedence: dynamic_tensor_shape wins over match_padded_shape_only when both are set.
+TEST(TensorSpecRelaxations, CPU_DynamicTakesPrecedenceOverPaddedShapeOnly) {
     const auto a = make_spec(Shape{1, 1, 32, 32});
     const auto b = make_spec(Shape{1, 1, 64, 64});  // same rank+layout, DIFFERENT padded_shape
     ASSERT_NE(a.padded_shape(), b.padded_shape());
@@ -106,6 +106,30 @@ TEST(TensorSpecRelaxations, CPU_DynamicSubsumesPaddedShapeOnly) {
     const TensorSpecRelaxations both{.match_padded_shape_only = true, .dynamic_tensor_shape = true};
     EXPECT_TRUE(tensorspecs_match_with_relaxation(a, b, both));
     EXPECT_EQ(hash_tensorspec_with_relaxation(a, both), hash_tensorspec_with_relaxation(b, both));
+}
+
+// ...but precedence is NOT containment, and the docs used to say "subsumes". The two settings are
+// not strictly ordered: padded-shape matching accepts a pair that dynamic_tensor_shape rejects,
+// because a padded_shape's rank is max(logical rank, alignment rank), so padding absorbs a
+// logical-rank change that dynamic_tensor_shape's rank term then refuses.
+//
+// This is the pair the sweep corpus carries for the same reason. Pinning it here as its own test so
+// the "subsumes" claim cannot quietly come back.
+TEST(TensorSpecRelaxations, CPU_DynamicDoesNotContainPaddedShapeOnly) {
+    // TILE's default alignment is rank 2, so both pad to {32,32} at rank 2.
+    const auto rank1 = make_spec(Shape{32});
+    const auto rank2 = make_spec(Shape{32, 32});
+    ASSERT_EQ(rank1.padded_shape(), rank2.padded_shape());
+    ASSERT_NE(rank1.logical_shape().rank(), rank2.logical_shape().rank());
+
+    // Accepted by padded-shape matching...
+    EXPECT_TRUE(
+        tensorspecs_match_with_relaxation(rank1, rank2, TensorSpecRelaxations{.match_padded_shape_only = true}));
+    // ...and REJECTED by the supposedly-looser setting, which pins the rank.
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(rank1, rank2, TensorSpecRelaxations{.dynamic_tensor_shape = true}));
+    // Freeing the rank is what makes it accepted again.
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(
+        rank1, rank2, TensorSpecRelaxations{.dynamic_tensor_shape = true, .relax_logical_rank = true}));
 }
 
 // dynamic_tensor_shape alone still PINS the rank. This is the mode relax_logical_rank was added

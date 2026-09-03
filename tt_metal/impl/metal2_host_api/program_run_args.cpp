@@ -144,9 +144,12 @@ static void report_tensor_arg_mismatch(
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
 //   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec, with the
-//     match relaxed according to the TensorParameter's loosening flags. The cases form a lattice
-//     from strictest to loosest (dynamic_tensor_shape strictly subsumes match_padded_shape_only;
-//     when both are set, dynamic wins):
+//     match relaxed according to the TensorParameter's loosening flags, ordered here roughly from
+//     strictest to loosest. dynamic_tensor_shape takes PRECEDENCE over match_padded_shape_only when
+//     both are set -- precedence, not containment: the two are not strictly ordered, since padded
+//     shape matching tolerates the logical-rank changes padding absorbs while dynamic_tensor_shape
+//     pins the rank. The worked pair is in CPU_DynamicDoesNotContainPaddedShapeOnly
+//     (test_tensor_spec_relaxations.cpp).
 //       - Neither flag set (default): full TensorSpec equality.
 //       - match_padded_shape_only=true (only): tensor_layout() must match exactly, and
 //         padded_shape() must match exactly. logical_shape() may differ.

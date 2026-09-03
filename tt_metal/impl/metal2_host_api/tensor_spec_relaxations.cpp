@@ -20,7 +20,7 @@ namespace tt::tt_metal::experimental {
 namespace relaxation_fields {
 
 // The TensorSpec fields a relaxation treats as load-bearing. Deriving that set -- including the
-// precedence rule that dynamic_tensor_shape subsumes match_padded_shape_only -- is the one piece
+// precedence rule that dynamic_tensor_shape wins over match_padded_shape_only -- is the one piece
 // of logic hash_tensorspec_with_relaxation and tensorspecs_match_with_relaxation must agree on, so
 // it lives here once and both consult it. Their notions of equivalence therefore cannot drift.
 //
