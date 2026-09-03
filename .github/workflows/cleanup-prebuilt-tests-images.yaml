@@ -33,15 +33,16 @@ name: "Cleanup prebuilt tests images"
 # Recompute N if the push rate changes: wiring more consumers raises it, and
 # building one image per run instead of two would halve it.
 #
-# The producer also creates prebuilt-tests-env-image, whose payload is a source
-# tree plus build output rather than packages. It is swept separately because its
-# push rate is nothing like the gates': the producer test plus the nightly
-# consumers put it on the order of ten a day, so a much smaller N buys more
-# retention than 4,800 buys for the gate images. Recompute it when a high-volume
-# caller is wired, the same way the figure above is derived from a rate.
+# One matrix entry per package the producer creates, each with its own N, because
+# their push rates differ by two orders of magnitude. prebuilt-tests-env-image
+# carries a source tree plus build output rather than packages, and is pushed by
+# the producer test and the nightly consumers on the order of ten a day, so N=100
+# buys it more retention than N=4,800 buys the gate images. Recompute either when
+# a high-volume caller is wired, the same way the figure above is derived.
 #
-# This deletes irreversibly. It is scoped to the two packages the
-# build-prebuilt-tests-image producer creates, and never touches a base image.
+# This deletes irreversibly. The package list is fixed in the matrix below and
+# never derives from event context, so this cannot resolve to a package it should
+# not touch, and it never touches a base image.
 
 permissions:
   packages: write
@@ -52,66 +53,48 @@ on:
   workflow_dispatch:
     inputs:
       min-versions-to-keep:
-        description: "Newest versions to keep. Set very high for a safe no-op run."
+        description: "Override retention for every package. Set very high for a safe no-op run. Empty uses each package's own default."
         required: false
         type: string
-        default: "4800"
-      env-min-versions-to-keep:
-        description: "Newest env-image versions to keep. Set very high for a safe no-op run."
-        required: false
-        type: string
-        default: "100"
+        default: ""
 
 jobs:
   cleanup:
-    name: "Delete aged-out prebuilt tests images"
+    name: "Delete aged-out ${{ matrix.package }}"
     runs-on: ubuntu-slim
     timeout-minutes: 10
+    strategy:
+      # One package failing must not stop the others being swept.
+      fail-fast: false
+      matrix:
+        include:
+          - package: tt-metal/prebuilt-tests-image
+            keep: "4800"
+          - package: tt-metal/prebuilt-tests-env-image
+            keep: "100"
     steps:
       - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
         with:
-          # Literal, not a context expression: this is what stops the job ever
-          # resolving to a package it should not touch.
           owner: tenstorrent
-          package-name: tt-metal/prebuilt-tests-image
+          package-name: ${{ matrix.package }}
           package-type: container
-          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '4800' }}
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || matrix.keep }}
 
       # A GC that silently falls behind looks exactly like one that is working.
       - name: Report what is left
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP: ${{ inputs.min-versions-to-keep || '4800' }}
+          KEEP: ${{ inputs.min-versions-to-keep || matrix.keep }}
+          PACKAGE: ${{ matrix.package }}
         run: |
           set -euo pipefail
-          COUNT=$(gh api "/orgs/tenstorrent/packages/container/tt-metal%2Fprebuilt-tests-image" --jq '.version_count')
-          echo "versions remaining: ${COUNT}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The API takes the package name path-encoded.
+          COUNT=$(gh api "/orgs/tenstorrent/packages/container/${PACKAGE//\//%2F}" --jq '.version_count')
+          echo "${PACKAGE}: ${COUNT} versions remaining" | tee -a "$GITHUB_STEP_SUMMARY"
           # Steady state sits near the retention value, so warn relative to it
           # rather than at a fixed number. A deliberate high-retention no-op run
           # would otherwise report falling behind.
           THRESHOLD=$(( KEEP * 2 ))
           if [ "${COUNT}" -gt "${THRESHOLD}" ]; then
-            echo "::warning::${COUNT} versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
-          fi
-
-      - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
-        with:
-          # Literal for the same reason as above.
-          owner: tenstorrent
-          package-name: tt-metal/prebuilt-tests-env-image
-          package-type: container
-          min-versions-to-keep: ${{ inputs.env-min-versions-to-keep || '100' }}
-
-      - name: Report what is left of the env images
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP: ${{ inputs.env-min-versions-to-keep || '100' }}
-        run: |
-          set -euo pipefail
-          # 404 until the first env image is pushed, which is not an error here.
-          COUNT=$(gh api "/orgs/tenstorrent/packages/container/tt-metal%2Fprebuilt-tests-env-image" --jq '.version_count' 2>/dev/null || echo 0)
-          echo "env image versions remaining: ${COUNT}" | tee -a "$GITHUB_STEP_SUMMARY"
-          THRESHOLD=$(( KEEP * 2 ))
-          if [ "${COUNT}" -gt "${THRESHOLD}" ]; then
-            echo "::warning::${COUNT} env image versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
+            echo "::warning::${PACKAGE}: ${COUNT} versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
           fi
