@@ -235,14 +235,18 @@ def run_full_ttnn_tts(
             )
             timings["icl_embed"] = time.time() - icl_start
 
-        if seed is not None:
-            torch.manual_seed(seed)
-
         from models.demos.qwen3_tts.reference.functional import (
             SpeechTokenizerDecoderConfig,
             speech_tokenizer_decoder_forward,
         )
         from models.demos.qwen3_tts.tt.generator import StreamingAudioDecoder
+
+        # Seed AFTER these imports. reference/functional.py calls
+        # torch.manual_seed(0) at module scope, so seeding before the first import
+        # of it was silently overwritten and every run used seed 0 regardless of
+        # --seed (verified: seeds 5 and 6 produced byte-identical audio).
+        if seed is not None:
+            torch.manual_seed(seed)
 
         _decoder_cfg = SpeechTokenizerDecoderConfig()
 
