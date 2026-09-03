@@ -1696,6 +1696,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         auto mesh_groupings = pgd.get_groupings_by_name("4x32_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
 
+        // TODO(plan 3 §8(a)): rewrite these find_all_in_psd tests onto solve_adjacency_guided_placement.
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         EXPECT_EQ(asic_ids.size(), 4u)
@@ -2565,6 +2566,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_TRUE(found_split_host) << "Expected 4x4_SplitHost grouping to be committed alongside 4x4_Mesh";
 
     const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    // TODO(plan 3 §8(a)): rewrite onto solve_adjacency_guided_placement when find_all_in_psd is deleted.
     const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
 
