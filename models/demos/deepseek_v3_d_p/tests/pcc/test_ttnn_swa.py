@@ -13,8 +13,10 @@ Every test drives a public forward -- no TtSWA private method is called directly
 Both V4 variants run, flash and pro. Pro has no sliding layer in the real checkpoint, but its
 dimensions are what stress the reductions, so it is kept as a width test.
 
-Prompt lengths are multiples of the 128-token window: the next chunk's first query needs the 128 keys
-before it, so a chunk that ended mid-window would leave the carry unable to name them.
+Non-final chunks are multiples of the 128-token window: the next chunk's first query needs the 128
+keys before it, so a chunk that ended mid-window would leave the carry unable to name them. A FINAL
+chunk may be ragged -- nothing reads its carry -- which is what the 3000-token tails cover. Same rule
+as TtHCA's, so one chunk sequence is valid for both layers.
 
 Device-perf for the same layer lives in tests/perf/test_ttnn_swa_perf.py.
 """
@@ -112,12 +114,17 @@ _MESH_CONFIGS = [
 ]
 
 _CHUNKED_SCENARIOS = [
-    ("2chunk-ragged", 4096, [4096, 3072]),  # the other chunk width, and a short final chunk
+    ("2chunk-ragged", 4096, [4096, 3000]),  # the other chunk width, and a final chunk ending mid-tile
     ("chunk5120-full", 5120, [5120, 5120]),  # what the perf gate measures
-    ("chunk5120-ragged", 5120, [5120, 5120, 3072]),  # three chunks, last one short
+    ("chunk5120-ragged", 5120, [5120, 5120, 3000]),  # three chunks, last one ragged
     # Non-final chunks below chunk_size. Pins the place real_len and the padded slab width must not be
     # confused: the carry, which the next chunk's first chip reads.
     ("chunk5120-varying", 5120, [1024, 256, 5120]),
+    ("chunk1024-ragged", 1024, [1024, 1024, 1000]),  # a final chunk 8 tokens past a tile row
+    # Non-final chunks BELOW the 128-token window, which the carry can only serve by reaching back
+    # into itself: after the 32-token chunk the last 128 keys are 96 of the previous carry and 32 new.
+    # A carry cut out of the chunk alone cannot express that, so this is the case that pins it.
+    ("sub-window", 5120, [1024, 32, 96, 128, 5120, 1000]),
 ]
 
 # The two 56,320-token scenarios are the same length by construction, so the mixed one differs only in
