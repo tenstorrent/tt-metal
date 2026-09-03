@@ -161,7 +161,6 @@ ALWI void write_direct_interleaved_signal(
                     const uint32_t signal_index = signal_base + lane;
                     float value = 0.0F;
                     if (signal_index >= group_begin && signal_index < group_end) {
-                        const uint32_t local_signal_index = signal_index - output_begin;
                         const uint32_t padded_index = left_pad + signal_index;
                         const uint32_t split_index = padded_index / 2U;
                         const bool is_even = (padded_index & 1U) == 0;

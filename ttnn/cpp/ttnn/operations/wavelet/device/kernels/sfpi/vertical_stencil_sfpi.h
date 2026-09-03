@@ -18,8 +18,6 @@
 
 #include "lwt_sfpi_common.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -64,18 +62,6 @@ inline void _vertical_stencil_rotate_() {
     TT_SFPTRANSP(0, 0, 0, 0);
 }
 
-// Arguments:
-//   h_packed: array of K uint32_t values, each being the bit-cast of h[j] as float32
-//   f0: first 4x8 block
-//   f1: second 4x8 block (next 4 rows)
-//   f2: third 4x8 block (next 4 rows)
-//   f3: fourth 4x8 block (next 4 rows)
-//   g0: first 4x8 block output
-//   g1: second 4x8 block output
-//   g2: third 4x8 block output
-//   base0: first 4x8 block base
-//   base1: second 4x8 block base
-//   base2: third 4x8 block base
 template <uint8_t K>
 inline void _vertical_stencil_block(
     const uint32_t h_packed[K],
@@ -95,7 +81,6 @@ inline void _vertical_stencil_block(
     const uint32_t dst_base2 = 512) {
     static_assert(K > 0 && K <= 17, "Vertical stencil supports 1..17 coefficients");
 
-    // Register allocations
     const auto& f_0 = p_sfpu::LREG0;
     const auto& f_1 = p_sfpu::LREG1;
     const auto& f_2 = p_sfpu::LREG2;
@@ -105,13 +90,11 @@ inline void _vertical_stencil_block(
     const auto& g_2 = p_sfpu::LREG6;
     const auto& tmp = p_sfpu::LREG7;
 
-    // Load inputs into LRegs, for odd columns offset of 2 is used
     TT_SFPLOAD(f_0, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f0);
     TT_SFPLOAD(f_1, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f1);
     TT_SFPLOAD(f_2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f2);
     TT_SFPLOAD(f_3, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_f3);
 
-    // Load base from Dst
     if (dst_base0 < 512) {
         TT_SFPLOAD(g_0, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_3, dst_base0);
     } else {
@@ -181,11 +164,6 @@ inline void _vertical_stencil_block(
     }
 }
 
-// Arguments:
-//   h_packed: array of K uint32_t values, each being the bit-cast of h[j] as float32
-//   input1: first tile index in dst register
-//   input2: second tile index in dst register
-//   output: tile index in dst register for output (can be same as either input)
 template <uint8_t K>
 inline void _vertical_stencil(
     const uint32_t h_packed[K],

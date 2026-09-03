@@ -166,24 +166,19 @@ void add_cb(
     return checked_u32((height / kTileHeight2D) * (width / kTileWidth2D), "2D route tile count");
 }
 
-[[nodiscard]] std::vector<uint32_t> plane_offsets(const WorkingBuffers2D& buffers) {
+template <typename Plan>
+[[nodiscard]] std::vector<uint32_t> build_plane_args(const WorkingBuffers2D& buffers, const Plan& plan) {
     std::vector<uint32_t> args(2 * device_protocol::kLwt2DPlaneCount, 0);
     uint32_t plane_offset = 0;
     for (size_t slot = 0; slot < buffers.plane_tile_counts.size(); ++slot) {
         args[slot] = plane_offset;
+        args[device_protocol::kLwt2DPlaneCount + slot] = plan.allocated_plane_widths_elements[slot] / kTileWidth2D;
         TT_FATAL(
             buffers.plane_tile_counts[slot] <= (std::numeric_limits<uint32_t>::max() - plane_offset) / kTileBytes,
             "2D workspace plane offsets overflow uint32_t");
         plane_offset += buffers.plane_tile_counts[slot] * kTileBytes;
     }
     return args;
-}
-
-template <typename Plan>
-void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Plan& plan) {
-    for (size_t slot = 0; slot < device_protocol::kLwt2DPlaneCount; ++slot) {
-        args[device_protocol::kLwt2DPlaneCount + slot] = plan.allocated_plane_widths_elements[slot] / kTileWidth2D;
-    }
 }
 
 [[nodiscard]] tt::tt_metal::KernelDescriptor::RTArgList reader_args(
@@ -202,9 +197,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
         plan.y_plan.preprocess_layout.pad_config.left,
         plan.x_plan.preprocess_layout.pad_config.left,
     });
-    std::vector<uint32_t> planes = plane_offsets(buffers);
-    replace_plane_tile_counts_with_widths(planes, plan);
-    args.append(planes);
+    args.append(build_plane_args(buffers, plan));
     args.push_back(static_cast<uint32_t>(buffers.chunk_config->get_backing_buffer()->address()));
     args.push_back(static_cast<uint32_t>(buffers.route_config->get_backing_buffer()->address()));
     args.push_back(work.chunk_begin);
@@ -221,10 +214,8 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     const CoreChunkWork& work,
     const uint32_t chunks_per_sample,
     const uint32_t output_tiles_per_sample) {
-    std::vector<uint32_t> plane_args = plane_offsets(buffers);
-    replace_plane_tile_counts_with_widths(plane_args, plan);
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.append(plane_args);
+    args.append(build_plane_args(buffers, plan));
     args.push_back(static_cast<uint32_t>(buffers.route_config->get_backing_buffer()->address()));
     args.push_back(static_cast<uint32_t>(buffers.band_config->get_backing_buffer()->address()));
     for (auto* output : buffers.outputs) {
@@ -269,9 +260,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     args.push_back(encoded_i32(y_canonical_start - y_forward.final_odd_shift, "2D ILWT y-odd offset"));
     args.push_back(encoded_i32(x_canonical_start - x_forward.final_even_shift, "2D ILWT x-even offset"));
     args.push_back(encoded_i32(x_canonical_start - x_forward.final_odd_shift, "2D ILWT x-odd offset"));
-    std::vector<uint32_t> planes = plane_offsets(buffers);
-    replace_plane_tile_counts_with_widths(planes, plan);
-    args.append(planes);
+    args.append(build_plane_args(buffers, plan));
     args.push_back(static_cast<uint32_t>(buffers.chunk_config->get_backing_buffer()->address()));
     args.push_back(static_cast<uint32_t>(buffers.route_config->get_backing_buffer()->address()));
     args.push_back(work.chunk_begin);
@@ -288,15 +277,11 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
     const CoreChunkWork& work,
     const uint32_t chunks_per_sample,
     const uint32_t output_tiles_per_sample) {
-    std::vector<uint32_t> plane_args = plane_offsets(buffers);
-    replace_plane_tile_counts_with_widths(plane_args, plan);
     tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.append(plane_args);
+    args.append(build_plane_args(buffers, plan));
     args.push_back(static_cast<uint32_t>(buffers.route_config->get_backing_buffer()->address()));
     args.push_back(static_cast<uint32_t>(buffers.band_config->get_backing_buffer()->address()));
-    for (uint32_t band = 0; band < device_protocol::kLwt2DBandCount; ++band) {
-        args.push_back(buffers.outputs[0]);
-    }
+    args.push_back(buffers.outputs[0]);
     args.push_back(checked_u32(plan.tiling.input.storage.width / kTileWidth2D, "2D ILWT output tile columns"));
     args.push_back(work.chunk_begin);
     args.push_back(work.chunk_count);
@@ -381,8 +366,9 @@ template <typename Plan>
     }
     tt::tt_metal::TensorAccessorArgs(*buffers.chunk_config->get_backing_buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*buffers.route_config->get_backing_buffer()).append_to(reader_compile_args);
-    reader_compile_args.push_back(static_cast<uint32_t>(boundary_mode));
-    reader_compile_args.push_back(scratch_bytes);
+    if (!inverse) {
+        reader_compile_args.push_back(static_cast<uint32_t>(boundary_mode));
+    }
     tt::tt_metal::KernelDescriptor::Defines reader_defines;
     if (inverse) {
         reader_defines.emplace_back("ILWT_2D", "1");
