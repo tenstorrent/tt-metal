@@ -848,7 +848,10 @@ def weight_cache_path(variant, model_path):
     Subsequent runs: weights are loaded directly, bypassing torch conversion.
 
     The path encodes variant + architecture + device count to prevent cross-config clashes.
-    Returns None if pretrained weights are unavailable (random-weight tests skip caching).
+    Resolution mirrors the runner (MLAPrefillAdapter.weight_cache_path): the variant's cache
+    env var, else ``ttnn_cache_default`` when that root is present on this machine, else a
+    directory beside the weights. Returns None if pretrained weights are unavailable
+    (random-weight tests skip caching).
     """
     if not _check_pretrained_available(model_path):
         return None
@@ -856,6 +859,10 @@ def weight_cache_path(variant, model_path):
     num_devices = ttnn.get_num_devices()
     env_name = variant.ttnn_cache_env or "TT_DS_PREFILL_TTNN_CACHE"
     env_cache = os.getenv(env_name)
+    if not env_cache:
+        default_root = getattr(variant, "ttnn_cache_default", "") or ""
+        if default_root and Path(default_root).is_dir():
+            env_cache = default_root
     if env_cache:
         cache_dir = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev"
     else:
