@@ -8,7 +8,6 @@ These need no hardware: they feed synthetic counter captures through the same co
 profiler reports use.
 """
 
-import random
 import re
 import sys
 from pathlib import Path
@@ -97,11 +96,11 @@ QUASAR_EXPECTED_METRICS = [
 ]
 
 
-def make_capture(counter_types, risc_fmt, num_riscs, seed=7):
-    random.seed(seed)
+def make_capture(counter_types, risc_fmt, num_riscs):
+    # Deterministic spread of values; nothing here needs randomness.
     rows = []
     for n in range(num_riscs):
-        for name in counter_types:
+        for i, name in enumerate(counter_types):
             rows.append(
                 {
                     "run_host_id": 1,
@@ -111,7 +110,7 @@ def make_capture(counter_types, risc_fmt, num_riscs, seed=7):
                     "core_y": 1 + n,
                     "risc_type": risc_fmt.format(n),
                     "counter type": name,
-                    "value": random.randint(100, 5000),
+                    "value": 100 + (n * 131 + i * 37) % 4900,
                     "ref cnt": 10000,
                 }
             )
