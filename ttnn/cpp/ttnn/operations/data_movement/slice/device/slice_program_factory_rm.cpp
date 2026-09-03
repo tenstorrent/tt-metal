@@ -48,7 +48,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -83,12 +82,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
 
-    const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
-
     // Reader arg 0 is the plain input buffer base address; it is emitted as a Buffer* binding in
     // create_descriptor (not here), so the args returned here start at arg 1.
     std::vector<uint32_t> common_reader_kernel_args = {
-        reader_page_size,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
@@ -145,14 +141,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        uint32_t addr_offset = 5;
+        uint32_t addr_offset = 4;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core_read;
         reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
-        const uint32_t writer_page_size = per_shard_page_size_bytes(output_tensor, unpadded_row_size_bytes);
         // Writer arg 0 is the plain output buffer base address; it is emitted as a Buffer* binding in
         // create_descriptor (not here), so the args returned here start at arg 1.
         std::vector<uint32_t> writer_kernel_args = {
@@ -162,7 +157,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core_read,
             num_read_per_barrier,
             num_sticks_written,
-            writer_page_size,
             chunking.chunk_size,
             chunking.num_chunks_per_stick,
             chunking.last_chunk_size,
