@@ -356,6 +356,9 @@ jobs:
       # Re-read GitHub instead of trusting process success. A session that exits
       # cleanly without executing its posting contract is a failed review; never
       # mask that failure by manufacturing a workflow-level "No issues found".
+      # Match only this reviewer's comments by their signature marker, not any
+      # github-actions[bot] comment: several bots share that login, so a login-only
+      # count could mistake another bot's comment for this review's output.
       - name: Verify review output was posted
         if: steps.llk_code_review.outcome == 'success'
         env:
@@ -372,12 +375,12 @@ jobs:
             inline_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")))] | length'
             )"
             issue_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")))] | length'
             )"
             if (( inline_count + issue_count > 0 )); then
               echo "LLK review posted ${inline_count} inline and ${issue_count} issue-level comment(s)"
