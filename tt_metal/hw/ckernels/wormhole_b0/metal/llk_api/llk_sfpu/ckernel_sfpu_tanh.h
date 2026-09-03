@@ -150,26 +150,61 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     y1 = sfpi::copysgn(sfpi::min(r1, 1.0f), x1);
 }
 
+// Approximate tanh: six-segment piecewise-linear table evaluated by SFPLUTFP32
+// (FP16_6ENTRY_TABLE1 | SGN_RETAIN), replacing a three-segment SFPLUT table whose
+// 4-bit-mantissa coefficients gave max |absolute error| 0.1447. Now 0.0117, at 3 issue slots per
+// datum instead of 5.
+//
+// Raw TTI because sfpi cannot emit the instruction: tanh is odd, so the table is fitted on |x|
+// and SGN_RETAIN copies the input's sign onto the result, but sfpi::lut2()'s six-register
+// overload always ORs SGN_RETAIN into the mod and __builtin_rvtt_sfplutfp32_6r rejects every mod
+// with that bit set, so it can never compile. (lut2_sign() does compile, but SGN_UPDATE would
+// give |tanh(x)| and cost a copysign per datum.) The restriction is sfpi's, not the hardware's:
+// the mod assembles and is verified on silicon.
+//
+// The second reason is scheduling. SFPLUTFP32's VD is a free field, but sfpi always picks
+// LReg[3] -- the register the instruction is hardwired to read -- so the one-cycle
+// result-latency slot has to be an SFPNOP and pipelining through sfpi costs an SFPMOV pair per
+// datum. Writing the result to LReg[7] instead lets the next datum's SFPLOAD fill that slot, so
+// the steady state is LUT / LOAD-next / STORE-previous and one staging register is enough -- no
+// rotation, which is why the table's appetite for LReg[0..2] and LReg[4..6] costs nothing.
+constexpr int TANH_APPX_LUT6_MOD = SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | SFPLUTFP32_MOD0_SGN_RETAIN;
+
+template <int K, int ITERATIONS>
+sfpi_inline void _tanh_appx_lut6_step_() {
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+
+    // LReg[7] = copysign(table(|LReg[3]|), LReg[3]).
+    TTI_SFPLUTFP32(p_sfpu::LREG7, TANH_APPX_LUT6_MOD);
+
+    // Fills the LUT's one-cycle result-latency slot, and is genuinely independent: it writes
+    // LReg[3], which the LUT already consumed on issue, and leaves LReg[7] alone.
+    if constexpr (K + 1 < ITERATIONS) {
+        TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_3, 2 * (K + 1));
+    } else {
+        TTI_SFPNOP;
+    }
+
+    // Two cycles after the LUT, satisfying its "do not read the result on the next cycle" rule.
+    TTI_SFPSTORE(p_sfpu::LREG7, IM, ADDR_MOD_3, 2 * K);
+
+    if constexpr (K + 1 < ITERATIONS) {
+        _tanh_appx_lut6_step_<K + 1, ITERATIONS>();
+    }
+}
+
+template <int ITERATIONS>
+inline void _calculate_tanh_appx_lut6_() {
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    // Prologue load; every later load is issued inside the previous datum's latency slot.
+    TTI_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_3, 0);
+    _tanh_appx_lut6_step_<0, ITERATIONS>();
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode
-        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
-
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, l0, l1, l2);
-            sfpi::dst_reg[0] = val;
-
-            sfpi::dst_reg++;
-        }
-
-        l_reg[sfpi::LRegs::LReg0] = l0;
-        l_reg[sfpi::LRegs::LReg1] = l1;
-        l_reg[sfpi::LRegs::LReg2] = l2;
+        _calculate_tanh_appx_lut6_<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -209,9 +244,40 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
+        // Six-segment piecewise-linear fit of tanh(|x|), evaluated by SFPLUTFP32 in
+        // FP16_6ENTRY_TABLE1 mode: LReg[0..2] hold the slopes, LReg[4..6] the intercepts, two
+        // Lut16ToFp32-encoded halves per register (low half = even segment, high half = odd).
+        //
+        //   |x| <  0.5   0.942871094*|x|                 (intercept pinned to exactly 0)
+        //   |x| <  1.0   0.599121094*|x| + 0.174194336
+        //   |x| <  1.5   0.287109375*|x| + 0.481933594
+        //   |x| <  2.0   0.117736816*|x| + 0.731933594
+        //   |x| <  3.0   0.030960083*|x| + 0.905761719
+        //   |x| >= 3.0                     1.0
+        //
+        // Each segment is a minimax linear fit snapped to the nearest Lut16ToFp32-representable
+        // pair. Max |absolute error| 0.0117 (was 0.1447), max relative error 0.0571 (was 0.1899).
+        // The residual is dominated by the [0.5, 1.0) segment and is the floor for a linear fit
+        // on hardware-fixed 0.5-wide breakpoints: err ~ |tanh''|*h^2/16.
+        //
+        // Both pinned coefficients are load-bearing. The first intercept must stay exactly 0
+        // (Lut16ToFp32 code 0x7C00, which encodes zero as exponent 31, not 0x0000) or SGN_RETAIN
+        // turns it into +/-c and tanh(0) stops being 0; the tail slope must stay exactly 0 or the
+        // fit diverges as |x| grows. A zero tail slope also evaluates 0*inf for |x| = inf, so
+        // tanh(+/-inf) is NaN -- unchanged from the old table, which had one too.
+
+        // A0 = 0.942871094 (0x3B8B), A1 = 0.599121094 (0x38CB)
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x38CB3B8B);
+        // B0 = 0           (0x7C00), B1 = 0.174194336 (0x3193)
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x31937C00);
+        // A2 = 0.287109375 (0x3498), A3 = 0.117736816 (0x2F89)
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x2F893498);
+        // B2 = 0.481933594 (0x37B6), B3 = 0.731933594 (0x39DB)
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x39DB37B6);
+        // A4 = 0.030960083 (0x27ED), A5 = 0           (0x7C00)
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C0027ED);
+        // B4 = 0.905761719 (0x3B3F), B5 = 1.0         (0x3C00)
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x3C003B3F);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
