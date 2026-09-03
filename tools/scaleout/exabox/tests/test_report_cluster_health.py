@@ -310,9 +310,7 @@ class TestDryRunCli(unittest.TestCase):
         validate_record(record, file_written=False)
 
     def test_pass_pct_override_wins(self):
-        artifact = self._iteration_dir(
-            ["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"]
-        )
+        artifact = self._iteration_dir(["Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n"])
         rc, out, err = _run(
             [
                 "--test-type",

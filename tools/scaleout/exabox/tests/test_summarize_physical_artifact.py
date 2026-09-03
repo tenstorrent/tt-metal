@@ -3,11 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for physical artifact inference and pass_pct migration."""
+"""Tests for physical artifact inference."""
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import unittest
@@ -16,7 +15,6 @@ from pathlib import Path
 EXABOX_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EXABOX_DIR))
 
-from migrate_cluster_health_pass_pct import apply_changes, plan_migration  # noqa: E402
 from summarize_physical_artifact import (  # noqa: E402
     parse_success_rate,
     summarize_physical_artifact,
@@ -69,81 +67,6 @@ class TestSummarizePhysicalArtifact(unittest.TestCase):
             summary = summarize_physical_artifact(Path(raw))
             self.assertIsNone(summary.pass_pct)
             self.assertIsNone(summary.analyzer_code)
-
-
-def _physical_record(artifact: str, record_uri: str) -> dict:
-    return {
-        "schema": "exabox.cluster_health.v1",
-        "ts": "2026-08-24T17:41:18Z",
-        "test_type": "physical",
-        "status": "failed",
-        "hosts": ["bh-glx-110-c01u02"],
-        "analyzer_code": 1,
-        "artifact_uri": artifact,
-        "record_id": "abc123",
-        "record_uri": record_uri,
-    }
-
-
-class TestMigratePassPct(unittest.TestCase):
-    def test_migrate_adds_pass_pct(self):
-        with tempfile.TemporaryDirectory() as raw:
-            tmp_path = Path(raw)
-            artifact = tmp_path / "run"
-            _write(
-                artifact,
-                "cluster_validation_iteration_1.log",
-                "Detected Hosts: bh-glx-110-c01u02\nAll Detected Links are healthy\n",
-            )
-            root = tmp_path / "hot"
-            date = root / "2026-08-24"
-            date.mkdir(parents=True)
-            path = date / "rec.json"
-            record = _physical_record(str(artifact), str(path))
-            path.write_text(json.dumps(record), encoding="utf-8")
-
-            changes, skipped, scanned = plan_migration([root])
-            self.assertEqual(scanned, 1)
-            self.assertEqual(skipped, [])
-            self.assertEqual(len(changes), 1)
-            self.assertEqual(changes[0].pass_pct, 100.0)
-
-            backup = tmp_path / "backup"
-            apply_changes(changes, backup)
-            migrated = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(migrated["pass_pct"], 100.0)
-            self.assertEqual(migrated["record_id"], "abc123")
-            self.assertTrue((backup / "hot" / "2026-08-24" / "rec.json").is_file())
-
-    def test_migrate_skips_when_rate_already_present(self):
-        with tempfile.TemporaryDirectory() as raw:
-            tmp_path = Path(raw)
-            root = tmp_path / "hot"
-            date = root / "2026-08-24"
-            date.mkdir(parents=True)
-            path = date / "rec.json"
-            record = _physical_record("/missing", str(path))
-            record["pass_pct"] = 88.0
-            path.write_text(json.dumps(record), encoding="utf-8")
-            changes, skipped, scanned = plan_migration([root])
-            self.assertEqual(scanned, 1)
-            self.assertEqual(changes, [])
-            self.assertEqual(skipped, [])
-
-    def test_migrate_skips_fabric(self):
-        with tempfile.TemporaryDirectory() as raw:
-            tmp_path = Path(raw)
-            root = tmp_path / "hot"
-            date = root / "2026-08-24"
-            date.mkdir(parents=True)
-            path = date / "rec.json"
-            record = _physical_record("/missing", str(path))
-            record["test_type"] = "fabric"
-            path.write_text(json.dumps(record), encoding="utf-8")
-            changes, skipped, scanned = plan_migration([root])
-            self.assertEqual(scanned, 1)
-            self.assertEqual(changes, [])
-            self.assertEqual(skipped, [])
 
 
 if __name__ == "__main__":

@@ -938,10 +938,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--from-artifact-dir cannot be combined with --test-type / --hosts / --artifact-dir")
         return run_backfill(args)
     if not args.test_type or not args.artifact_dir:
-        parser.error(
-            "--test-type and --artifact-dir are required "
-            "(or pass --from-artifact-dir / --from-diag-report)"
-        )
+        parser.error("--test-type and --artifact-dir are required (or pass --from-artifact-dir / --from-diag-report)")
     if args.pass_pct is not None and args.test_type != "physical":
         parser.error("--pass-pct is only valid with --test-type physical")
     if not args.hosts and args.test_type != "physical":

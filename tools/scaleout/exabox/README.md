@@ -176,11 +176,6 @@ snapshot with `migrate_cluster_health_labels.py`. Dry-run is the default;
 whose hierarchy changes. Record IDs, timestamps, status, hosts, artifacts, and
 orchestrator IDs are preserved.
 
-Add inferred physical `pass_pct` to stored records with
-`migrate_cluster_health_pass_pct.py` (same dry-run / `--apply --backup-root`
-pattern). It re-grades `artifact_uri` logs and skips records that already have
-a rate or have no gradeable logs.
-
 ```bash
 python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
   --snapshot /path/to/topology.snapshot.json \
@@ -416,8 +411,6 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `analyze_fabric_results.py` | Parse fabric test logs |
 | `analyze_host_health_results.py` | Map `diag_report.json` to a host analyzer code |
 | `report_cluster_health.py` | Emit cluster health JSON after analyze |
-| `migrate_cluster_health_labels.py` | Reclassify stored JSON labels from a snapshot |
-| `migrate_cluster_health_pass_pct.py` | Add inferred physical `pass_pct` to stored JSON |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files
