@@ -184,7 +184,12 @@ Either way the **port procedure covers only the two single-program concepts**: a
 
 Every `TensorParameter` enforces an exact `TensorSpec` match by default. **Don't deviate during a port.** The relaxation infrastructure exists (`TensorParameter::relaxations`, a `TensorSpecRelaxations` holding `dynamic_tensor_shape` / `match_padded_shape_only`), and the per-dispatch legality check respects it, but relaxations are a deliberate correctness-sensitive opt-in: the kernel must *actually* tolerate the relaxation, and declaring one the kernel doesn't tolerate is a silent wrong-answer bug. The bias of mistakes favors strict — forgetting to relax is merely slower (narrower cache equivalence, still correct); relaxing incorrectly is wrong output. A port is not the context to make that call. If you notice a kernel that *would* tolerate a relaxation (e.g. padding-only dimension differences), capture it in the port report under "Open items for downstream" — don't bake it into the port.
 
-**The exception is a *known-required* relaxation the docs already call out.** Where a kernel is known to need one, it is flagged for you — the [pre-migration `ArgConfig::Runtime*` check](migration_guide.md#tensorparameter) and its op-family heads-ups (e.g. `eltwise` → `dynamic_tensor_shape = true`). Those are faithful mirrors of a relaxation the legacy op *already* declared, not a judgment call you're making. So the rule is two-sided: don't *self-decide* a relaxation, but *do* apply the ones the docs flag as required — follow the hint rather than DIY-ing it (or, conversely, ignoring it).
+**The exception is a *known-required* relaxation the docs already call out.** Where a kernel is known to need one, it is flagged for you. Two sanctioned sources, in order of authority:
+
+1. **A relaxation analysis doc**, when the audit brief carries one (`analyses/relaxations/<op>.md`, reached from the readiness sheet's `… (see analysis)` cell). It gives a **per-slot declaration** — which flags, on which `TensorParameter`, under which condition. **Transcribe it; do not re-derive it, and do not generalise it to a slot it does not name.** It also carries a short invariant checklist: run it, and if it fails, stop and report the verdict UNCONFIRMED rather than proceeding on your own reading.
+2. The [pre-migration `ArgConfig::Runtime*` check](migration_guide.md#tensorparameter) and its op-family heads-ups (e.g. `eltwise` → `dynamic_tensor_shape = true`) — faithful mirrors of a relaxation the legacy op *already* declared.
+
+So the rule is two-sided: don't *self-decide* a relaxation, but *do* apply the ones the docs flag as required — follow the hint rather than DIY-ing it (or, conversely, ignoring it).
 
 ---
 
@@ -242,7 +247,13 @@ Do not reason your way back to deleting it from "Metal 2.0 doesn't read a custom
 
 ### If the hash contradicts the audit, stop — you have found an upstream error
 
-The audit tells you which tensor relaxations apply to this op. Today that answer is always **none**, which means the hash has to pin the whole `TensorSpec`. A hash that tolerates *any* `TensorSpec` deviation contradicts that, and the contradiction means the pre-port vetting was wrong.
+The audit tells you which tensor relaxations apply to this op. **The hash must not be looser than the declaration.** Every deviation the hash tolerates — every way two tensors can differ and still land in one cache entry — must be one the declared relaxation admits. Otherwise the second tensor is checked against the first's declared spec, fails, and the framework throws — **a failure that could not happen before the port.**
+
+The other direction is not a defect. A hash *tighter* than the declaration just splits work across more cache entries than it strictly needs; that is a performance choice, and sometimes a deliberate one.
+
+With a **`none`** relaxation this reduces to the familiar rule — the hash must pin the whole `TensorSpec`. And because `tensor_layout` (dtype, page config including `Tile`, memory config, alignment) is freed by **no** flag, a hash that does not pin it fails the test under *every* declaration.
+
+Either way the contradiction means the pre-port vetting was wrong.
 
 It surfaces two ways, and they are the same defect:
 
@@ -251,7 +262,7 @@ It surfaces two ways, and they are the same defect:
 
 Either way the response is the same, and it is **not** a fix:
 
-- **Stop, and flag it prominently.** Record the hash's file:line, exactly which deviation it tolerates (or what the legality check rejected, and on which dispatch), and that the audit declared no relaxations for this op.
+- **Stop, and flag it prominently.** Record the hash's file:line, exactly which deviation it tolerates (or what the legality check rejected, and on which dispatch), and the relaxation the audit declared — which is the other half of the containment test, and useless to the reader without it.
 - Do **not** delete the hash to make the symptom go away, and do **not** patch it to fold in `TensorSpec`. Both bury a mistaken expert verdict inside a port, where the next person to hit it has no trail back to the decision that was actually wrong.
 
 ---
