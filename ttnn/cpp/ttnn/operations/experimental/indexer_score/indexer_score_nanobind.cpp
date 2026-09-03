@@ -58,7 +58,10 @@ void bind_indexer_score(nb::module_& mod) {
                 recompile.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
                 the rest is masked out. Tile-aligned, in (0, T], with
-                chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
+                chunk_start_idx < kv_len -- the chunk must BEGIN inside the valid
+                prefix, but its causal window MAY end past kv_len (and past T):
+                those trailing rows are pad queries with no keys to attend.
+                Re-applied each dispatch, so a
                 serving loop growing kv_len (<= T) reuses one program -- no
                 recompile. Only output columns [0, kv_len) are written.
             seq_shard_axes: the mesh axes the query seq is sharded over, outermost
@@ -150,7 +153,9 @@ void bind_indexer_score(nb::module_& mod) {
                 recompile. Same semantics as indexer_score_dsa.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
                 the rest is masked out. Tile-aligned, in (0, T], with
-                chunk_start_idx + Sq <= kv_len. When block-max-pooling
+                chunk_start_idx < kv_len -- the chunk must BEGIN inside the valid
+                prefix, but its causal window MAY end past kv_len (and past T).
+                When block-max-pooling
                 (block_size > 0) it must also be a multiple of block_size (whole
                 blocks are written). Re-applied each dispatch (a serving loop
                 growing kv_len reuses one program). Only columns/blocks within

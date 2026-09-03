@@ -983,6 +983,196 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")
 
 
+def _natural_from_cache(cache_slot_rows, sp, chunk_local, cache_tokens_per_dev, chunk_global):
+    """Un-rotate one cache slot read back in chip-concat order into natural token order.
+
+    ``cache_slot_rows`` is [sp * cache_tokens_per_dev, head_dim] (the composer concatenates each chip's
+    slab on the seq dim), and chip c's local row lr carries global position
+    ``(lr // chunk_local) * chunk_global + c * chunk_local + (lr % chunk_local)`` -- the block-cyclic
+    layout the writer targets."""
+    nat = torch.empty_like(cache_slot_rows)
+    for c in range(sp):
+        for lr in range(cache_tokens_per_dev):
+            pos = (lr // chunk_local) * chunk_global + c * chunk_local + (lr % chunk_local)
+            nat[pos] = cache_slot_rows[c * cache_tokens_per_dev + lr]
+    return nat
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "dtype, layout",
+    [(ttnn.bfloat8_b, ttnn.TILE_LAYOUT), (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)],
+    ids=["bfp8_tile", "bf16_rm"],
+)
+@pytest.mark.parametrize("path", ["metadata", "scalar"], ids=["metadata", "scalar"])
+@pytest.mark.parametrize(
+    "case", ["mid_chunk", "tail_overflow", "tail_chip_jump"], ids=["mid_chunk", "tail_overflow", "tail_chip_jump"]
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_valid_global_clamp(mesh_device, dtype, layout, path, case, expect_error):
+    """`valid_global` keeps a chunk's PAD tail out of the cache.
+
+    Three shapes: `mid_chunk` ends on a non-tile-aligned boundary (its 32-token block is written, the rest
+    is not); `tail_overflow` pads one tile past the cache while its real tokens fit (the case the op
+    rejects unclamped, asserted here too); `tail_chip_jump` has boundary_chip > 0, so the pre-boundary
+    chips jump a whole slab past the cache end and must write NOTHING.
+
+    Checked three ways and bit-exact against a sentinel-filled cache and poisoned pad rows: real rows
+    match what was sent, rows past the real end still hold the sentinel, and the poison appears nowhere."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    chunk_local = 4 * tile
+    chunk_global = chunk_local * sp
+    slabs = 2
+    cache_tokens_per_dev = slabs * chunk_local
+    cache_global = cache_tokens_per_dev * sp
+    num_layers = 2  # slot 0 is written, slot 1 is the neighbour that must stay untouched
+    slot_id, layer_idx = 0, 0
+    batch_idx = slot_id * num_layers + layer_idx
+
+    if case == "mid_chunk":
+        # Ends 5 tokens into a page row, so ceil-to-32 keeps the boundary row and drops the rest.
+        kv_actual, valid_global = 0, chunk_global - 2 * tile - 5
+    elif case == "tail_overflow":
+        # Starts one tile off the slab grid in the last slab: padded window ends at cache_global + tile.
+        kv_actual, valid_global = chunk_global + tile, cache_global
+    else:
+        # boundary_chip = (kv_actual / chunk_local) % sp > 0, in the LAST slab: every chip before the
+        # boundary jumps a full slab, landing exactly at the end of its cache -- nothing to write.
+        kv_actual, valid_global = cache_global - chunk_local + tile, cache_global
+        assert (kv_actual // chunk_local) % sp > 0, "case must put the boundary chip past chip 0"
+    write_end = -(-valid_global // tile) * tile
+    assert write_end < kv_actual + chunk_global, "the case must leave a pad tail to clamp away"
+    if case != "mid_chunk":
+        assert kv_actual + chunk_global > cache_global >= write_end, "the case must overflow only in its pad"
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims)
+
+    def _to_device(rows):
+        return _make_input(rows.reshape(1, 1, chunk_global, KVPE_HEAD_DIM), dtype, layout, mesh_device, mapper)
+
+    def _read_back(tt):
+        """Rows as the device holds them, in chip-concat order, through the cache's own dtype."""
+        return ttnn.to_torch(tt, mesh_composer=composer).to(torch.float32)[0, 0]
+
+    mesh_device.enable_program_cache()
+    kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=cache_global,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+
+    # Sentinel: fill every slot, slab by slab, with UNCLAMPED chunk-aligned writes (natural order in,
+    # so slab s lands at positions [s*chunk_global, (s+1)*chunk_global)).
+    torch.manual_seed(7)
+    sentinel = {b: torch.randn(cache_global, KVPE_HEAD_DIM, dtype=torch.bfloat16) for b in range(num_layers)}
+    sentinel_dev = {}
+    for b in range(num_layers):
+        slab_rows = []
+        for s in range(slabs):
+            tt_slab = _to_device(sentinel[b][s * chunk_global : (s + 1) * chunk_global])
+            slab_rows.append(_read_back(tt_slab))  # what the dtype actually stored
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kv_cache,
+                tt_slab,
+                slot_idx=b // num_layers,
+                layer_idx=b % num_layers,
+                num_layers=num_layers,
+                kv_actual_global=s * chunk_global,
+                cluster_axis=sp_axis,
+            )
+            ttnn.deallocate(tt_slab)
+        sentinel_dev[b] = torch.cat(slab_rows, dim=0)  # natural order, [cache_global, head_dim]
+    ttnn.synchronize_device(mesh_device)
+
+    # The chunk under test, in ROTATED order: chip c's row r carries positions[c][r]; rows past the real
+    # end are pad and carry POISON.
+    positions = _rotated_chip_positions(kv_actual, sp, chunk_local)
+    poison = torch.full((KVPE_HEAD_DIM,), 8.0, dtype=torch.bfloat16)
+    new_nat = torch.randn(chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    rotated = torch.stack(
+        [
+            new_nat[positions[c][r] - kv_actual] if positions[c][r] < write_end else poison
+            for c in range(sp)
+            for r in range(chunk_local)
+        ]
+    )
+    tt_chunk = _to_device(rotated)
+    sent_rows = _read_back(tt_chunk)  # rotated order, through the cache dtype
+    sent_by_pos = {positions[c][r]: sent_rows[c * chunk_local + r] for c in range(sp) for r in range(chunk_local)}
+
+    if case != "mid_chunk":  # unclamped, this write does not fit -- the op must still say so
+        with expect_error(RuntimeError, "overflow global cache capacity"):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kv_cache,
+                tt_chunk,
+                slot_idx=slot_id,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_actual_global=kv_actual,
+                cluster_axis=sp_axis,
+            )
+
+    if path == "metadata":
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=slot_id)
+        valid_t = _make_scalar_tensor(mesh_device, valid_global)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache,
+            tt_chunk,
+            slot_t,
+            kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            valid_global=valid_t,
+        )
+        for t in (slot_t, kv_t, valid_t):
+            ttnn.deallocate(t)
+    else:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache,
+            tt_chunk,
+            slot_idx=slot_id,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=sp_axis,
+            valid_global=valid_global,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    cache_host = ttnn.to_torch(kv_cache, mesh_composer=composer).to(torch.float32)[:, :1, :, :]
+    for b in range(num_layers):
+        nat = _natural_from_cache(cache_host[b, 0], sp, chunk_local, cache_tokens_per_dev, chunk_global)
+        for pos in range(cache_global):
+            if b == batch_idx and kv_actual <= pos < write_end:
+                want, what = sent_by_pos[pos], f"the chunk's row for position {pos}"
+            else:
+                want, what = sentinel_dev[b][pos], "the sentinel (this row must not have been written)"
+            assert torch.equal(
+                nat[pos], want.to(torch.float32)
+            ), f"[{case}/{path}] slot {b} position {pos} does not hold {what}" + (
+                " -- POISON LEAKED (a pad row was written)" if torch.equal(nat[pos], poison.to(torch.float32)) else ""
+            )
+    logger.success(
+        f"[{case}/{path}] clamp held: wrote [{kv_actual}, {write_end}) of a chunk spanning "
+        f"[{kv_actual}, {kv_actual + chunk_global}) into a {cache_global}-token cache"
+    )
+
+
 def _alloc_multihead_cache(mesh_device, *, batch, heads, seq_local, head_dim, dtype, layout):
     """Cache with a per-chip HEAD dim > 1, ND-sharded exactly like the model caches (32-token bank
     chunks, round-robin over the DRAM grid). ``init_kvpe_cache`` is fixed at one head, so this is its
@@ -1025,14 +1215,15 @@ def _alloc_multihead_cache(mesh_device, *, batch, heads, seq_local, head_dim, dt
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("case", ["full", "clamped"], ids=["full", "clamped"])
 @pytest.mark.timeout(0)
-def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
+def test_update_padded_kv_cache_multihead_head_stride(mesh_device, case):
     """A per-chip head dim > 1 must not smear rows across heads.
 
-    The cache's head stride (cache_HtWt) is larger than the input's (input_Ht * Wt) whenever the cache is
-    deeper than one chunk, so a core holding blocks either side of a head boundary must address each
-    block from its own (head, row) -- 64 heads x 7 page-rows over ~110 cores puts several cores across a
-    boundary."""
+    The cache's head stride exceeds the input's once the cache is deeper than one chunk, so a core holding
+    blocks either side of a head boundary must address each from its own (head, row) -- 64 heads x 7
+    page-rows over ~110 cores puts several cores across one. `clamped` repeats it with valid_global, so the
+    row clamp is checked per head rather than per core."""
     sp_axis, tp_axis = 0, 1
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -1043,7 +1234,8 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
     seq_local = 2 * chunk_local  # deeper than one chunk -> cache head stride != input head stride
     num_layers = 2
     layer_idx, slot_id = 0, 0
-    write_end = chunk_global
+    valid_global = chunk_global - 2 * tile - 5 if case == "clamped" else None
+    write_end = chunk_global if valid_global is None else -(-valid_global // tile) * tile
 
     input_shard_dims = [None, None]
     input_shard_dims[sp_axis] = 2
@@ -1080,6 +1272,7 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
         num_layers=num_layers,
         kv_actual_global=0,
         cluster_axis=sp_axis,
+        valid_global=valid_global,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -1091,17 +1284,17 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
     ).to(torch.float32)[:num_layers, :, :, :head_dim]
     written = torch.cat([host[layer_idx, :, c * seq_local : c * seq_local + chunk_local, :] for c in range(sp)], dim=1)
 
-    # Spill first, placement second: a misaddressed block shows up as a write past the real rows, and
-    # that is the more specific signal. This must read `host`, not `written` -- `written` is assembled
-    # from exactly chunk_local rows per chip, so slicing it past write_end yields nothing at all. Each
-    # chip's slab is seq_local deep with only its first chunk_local written, so the spill lands in the
-    # unwritten half.
+    # Spill first: a misaddressed block shows up as a write past the chip's real rows, and that is
+    # the more specific signal. It must read `host`, not `written` -- `written` holds exactly
+    # chunk_local rows per chip, so unclamped (write_end == chunk_global) slicing it past write_end
+    # yields nothing at all. Clamped, the per-head slice below is the dropped pad tail.
     for c in range(sp):
         tail = host[layer_idx, :, c * seq_local + chunk_local : (c + 1) * seq_local, :]
-        assert torch.count_nonzero(tail) == 0, f"chip {c}: wrote past its {chunk_local} real rows"
+        assert torch.count_nonzero(tail) == 0, f"[{case}] chip {c}: wrote past its {chunk_local} real rows"
     assert torch.count_nonzero(host[1 - layer_idx]) == 0, "wrote into the neighbouring layer slot"
     for h in range(heads):
-        assert torch.equal(
-            written[h, :write_end], src[0, h, :write_end].to(torch.float32)
-        ), f"head {h}: rows [0, {write_end}) do not match what was sent -- a block landed in another head"
-    logger.success(f"{heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")
+        assert torch.equal(written[h, :write_end], src[0, h, :write_end].to(torch.float32)), (
+            f"[{case}] head {h}: rows [0, {write_end}) do not match what was sent -- a block landed in " f"another head"
+        )
+        assert torch.count_nonzero(written[h, write_end:]) == 0, f"[{case}] head {h}: wrote past {write_end}"
+    logger.success(f"[{case}] {heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")
