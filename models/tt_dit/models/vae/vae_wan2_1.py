@@ -105,12 +105,12 @@ def _clear_feat_cache(cache_list) -> None:
         cache_list[i] = None
 
 
-def _cached_conv(conv, x, logical_h, feat_cache, feat_idx, logical_w):
+def _cached_conv(conv, x, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=False):
     if feat_cache is None:
-        return conv(x, logical_h, logical_w=logical_w)
+        return conv(x, logical_h, logical_w=logical_w, deallocate_input=deallocate_input)
     idx = feat_idx[0]
-    cache_x = _capture_feat_cache(x, feat_cache, idx)
-    out = conv(x, logical_h, feat_cache[idx], logical_w=logical_w)
+    cache_x = _capture_feat_cache(x, feat_cache, idx)  # clones BEFORE the conv may free x
+    out = conv(x, logical_h, feat_cache[idx], logical_w=logical_w, deallocate_input=deallocate_input)
     _store_feat_cache(feat_cache, idx, cache_x)
     feat_idx[0] += 1
     return out
@@ -494,20 +494,32 @@ class WanCausalConv3d(Module):
         logical_h: int,
         cache_x_BTHWC: ttnn.Tensor | None = None,
         logical_w: int = 0,
+        deallocate_input: bool = False,
     ) -> ttnn.Tensor:
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
         cache_x_BTHWC: (B, T1, H, W, C) fractured on H and W
+        deallocate_input: the conv owns `x_BTHWC` and frees it at its last use, BEFORE the
+            conv output allocates — one full activation less at the DRAM peak vs the caller
+            freeing after the call returns.
 
         returns: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
         """
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanCausalConv3d expects ROW_MAJOR input, got {x_BTHWC.layout}"
         x_in = x_BTHWC
+
+        def _adopt(new, current):
+            # Free `current` when replaced: always for intermediates we made, and for the
+            # caller's tensor too when ownership was transferred (deallocate_input).
+            if current is not new and (deallocate_input or current is not x_in):
+                ttnn.deallocate(current)
+            return new
+
         # NOTE: T padding is handled explicitly and depends on the cache
         t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
             # concat on T
-            x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
+            x_BTHWC = _adopt(ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1), x_BTHWC)
             t_front_padding -= cache_x_BTHWC.shape[1]
         # Halo exchange (height and/or width padding)
         # Masking (zero rows at/beyond logical_h) is fused into neighbor_pad via logical_h parameter,
@@ -526,7 +538,7 @@ class WanCausalConv3d(Module):
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         ):
-            x_BTHWC = _replace_owned(
+            x_BTHWC = _adopt(
                 ttnn.mul(
                     x_BTHWC,
                     _get_w_mask(
@@ -534,8 +546,15 @@ class WanCausalConv3d(Module):
                     ),
                 ),
                 x_BTHWC,
-                x_in,
             )
+
+        # Compact-halo conv3d path: only when the logical_h mask is dormant (it is fused into
+        # neighbor_pad, which the halo path skips; conv3d-side masking is not wired here).
+        h_mask_active = (
+            logical_h > 0
+            and h_pad_needed
+            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+        )
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
@@ -545,9 +564,7 @@ class WanCausalConv3d(Module):
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
-            x_BTHWC = _replace_owned(
-                ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C)), x_BTHWC, x_in
-            )
+            x_BTHWC = _adopt(ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C)), x_BTHWC)
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
@@ -576,13 +593,13 @@ class WanCausalConv3d(Module):
                 if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
                 else 0
             )
-            x_BTHWC = _replace_owned(
+            # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
+            x_BTHWC = _adopt(
                 self.ccl_manager.neighbor_pad(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
                     pad_right=pad_right,
-                    padding_mode="zeros",
                     axes=axes,
                     neighbor_sems=neighbor_sems,
                     num_links=links,
@@ -591,7 +608,6 @@ class WanCausalConv3d(Module):
                     t_front_pad=t_front_padding if fuse_t_front_pad else 0,
                 ),
                 x_BTHWC,
-                x_in,
             )
 
         x_conv_in = x_BTHWC
@@ -609,7 +625,7 @@ class WanCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        if x_conv_in is not x_in:
+        if x_conv_in is not x_in or deallocate_input:
             ttnn.deallocate(x_conv_in)
 
         return x_BTHWC
@@ -738,21 +754,26 @@ class WanResidualBlock(Module):
         x_rm_BTHWC = ttnn.to_layout(x_norm_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x_norm_silu_tile_BTHWC)
 
-        x_conv_BTHWC = _cached_conv(self.conv1, x_rm_BTHWC, logical_h, feat_cache, feat_idx, logical_w)
-        ttnn.deallocate(x_rm_BTHWC)
+        # deallocate_input=True: the conv frees its input at its last use, before the conv
+        # output allocates — one full activation less at the DRAM peak.
+        x_conv_BTHWC = _cached_conv(
+            self.conv1, x_rm_BTHWC, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=True
+        )
 
         x_norm2_BTHWC = self.norm2(x_conv_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         ttnn.deallocate(x_conv_BTHWC)
 
-        x_conv_BTHWC = _cached_conv(self.conv2, x_norm2_BTHWC, logical_h, feat_cache, feat_idx, logical_w)
-        ttnn.deallocate(x_norm2_BTHWC)
+        x_conv_BTHWC = _cached_conv(
+            self.conv2, x_norm2_BTHWC, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=True
+        )
 
         x_conv_tile_BTHWC = _to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_conv_tile_BTHWC)
-        ttnn.deallocate(x_conv_tile_BTHWC)
+        # In-place: accumulate the residual into the conv output instead of allocating a third
+        # full-size tile tensor (the largest single saving at the final full-res up block).
+        ttnn.add_(x_conv_tile_BTHWC, h_tile_BTHWC)
         if h_tile_BTHWC is not residual_in:
             ttnn.deallocate(h_tile_BTHWC)
-        return x_tile_BTHWC
+        return x_conv_tile_BTHWC
 
 
 class WanMidBlock(Module):
@@ -931,9 +952,18 @@ class WanConv2d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int, logical_w: int = 0) -> ttnn.Tensor:
+    def forward(
+        self, x_BTHWC: ttnn.Tensor, logical_h: int, logical_w: int = 0, deallocate_input: bool = False
+    ) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
         x_in = x_BTHWC
+
+        def _adopt(new, current):
+            # Free `current` when replaced: always for intermediates we made, and for the
+            # caller's tensor too when ownership was transferred (deallocate_input).
+            if current is not new and (deallocate_input or current is not x_in):
+                ttnn.deallocate(current)
+            return new
 
         # Halo exchange (height and/or width padding)
         # Masking fused into neighbor_pad via logical_h (see WanCausalConv3d.forward for details).
@@ -947,7 +977,7 @@ class WanConv2d(Module):
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         ):
-            x_BTHWC = _replace_owned(
+            x_BTHWC = _adopt(
                 ttnn.mul(
                     x_BTHWC,
                     _get_w_mask(
@@ -955,8 +985,14 @@ class WanConv2d(Module):
                     ),
                 ),
                 x_BTHWC,
-                x_in,
             )
+
+        # Compact-halo conv3d path (see WanCausalConv3d.forward).
+        h_mask_active = (
+            logical_h > 0
+            and h_pad_needed
+            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+        )
 
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
@@ -985,13 +1021,13 @@ class WanConv2d(Module):
                 if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
                 else 0
             )
-            x_BTHWC = _replace_owned(
+            # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
+            x_BTHWC = _adopt(
                 self.ccl_manager.neighbor_pad(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
                     pad_right=pad_right,
-                    padding_mode="zeros",
                     axes=axes,
                     neighbor_sems=neighbor_sems,
                     num_links=links,
@@ -999,7 +1035,6 @@ class WanConv2d(Module):
                     logical_h=fused_logical_h,
                 ),
                 x_BTHWC,
-                x_in,
             )
 
         x_conv_in = x_BTHWC
@@ -1017,7 +1052,7 @@ class WanConv2d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        if x_conv_in is not x_in:
+        if x_conv_in is not x_in or deallocate_input:
             ttnn.deallocate(x_conv_in)
 
         return x_BTHWC
@@ -1087,9 +1122,18 @@ class WanResample(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
         logical_w: int = 0,
+        deallocate_input: bool = False,
     ) -> tuple[ttnn.Tensor, int, int]:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanResample expects ROW_MAJOR input, got {x_BTHWC.layout}"
         B, T, H, W, C = x_BTHWC.shape
+        x_orig = x_BTHWC
+
+        def _free_owned(t):
+            # Free `t` at its last use: always for intermediates made here, and for the
+            # caller's tensor too when ownership was transferred (deallocate_input).
+            if t is not None and (deallocate_input or t is not x_orig):
+                ttnn.deallocate(t)
+
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
                 idx = feat_idx[0]
@@ -1099,15 +1143,9 @@ class WanResample(Module):
                         # Frame 0 passes through; frames 1+ get time_conv + temporal doubling
                         x_first = x_BTHWC[:, :1, :, :, :]
                         x_rest = x_BTHWC[:, 1:, :, :, :]
-                        x_time_rest = self.time_conv(x_rest, logical_h, logical_w=logical_w)
-                        T_rest = x_time_rest.shape[1]
-                        x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
-                        x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
-                        x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))
-                        x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)
-                        ttnn.deallocate(x_time_rest)
-                        # Cache last CACHE_T frames from x_rest for the next chunk.
-                        # Zero-pad the front if fewer than CACHE_T frames available.
+                        _free_owned(x_BTHWC)  # both slices taken; the input is dead
+                        # Cache last CACHE_T frames from x_rest for the next chunk (BEFORE the
+                        # time_conv frees x_rest). Zero-pad the front if fewer than CACHE_T frames.
                         cache_start = max(x_rest.shape[1] - CACHE_T, 0)
                         cache_x = x_rest[:, cache_start:, :, :, :]
                         if cache_x.shape[1] < CACHE_T:
@@ -1117,6 +1155,15 @@ class WanResample(Module):
                             cache_x = ttnn.reshape(cache_x_BNC, (B, CACHE_T, H, W, C))
                         else:
                             cache_x = ttnn.clone(cache_x)
+                        x_time_rest = self.time_conv(x_rest, logical_h, logical_w=logical_w, deallocate_input=True)
+                        T_rest = x_time_rest.shape[1]
+                        x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
+                        x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                        x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))
+                        x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)
+                        ttnn.deallocate(x_time_rest)
+                        ttnn.deallocate(x_BT2HWC)
+                        ttnn.deallocate(x_first)
                         _store_feat_cache(feat_cache, idx, cache_x)
                     else:
                         _store_feat_cache(feat_cache, idx, "Rep")
@@ -1139,9 +1186,13 @@ class WanResample(Module):
                         cache_x_BTHWC = ttnn.clone(cache_x_BTHWC)
 
                     if is_rep:
-                        x_time_BTHWU = self.time_conv(x_BTHWC, logical_h, logical_w=logical_w)
+                        x_time_BTHWU = self.time_conv(
+                            x_BTHWC, logical_h, logical_w=logical_w, deallocate_input=deallocate_input
+                        )
                     else:
-                        x_time_BTHWU = self.time_conv(x_BTHWC, logical_h, feat_cache[idx], logical_w=logical_w)
+                        x_time_BTHWU = self.time_conv(
+                            x_BTHWC, logical_h, feat_cache[idx], logical_w=logical_w, deallocate_input=deallocate_input
+                        )
                     x_BTHWU = x_time_BTHWU
                     _store_feat_cache(feat_cache, idx, cache_x_BTHWC)
                     feat_idx[0] += 1
@@ -1149,6 +1200,7 @@ class WanResample(Module):
                     T1 = x_BTHWU.shape[1]
                     x_BTHW2C = ttnn.reshape(x_BTHWU, (B, T1, H, W, 2, C))
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                    ttnn.deallocate(x_BTHWU)
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
                 # NOTE: This else section was written with the sole objective of
@@ -1171,34 +1223,42 @@ class WanResample(Module):
                 # - Frames 1..T-1: time_conv with zero-padded boundary
                 # This gives contexts: frame 1 = [0,0,x_1], frame 2 = [0,x_1,x_2], frame t≥3 = [x_{t-2},x_{t-1},x_t]
                 # which matches the cached path exactly.
-                x_first = x_BTHWC[:, :1, :, :, :]  # frame 0: identity (T=1)
                 if T > 2:
+                    x_first = x_BTHWC[:, :1, :, :, :]  # frame 0: identity (T=1)
                     x_rest = x_BTHWC[:, 1:, :, :, :]  # frames 1..T-1
+                    _free_owned(x_BTHWC)  # both slices taken; the input is dead
                     x_time_rest = self.time_conv(
-                        x_rest, logical_h, logical_w=logical_w
+                        x_rest, logical_h, logical_w=logical_w, deallocate_input=True
                     )  # zero-padded: context [0,0,x_1], [0,x_1,x_2], ...
                     T_rest = x_time_rest.shape[1]  # = T-1
                     x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))  # 2*(T-1) frames
                     x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)  # 1 + 2*(T-1) = 2*T-1 frames
-                # If T=1: x_BTHWC = x_first (unchanged), no temporal doubling, same as cached "Rep" path
+                    ttnn.deallocate(x_time_rest)
+                    ttnn.deallocate(x_BT2HWC)
+                    ttnn.deallocate(x_first)
+                # If T<=2: x_BTHWC unchanged, no temporal doubling, same as cached "Rep" path
 
         if self.is_upsample:
             T2 = x_BTHWC.shape[1]
             x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
             x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
+            _free_owned(x_BTHWC)  # the upsample was the pre-upsample tensor's last use
             logical_h *= 2
             if logical_w > 0:
                 logical_w *= 2
             H2, W2 = x_upsamped_NHWC.shape[1], x_upsamped_NHWC.shape[2]
             x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
-            x_conv_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w)
+            # deallocate_input=True: the 2xHW pre-halving tensor (the largest transient in the
+            # whole decode) is freed inside the conv instead of surviving until it returns.
+            x_conv_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w, deallocate_input=True)
         else:
-            x_conv_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w)
-            x_conv_BTHWC = x_conv_BTHWC[
+            x_conv_full_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w, deallocate_input=deallocate_input)
+            x_conv_BTHWC = x_conv_full_BTHWC[
                 :, :, 1::2, 1::2, :
             ]  # 2x2 strided convolution output to support patched conv, with only right and bottom padding
+            ttnn.deallocate(x_conv_full_BTHWC)
             logical_h //= 2
             if logical_w > 0:
                 logical_w //= 2
@@ -1316,21 +1376,23 @@ class WanUpBlock(Module):
         feat_idx: list[int] = [0],
         logical_w: int = 0,
     ) -> tuple[ttnn.Tensor, int, int]:
-        for resnet in self.resnets:
+        for ri, resnet in enumerate(self.resnets):
             x_res_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
             if x_res_BTHWC is not x_BTHWC:
                 ttnn.deallocate(x_BTHWC)
             x_BTHWC = x_res_BTHWC
         if self.upsamplers is not None:
             x_rm_BTHWC = _to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            # deallocate_input=True: the resample frees x_rm at its true last use inside,
+            # before the upsampled/conv tensors allocate on top of it.
             x_upsampled_BTHWC, logical_h, logical_w = self.upsamplers(
                 x_rm_BTHWC,
                 logical_h,
                 feat_cache,
                 feat_idx,
                 logical_w=logical_w,
+                deallocate_input=True,
             )
-            ttnn.deallocate(x_rm_BTHWC)
             x_BTHWC = _to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
         return x_BTHWC, logical_h, logical_w
 
@@ -1491,21 +1553,26 @@ class WanDecoder3d(Module):
         ## conv1
         x_BTHWC = _cached_conv(self.conv_in, x_BTHWC, logical_h, feat_cache, feat_idx, logical_w)
         x_BTHWC = _to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        B, T, H, W, C = x_BTHWC.shape
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        B, T, H, W, C = x_BTHWC.shape
 
         ## upsamples
-        for _, up_block in enumerate(self.up_blocks):
+        for i, up_block in enumerate(self.up_blocks):
             x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+            B, T, H, W, C = x_BTHWC.shape
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
         ttnn.deallocate(x_BTHWC)
         x_head_BTHWC = _to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        x_BTHWC = _cached_conv(self.conv_out, x_head_BTHWC, logical_h, feat_cache, feat_idx, logical_w)
-        ttnn.deallocate(x_head_BTHWC)
+        x_BTHWC = _cached_conv(
+            self.conv_out, x_head_BTHWC, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=True
+        )
+        B, T, H, W, C = x_BTHWC.shape
         return x_BTHWC, logical_h, logical_w
 
 
