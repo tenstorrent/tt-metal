@@ -44,7 +44,6 @@ slip spread over ``[0, 2**-m)``, rather than its standard deviation.
 """
 
 import math
-import re
 
 import torch
 import ttnn
@@ -203,23 +202,6 @@ def matmul_relative_error(
     return math.sqrt(sum(term * term for term in terms))
 
 
-_PARAMS_PATTERN = re.compile(r"params=\[([^\]]*)\]")
-
-
-def activation_params(activation):
-    """Parameters of a ``ttnn.UnaryWithParam``, read from its text form.
-
-    The binding exposes ``op_type`` but no accessor for the parameters, so the
-    only way to recover them is the object's own text form.
-    """
-    if activation is None:
-        return []
-    match = _PARAMS_PATTERN.search(repr(activation))
-    if match is None or not match.group(1).strip():
-        return []
-    return [float(value) for value in match.group(1).split(",")]
-
-
 def _op_type(activation):
     return getattr(activation, "op_type", None)
 
@@ -299,7 +281,7 @@ def activation_evaluation_error(activation, dest_dtype):
 
     flag_index = _PIECEWISE_LINEAR_FLAG_INDEX.get(op_type)
     if flag_index is not None:
-        params = activation_params(activation)
+        params = activation.params
         if len(params) > flag_index and params[flag_index] != 0.0:
             return 0.0, _PIECEWISE_LINEAR_ABSOLUTE_ERROR[op_type]
 
