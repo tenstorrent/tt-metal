@@ -34,7 +34,7 @@ Do **not** use FSD `host_id` (0..N-1 in file order): live discovery has no FSD i
 
 Do **not** use `std::string` inside the node (heap, allocator-sensitive compare). Do **not** use `std::array` — the host id is a fixed buffer we never pass around on its own; a C array is the pack.
 
-UMD unique ids stay on `ASICDescriptor::umd_unique_id` / `Cluster::get_unique_chip_ids()` — they are not mapper identity.
+UMD unique ids stay on `ASICDescriptor::unique_id` / `Cluster::get_unique_chip_ids()` — they are not mapper identity. (`ASICDescriptor::umd_unique_id` is the local `ChipId`, despite the name — §6.1 F.)
 
 **Mock + FSD is the load-bearing case.** The value that goes into `host_id[]` is the **exact** FSD / OS hostname. Mock filenames are not that value — §8.1. The fix is the UMD `host_id:` field — §8.2. Until assets are filled, the aisle-token fallback in §8.2. If mock and FSD pack different `host_id[]` bytes, the solve diverges again. Work list: §8.3.
 
@@ -109,7 +109,7 @@ One utility, three producers, mapper as the consumer. Do not invent a second enc
 | Site | Today | After |
 |------|--------|--------|
 | `physical_descriptor_builder` | `next_id++` from 1 | `unique_id` / graph key = `make_physical_node_id(fsd_hostname, tray, loc)` |
-| `physical_system_discovery` | `AsicID{umd_chip_unique_id}` as graph key | graph key = `make_physical_node_id(host_for_node_id(...), tray, loc)`; keep UMD id in `umd_unique_id` |
+| `physical_system_discovery` | `AsicID{umd_chip_unique_id}` as graph key | graph key = `make_physical_node_id(host_for_node_id(...), tray, loc)`; keep UMD id in `unique_id` |
 | Mock cluster YAML | basename as live host key; `chip_id << 32` as unique id | **host for the id is the FSD hostname** (§8), never the YAML basename |
 | `TopologyMapper` adjacency / solver `GlobalNode` | `AsicID` from the descriptor | `PhysicalNodeId` — every site in §6.1 |
 | `Cluster::get_unique_chip_ids()` | UMD ids | **unchanged** |
@@ -139,9 +139,9 @@ Do **not** instantiate the solver on a `tuple<string, TrayID, ASICLocation>` in 
 
 **`physical_descriptor_builder.cpp`:** drop `next_id++`. Every ASIC's graph key is `make_physical_node_id(hostname_of(host_id), TrayID{tray}, ASICLocation{loc})`. Duplicate `(host_id, tray, loc)` is fatal while filling `key_to_unique_id`.
 
-**`physical_system_discovery.cpp`:** when creating `ASICDescriptor`, set the graph key from position (`host_for_node_id`, §8) and `umd_unique_id` from `chip_unique_ids`. Cross-host gather still carries UMD ids on the wire if they do today — translate to packed ids on ingest using the peer's **resolved** host_id + tray + loc from the payload, not by hashing the UMD id.
+**`physical_system_discovery.cpp`:** when creating `ASICDescriptor`, set the graph key from position (`host_for_node_id`, §8) and keep the UMD chip unique id on `unique_id`, which is where discovery already puts it (§F field-name note). Cross-host gather still carries UMD ids on the wire if they do today — translate to packed ids on ingest using the peer's **resolved** host_id + tray + loc from the payload, not by hashing the UMD id.
 
-**`topology_mapper.cpp`:** build `PhysicalAdjacencyMap` / `hostname_to_asics` / `asic_positions` from packed ids (host/tray/loc are on the id). `verify_topology_mapping` compares **UMD** ids to `cluster.get_unique_chip_ids()`, never the packed id. ChipId backfill: match `umd_unique_id`, not packed id.
+**`topology_mapper.cpp`:** build `PhysicalAdjacencyMap` / `hostname_to_asics` / `asic_positions` from packed ids (host/tray/loc are on the id). `verify_topology_mapping` compares **UMD** ids to `cluster.get_unique_chip_ids()`, never the packed id. ChipId backfill: match the UMD chip unique id, which lives on `unique_id`, not the packed id (§F field-name note).
 
 **Tests:** `tests/tt_metal/tt_fabric/fabric_router/test_physical_node_id.cpp` (offline).
 
@@ -332,7 +332,7 @@ const auto nid = node_id_from_asic_descriptor(desc);
 flat_adj[nid].push_back(node_id_from_asic_descriptor(dst_desc));
 ```
 
-If discovery later keys the PSD on `PhysicalNodeId`, set `unique_id` unused / packed and `umd_unique_id = chip_unique_ids[chip]`.
+If discovery later keys the PSD on `PhysicalNodeId`, `unique_id` keeps `chip_unique_ids[chip]` and stops being the map key. It cannot hold a packed id — §A.
 
 ---
 
@@ -492,14 +492,23 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
 }
 
 info.physical_node_id = node_id_from_asic_descriptor(asic_descriptor, hosts_unique);
-info.asic_id = AsicID{asic_descriptor.umd_unique_id};  // UMD when known; 0 / unset on FSD-only
+info.asic_id = asic_descriptor.unique_id;  // UMD chip unique id when known; 0 / unset on FSD-only
 info.tray_id = asic_descriptor.tray_id;
 info.asic_location = asic_descriptor.asic_location;
-// ChipId backfill: match umd_unique_id, not physical_node_id
-if (unique_id == asic_descriptor.umd_unique_id) {
+// ChipId backfill: keyed off the UMD chip unique id, never physical_node_id. This is today's loop
+// over cluster.get_unique_chip_ids() (topology_mapper.cpp ~397) and it needs no change -- it already
+// matches asic_descriptor.unique_id, which stays the UMD id.
+if (unique_id == *asic_descriptor.unique_id) {
     info.physical_chip_id = physical_chip_id;
 }
 ```
+
+> **Field names on `ASICDescriptor` are inverted from what this plan assumed.** Verify before writing slices 4 and 5:
+>
+> - `unique_id` (`AsicID`, strong `uint64`) is the **UMD chip unique id** — discovery fills it from `chip_unique_ids.at(chip)`, and it is the key of `asic_descriptors_`.
+> - `umd_unique_id` (`ChipId`) is the **local UMD chip id**, i.e. `Cluster`'s `ChipId`, not a unique id at all. `get_umd_unique_id()`'s contract is "match the cluster's ChipId for this ASIC" (`test_physical_system_descriptor.cpp` ~91), and the deserializer uses `-1` as its unset sentinel.
+>
+> So the plan's earlier `info.asic_id = AsicID{asic_descriptor.umd_unique_id}` read the local chip id into the UMD-id field. Anywhere this plan says "keep UMD on `umd_unique_id`" (§B, §6, §H), the field holding the UMD unique id is `unique_id`. A useful consequence: the ChipId backfill can read `asic_descriptor.umd_unique_id` directly instead of scanning `get_unique_chip_ids()`, since that field already *is* the local ChipId — but only where the `-1` sentinel is handled.
 
 Lookups — physical side is only `physical_node_id_to_mapping_`:
 
@@ -527,7 +536,7 @@ PGD matching (`physical_grouping_descriptor_matching.cpp`) builds `AdjacencyGrap
 
 ### H. `verify_topology_mapping` — still UMD
 
-Today (`topology_mapper.cpp` ~1781–1815) Check 1 compares `info.asic_id` to `cluster.get_unique_chip_ids()`. After the split, that check uses `info.asic_id` / `umd_unique_id` only. Skip it when `umd_unique_id` is unset (FSD-only `generate_rank_bindings`). Tray/loc checks already go through the PSD and stay valid.
+Today (`topology_mapper.cpp` ~1781–1815) Check 1 compares `info.asic_id` to `cluster.get_unique_chip_ids()`. After the split, that check uses `info.asic_id` (fed from `ASICDescriptor::unique_id`, the UMD chip unique id — see the field-name note in §F) and never the packed id. Skip it when that id is unset (FSD-only `generate_rank_bindings`). Tray/loc checks already go through the PSD and stay valid.
 
 ---
 
