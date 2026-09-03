@@ -60,6 +60,10 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
 #if ISCLOSE_OP
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#elif SCALAR_IS_LHS
+        // Both operands are already loaded in DST, so mirroring is purely a matter of
+        // which slot the LLK reads as the left operand -- the scalar tile at i*2+1.
+        BINARY_SFPU_OP(i * 2 + 1, i * 2, i * 2);
 #else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
 #endif

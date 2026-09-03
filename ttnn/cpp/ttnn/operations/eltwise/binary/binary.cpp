@@ -119,6 +119,40 @@
             lhs, b, dtype, memory_config, output);                                                            \
     }
 
+// scalar OP tensor. Operands are passed to the primitive swapped, because slot a must hold a
+// tensor, and scalar_is_lhs tells the kernel to mirror them back. MODE is the op's own
+// fast_and_approximate_mode policy, spelled at each instantiation rather than baked into two
+// near-identical macros: it is the one thing that differs per op, and the one thing that has
+// drifted from the tensor-first overloads before.
+#define TTNN_BINARY_OP_SCALAR_TENSOR_IMPL(NAME, OP_TYPE, MODE)                       \
+    Tensor NAME(                                                                     \
+        operations::unary::ScalarVariant lhs,                                        \
+        const Tensor& rhs,                                                           \
+        const std::optional<const DataType>& output_dtype,                           \
+        const std::optional<MemoryConfig>& memory_config,                            \
+        const std::optional<Tensor>& output,                                         \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
+        const std::optional<bool>& fast_and_approximate_mode,                        \
+        const std::optional<CoreRangeSet>& sub_core_grids,                           \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {             \
+        return ttnn::detail::invoke_binary_ng(                                       \
+            rhs,                                                                     \
+            lhs,                                                                     \
+            operations::binary::BinaryOpType::OP_TYPE,                               \
+            output_dtype,                                                            \
+            memory_config,                                                           \
+            output,                                                                  \
+            post_activations,                                                        \
+            lhs_activations,                                                         \
+            rhs_activations,                                                         \
+            MODE,                                                                    \
+            sub_core_grids,                                                          \
+            sub_device_id,                                                           \
+            /*scalar_is_lhs=*/true);                                                 \
+    }
+
 #define TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(NAME, OP_TYPE)                             \
     Tensor NAME(                                                                     \
         const Tensor& lhs,                                                           \
@@ -604,7 +638,8 @@ inline auto invoke_binary_ng_impl(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool scalar_is_lhs = false) {
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -693,42 +728,53 @@ inline auto invoke_binary_ng_impl(
     TT_FATAL(
         !(output_preallocated && input_a_rm && input_b_rm),
         "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
-    if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
-        auto result = ttnn::prim::binary_ng(
-            lhs_eff,
-            rhs_eff,
-            binary_op_type,
-            out_dtype,
-            memory_config,
-            output,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt,
-            sub_core_grids,
-            sub_device_id);
+    // Only the scalar prim overload takes scalar_is_lhs -- the tensor-tensor one ends in
+    // rtol/atol/equal_nan for isclose instead -- so the two cannot share a call. Dispatching
+    // through one helper keeps the flag from being forgotten on a second call site.
+    auto dispatch = [&](const auto& a, const auto& b) {
+        if constexpr (requires { b.dtype(); }) {
+            return ttnn::prim::binary_ng(
+                a,
+                b,
+                binary_op_type,
+                out_dtype,
+                memory_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt,
+                sub_core_grids,
+                sub_device_id);
+        } else {
+            return ttnn::prim::binary_ng(
+                a,
+                b,
+                binary_op_type,
+                out_dtype,
+                memory_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt,
+                sub_core_grids,
+                sub_device_id,
+                scalar_is_lhs);
+        }
+    };
 
-        return result;
+    if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
+        // is_layout_or_scalar reports a scalar as row-major, so a mirrored scalar reaches here too.
+        return dispatch(lhs_eff, rhs_eff);
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
 
-    auto result = ttnn::prim::binary_ng(
-        input_a,
-        input_b,
-        binary_op_type,
-        out_dtype,
-        memory_config,
-        output,
-        fast_and_approximate_mode,
-        lhs_activations,
-        rhs_activations,
-        post_activations,
-        std::nullopt,
-        sub_core_grids,
-        sub_device_id);
+    auto result = dispatch(input_a, input_b);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
@@ -780,7 +826,8 @@ Tensor invoke_binary_ng(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool scalar_is_lhs) {
     return invoke_binary_ng_impl(
         lhs,
         rhs,
@@ -793,7 +840,8 @@ Tensor invoke_binary_ng(
         rhs_activations,
         fast_and_approximate_mode,
         sub_core_grids,
-        sub_device_id);
+        sub_device_id,
+        scalar_is_lhs);
 }
 
 bool resolve_fast_and_approximate_mode(const std::optional<bool>& fast_and_approximate_mode) {
@@ -1106,9 +1154,12 @@ namespace ttnn {
 
 TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX_IMPL(add, ADD)
 TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX_IMPL(add, ADD)
+TTNN_BINARY_OP_SCALAR_TENSOR_IMPL(add, ADD, ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode))
 TTNN_BINARY_OP_INPLACE_FAST_APPROX_IMPL(add_, ADD)
 TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX_IMPL(subtract, SUB)
 TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX_IMPL(subtract, SUB)
+TTNN_BINARY_OP_SCALAR_TENSOR_IMPL(
+    subtract, SUB, ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode))
 TTNN_BINARY_OP_INPLACE_FAST_APPROX_IMPL(subtract_, SUB)
 TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(eq, EQ)
 TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(eq, EQ)
@@ -1345,6 +1396,39 @@ Tensor multiply(const Tensor& lhs, operations::unary::ScalarVariant rhs, bool fa
         fast_and_approximate_mode,
         std::nullopt);
 }
+Tensor multiply(
+    operations::unary::ScalarVariant lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // Block-float arithmetic runs on the FPU only, so the tensor's format forces the mode
+    // here exactly as it does for the other operand orders. Not shared with the scalar-first
+    // macro because MUL is the only op with this override.
+    bool is_block_fmt_inp = (is_block_float(rhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    return ttnn::detail::invoke_binary_ng(
+        rhs,
+        lhs,
+        operations::binary::BinaryOpType::MUL,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        fast_and_approx,
+        sub_core_grids,
+        sub_device_id,
+        /*scalar_is_lhs=*/true);
+}
+TTNN_BINARY_OP_SCALAR_TENSOR_IMPL(divide, DIV, fast_and_approximate_mode)
 Tensor multiply_(
     const Tensor& lhs,
     const Tensor& rhs,

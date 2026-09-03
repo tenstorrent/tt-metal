@@ -484,6 +484,7 @@ div_ = ttnn.divide_
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
+ttnn.Tensor.__rsub__ = lambda self, *args, **kwargs: ttnn.rsub(self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__truediv__ = lambda self, *args, **kwargs: ttnn.divide(self, *args, **kwargs)

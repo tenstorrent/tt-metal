@@ -146,7 +146,12 @@ Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<M
         std::nullopt);
 }
 
-Tensor div(
+namespace {
+
+// Shared by both scalar orderings; scalar_is_lhs selects which operand the compute kernel
+// reads as the left-hand side. Kept out of the public signature because bind_div pins it
+// via nb::overload_cast.
+Tensor div_scalar_impl(
     const Tensor& input,
     unary::ScalarVariant value,
     bool fast_and_approximate_mode,
@@ -158,7 +163,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool scalar_is_lhs) {
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
@@ -181,7 +187,8 @@ Tensor div(
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
                 sub_core_grids,
-                sub_device_id);
+                sub_device_id,
+                scalar_is_lhs);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -196,7 +203,8 @@ Tensor div(
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
                 sub_core_grids,
-                sub_device_id);
+                sub_device_id,
+                scalar_is_lhs);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -215,7 +223,8 @@ Tensor div(
             rhs_activations,
             std::nullopt,  // fast_and_approximate_mode
             sub_core_grids,
-            sub_device_id);
+            sub_device_id,
+            scalar_is_lhs);
     }
 
     // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
@@ -233,7 +242,8 @@ Tensor div(
             rhs_activations,
             fast_and_approximate_mode,
             sub_core_grids,
-            sub_device_id);
+            sub_device_id,
+            scalar_is_lhs);
     }
 
     TT_FATAL(
@@ -250,9 +260,12 @@ Tensor div(
     const bool suppress_fap = fast_and_approximate_mode && input.dtype() == DataType::BFLOAT16;
     const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
 
-    std::optional<Tensor> divided = ttnn::divide(
+    // ttnn::divide's tensor-scalar overload takes no mirror flag, so go straight to the
+    // primitive here to forward it.
+    std::optional<Tensor> divided = ttnn::detail::invoke_binary_ng(
         input,
         value,
+        binary::BinaryOpType::DIV,
         std::nullopt,
         output_mem_config,
         output_tensor,
@@ -261,12 +274,73 @@ Tensor div(
         rhs_activations,
         effective_fap,
         sub_core_grids,
-        sub_device_id);
+        sub_device_id,
+        scalar_is_lhs);
 
     if (rounding_mode == "trunc") {
         return ttnn::trunc(divided.value(), output_mem_config, output_tensor, sub_core_grids);
     }
     return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
+}
+
+}  // namespace
+
+Tensor div(
+    const Tensor& input,
+    unary::ScalarVariant value,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return div_scalar_impl(
+        input,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        sub_device_id,
+        /*scalar_is_lhs=*/false);
+}
+
+Tensor div(
+    unary::ScalarVariant value,
+    const Tensor& input,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return div_scalar_impl(
+        input,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        sub_device_id,
+        /*scalar_is_lhs=*/true);
 }
 
 Tensor div(

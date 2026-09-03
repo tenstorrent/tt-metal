@@ -262,7 +262,8 @@ void bind_binary_inplace_operation(
 
         Keyword args:
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Follows the
+                argument order, so a Number in the first position takes this span, not input_tensor_b_activations. Defaults to `None`.
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
@@ -1124,13 +1125,14 @@ void bind_prelu(
             nb::arg("memory_config") = nb::none()));
 }
 
-template <ttnn::unique_string Name, typename TensorTensorFn, typename TensorScalarFn>
+template <ttnn::unique_string Name, typename TensorTensorFn, typename TensorScalarFn, typename ScalarTensorFn>
 void bind_div(
     nb::module_& mod,
     const std::string& description,
     const std::string& math,
     TensorTensorFn tensor_tensor_fn,
     TensorScalarFn tensor_scalar_fn,
+    ScalarTensorFn scalar_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ",
     const std::string& post_note = " ") {
@@ -1142,8 +1144,9 @@ void bind_div(
             {3}
 
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ttnn.Tensor or Number): the input tensor. A Number here is the numerator.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands
+                must be a tensor; there is no scalar-scalar overload.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1214,7 +1217,22 @@ void bind_div(
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("sub_device_id") = nb::none());
-    ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
+    auto scalar_tensor_overload = ttnn::overload_t(
+        scalar_tensor_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("rounding_mode") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+    ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload, scalar_tensor_overload);
 }
 
 // Free functions for add, subtract, multiply and divide with fast_and_approximate_mode.
@@ -1236,6 +1254,31 @@ void bind_div(
         return TTNN_OP(                                                                 \
             input_tensor_a,                                                             \
             value,                                                                      \
+            dtype,                                                                      \
+            memory_config,                                                              \
+            output_tensor,                                                              \
+            activations,                                                                \
+            input_tensor_a_activations,                                                 \
+            input_tensor_b_activations,                                                 \
+            fast_and_approximate_mode,                                                  \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
+    }                                                                                   \
+    Tensor NAME##_fast_approx_scalar_tensor(                                            \
+        unary::ScalarVariant value,                                                     \
+        const Tensor& input_tensor_b,                                                   \
+        bool fast_and_approximate_mode,                                                 \
+        const std::optional<const DataType>& dtype,                                     \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<ttnn::Tensor>& output_tensor,                               \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> activations,                     \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,      \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,      \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) { \
+        return TTNN_OP(                                                                 \
+            value,                                                                      \
+            input_tensor_b,                                                             \
             dtype,                                                                      \
             memory_config,                                                              \
             output_tensor,                                                              \
@@ -1305,6 +1348,32 @@ Tensor multiply_fast_approx_tensor_scalar(
         sub_device_id);
 }
 
+Tensor multiply_fast_approx_scalar_tensor(
+    unary::ScalarVariant value,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return ttnn::multiply(
+        value,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        activations,
+        input_tensor_a_activations,
+        input_tensor_b_activations,
+        fast_and_approximate_mode,
+        sub_core_grids,
+        sub_device_id);
+}
+
 Tensor multiply_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1361,6 +1430,32 @@ Tensor divide_fast_approx_tensor_scalar(
         sub_device_id);
 }
 
+Tensor divide_fast_approx_scalar_tensor(
+    unary::ScalarVariant value,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return ttnn::divide(
+        value,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        activations,
+        input_tensor_a_activations,
+        input_tensor_b_activations,
+        fast_and_approximate_mode,
+        sub_core_grids,
+        sub_device_id);
+}
+
 Tensor divide_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1389,13 +1484,14 @@ Tensor divide_fast_approx_tensor_tensor(
         sub_device_id);
 }
 
-template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn, typename ScalarTensorFn>
 void bind_binary_operation_with_fast_approx(
     nb::module_& mod,
     const std::string& description,
     const std::string& math,
     TensorScalarFn tensor_scalar_fn,
     TensorTensorFn tensor_tensor_fn,
+    ScalarTensorFn scalar_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ",
     const std::string& post_note = " ",
@@ -1408,8 +1504,9 @@ void bind_binary_operation_with_fast_approx(
             {3}
 
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ttnn.Tensor or Number): the input tensor. A Number here is the left operand.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands
+                must be a tensor; there is no scalar-scalar overload.
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
@@ -1467,6 +1564,20 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("fast_and_approximate_mode") = fast_approx_default,
+            nb::arg("dtype") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()),
+        ttnn::overload_t(
+            scalar_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
@@ -1898,10 +2009,11 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation_with_fast_approx<"add">(
         mod,
-        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
         &detail::add_fast_approx_tensor_scalar,
         &detail::add_fast_approx_tensor_tensor,
+        &detail::add_fast_approx_scalar_tensor,
         detail::kArithmeticFpuDtypes,
         detail::kMixedFloatFamilyFootnote,
         detail::kAdditiveFastApproxPostNote,
@@ -1922,10 +2034,11 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation_with_fast_approx<"subtract">(
         mod,
-        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         &detail::subtract_fast_approx_tensor_scalar,
         &detail::subtract_fast_approx_tensor_tensor,
+        &detail::subtract_fast_approx_scalar_tensor,
         detail::kArithmeticFpuDtypes,
         detail::kMixedFloatFamilyFootnote,
         detail::kAdditiveFastApproxPostNote,
@@ -2076,19 +2189,21 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation_with_fast_approx<"multiply">(
         mod,
-        R"doc(Multiplies :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Multiplies :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
         &detail::multiply_fast_approx_tensor_scalar,
         &detail::multiply_fast_approx_tensor_tensor,
+        &detail::multiply_fast_approx_scalar_tensor,
         detail::kArithmeticFpuDtypes,
         detail::kMulDtypeFootnote,
         detail::kMultiplyFastApproxPostNote);
     detail::bind_binary_operation_with_fast_approx<"divide">(
         mod,
-        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
         &detail::divide_fast_approx_tensor_scalar,
         &detail::divide_fast_approx_tensor_tensor,
+        &detail::divide_fast_approx_scalar_tensor,
         detail::kFloatAndInt32Dtypes,
         detail::kDivideDtypeFootnote,
         detail::kDivideFastApproxPostNote);
@@ -2304,7 +2419,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_div<"div">(
         mod,
-        R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc",
         nb::overload_cast<
@@ -2323,6 +2438,19 @@ void py_module(nb::module_& mod) {
         nb::overload_cast<
             const Tensor&,
             unary::ScalarVariant,
+            bool,
+            const std::optional<std::string>&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            const std::optional<CoreRangeSet>&,
+            const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
+        nb::overload_cast<
+            unary::ScalarVariant,
+            const Tensor&,
             bool,
             const std::optional<std::string>&,
             const std::optional<const DataType>&,

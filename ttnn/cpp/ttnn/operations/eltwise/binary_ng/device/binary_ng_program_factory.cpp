@@ -944,12 +944,32 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
-        if (op_config.process_lhs.has_value()) {
-            lhs_activations.push_back(*op_config.process_lhs);
+        // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
+        // operands are mirrored relative to the physical CBs. The caller's per-operand
+        // activation lists and the op-derived preprocess steps are both stated against the
+        // mathematical operands, so both follow the same inversion: math LHS lands on c_1,
+        // math RHS on c_0.
+        //
+        // This is the single point where "lhs" changes meaning. Above it -- scalar_is_lhs,
+        // lhs_activations, OpConfig::process_lhs -- lhs is the mathematical operand. Below it,
+        // and in the kernels, LHS is physical CB c_0. A caller that rewrites operands into
+        // slots must leave the activation lists in mathematical order and let this inversion
+        // map them; inverting them there as well cancels out and lands operand-b activations
+        // on the scalar.
+        const bool mirrored = operation_attributes.scalar_is_lhs;
+        if (mirrored) {
+            std::swap(lhs_activations, rhs_activations);
         }
 
-        if (op_config.process_rhs.has_value()) {
-            rhs_activations.push_back(*op_config.process_rhs);
+        const auto& process_c0 = mirrored ? op_config.process_rhs : op_config.process_lhs;
+        const auto& process_c1 = mirrored ? op_config.process_lhs : op_config.process_rhs;
+
+        if (process_c0.has_value()) {
+            lhs_activations.push_back(*process_c0);
+        }
+
+        if (process_c1.has_value()) {
+            rhs_activations.push_back(*process_c1);
         }
 
         // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
@@ -1330,6 +1350,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
+    compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
