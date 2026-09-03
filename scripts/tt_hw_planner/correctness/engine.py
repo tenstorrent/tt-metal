@@ -96,9 +96,10 @@ def run_gate(
     so the cli.py call sites can be migrated by a name change
     only. Returns ``(result, prompt_used)``:
 
-    * ``result`` is a :class:`ValidationResult` (or ``None`` if the
-      gate could not run; the caller treats ``None`` as a soft pass
-      with a printed warning).
+    * ``result`` is a :class:`ValidationResult`. ``None`` now means only that the gate was not ASKED
+      to run for this invocation (the operator's opt-out). A gate that was asked and could not
+      compare returns a fail-closed UNVERIFIED verdict instead, because the caller reads ``None`` as
+      "nothing to judge" and stamped SUCCESS on models it had never compared.
     * ``prompt_used`` is the demo's first prompt text (or ``None``
       if not available); the caller passes this to the repair loop
       so the agent sees the same prompt the demo saw.
@@ -253,12 +254,12 @@ def run_evidence_gate(
     :class:`evidence.TextEvidence` attached as
     ``result._text_evidence`` so the repair loop can use it.
 
-    Soft-skips on any non-fatal failure: a missing
-    ``==USER 0 - OUTPUT`` block, a missing HF mirror, an HF
-    generation timeout, a tokenizer reload failure. The caller
-    treats ``None`` results as "gate did not engage" (soft pass)
-    so this function CANNOT downgrade a real bring-up into a
-    false-fail.
+    A failure to PRODUCE the comparison -- an HF mirror that is missing, a generation timeout, a
+    tokenizer that will not reload -- returns a fail-closed UNVERIFIED verdict rather than ``None``.
+    It still cannot downgrade a real bring-up into a false-fail: the call site excludes UNVERIFIED
+    from the repair escalation, since there is no divergence to localize. What it does instead is
+    stop the run being labelled SUCCESS, which is the whole difference between "we compared and it
+    matched" and "we never compared".
     """
     from scripts.tt_hw_planner.output_validation import (
         DEFAULT_COMPARE_TOKENS,
@@ -268,6 +269,7 @@ def run_evidence_gate(
         generate_hf_reference,
         load_demo_first_prompt,
         tokenize_text_for_compare,
+        comparison_impossible,
     )
     from .evidence import (
         DEFAULT_SCAN_LIMIT,
@@ -329,18 +331,23 @@ def run_evidence_gate(
             return_logits=True,
         )
     except Exception as exc:
+        # "soft pass" was the accurate name for the defect: the same None the operator's opt-out
+        # returns, so a reference that would not load left SUCCESS stamped on an uncompared model.
+        # Fail closed, exactly as the empty-TT-text branch above already does.
         print(
             f"  PCC gate (evidence): HF reference generation "
-            f"FAILED ({type(exc).__name__}: {exc}). Skipping the "
-            f"gate (soft pass)."
+            f"FAILED ({type(exc).__name__}: {exc}). The end-to-end "
+            f"comparison could not be made."
         )
-        return None, prompt
+        return comparison_impossible("HF reference generation", exc, tt_text=tt_text), prompt
 
     try:
         tt_token_ids = tokenize_text_for_compare(model_id, tt_text)
     except Exception as exc:
-        print(f"  PCC gate (evidence): tokenizer re-load FAILED " f"({type(exc).__name__}: {exc}). Skipping the gate.")
-        return None, prompt
+        print(
+            f"  PCC gate (evidence): tokenizer re-load FAILED " f"({type(exc).__name__}: {exc}). Nothing was compared."
+        )
+        return comparison_impossible("tokenizer re-load", exc, tt_text=tt_text), prompt
 
     evidence_record = build_text_evidence(
         tt_text=tt_text,

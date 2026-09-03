@@ -1221,6 +1221,81 @@ def _probe_local_model(model_id: str) -> ModelProbe:
             f"{pipeline_tag!r} with no recognized model_type/architectures — verify. "
             f"('text-to-audio' spans text-to-speech AND music/audio-generation.)"
         )
+    if not isinstance(cfg, dict):
+        # No readable config: there is nothing to build an architecture from, and the caller already
+        # handles a probe without one. The hub path cannot reach this -- it returns earlier when the
+        # config is missing -- so the guard belongs here rather than inside the shared helper.
+        return probe
+    return _apply_transformer_config(probe, cfg, total_params, weight_bytes)
+
+
+def _apply_transformer_config(
+    probe: ModelProbe,
+    cfg: dict,
+    total_params: Optional[int],
+    weight_bytes: int,
+) -> ModelProbe:
+    """Read the architecture out of a loaded config and size the model from it.
+
+    SHARED BY BOTH PROBE PATHS. This used to sit inline at the end of the hub path only, so pointing
+    the planner at a checkpoint DIRECTORY -- same model, same weights, same config.json -- returned a
+    probe with no arch_spec and no memory_model. Everything downstream reads that absence as "not a
+    transformer": `plan` falls back to a weights-only estimate with no KV math, the memory-fit gate
+    answers "unknown" instead of "no-fit", and bring-up routes an LLM through the non-text-family
+    branch, which defaults the mesh to a single chip and never evaluates whether the model fits.
+
+    The identical config produced a full plan when named by hub id, which is what makes this a bug in
+    the local path rather than a limitation of local checkpoints.
+    """
+    if probe.category not in TRANSFORMER_CATEGORIES:
+        probe.config_status = None
+        return probe
+
+    NESTED_KEYS = (
+        "text_config",
+        "llm_config",
+        "language_config",
+        "decoder_config",
+        "text_model_config",
+        "language_model_config",
+    )
+    candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
+    for c in candidates:
+        if c.get("hidden_size") and c.get("num_hidden_layers"):
+            text_cfg = c
+            break
+    else:
+        text_cfg = cfg
+
+    family = detect_architecture(text_cfg)
+    arch_spec = build_arch_spec(text_cfg, family)
+    probe.arch_spec = arch_spec
+    probe.arch_family = family
+
+    if arch_spec.hidden_size and arch_spec.num_layers:
+        probe.config_status = True
+        probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
+
+        if family == "mla":
+            probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
+        if family == "moe":
+            probe.flags.append(f"MoE detected ({arch_spec.num_experts} experts, top-{arch_spec.experts_per_token})")
+        if family == "ssm":
+            probe.flags.append("State-space model — no per-token KV cache")
+        if arch_spec.sliding_window:
+            probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
+    else:
+        if probe.category in {"LLM", "VLM"}:
+            probe.flags.append(
+                "Category downgraded to CNN after config inspection: no causal-LM fields found in config.json."
+            )
+            probe.category = "CNN"
+            probe.arch_spec = None
+            probe.arch_family = None
+            probe.config_status = None
+        else:
+            probe.config_status = False
+
     return probe
 
 
@@ -1390,53 +1465,4 @@ def probe_model(model_id: str) -> ModelProbe:
             f"routing uses the module-tree fingerprint, so a diffusion/DiT trunk still routes correctly.)"
         )
 
-    if probe.category not in TRANSFORMER_CATEGORIES:
-        probe.config_status = None
-        return probe
-
-    NESTED_KEYS = (
-        "text_config",
-        "llm_config",
-        "language_config",
-        "decoder_config",
-        "text_model_config",
-        "language_model_config",
-    )
-    candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
-    for c in candidates:
-        if c.get("hidden_size") and c.get("num_hidden_layers"):
-            text_cfg = c
-            break
-    else:
-        text_cfg = cfg
-
-    family = detect_architecture(text_cfg)
-    arch_spec = build_arch_spec(text_cfg, family)
-    probe.arch_spec = arch_spec
-    probe.arch_family = family
-
-    if arch_spec.hidden_size and arch_spec.num_layers:
-        probe.config_status = True
-        probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
-
-        if family == "mla":
-            probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
-        if family == "moe":
-            probe.flags.append(f"MoE detected ({arch_spec.num_experts} experts, top-{arch_spec.experts_per_token})")
-        if family == "ssm":
-            probe.flags.append("State-space model — no per-token KV cache")
-        if arch_spec.sliding_window:
-            probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
-    else:
-        if probe.category in {"LLM", "VLM"}:
-            probe.flags.append(
-                "Category downgraded to CNN after config inspection: no causal-LM fields found in config.json."
-            )
-            probe.category = "CNN"
-            probe.arch_spec = None
-            probe.arch_family = None
-            probe.config_status = None
-        else:
-            probe.config_status = False
-
-    return probe
+    return _apply_transformer_config(probe, cfg, total_params, weight_bytes)

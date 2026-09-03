@@ -2845,7 +2845,15 @@ def test_cmd_up_calls_register_bringup_success_on_cold_start_success() -> None:
     cold_idx = block.find("_cold_start_signal is not None")
     assert cold_idx >= 0
 
-    cold_branch = block[cold_idx : cold_idx + 8000]
+    # TO THE END OF THE BRANCH, not a fixed number of characters. This sliced 8000 chars, and the
+    # registration call sat about 8020 in once the strict-gate block ahead of it grew -- so the
+    # window ended mid-identifier and the test read a call that was present as absent. The branch
+    # ends where it returns its own rc, which is a property of the code rather than of its length.
+    # Searched in the whole source: `block` is itself capped, and the branch now ends past that cap.
+    _cold_abs = fn_idx + cold_idx
+    _cold_end = src.find("return _rc_cold", _cold_abs)
+    assert _cold_end > _cold_abs, "cold-start branch no longer ends by returning _rc_cold"
+    cold_branch = src[_cold_abs:_cold_end]
     assert "_register_bringup_success(" in cold_branch, (
         "cmd_up cold-start branch must call _register_bringup_success " "after cmd_prepare returns 0"
     )

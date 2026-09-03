@@ -130,6 +130,72 @@ class ValidationResult:
         )
 
 
+_TRUST_REMOTE_CODE_ENV = "HF_TRUST_REMOTE_CODE"
+# Spellings that turn the trust OFF, matching instrumentation.py's opt-out vocabulary.
+_TRUST_DISABLE_VALUES = frozenset({"0", "false", "no", "off"})
+# What a gate says when it could not make the comparison AT ALL, as opposed to making it and
+# disagreeing. correctness/text.py already words its own version of this verdict the same way.
+UNVERIFIED = "PCC GATE UNVERIFIED"
+
+
+def resolve_trust_remote_code(value: Optional[bool] = None) -> bool:
+    """Whether loading a reference may run the model's own shipped code.
+
+    ONE DECISION, MADE ONCE. Three copies of this lived in this module and all three defaulted to
+    NO, which put them at odds with the rest of the tool: the generated per-component test, the
+    capture pass, decompose and the module walk all load with it enabled, minutes earlier in the
+    same bring-up. Refusing here protected nothing -- that code had already run -- and cost the
+    end-to-end comparison, because the load threw and the gate treated the throw as a soft pass.
+    The models it silenced were exactly the ones whose architecture is least standard.
+
+    So the default is ON and the environment variable OPTS OUT rather than opting in. A caller that
+    passes an explicit bool still wins; a deployment that wants the old refusal sets the variable to
+    one of the disable values.
+    """
+    if value is not None:
+        return bool(value)
+    return os.environ.get(_TRUST_REMOTE_CODE_ENV, "").strip().lower() not in _TRUST_DISABLE_VALUES
+
+
+def unverified(reason: str, **fields) -> ValidationResult:
+    """The comparison could not be MADE. That is not a pass.
+
+    Every caller of this used to `return None`, which its own caller reads as "the gate did not run
+    for this invocation" -- the same value meaning "the operator switched it off". So a reference
+    that failed to load left the run green and indistinguishable from one that was never asked to
+    verify anything. Failing closed is this codebase's stated preference in the same situation:
+    correctness/text.py calls it "safer than a false-green" and the empty-TT-text branch a few lines
+    above the load already builds exactly this verdict.
+    """
+    return ValidationResult(ok=False, reason=f"{UNVERIFIED}: {reason}", **fields)
+
+
+def comparison_impossible(stage: str, exc: BaseException, *, tt_text: str = "") -> ValidationResult:
+    """A step the comparison DEPENDS ON failed, so no comparison happened.
+
+    Both engines reach this two ways -- the reference would not generate, or the TT text would not
+    tokenize -- and each of the four sites used to word its own verdict. One wording, so the thing a
+    reader greps for is the same whichever engine and whichever step gave out.
+    """
+    return unverified(f"{stage} failed ({type(exc).__name__}: {exc}); nothing was compared end-to-end", tt_text=tt_text)
+
+
+def is_unverified(result: Any) -> bool:
+    """Did the gate fail because it could not COMPARE, or because it compared and disagreed?
+
+    Both are ``ok=False`` and they call for opposite responses. A real mismatch escalates into the
+    per-component repair loop. A reference that would not load has nothing to repair -- the model may
+    be entirely correct -- so escalating it would burn a repair budget on a cache miss. What it must
+    do instead is stop the run being labelled SUCCESS, which is the outcome the banner already has a
+    name for and never received.
+    """
+    return bool(
+        result is not None
+        and not getattr(result, "ok", True)
+        and str(getattr(result, "reason", "")).startswith(UNVERIFIED)
+    )
+
+
 def extract_demo_user_output(
     captured_output: str,
     user_idx: int = 0,
@@ -398,11 +464,7 @@ def gather_model_architecture_context(
     (network, gated repo, missing cache), returns a short note so the
     prompt still renders.
     """
-    import os as _os
-
-    if trust_remote_code is None:
-        env = _os.environ.get("HF_TRUST_REMOTE_CODE", "").lower()
-        trust_remote_code = env in ("1", "true", "yes")
+    trust_remote_code = resolve_trust_remote_code(trust_remote_code)
 
     try:
         from transformers import AutoConfig
@@ -850,12 +912,8 @@ def generate_hf_reference(
         StoppingCriteriaList,
     )
 
-    if trust_remote_code is None:
-        env = os.environ.get("HF_TRUST_REMOTE_CODE", "").lower()
-        trust_remote_code = env in ("1", "true", "yes")
-
     load_kwargs = dict(
-        trust_remote_code=trust_remote_code,
+        trust_remote_code=resolve_trust_remote_code(trust_remote_code),
     )
     if cache_dir:
         load_kwargs["cache_dir"] = cache_dir
@@ -957,7 +1015,7 @@ def _load_hf_for_text_generation(model_id: str, **load_kwargs):
 
     AutoConfig.from_pretrained(
         model_id,
-        trust_remote_code=load_kwargs.get("trust_remote_code", False),
+        trust_remote_code=resolve_trust_remote_code(load_kwargs.get("trust_remote_code")),
     )
 
     last_err: Optional[Exception] = None
@@ -998,11 +1056,7 @@ def tokenize_text_for_compare(
     """
     from transformers import AutoTokenizer
 
-    if trust_remote_code is None:
-        env = os.environ.get("HF_TRUST_REMOTE_CODE", "").lower()
-        trust_remote_code = env in ("1", "true", "yes")
-
-    load_kwargs = {"trust_remote_code": trust_remote_code}
+    load_kwargs = {"trust_remote_code": resolve_trust_remote_code(trust_remote_code)}
     if cache_dir:
         load_kwargs["cache_dir"] = cache_dir
 

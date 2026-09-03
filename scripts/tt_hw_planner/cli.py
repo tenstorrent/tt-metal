@@ -2951,6 +2951,7 @@ def _run_pcc_gate(
         generate_hf_reference,
         load_demo_first_prompt,
         tokenize_text_for_compare,
+        comparison_impossible,
     )
 
     n = compare_tokens or DEFAULT_COMPARE_TOKENS
@@ -3012,14 +3013,17 @@ def _run_pcc_gate(
             instruct=instruct,
         )
     except Exception as exc:
+        # NOT A PASS. This returned None, which the call site reads as "the gate did not run for
+        # this invocation" -- the same value the operator's own --no-strict-pcc produces -- so a
+        # reference that failed to load stamped SUCCESS on a model nothing had compared. The
+        # UNVERIFIED outcome exists for precisely this and was never reachable from here.
         print(
             f"  PCC gate: HF reference generation FAILED "
-            f"({type(exc).__name__}: {exc}). Skipping the gate (the "
-            f"build will pass on the basis of pytest alone; this "
-            f"could mean a HF cache miss, a VLM that needs special "
-            f"loading, or HF_TRUST_REMOTE_CODE not being set)."
+            f"({type(exc).__name__}: {exc}). The end-to-end comparison "
+            f"could not be made; this could mean a HF cache miss or a "
+            f"VLM that needs special loading."
         )
-        return None, prompt
+        return comparison_impossible("HF reference generation", exc, tt_text=tt_text), prompt
 
     if hf.truncated:
         print(
@@ -3031,8 +3035,8 @@ def _run_pcc_gate(
     try:
         tt_token_ids = tokenize_text_for_compare(model_id, tt_text)
     except Exception as exc:
-        print(f"  PCC gate: tokenizer re-load FAILED " f"({type(exc).__name__}: {exc}). Skipping the gate.")
-        return None, prompt
+        print(f"  PCC gate: tokenizer re-load FAILED " f"({type(exc).__name__}: {exc}). Nothing was compared.")
+        return comparison_impossible("tokenizer re-load", exc, tt_text=tt_text), prompt
 
     result = compare_token_sequences(
         tt_token_ids,
@@ -3075,6 +3079,26 @@ OUTCOME_SUCCESS = "SUCCESS"
 OUTCOME_SUCCESS_PARTIAL = "SUCCESS-PARTIAL"
 OUTCOME_UNVERIFIED = "UNVERIFIED"
 OUTCOME_FAIL = "FAIL"
+
+# Tells "the gate compared and disagreed" from "the gate could not compare". Only the first is a
+# divergence worth escalating; the second is what stamps the outcome above.
+from .output_validation import is_unverified as _is_unverified  # noqa: E402
+
+
+def _unverified_banner_note(result) -> Optional[str]:
+    """The line a run must carry when its correctness gate could not verify anything, else None.
+
+    Both gate call sites need the same sentence and the same outcome label, and writing it twice is
+    how the two ends of a check drift apart -- which is the failure this whole change is about.
+    """
+    if not _is_unverified(result):
+        return None
+    return (
+        f"PCC correctness gate could NOT verify this model: "
+        f"{getattr(result, 'reason', '(none)')}. pytest passed, but nothing "
+        f"compared the decoded output to an HF reference — this is NOT a "
+        f"confirmed SUCCESS."
+    )
 
 
 def _final_outcome_banner(
@@ -8990,7 +9014,10 @@ def _cmd_up_core_impl(args) -> int:
             # _maybe_escalate_pcc_fail — the per-component iterate
             # flow that brought up Qwen.
             _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
-            if _pcc_result is not None and not _pcc_result.ok:
+            if _pcc_result is not None and not _pcc_result.ok and not _is_unverified(_pcc_result):
+                # An UNVERIFIED verdict is deliberately NOT escalated: there is no divergence to
+                # localize and no component to repair, because no comparison happened. It is handled
+                # below, where rc=0 stops deriving SUCCESS.
                 # Chain-divergence diagnostic BEFORE escalation: pure
                 # diagnostic, doesn't change routing. Best-effort; any
                 # failure inside degrades silently.
@@ -9067,6 +9094,13 @@ def _cmd_up_core_impl(args) -> int:
             # rc=0 hides "we passed pytest but never compared decoded
             # output to HF reference."
             _gate_extra = []
+            # The label, not just a line of prose. B-FIX #3 surfaced the non-engagement in `extra`
+            # but left the banner deriving SUCCESS from rc=0, so a run that compared nothing still
+            # announced itself as verified to every downstream reader that greps the outcome line.
+            # OUTCOME_UNVERIFIED exists for this and was never passed. Reserved for the gate having
+            # TRIED and failed: an operator who switched the gate off keeps today's label, because
+            # that is a choice they made rather than a failure they need to hear about.
+            _gate_outcome = None
             if _pcc_result is None:
                 _gate_extra.append(
                     "PCC correctness gate DID NOT engage (soft-skipped — "
@@ -9074,6 +9108,9 @@ def _cmd_up_core_impl(args) -> int:
                     "decoded output was NOT compared to HF reference; "
                     "the success is on basis of pytest alone."
                 )
+            elif _unverified_banner_note(_pcc_result):
+                _gate_outcome = OUTCOME_UNVERIFIED
+                _gate_extra.append(_unverified_banner_note(_pcc_result))
             elif not _pcc_result.ok:
                 # rc=0 with ok=False shouldn't normally happen (the loop
                 # would have set rc != 0), but guard for completeness.
@@ -9085,6 +9122,7 @@ def _cmd_up_core_impl(args) -> int:
                 model_id=MODEL,
                 path_label="ALREADY-SUPPORTED -> prepare --execute",
                 extra=_gate_extra or None,
+                outcome=_gate_outcome,
             )
         elif _rc_supp == _PCC_FAIL_RC:
             # WIRING #6 (Path 2 parity): consult brain G8's
@@ -9369,7 +9407,9 @@ def _cmd_up_core_impl(args) -> int:
             # contract as the ALREADY-SUPPORTED site above — escalate
             # to Path A on fail, preserve legacy non-auto bypass.
             _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
-            if _pcc_result is not None and not _pcc_result.ok:
+            if _pcc_result is not None and not _pcc_result.ok and not _is_unverified(_pcc_result):
+                # Same contract as the site above: nothing to localize or repair when no comparison
+                # took place, so an UNVERIFIED verdict downgrades the label instead of escalating.
                 _run_and_log_chain_divergence(MODEL, demo_dir=_find_demo_dir_safe(MODEL))
                 _esc_rc_cold = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
                 _rc_cold = _esc_rc_cold if _esc_rc_cold is not None else _PCC_FAIL_RC
@@ -9380,10 +9420,13 @@ def _cmd_up_core_impl(args) -> int:
                 sep=sep,
                 notes="Auto-routed via ColdStartScaffoldError handler in cmd_up.",
             )
+            _cold_note = _unverified_banner_note(_pcc_result)
             _final_outcome_banner(
                 rc=0,
                 model_id=MODEL,
                 path_label="COLD-START -> prepare --execute (generic backend)",
+                extra=[_cold_note] if _cold_note else None,
+                outcome=OUTCOME_UNVERIFIED if _cold_note else None,
             )
         elif _rc_cold == _PCC_FAIL_RC:
             _final_outcome_banner(
