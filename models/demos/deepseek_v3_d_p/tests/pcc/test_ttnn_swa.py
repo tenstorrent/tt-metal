@@ -34,6 +34,18 @@ _SHAPES = [128, 130, 1024, 2048, 4095, 5120]
 _WRITE_COMPILES_PER_CHUNK = 0
 
 
+def _ci_unsupported_param_combos_swa(**params):
+    """The Blackhole e2e pipeline collects this whole folder, so every leg it should not run has to
+    opt out here rather than be filtered by name in the pipeline's -k expression."""
+    return params["is_ci_env"] or params["is_ci_v2_env"]
+
+
+def _ci_unsupported_param_combos_swa_long(**params):
+    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+        return False
+    return params["name"] != "mixed5120"
+
+
 def _config(model_config, num_hidden_layers=4):
     """Reference config from one variant's dimension constants, with layer 0 forced to sliding.
 
@@ -246,6 +258,7 @@ def _run_chunked(mesh_device, topology, chunk_size, iters_valid, model_config, f
     assert state.kv_actual == total
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_swa)
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
@@ -282,6 +295,7 @@ def test_swa_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
     assert passed, f"SWA mesh layer PCC test failed: {message}"
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_swa)
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
@@ -296,6 +310,7 @@ def test_swa_chunked_prefill_mesh(
     _run_chunked(mesh_device, topology, chunk_size, iters_valid, model_config, chunked_pcc, f"scenario={name}")
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_swa_long)
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _LONG_SCENARIOS)
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
