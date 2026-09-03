@@ -249,8 +249,10 @@ ALWI void reduce_accumulate_via_add(
     constexpr bool streamed_input = streaming || grouped_col;
     constexpr bool has_accum = is_accumulate_v<AccumulateT>;  // cross-call CB accumulator (raw partial sum)
 
-    // CB-policy predicates (match the standard path). should_pop_p: the output is popped per output tile
-    // (Bulk / WaitAndPop) vs bulk-reserved upfront + bulk-pushed at the end (WaitUpfrontNoPop / NoWaitNoPop).
+    // CB-policy predicates (match the standard path). should_pop_p: the input is popped by the helper.
+    // Non-accumulating no-pop calls can bulk-reserve their output. Accumulating no-pop calls reserve per output:
+    // an intermediate call may read and write the same full accumulator CB, so it must pop one tile before it
+    // reserves the slot used to write that tile back.
     // helper_waits_block: the whole resident block is waited once (Bulk / WaitUpfront) — NoWaitNoPop trusts the
     // caller to have it resident, WaitAndPop streams per pair. helper_pops_block: only BulkWaitBulkPop pops it.
     constexpr bool should_pop_p =
@@ -260,6 +262,7 @@ ALWI void reduce_accumulate_via_add(
     constexpr bool bulk_per_output = input_policy == ReduceInputPolicy::BulkWaitBulkPop && !is_col;
     constexpr bool helper_waits_block = (!streamed_input && !no_wait_p && !bulk_per_output);
     constexpr bool helper_pops_block = (!streamed_input && should_pop_p && !bulk_per_output);
+    constexpr bool reserves_output_per_tile = should_pop_p || has_accum;
 
     // tiles that collapse into one output, and their stride in the row-major (batch-major) input block.
     const uint32_t cnt = is_row ? Wt : (is_col ? Ht : (Ht * Wt));
@@ -369,7 +372,7 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (helper_waits_block) {
         input_dfb.wait_front(in_tiles);  // Bulk / WaitUpfront: whole resident block, indexed per output
     }
-    if constexpr (!should_pop_p) {
+    if constexpr (!reserves_output_per_tile) {
         output_dfb.reserve_back(n_out);  // no-pop: reserve every output page upfront (pack o -> page o below)
     }
 
@@ -797,13 +800,14 @@ ALWI void reduce_accumulate_via_add(
 
         tile_regs_commit();
         tile_regs_wait();
-        if constexpr (should_pop_p) {  // Bulk / WaitAndPop: reserve + pack + push per output tile
+        if constexpr (reserves_output_per_tile) {
+            // Input-popping policies naturally stream outputs. Accumulating no-pop calls also use this path so
+            // an intermediate call can pop and replace each tile of an in-place accumulator without first
+            // waiting for space in the full CB.
             output_dfb.reserve_back(1);
             pack_tile(0, output_dfb_id);
             output_dfb.push_back(1);
-        } else {  // no-pop: bulk-reserved upfront; write output o to its OWN page o. (The standard no-pop body
-                  // packs every output to the default page 0 — correct only for a single output; the fast path
-                  // passes o explicitly so multi-output no-pop is correct.)
+        } else {  // standalone no-pop: bulk-reserved upfront; write output o to its OWN page o
             pack_tile(0, output_dfb_id, o);
         }
         tile_regs_release();
@@ -811,8 +815,8 @@ ALWI void reduce_accumulate_via_add(
             input_dfb.pop_front(cnt);
         }
     }
-    if constexpr (!should_pop_p) {
-        output_dfb.push_back(n_out);  // no-pop: bulk-push all outputs at the end
+    if constexpr (!reserves_output_per_tile) {
+        output_dfb.push_back(n_out);  // standalone no-pop: bulk-push all outputs at the end
     }
     if constexpr (helper_pops_block) {
         input_dfb.pop_front(in_tiles);  // only BulkWaitBulkPop pops the resident block

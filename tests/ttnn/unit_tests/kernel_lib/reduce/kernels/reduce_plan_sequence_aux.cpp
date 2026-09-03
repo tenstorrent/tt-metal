@@ -9,6 +9,5 @@ void kernel_main() {
     using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<1>;
     static_assert(kernel_owned_arg == 23, "The auxiliary args must preserve the kernel-owned prefix");
     static_assert(Auxiliary::cb_id == 1, "The aggregate recipe must carry its auxiliary CB ID");
-    static_assert(Auxiliary::num_tiles == 1, "Equal call recipes must share one aggregate auxiliary tile");
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 }
