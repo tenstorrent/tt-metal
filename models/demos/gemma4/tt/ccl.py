@@ -94,6 +94,25 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
+def _tiny_decode_fused_ar(tensor) -> bool:
+    """True for launch-bound decode all-reduces (MTP drafter: M≤32, N≤2048).
+
+    The 31B target AR is bandwidth-bound at hidden=5376 and wants the tuned
+    sync split. The 453M it-assistant is hidden=1024 with 24 ARs per K=3 iter;
+    those payloads are tiny and the extra RS+AG launch dominates. Fused
+    ``ttnn.all_reduce`` is one kernel and bit-identical. Default on;
+    ``GEMMA4_CCL_TINY_FUSED=0`` keeps the split for every shape.
+    """
+    if os.environ.get("GEMMA4_CCL_TINY_FUSED", "1").lower() in ("0", "false", "no"):
+        return False
+    try:
+        h = int(tensor.shape[-2])
+        w = int(tensor.shape[-1])
+    except Exception:
+        return False
+    return h <= 32 and w <= 2048
+
+
 def ccl_sync_split_enabled() -> bool:
     """Run the TP all-reduce as sync ``reduce_scatter`` + sync ``all_gather``
     instead of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0``
@@ -181,9 +200,9 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     Policy (when env unset):
       * **Ring** on **Blackhole** meshes with **≥8 devices** (Ring+sync beat
         Linear+sync on the P150x8 TTFT sweep at 31B/128k).
-      * **Linear** on Wormhole, including dense 1×8. Ring remains available via
-        the environment override, but is not the default until its full-model
-        PCC is revalidated.
+      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense 31B**
+        (decode all-reduce). ``num_links=2`` is still unusable on WH (event-order
+        hang); Ring on 1 link is the remaining TP=8 CCL lever. MoE stays Linear.
       * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model PCC
         well below the Linear result.
     """
@@ -196,6 +215,9 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
     if n:
         if n >= 8 and is_blackhole():
+            return ttnn.Topology.Ring
+        model = os.environ.get("HF_MODEL", "").lower()
+        if n >= 8 and (not is_moe) and "31b" in model:
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
@@ -501,7 +523,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    if ccl_sync_split_enabled():
+    if ccl_sync_split_enabled() and not _tiny_decode_fused_ar(tensor):
         scattered = ttnn.reduce_scatter(
             tensor,
             dim=3,
