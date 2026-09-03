@@ -38,8 +38,9 @@ public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
-    // Binding token constructor when host supplies LLK metadata.
-    // See "Entry format metadata" in ScratchpadSpec. LLKOperandFrom reads these via
+    // Optional binding token constructor used when the host supplies LLK metadata.
+    // See "Entry format metadata" in ScratchpadSpec. LLKOperandFrom rejects tokens created by
+    // the two-arg constructor and reads metadata-bearing tokens via
     // binding_details::LLKOperandExtractor (api/llk_operand_from_tokens.h). Plain working memory
     // uses the two-arg form.
     constexpr ScratchpadBindingToken(

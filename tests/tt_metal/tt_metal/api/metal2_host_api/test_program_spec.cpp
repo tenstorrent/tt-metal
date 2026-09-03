@@ -5095,6 +5095,26 @@ protected:
 // Fold checks for LLKOperandFrom (SPEC Part II).
 using LLKOperandInterop = ProgramSpecTestBlackhole;
 
+TEST_F(LLKOperandInterop, ScratchpadWithoutMetadataFailsToFormOperand) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/llk_operand_from_tokens.h"
+void kernel_main() {
+    using PadOp = LLKOperandFrom<scratch::pad>;
+    (void)sizeof(PadOp);
+}
+)"};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(LLKOperandInterop, ScratchpadFormatAloneSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
