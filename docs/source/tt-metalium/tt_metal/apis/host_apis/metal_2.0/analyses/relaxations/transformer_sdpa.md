@@ -23,21 +23,17 @@ Here there is no scan to fall back on: the audit recipe forbids re-deriving a re
 
 > **If the staleness check fails, do not substitute your own judgement. Stop, and report the relaxation verdict as UNCONFIRMED.**
 
-### Staleness check
+### Validity check — confirm these three still hold
 
-```
-git log -1 --format=%H -- ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.cpp \
-                          ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_program_factory.cpp \
-                          ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.cpp \
-                          ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_program_factory.cpp
-```
+Each is one grep. They are the facts the declaration rests on; if all three hold, the analysis holds regardless of what else changed in the op.
 
-| scope | expected | date |
-|---|---|---|
-| the four files above | `69e7e920fc98a67254f5367404d90eee3a5739d5` | 2026-09-02 |
-| relaxation framework | `29378ce8b50387b9b58696edd3122b4902157266` | 2026-09-03 |
+1. **The hash still gates on the same two disjuncts.** `compute_program_hash` includes the KV tensor's `logical_shape` *only* when that tensor is sharded or `has_block_cyclic()`, substituting an empty `Shape{}` otherwise — `sparse_sdpa_device_operation.cpp` (`kv`) and `sparse_sdpa_msa_device_operation.cpp` (`k` and `v`, branching independently). **If the branch condition changed, the conditions in §2 are wrong.**
+2. **The hit path still pins the KV width and rank.** `validate_non_hashed` re-`TT_FATAL`s `kv[3] == expected_kv_width` and rank 4 on every dispatch, and is still called from `validate_on_program_cache_hit`. **If that check is gone, `match_page_size` is no longer justified and rank is no longer pinned.**
+3. **Q, indices and output are still `TT_FATAL`'d to ROW_MAJOR / DRAM / interleaved / `padded == logical`.** That is what makes strict the exactly-right declaration for them rather than an over-tightening.
 
-Scoped to these four files deliberately: a directory-level stamp on `transformer/sdpa` would false-alarm on every unrelated SDPA factory, and a staleness check that cries wolf gets ignored. Analysed against `28994778430`, whose `transformer/sdpa` tree is byte-identical to `origin/main`.
+**If any check fails, report the relaxation verdict as UNCONFIRMED** rather than substituting your own reading.
+
+*Provenance, not a gate:* analysed at `28994778430`, whose `transformer/sdpa` tree is byte-identical to `origin/main`; the four source files were last touched by `69e7e920fc9` (2026-09-02) and the relaxation framework by `29378ce8b50` (2026-09-03). A commit stamp is deliberately **not** the check here — these files carry many unrelated SDPA factories, and a stamp that fires on every unrelated commit trains its reader to ignore it.
 
 ---
 
