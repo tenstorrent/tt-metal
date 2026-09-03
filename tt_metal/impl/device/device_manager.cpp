@@ -282,8 +282,11 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
                 fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             // Update the fabric config in the descriptor
             MetalEnvAccessor(descriptor_->env()).impl().fabric_config_ = fabric_config;
-            // Call initialize again because previously it was a no-op
-            ctx_.initialize_fabric_config();
+            // No need to call initialize_fabric_config() again here: set_fabric_config() above already
+            // calls it internally for any non-DISABLED tt-fabric config (see
+            // MetalEnvImpl::set_fabric_config()'s is_tt_fabric_config() branch), so re-calling it here
+            // duplicated ethernet-router/routing-table setup (and its log_warning output) on every
+            // dispatch-fallback fabric enable.
             log_info(
                 tt::LogMetal,
                 "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
