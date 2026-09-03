@@ -92,6 +92,10 @@ TEST(PhysicalNodeIdTest, IllegalAddressIsFatal) {
     // A leading underscore is an ordinary character, not a stripped rank suffix.
     EXPECT_NO_THROW(node("_7", 1, 2));
 
+    // Mock descriptors that leave host_id empty use the YAML filename, which is longer than
+    // POSIX HOST_NAME_MAX. The buffer has to hold that, not just a real hostname.
+    EXPECT_NO_THROW(node("sc36_32x4_revc_subtorus_aisled_cluster_desc_bh-glx-120-d05u20_rank_7.yaml", 1, 2));
+
     // Not truncated: a truncated host id would silently collide with its neighbours.
     EXPECT_THROW(node(std::string(kPhysicalHostNameLen, 'a'), 1, 2), std::runtime_error);
     EXPECT_THROW(node(std::string(kPhysicalHostNameLen + 1, 'a'), 1, 2), std::runtime_error);

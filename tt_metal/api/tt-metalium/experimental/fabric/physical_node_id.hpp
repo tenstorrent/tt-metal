@@ -26,9 +26,11 @@ namespace tt::tt_metal {
 // connected to a common host / controller / root complex. Its value is currently that group's
 // hostname -- see the UMD cluster descriptor's host_id field, which is where it comes from.
 
-// POSIX HOST_NAME_MAX-class, and the same limit UMD enforces on host_id. First DNS label after
-// canonicalization. Today's values: "bh-glx-110-c01u02" (18), "sjc1-tt-qb-01" (13).
-inline constexpr std::size_t kPhysicalHostNameLen = 64;
+// Sized for mock cluster-descriptor filenames used as host ids when the descriptor leaves
+// host_id empty (e.g. "sc36_32x4_revc_subtorus_aisled_cluster_desc_bh-glx-120-d05u20_rank_7.yaml"
+// is 73). Real host ids are much shorter -- "bh-glx-110-c01u02" (18), "sjc1-tt-qb-01" (13).
+// Never truncated: a truncated id would silently collide with its neighbours.
+inline constexpr std::size_t kPhysicalHostNameLen = 128;
 
 struct PhysicalNodeId {
     char host_id[kPhysicalHostNameLen]{};  // NUL-padded C buffer, not std::array / std::string
