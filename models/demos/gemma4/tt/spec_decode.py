@@ -133,6 +133,7 @@ class SpeculativeDecoder:
         self._fused_trace = None
         self._fused_graph_key = None
         self._fused_setup_key = None
+        self._last_fused_reused = False
         # Single FUSED batched (B>1) per-iteration trace (batched drafter chain +
         # batched packed verify). Captured once, replayed per iter (prefill never
         # traced). See _capture_fused_trace_batched / _generate_fused_traced_batched.
@@ -555,6 +556,7 @@ class SpeculativeDecoder:
         self._fused_trace = None
         self._fused_graph_key = None
         self._fused_setup_key = None
+        self._last_fused_reused = False
 
     def _io_pack_in_graph_enabled(self):
         """In-graph unpack of one uint32 blob. Default on (previous fast-host).
@@ -1644,8 +1646,10 @@ class SpeculativeDecoder:
         if self._fused_trace is not None and self._fused_graph_key == graph_key:
             _lg.info("[spec-trace] reuse fused trace (restage seed + I/O, no recapture)")
             self._bind_fused_trace(self._fused_trace, anchor_token, anchor_pos, anchor_hidden)
+            self._last_fused_reused = True
         else:
             self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
+            self._last_fused_reused = False
         anchor_hidden.deallocate(True)
         self._use_trace = saved_trace
         self._fused_setup_key = key
