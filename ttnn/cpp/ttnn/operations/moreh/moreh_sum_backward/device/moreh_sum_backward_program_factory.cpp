@@ -247,7 +247,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
         return KernelSpec{
             .unique_id = id,
             .source = COMPUTE_KERNEL_PATH,
-            .compiler_options = {.defines = compute_defines},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = C0_IN, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{

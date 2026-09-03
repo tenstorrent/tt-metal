@@ -7,13 +7,55 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
+
+// Host-side mirror of the device SemScope enum.
+// Codegen spells the scope by name.
+enum class SemScope : uint8_t {
+    LOCAL_NONATOMIC = 0,
+    DM_LOCAL_CACHED = 1,
+    EXTERNAL = 2,
+};
+
 namespace tt::tt_metal {
+
+// One resolved semaphore binding.
+struct SemBindingEntry {
+    std::string name;
+    uint16_t id = 0;
+    SemScope scope = SemScope::LOCAL_NONATOMIC;
+    uint32_t total_binder_harts = 0;
+};
+
+// The enumerator name, as the kernel spells it.
+inline std::string_view sem_scope_enumerator(SemScope scope) {
+    switch (scope) {
+        case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
+        case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
+        case SemScope::EXTERNAL: return "EXTERNAL";
+    }
+    TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
+}
+
+// The generated semaphore section: one binding token per bound semaphore, in `namespace sem`.
+// The token carries the id and the mechanism the host picked, so the kernel gets its scope at
+// compile time.
+inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
+    os << "namespace sem {\n";
+    for (const auto& entry : entries) {
+        os << "using " << entry.name << "_t = ::SemaphoreBindingToken<" << entry.id
+           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << ">;\n";
+        os << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+    }
+    os << "}  // namespace sem\n";
+}
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
@@ -103,7 +145,9 @@ public:
     virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+        std::function<
+            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
+        const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace

@@ -56,13 +56,16 @@ inline void find_argmax_for_core(
     volatile tt_l1_ptr uint32_t* red_idxs,
     volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
     for (uint32_t j = 0; j < inner_dim_units; ++j) {
-        noc.async_read(
-            s_src,
-            src_dfb,
-            src_read_size,
-            {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
+        // Cores that sub_core_grids leaves without work skip the empty NoC read but still publish a default partial.
+        if (red_dim_units_this_core > 0) {
+            noc.async_read(
+                s_src,
+                src_dfb,
+                src_read_size,
+                {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+        }
 
         // Reset max_val for each new output
         if constexpr (not reduce_all) {
@@ -333,8 +336,8 @@ void kernel_main() {
         "Partial result buffer must use the same data format as values.");
 
     // Semaphores
-    Semaphore<> start_sem(sem::start);
-    Semaphore<> done_sem(sem::done);
+    Semaphore start_sem(sem::start);
+    Semaphore done_sem(sem::done);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
