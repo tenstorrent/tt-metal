@@ -124,37 +124,57 @@ class CodePredictor(LightweightModule):
             q_chunk_size=_sdpa_chunk,
             k_chunk_size=_sdpa_chunk,
         )
-        # Fused, GQA-native SDPA off N150 too. OPT-IN (default OFF) — see below.
+        # Fused, GQA-native SDPA off N150 too. DEFAULT ON; QWEN3_TTS_CP_FUSED_SDPA=0
+        # restores the manual chain for A/B.
         #
         # The manual fp32 chain costs ~47 us/layer (2x repeat_interleave to expand KV
         # heads, 5 typecasts, a transpose, fp32 QK^T, scale-mul, mask-add, softmax,
-        # fp32 PV, a typecast back) = 234 us/step, and one SDPA call replaces all of
-        # it. Measured on N300, cp_decode_step: 270 -> 222 ops, 1703.1 -> 1537.8 us
-        # (with the 32-wide chunk below), i.e. -2.5 ms of a 24 ms CP frame, and the
-        # real demo's fused CP trace went 30.36 -> 27.35 ms/frame.
+        # fp32 PV, a typecast back), and one SDPA call replaces all of it. Measured on
+        # the demo's own fused CP frame (tests/test_qwen3_tts_perf_report.py -k
+        # test_decode_cp, N300 TP=2), traced, one replay per capture:
         #
-        # It is OFF by default because the win is not yet gated. What IS known:
-        #   * test_qwen3_tts_pcc cp_step is digit-identical either way (0.999976) --
-        #     but that test runs kv_caches=None with no mask, so it takes SDPA's
-        #     is_causal branch and never exercises the explicit decode/prefill masks
-        #     the demo feeds.
-        #   * Both paths start from the SAME bf16 Q/K (the manual chain only casts
-        #     them up to fp32, which adds no information) and fused SDPA accumulates
-        #     in fp32 via fp32_dest_acc_en, so the expected delta is tiny.
-        #   * Yet paired demo runs (same tree, same prompt, only this flag differing)
-        #     generated consistently FEWER frames with it on -- seed 7: 72->65,
-        #     seed 42: 87->68, seed 123: 91->85. Direction is 3/3 but the within-arm
-        #     spread (~20 frames) is larger than the mean shift (~11), so n=3 cannot
-        #     separate "real regression" from sampler chaos, and fewer frames may just
-        #     be faster speech rather than dropped words.
+        #     manual chain   4339 ops   31.23 ms device   30.32 ms wall
+        #     fused SDPA     3619 ops   28.27 ms device   27.32 ms wall
+        #                    -720 ops   -2.97 ms          -3.00 ms   (-9.9%)
         #
-        # To promote it to default-on: run tests/test_qwen3_tts_cp_sdpa_parity.py
-        # (compares both arms on the real MASKED shapes with real weights) and, if
-        # that is clean, a frame-count sweep over >=8 seeds plus a listen/WER check.
-        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here.
+        # Per op code, the 75 hand-built chains (5 layers x 15 CP invocations per
+        # frame) become 75 SDPA calls: -285 typecast (0.97 ms), -150 matmul, i.e. the
+        # explicit QK^T and PV (0.92 ms), -75 softmax (0.56 ms), -75 binary (0.49 ms),
+        # -150 repeat_interleave (0.44 ms), -75 transpose (0.29 ms), +75 SDPA
+        # (0.66 ms). Device delta and wall-clock delta agree to 0.03 ms.
+        #
+        # Numerics, tests/test_qwen3_tts_cp_sdpa_parity.py on the REAL masked shapes
+        # with real checkpoint weights (the shapes test_qwen3_tts_pcc never reaches --
+        # it runs kv_caches=None and so takes SDPA's is_causal branch):
+        #
+        #     prefill seq=2        PCC=0.99969828  maxabs=0.195312
+        #     decode start_pos=2   PCC=0.99977070  argmax 376  == 376
+        #     decode start_pos=3   PCC=0.99975890  argmax 1741 == 1741
+        #     decode start_pos=5   PCC=0.99983436  argmax 1364 == 1364
+        #
+        # The sampled token is identical, not merely close. Both paths also start from
+        # the SAME bf16 Q/K (the manual chain only casts them up to fp32, which adds no
+        # information) and fused SDPA accumulates in fp32 via fp32_dest_acc_en.
+        #
+        # KNOWN NOT GATED, and turned on anyway at the owner's direction. dccf18b66c4
+        # named three gates; only the parity test above is clean. What is outstanding:
+        #   * Frame-count sweep over >=8 seeds. NOT RUN. Paired demo runs generate
+        #     consistently FEWER frames with this on -- dccf18b66c4 saw seed 7 72->65,
+        #     seed 42 87->68, seed 123 91->85, and a fresh seed-42 pair here gave
+        #     88->81 (7.04 s -> 6.48 s of audio). Direction is now 4/4. Nothing ran
+        #     away to the 256-frame cap in any of them, but the within-arm spread is
+        #     larger than the shift -- the same seed-42 ON arm measured 68 then 81 --
+        #     so n=1 per seed cannot separate a real regression from sampler chaos.
+        #   * Listen / WER check. NOT RUN. -0.56 s of audio is either slightly faster
+        #     speech (harmless) or a dropped word (not), and duration alone cannot
+        #     distinguish them.
+        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here,
+        # and records a 0.77% embedding change flipping a render into a 256-frame
+        # runaway while PCC stayed indistinguishable. If generation quality regresses,
+        # QWEN3_TTS_CP_FUSED_SDPA=0 is the first thing to try.
         # NOTE: --greedy is NOT a usable gate for this -- pristine HEAD already runs
         # away to the 256-frame cap on the en_long prompt.
-        self._fused_sdpa = not self._n150 and os.environ.get("QWEN3_TTS_CP_FUSED_SDPA", "0") != "0"
+        self._fused_sdpa = not self._n150 and os.environ.get("QWEN3_TTS_CP_FUSED_SDPA", "1") != "0"
 
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:

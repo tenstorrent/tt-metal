@@ -735,19 +735,53 @@ then run `test_qwen3_tts_pcc.py` and listen to the demo output. Note `sdpa_kcfg`
 and should stay high-fidelity: the code documents that QK-norm amplifies K by ~68x and q.k
 dot products can overflow bf16, which is why the SDPA chain runs in fp32.
 
-### 6.4 Finish the CP's SDPA switch — the mask rescale, then promote the flag
+### 6.4 The CP's SDPA switch — flag PROMOTED, mask rescale still open
 
-`dccf18b66c4` already put the CP on fused SDPA with `k_chunk_size=32` behind
-`QWEN3_TTS_CP_FUSED_SDPA` (**default OFF**, 270 -> 222 ops / 1703 -> 1538 us per
-`cp_decode_step`). Two things remain, in this order:
+`QWEN3_TTS_CP_FUSED_SDPA` is now **default ON** (set it to `0` to restore the manual
+chain for an A/B). Measured with `tests/test_qwen3_tts_perf_report.py -k test_decode_cp`
+on N300 TP=2 — the demo's own fused CP frame, traced, one replay per capture:
 
-1. **The mask rescale, which that commit did not take.** `scale=1.0` with the softmax scale
-   folded into the CP's q_norm gain stops ttnn's wrapper pre-multiplying the CP mask by
-   `1/scale` on every call — 2.4 measured 6 us/layer on the Talker, and the CP runs 75 layer
-   evaluations per frame. Same recipe, same `q_norm` fold, its own weight-cache key.
-2. **Promote the flag**, per that commit's own plan: `test_qwen3_tts_cp_sdpa_parity.py`
-   (committed, never executed) clean, then a frame-count sweep over >=8 seeds plus a
-   listen/WER check.
+| | ops | device | wall |
+|---|---|---|---|
+| manual fp32 chain | 4339 | 31.23 ms | 30.32 ms |
+| fused SDPA | 3619 | 28.27 ms | 27.32 ms |
+| | **-720** | **-2.97 ms** | **-3.00 ms (-9.9 %)** |
+
+Per op code, the 75 hand-built chains (5 layers x 15 CP invocations per frame) become 75
+SDPA calls: -285 typecast (0.97 ms), -150 matmul — the explicit QK^T and PV (0.92 ms),
+-75 softmax (0.56 ms), -75 binary (0.49 ms), -150 repeat_interleave (0.44 ms), -75
+transpose (0.29 ms), +75 SDPA (0.66 ms). Device delta and wall-clock delta agree to
+0.03 ms, so this is mechanism rather than run-to-run noise.
+
+**What gated it, and what did not.** `dccf18b66c4` named three gates and only the first is
+clean:
+
+1. `tests/test_qwen3_tts_cp_sdpa_parity.py` — **clean.** It had never actually run: its
+   `state_dict` fixture passed `load_weights()`'s whole `(main, decoder)` tuple into
+   `CodePredictor`, so every attempt died in the constructor. Fixed in `2b8ed3db073`. On
+   the real masked shapes with real weights: prefill seq=2 PCC 0.99969828; decode
+   start_pos 2/3/5 PCC 0.9998 with the **sampled token identical** (376/1741/1364) in all
+   three. So the fused path is not wrong on the explicit decode/prefill masks — which is
+   the only question this test was written to answer.
+2. Frame-count sweep over >=8 seeds — **NOT RUN.**
+3. Listen / WER check — **NOT RUN.**
+
+The flag was promoted anyway, at the owner's direction, with 2 and 3 outstanding. Record
+of what is known against it: paired demo runs generate consistently FEWER frames with it
+on — `dccf18b66c4` saw seed 7 72->65, seed 42 87->68, seed 123 91->85, and a fresh seed-42
+pair on this tree gave 88->81 (7.04 s -> 6.48 s of audio). Direction is 4/4. But nothing
+has ever run away to the 256-frame cap, and the within-arm spread swamps the shift — the
+same seed-42 ON arm measured 68 on one tree and 81 on another — so n=1 per seed cannot
+separate a real regression from sampler chaos. Shorter audio is either slightly faster
+speech or a dropped word, and duration alone cannot tell them apart. 3.4 is explicit that
+PCC cannot predict generation length here.
+
+**If generation quality regresses, `QWEN3_TTS_CP_FUSED_SDPA=0` is the first thing to try.**
+
+Still open: **the mask rescale, which `dccf18b66c4` did not take.** `scale=1.0` with the
+softmax scale folded into the CP's q_norm gain stops ttnn's wrapper pre-multiplying the CP
+mask by `1/scale` on every call — 2.4 measured 6 us/layer on the Talker, and the CP runs 75
+layer evaluations per frame. Same recipe, same `q_norm` fold, its own weight-cache key.
 
 Do **not** reach for `scaled_dot_product_attention_decode` on either model — it is
 numerically broken at these shapes (see 5).
