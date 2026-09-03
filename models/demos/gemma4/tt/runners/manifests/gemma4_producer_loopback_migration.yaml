@@ -22,7 +22,8 @@ workload:
   max_requests: 1
   interleave: round_robin
   check_pcc: false
-  # Token input only. No kv_cache/ golden is needed by dst-bytes verification.
+  # Token input only. 20 vocab ids tiled to 64K (see loopback_tokens/metadata.json).
+  # No kv_cache/ golden is needed by dst-bytes verification.
   trace_dir: models/demos/gemma4/tests/test_data/loopback_tokens
 
 migration:
