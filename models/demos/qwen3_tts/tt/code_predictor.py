@@ -946,7 +946,17 @@ class CodePredictor(LightweightModule):
                 attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(attn_out)
 
-            o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
+            # memory_config=L1: ttnn.matmul defaults its output to DRAM interleaved,
+            # and at M=32 (a tile pad of a true M=1) in0 is ~64 KB against a 2 MB
+            # weight — so the only placement that can matter is the WRITEBACK, which
+            # was a full extra DRAM round-trip that _all_reduce then re-read.
+            o = ttnn.matmul(
+                attn_concat,
+                lw["o_proj"],
+                dtype=self.act_dtype,
+                compute_kernel_config=self.mm_kcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
             ttnn.deallocate(attn_concat)
         if self.tp_size > 1:
             o = self._all_reduce(o, fast)
@@ -1064,6 +1074,7 @@ class CodePredictor(LightweightModule):
                 bias=self.input_proj_bias if self.input_proj_bias is not None else None,
                 dtype=self.act_dtype,
                 compute_kernel_config=self.mm_kcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             own_h = True
         else:
