@@ -212,6 +212,17 @@ inline m2::KernelSpec make_dm_dfb_consumer(
     return kernel;
 }
 
+// Which oracle verifies a DM-consumer run.
+//   ORDERED   -- output must equal a positionally-derived expectation. Requires knowing the
+//                slot->page mapping, so it is only usable where that mapping is settled.
+//   MULTISET  -- output must be a permutation of the expected multiset: with a host-prefilled
+//                ring whose slots the producer never rewrites, slot s always holds input[s], and
+//                every posted credit is consumed exactly once, so each input page must appear
+//                exactly entries_per_core/num_entries times somewhere in the output. Derived from
+//                the DFB contract alone and INDEPENDENT of the interleave, which is what makes it
+//                usable on shapes whose mapping is not yet established.
+enum class M2Oracle { ORDERED, MULTISET };
+
 struct M2SingleDFBParams {
     M2PorCType producer_type;
     M2PorCType consumer_type;
@@ -223,6 +234,7 @@ struct M2SingleDFBParams {
     uint32_t entry_size = 1024;
     uint32_t num_entries = 16;
     std::optional<uint32_t> num_entries_in_buffer = std::nullopt;  // override for ring pressure
+    M2Oracle oracle = M2Oracle::ORDERED;
 };
 
 inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
@@ -513,6 +525,69 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     if (p.consumer_type == M2PorCType::DM) {
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(out_tensor->mesh_buffer(), output);
+        if (p.oracle == M2Oracle::MULTISET) {
+            // Mapping-independent check -- see M2Oracle. Each ring slot must be delivered exactly
+            // reps times across the whole output, in any order. A consumer sub-stream that receives
+            // no valid data shows up as output pages matching no input slot.
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t reps = entries_per_core / p.num_entries;
+            // Both preconditions of the oracle, asserted rather than assumed. It only holds for a
+            // host-prefilled ring (TENSIX producer) whose slots the producer never rewrites, and only
+            // when the stream is a whole number of ring-fills.
+            ASSERT_EQ(p.producer_type, M2PorCType::TENSIX) << "MULTISET assumes a host-prefilled ring";
+            ASSERT_EQ(entries_per_core % p.num_entries, 0u) << "MULTISET oracle needs whole ring-fills";
+            ASSERT_EQ(output.size(), input.size());
+
+            std::vector<uint32_t> delivered(p.num_entries, 0u);
+            uint32_t unmatched = 0;
+            for (uint32_t t = 0; t < entries_per_core; ++t) {
+                int match = -1;
+                for (uint32_t src = 0; src < p.num_entries; ++src) {
+                    if (std::equal(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                        match = static_cast<int>(src);
+                        break;
+                    }
+                }
+                if (match < 0) {
+                    ++unmatched;
+                } else {
+                    ++delivered[match];
+                }
+            }
+
+            // Attribute failures to consumer sub-streams the way the STRIDED split assigns them, so
+            // the "exactly num_consumers-of-N serviced" signature is visible rather than inferred.
+            if (unmatched != 0) {
+                std::vector<uint32_t> bad_per_residue(p.num_consumers, 0u);
+                for (uint32_t t = 0; t < entries_per_core; ++t) {
+                    bool ok = false;
+                    for (uint32_t src = 0; src < p.num_entries && !ok; ++src) {
+                        ok = std::equal(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe);
+                    }
+                    if (!ok) {
+                        ++bad_per_residue[t % p.num_consumers];
+                    }
+                }
+                for (uint32_t c = 0; c < p.num_consumers; ++c) {
+                    log_info(
+                        tt::LogTest,
+                        "  consumer residue {}: {} of {} output entries match no ring slot",
+                        c,
+                        bad_per_residue[c],
+                        entries_per_core / p.num_consumers);
+                }
+            }
+
+            EXPECT_EQ(unmatched, 0u) << "M2 MULTISET: " << unmatched << " of " << entries_per_core
+                                     << " output entries match no ring slot";
+            for (uint32_t src = 0; src < p.num_entries; ++src) {
+                EXPECT_EQ(delivered[src], reps) << "M2 MULTISET: ring slot " << src << " delivered " << delivered[src]
+                                                << " times, expected " << reps;
+            }
+            return;
+        }
         // For Tensix→DM ring-pressure with STRIDED, each consumer reads ring slot
         // (c % num_entries), so expected output is the corresponding input slice.
         if (p.producer_type == M2PorCType::TENSIX && entries_per_core > p.num_entries &&

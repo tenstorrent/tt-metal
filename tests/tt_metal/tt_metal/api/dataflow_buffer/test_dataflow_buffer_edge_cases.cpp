@@ -673,4 +673,300 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A_2_0
     run_single_dfb_program_2_0(this->device(), params);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Tensix→DM ring pressure with a mapping-independent oracle.
+//
+// The RingPressure_2Sx4S case above is the only test in the tree that combines ring wraparound,
+// data verification, and a DM side wider than the Tensix side -- and its expected values were
+// re-derived by mapping observed output tiles back to input pages, so it cannot distinguish a
+// slot-mapping defect from intended behaviour. These three use M2Oracle::MULTISET, which asserts
+// only what the DFB contract guarantees: every ring slot is delivered exactly once per ring-fill,
+// in any order.
+//
+// The 2Sx2S case is the control. It must pass, and it is what makes a failure in the other two
+// evidence about the DFB rather than about the new oracle.
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_2Sx2S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_1Sx2S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB_RingPressure_2Sx4S_Multiset_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 4,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = 16,
+        .num_entries_in_buffer = 32,
+        .oracle = M2Oracle::MULTISET,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// ---------------------------------------------------------------------------------------------
+// DM→DM asymmetric under ring pressure.
+//
+// This is the configuration closest to the op-level corruption that the harness can verify END TO END:
+// the DM producers NoC-read from DRAM and write their OWN ring slots (unlike the Tensix-producer cases,
+// where the host prefills the ring and the producer only posts credits), and the DM consumers NoC-write
+// to DRAM, so the default identity oracle applies. Existing DM→DM ring-pressure coverage is symmetric
+// only (1Sx1S, 3Sx3S), and existing asymmetric DM→DM coverage moves exactly one ring-fill -- so
+// asymmetric-plus-wrap is untested, and it is where per-thread producer slot assignment would show up.
+//
+// Shapes mirror the op configs that corrupt: 4Sx1S/2Sx1S are the in0/in1 (R, C) shapes at C=1,
+// 1Sx2S/1Sx4S are the out (C, W) shapes at C=1.
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_4Sx1S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 4,
+        .num_consumers = 1,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(4, 1),
+        .num_entries_in_buffer = 2 * default_num_entries(4, 1),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_2Sx1S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 1,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(2, 1),
+        .num_entries_in_buffer = 2 * default_num_entries(2, 1),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_1Sx2S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 2,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(1, 2),
+        .num_entries_in_buffer = 2 * default_num_entries(1, 2),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB_RingPressure_1Sx4S_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .implicit_sync = false,  // explicit sync only; see note above
+        .num_entries = default_num_entries(1, 4),
+        .num_entries_in_buffer = 2 * default_num_entries(1, 4),
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// ---------------------------------------------------------------------------------------------
+// DM -> DFB -> Tensix -> DFB -> DM, multi-threaded, under ring pressure.
+//
+// The single-DFB sweeps all pass at the asymmetric shapes an op-level binary_ng corrupts, so the
+// remaining structural difference is that a real op chains TWO DFBs through a Tensix stage that is
+// simultaneously a consumer and a producer. Nothing else in the tree covers that with multiple threads:
+// A1 above is the right topology but hardcodes one thread per stage and one ring-fill.
+//
+// (R, C, W) are the producer / compute / consumer thread counts, i.e. exactly the KernelSpec::num_threads
+// triple a Quasar op sets. Rings are sized 2 x max(endpoints) so the tile stream wraps many times. The
+// oracle is the end-to-end identity, since the copy kernel is an identity.
+static void run_a1_threaded_pipeline(
+    distributed::MeshDevice& mesh_device, uint32_t r, uint32_t c, uint32_t w, uint32_t total_tiles) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+    }
+    ASSERT_EQ(total_tiles % r, 0u);
+    ASSERT_EQ(total_tiles % c, 0u);
+    ASSERT_EQ(total_tiles % w, 0u);
+
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_tiles, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = 2 * std::max(r, c),
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    m2::DataflowBufferSpec dfb_out{
+        .unique_id = DFB_OUT,
+        .entry_size = entry_size,
+        .num_entries = 2 * std::max(c, w),
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    auto producer = make_dm_dfb_producer(
+        PRODUCER,
+        DFB_IN,
+        IN_TENSOR,
+        total_tiles / r,
+        /*implicit_sync=*/false,
+        m2::DFBAccessPattern::STRIDED,
+        static_cast<uint8_t>(r));
+
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_eltwise_copy_2_0.cpp", static_cast<uint8_t>(c));
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    // Per-THREAD count: the kernel loop is not strided, the STRIDED binding is what hands each thread
+    // its own sub-stream. Same convention the single-DFB helper uses.
+    compute.compile_time_args = {{"per_core_tile_cnt", total_tiles / c}};
+
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER,
+        DFB_OUT,
+        OUT_TENSOR,
+        total_tiles / w,
+        /*blocked_consumer=*/false,
+        /*implicit_sync=*/false,
+        m2::DFBAccessPattern::STRIDED,
+        static_cast<uint8_t>(w));
+
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{
+        .name = "wu",
+        .kernels = {PRODUCER, CONSUMER, COMPUTE},
+        .target_nodes = node,
+    };
+    m2::ProgramSpec spec{
+        .name = "a1_threaded_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = create_random_vector_of_bfloat16(entry_size * total_tiles, 2.0f, 0xA1A1);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
+
+    // Poison the output so a pass cannot come from a buffer that happened to already hold the answer,
+    // and so pages nobody wrote are distinguishable from pages written with wrong data.
+    constexpr uint32_t kPoison = 0xDEADBEEFu;
+    const std::vector<uint32_t> poison(input.size(), kPoison);
+    slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), poison);
+    m2_writeshard_barrier_uint32(mesh_device, out_tensor, poison);
+
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    ASSERT_EQ(input.size(), output.size());
+
+    // Second read of the same buffer: a difference would mean the readback is unstable, which would
+    // make every mismatch count below meaningless.
+    std::vector<uint32_t> output_reread;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output_reread);
+    ASSERT_EQ(output, output_reread) << "output buffer readback is not stable across two reads";
+
+    size_t bad = 0;
+    size_t untouched = 0;
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == output[i]) {
+            continue;
+        }
+        ++bad;
+        untouched += (output[i] == kPoison);
+    }
+    EXPECT_EQ(bad, 0u) << "A1 threaded pipeline R=" << r << " C=" << c << " W=" << w << ": " << bad << " of "
+                       << input.size() << " words wrong (" << (100.0 * bad / input.size()) << "%), of which "
+                       << untouched << " still hold the poison value (never written)";
+}
+
+// 48 tiles is divisible by every thread count used below, so no thread is ever handed a short share.
+#define A1_THREADED_TEST(r, c, w)                                                    \
+    TEST_F(UnitMeshFixture, DMTensixDMTest2xDFB_Threaded_R##r##C##c##W##w##_2_0) {   \
+        run_a1_threaded_pipeline(this->device(), (r), (c), (w), /*total_tiles=*/48); \
+    }
+
+A1_THREADED_TEST(1, 1, 1)  // control: op-level PASS
+A1_THREADED_TEST(2, 2, 1)  // op-level PASS
+A1_THREADED_TEST(4, 4, 2)  // op-level PASS, the optimum
+A1_THREADED_TEST(2, 1, 1)  // op-level FAIL 46.6%  (R > C)
+A1_THREADED_TEST(4, 1, 1)  // op-level FAIL 69.9%  (R > C)
+A1_THREADED_TEST(1, 1, 2)  // op-level FAIL 50.0%  (W > C)
+A1_THREADED_TEST(1, 1, 4)  // op-level FAIL 74.9%  (W > C)
+
+#undef A1_THREADED_TEST
+
 }  // namespace tt::tt_metal

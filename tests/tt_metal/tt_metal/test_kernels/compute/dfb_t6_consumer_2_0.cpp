@@ -80,7 +80,7 @@ void kernel_main() {
             // the producer cannot reclaim the slot until we pop. get_read_ptr() is in
             // 16B units on both arches, hence the << 4 (cf. dfb_t6_intra_2_0.cpp).
             const volatile tt_l1_ptr uint32_t* const entry =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dfb.get_read_ptr() << 4) + l1_uncached_bias);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dfb.get_read_ptr() << 4));
             uint32_t digest = 2166136261u;  // FNV-1a offset basis
             for (uint32_t w = 0; w < words_per_entry; ++w) {
                 digest = (digest ^ entry[w]) * 16777619u;  // FNV-1a prime
