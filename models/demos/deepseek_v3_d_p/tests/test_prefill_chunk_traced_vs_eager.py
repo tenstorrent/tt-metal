@@ -192,21 +192,6 @@ def _run_traced(runtime, kv_caches, mesh_device, token_ids, slot):
     ttnn.synchronize_device(mesh_device)
 
 
-def _run_eager(runtime, kv_caches, mesh_device, token_ids, slot):
-    """Eager reference through prefill_chunk. Only valid on a use_trace=False runtime."""
-    assert not runtime.config.use_trace, "use _run_eager_reference on a traced runtime; see its docstring"
-    for c, ids in enumerate(token_ids):
-        runtime.prefill_chunk(
-            runtime.make_chunk_input(ids),
-            kv_caches,
-            slot_id=slot,
-            actual_start=c * CHUNK,
-            actual_end=(c + 1) * CHUNK,
-            request_id=c,
-        )
-    ttnn.synchronize_device(mesh_device)
-
-
 def _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, slot):
     """Eager reference on a TRACED runtime, by calling the model directly.
 
@@ -260,11 +245,31 @@ def _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, slot):
 def test_prefill_chunk_traced_matches_eager(
     variant, config_only, mesh_device, device_params, weight_cache_path, num_layers, num_links
 ):
-    """Traced ``prefill_chunk`` must write the same KV as eager across 6 chunks (30,720 tokens).
+    """Traced ``prefill_chunk`` must write the same KV as eager across 6 chunks (30,720 tokens), and
+    the comparison that says so must be shown capable of failing.
 
-    Fails today on the ``llama4 query-scale buffer`` guard in the traced branch. That IS the bug under
-    #55126; the guard is correct (an unrefreshed buffer would silently apply temperature 1.0) and this
-    test is what makes its removal checkable.
+    THREE PASSES, ONE MODEL. All three run on a single traced runtime, so the leg pays one weight
+    load rather than three:
+
+      traced   prefill_chunk, the real serving entry point           -> slot 1   [under test]
+      eager    model.forward, prefill_chunk's eager branch inlined   -> slot 2   [reference]
+      control  eager with _llama4_beta suppressed                    -> slot 3   [sensitivity]
+
+    The control is the point of the file as much as the comparison is. An unrefreshed scale buffer
+    is ones-initialised, which applies temperature 1.0 and moves the chunked PCC gate by ~0.002
+    against a 0.98 threshold -- so a PCC assertion that is not itself shown to notice a wrong
+    temperature would repeat the exact mistake #55126 exists to fix. Suppressing ``_llama4_beta``
+    skips the multiply, which is precisely what a stale ones-buffer computes. Running it in the SAME
+    invocation, on the same weights and the same device state, is stronger evidence than a separate
+    test would be: the only difference between slots 2 and 3 is the temperature.
+
+    Layer 0 is asserted in both directions. Its KV comes from the embeddings, so it must MATCH under
+    traced-vs-eager (a mismatch means the replay is broken generally, not the scale) and must ALSO
+    match under eager-vs-control (a mismatch means the control perturbs more than the temperature
+    and proves nothing). Layers >= 1 carry the signal in both.
+
+    FAILS TODAY on the traced branch's llama4 guard for any model with ChunkMetadata.llama4_scale
+    set, which is Mistral only. That is the bug; see #55126.
     """
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -290,147 +295,66 @@ def test_prefill_chunk_traced_matches_eager(
     try:
         runtime.compile(kv_caches)
         runtime.capture_trace(kv_caches)
+
         _run_traced(runtime, kv_caches, mesh_device, token_ids, SLOT_TRACED)
         _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, SLOT_EAGER)
 
-        traced = _read_slot(
-            kvpe_cache=kv_caches.kvpe,
-            mesh_device=mesh_device,
-            sp=sp,
-            slot=SLOT_TRACED,
-            num_layers=num_layers,
-            seq_len_cache=TOTAL_LEN,
-        )
-        eager = _read_slot(
-            kvpe_cache=kv_caches.kvpe,
-            mesh_device=mesh_device,
-            sp=sp,
-            slot=SLOT_EAGER,
-            num_layers=num_layers,
-            seq_len_cache=TOTAL_LEN,
-        )
-    finally:
-        del runtime
-        gc.collect()
-
-    pccs = _per_layer_pcc(traced, eager)
-    for i, v in sorted(pccs.items()):
-        logger.info(f"  KV layer {i}: traced vs eager PCC = {v:.6f}")
-
-    # Layer 0 first and separately: it is temperature-independent, so if IT disagrees the problem is
-    # the trace path in general (dispatch, KV write addressing) and not the query scale, and saying so
-    # in the failure message saves the next person the bisect.
-    assert pccs[0] >= TRACED_VS_EAGER_KV_PCC, (
-        f"KV layer 0 traced-vs-eager PCC {pccs[0]:.6f} < {TRACED_VS_EAGER_KV_PCC}. Layer 0's KV comes "
-        "from the embeddings and cannot be affected by the query temperature, so this is a general "
-        "trace-replay divergence, not the llama4 scale"
-    )
-    deep = min(v for i, v in pccs.items() if i >= 1)
-    assert deep >= TRACED_VS_EAGER_KV_PCC, (
-        f"KV min PCC over layers 1..{num_layers - 1} is {deep:.6f} < {TRACED_VS_EAGER_KV_PCC} while "
-        f"layer 0 agrees ({pccs[0]:.6f}). That is the signature of a wrong per-chunk query "
-        "temperature on the traced path: layer 0 is temperature-independent, deeper layers are not"
-    )
-
-
-@pytest.mark.parametrize("num_layers", [4], ids=["L4"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(
-                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
-                l1_small_size=768,
-                trace_region_size=256 * 1024 * 1024,
-            ),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
-@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 prefill requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kv_comparison_can_see_a_wrong_temperature(
-    variant, config_only, mesh_device, device_params, weight_cache_path, num_layers, num_links
-):
-    """Sensitivity control for the test above: prove the KV comparison FAILS when the temperature is
-    wrong, so a pass there means something.
-
-    This is the whole reason #55126 needs a new test rather than an existing gate. The failure mode is
-    not noise, it is a silently-correct-looking run: an unrefreshed scale buffer is ones-initialised,
-    which applies temperature 1.0, and that moves the chunked PCC gate by ~0.002 against a 0.98
-    threshold. Suppressing ``_llama4_beta`` reproduces exactly that -- the multiply is skipped, which
-    is what a stale ones-buffer computes -- and the assertion is that the metric NOTICES.
-
-    Runs eager on both sides: the control is about the metric's sensitivity to the temperature, not
-    about trace replay, and keeping trace out of it means this test still runs (and still means
-    something) while the traced path is blocked.
-    """
-    if weight_cache_path is None:
-        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
-
-    hf_config = config_only
-    hf_config.max_seq_len = TOTAL_LEN
-    sp = tuple(mesh_device.shape)[0]
-    token_ids = _chunk_token_ids(N_CHUNKS, hf_config.vocab_size)
-
-    runtime, kv_caches = _build(mesh_device, hf_config, weight_cache_path, num_layers, num_links, use_trace=False)
-    try:
-        runtime.compile(kv_caches)
-        _run_eager(runtime, kv_caches, mesh_device, token_ids, SLOT_EAGER)
-
-        # Suppress the temperature exactly the way a stale ones-buffer does: skip the multiply.
         betas = [layer.mla._llama4_beta for layer in runtime.model.layers]
         assert all(b is not None for b in betas), "llama_4_scaling_beta is not reaching ttMLA; the control is inert"
         for layer in runtime.model.layers:
             layer.mla._llama4_beta = None
         try:
-            _run_eager(runtime, kv_caches, mesh_device, token_ids, SLOT_CONTROL)
+            _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, SLOT_CONTROL)
         finally:
             for layer, b in zip(runtime.model.layers, betas):
                 layer.mla._llama4_beta = b
 
-        correct = _read_slot(
+        read = lambda slot: _read_slot(
             kvpe_cache=kv_caches.kvpe,
             mesh_device=mesh_device,
             sp=sp,
-            slot=SLOT_EAGER,
+            slot=slot,
             num_layers=num_layers,
             seq_len_cache=TOTAL_LEN,
         )
-        no_temp = _read_slot(
-            kvpe_cache=kv_caches.kvpe,
-            mesh_device=mesh_device,
-            sp=sp,
-            slot=SLOT_CONTROL,
-            num_layers=num_layers,
-            seq_len_cache=TOTAL_LEN,
-        )
+        traced, eager, control = read(SLOT_TRACED), read(SLOT_EAGER), read(SLOT_CONTROL)
     finally:
         del runtime
         gc.collect()
 
-    pccs = _per_layer_pcc(correct, no_temp)
-    for i, v in sorted(pccs.items()):
-        logger.info(f"  KV layer {i}: correct vs temperature-1.0 PCC = {v:.6f}")
+    agree = _per_layer_pcc(traced, eager)
+    sens = _per_layer_pcc(eager, control)
+    for i in sorted(agree):
+        logger.info(f"  KV layer {i}: traced-vs-eager {agree[i]:.6f}   eager-vs-temperature-1.0 {sens[i]:.6f}")
 
-    assert pccs[0] >= TRACED_VS_EAGER_KV_PCC, (
-        f"KV layer 0 moved ({pccs[0]:.6f}) when only the query temperature changed. Layer 0's KV is "
+    # Sensitivity FIRST: if the comparison cannot see a wrong temperature, the agreement numbers
+    # below mean nothing, and reporting them as a pass would be the failure mode #55126 is about.
+    assert sens[0] >= TRACED_VS_EAGER_KV_PCC, (
+        f"KV layer 0 moved ({sens[0]:.6f}) when only the query temperature changed. Layer 0's KV is "
         "computed from the embeddings and must be temperature-independent; if it moved, the control "
-        "is perturbing something other than the temperature and proves nothing"
+        "perturbed something other than the temperature and proves nothing"
     )
-    deep = min(v for i, v in pccs.items() if i >= 1)
-    assert deep < TRACED_VS_EAGER_KV_PCC, (
+    sens_deep = min(v for i, v in sens.items() if i >= 1)
+    assert sens_deep < TRACED_VS_EAGER_KV_PCC, (
         f"suppressing the llama4 query temperature left KV layers 1..{num_layers - 1} at PCC "
-        f"{deep:.6f}, still above the {TRACED_VS_EAGER_KV_PCC} bar the traced-vs-eager test asserts. "
-        "That test would therefore pass with a wrong temperature and is not evidence for #55126; fix "
-        "the comparison (more layers, or compare hidden states) before trusting it"
+        f"{sens_deep:.6f}, still above the {TRACED_VS_EAGER_KV_PCC} bar this test asserts for "
+        "agreement. The comparison would therefore PASS with a wrong temperature and is not evidence "
+        "for #55126. Fix the comparison (more layers, or compare hidden states) before trusting it"
     )
     logger.info(
-        f"control: temperature 1.0 drives KV layers 1..{num_layers - 1} to PCC {deep:.6f}, "
-        f"well under the {TRACED_VS_EAGER_KV_PCC} bar -- the traced-vs-eager comparison can see it"
+        f"sensitivity OK: temperature 1.0 drives KV layers 1..{num_layers - 1} to {sens_deep:.6f}, "
+        f"under the {TRACED_VS_EAGER_KV_PCC} bar -- the comparison below can see a wrong temperature"
+    )
+
+    assert agree[0] >= TRACED_VS_EAGER_KV_PCC, (
+        f"KV layer 0 traced-vs-eager PCC {agree[0]:.6f} < {TRACED_VS_EAGER_KV_PCC}. Layer 0's KV comes "
+        "from the embeddings and cannot be affected by the query temperature, so this is a general "
+        "trace-replay divergence, not the llama4 scale"
+    )
+    agree_deep = min(v for i, v in agree.items() if i >= 1)
+    assert agree_deep >= TRACED_VS_EAGER_KV_PCC, (
+        f"KV min PCC over layers 1..{num_layers - 1} is {agree_deep:.6f} < {TRACED_VS_EAGER_KV_PCC} "
+        f"while layer 0 agrees ({agree[0]:.6f}). That is the signature of a wrong per-chunk query "
+        f"temperature on the traced path: layer 0 is temperature-independent, deeper layers are not. "
+        f"For scale, temperature 1.0 drives the same layers to {sens_deep:.6f}"
     )
