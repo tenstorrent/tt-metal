@@ -1135,6 +1135,109 @@ def test_llama4_query_scale_matches_rotated_positions(request, mesh_device, kv_a
     )
 
 
+# The rows above check the scale tensor's VALUES. None of them checks that it reaches tt_q: the 27
+# direct rows call _llama4_scale itself, and the trace-replay row multiplies a synthetic q of its own.
+# Deleting the multiply in _q_stem leaves every one of them green. This row closes that gap by running
+# _q_stem twice, scale active and scale suppressed, and asserting the ratio between the two outputs is
+# the scale itself -- so the wiring is covered rather than inferred. Output PCC cannot do this job, for
+# the same reason given above: the temperature moves full-output PCC by ~0.002 against a 0.98 gate.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+# Past 8192, so the scale is not 1.0 and the assertion can actually fail. At 5120 the scale is exactly
+# 1.0 and this test would pass with the multiply deleted.
+@pytest.mark.parametrize("kv_actual", [25600], ids=["past_8192"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_query_scale_is_applied_in_q_stem(request, mesh_device, kv_actual, variant, device_params):
+    """The query temperature must be applied to tt_q, not merely computed correctly."""
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    chunk_local = chunk_size_global // sp
+    seq_len_cache = ((kv_actual + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, weights = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=ttnn.Topology.Linear,
+        is_chunked=True,
+        active_seq_len=chunk_size_global,
+        slot_num=1,
+        layer_num=1,
+    )
+    assert mla_tt._llama4_beta is not None, "llama_4_scaling_beta is not reaching ttMLA"
+
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_tensors = rope_setup.get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+    )
+
+    # _q_stem deallocates qr, so build one input per call from the same host tensor.
+    torch.manual_seed(0)
+    qr_host = torch.randn(1, 1, chunk_local, config.q_lora_rank, dtype=torch.float32)
+
+    def _q_stem_output(apply_scale: bool):
+        qr = ttnn.from_torch(
+            qr_host,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        saved = mla_tt._llama4_beta
+        if not apply_scale:
+            mla_tt._llama4_beta = None  # skips the multiply in _q_stem
+        try:
+            out = mla_tt._q_stem(qr, rope_tensors, kv_actual, chunk_local, metadata=None)
+        finally:
+            mla_tt._llama4_beta = saved
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = 2
+        shard_dims[tp_axis] = 1
+        return ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).float()
+
+    scaled = _q_stem_output(apply_scale=True)
+    plain = _q_stem_output(apply_scale=False)
+
+    beta, orig_max = mla_tt._llama4_beta, mla_tt._llama4_orig_max
+    positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(chunk_local)], dtype=torch.float32)
+    want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+    assert want.min() > 1.0, f"kv_actual={kv_actual} produced scale 1.0; the test cannot fail as written"
+
+    # Compare where the unscaled magnitude is large enough that the ratio is not dominated by bf16
+    # quantisation of near-zero entries.
+    ref = plain[0, 0, :, :]
+    got = scaled[0, 0, :, :]
+    mask = ref.abs() > 0.1
+    assert mask.any(), "no usable magnitudes in the q stem output"
+    ratio = (got[mask] / ref[mask]).float()
+    per_row = want.unsqueeze(-1).expand_as(ref)[mask]
+    logger.info(
+        f"kv_actual={kv_actual}: expected scale range [{want.min():.6f}, {want.max():.6f}], "
+        f"observed ratio range [{ratio.min():.6f}, {ratio.max():.6f}]"
+    )
+    torch.testing.assert_close(ratio, per_row, rtol=2e-2, atol=2e-2)
+
+
 # ---------------------------------------------------------------------------------------------------
 # Does a CAPTURED trace read the scale buffer's live contents, or a capture-time snapshot?
 #
