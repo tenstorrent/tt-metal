@@ -876,16 +876,19 @@
   test_group: module
   skus:
     bh_sc1:
-      # PROVISIONAL -- still unmeasured; re-size from the first green run of this leg. Two rows
-      # (notrace + traced) at 20 chunks x 10 iters. Rough estimate from the measured per-chunk
-      # medians: traced ~0.9 s/chunk and untraced a flat ~0.67 s/chunk, so 20 x 10 x (0.9 + 0.67)
-      # ~= 5.2 min of measured time plus weight load and cache warm.
+      # PROVISIONAL, but now measured on one side. Run 33799453086's notrace row: 18.7 min total,
+      # of which tt_transformer_creation is 14.1 and tt_forward 4.6. The 5.2 min estimate this
+      # replaces was not wrong about the measured work -- it just costed the wrong thing. The leg is
+      # dominated by weight load, not by the 20 x 10 chunk executions.
       #
-      # Deliberately generous for that first run rather than tight: the estimate above covers the
-      # measured work only, and the neighbouring Mistral legs show ~10 min of weight load and cache
-      # warm on top. A first run killed at the cap measures nothing, so this errs high and comes
-      # down once the run reports its real wall time.
-      timeout: 30
+      # And that load is paid TWICE. notrace and traced are separate parametrizations, so each
+      # builds its own TtPrefillTransformer: ~2 x 14.1 + 4.6 + ~3 (traced forward) ~= 38 min. 50
+      # keeps ~30% over that for the first green two-row run, then comes down.
+      #
+      # The obvious lever if this leg needs to get cheaper: share one transformer build across the
+      # two rows (module-scoped fixture in run_chunked_transformer_updated) and the leg loses ~14
+      # min outright. Not done here -- it is a refactor of a helper five other models drive.
+      timeout: 50
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
