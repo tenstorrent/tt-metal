@@ -18,9 +18,14 @@
 namespace hal::cfg::detail
 {
 
+template <std::uint32_t Addr>
+inline constexpr bool rmwcib_is_ignored_by_hardware = (Addr == STATE_RESET_EN_ADDR32);
+
 template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
 inline __attribute__((always_inline)) void cfg_reg_rmw_tensix(const std::uint32_t value)
 {
+    static_assert(!rmwcib_is_ignored_by_hardware<CfgAddr32>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
+
     const std::uint32_t write_data = value << Shamt;
 
     if constexpr ((Mask & 0x000000ffu) != 0u)
@@ -138,6 +143,8 @@ inline __attribute__((always_inline)) void write_constant_word()
     }
     else
     {
+        static_assert(!rmwcib_is_ignored_by_hardware<Addr>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
+
         if constexpr ((Mask & 0x000000ffu) != 0u)
         {
             TTI_RMWCIB0((Mask >> 0) & 0xffu, (Data >> 0) & 0xffu, Addr);
