@@ -1,0 +1,29 @@
+name: "PR - TTSim pin qualification"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tt_metal/ttsim-version
+      - tests/pipeline_reorg/ttsim-skip-list.yaml
+      - .github/workflows/ttsim-pin-qualification.yaml
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+jobs:
+  qualify-public-ttsim-release:
+    uses: ./.github/workflows/sanity-tests.yaml
+    secrets: inherit
+    with:
+      build-inplace-wheel: true
+      run-wormhole: false
+      run-blackhole: false
+      run-sim: true
+      run-llk-sanity-tests: true
