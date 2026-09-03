@@ -7,6 +7,12 @@
 #include "kernel_utils.hpp"
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
+// sfpu_reduce()/sfpu_reduce_init() are called from trisc_fused_softmax_top_p_sampling_block()
+// without a MATH() wrapper, so every TRISC parses those calls and needs the declarations --
+// not just the math TRISC.
+#if defined(COMPILE_FOR_TRISC)
+#include "api/compute/sfpu_reduce.h"
+#endif
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
 #endif
