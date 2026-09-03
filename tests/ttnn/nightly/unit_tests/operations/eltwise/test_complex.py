@@ -256,6 +256,42 @@ def test_level2_recip(bs, memcfg, dtype, device, function_level_defaults):
     assert passing
 
 
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
+def test_level2_recip_extreme(memcfg, dtype, device, function_level_defaults):
+    """Regression test for #55315: reciprocal must stay finite for |z| beyond 2^63 and below 2^-63."""
+    input_shape = torch.Size([1, 1, 32, 64])
+    re = torch.ones(input_shape, dtype=torch.bfloat16)
+    im = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # Fill first tile row with extreme-magnitude values.
+    extreme_re = [1e20, 0.0, 3e19, 1e-20, 0.0, 1e-19, float(2**63), 3.0]
+    extreme_im = [0.0, 1e20, 4e19, 0.0, 1e-20, 1e-19, 0.0, 4.0]
+    for i, (er, ei) in enumerate(zip(extreme_re, extreme_im)):
+        re[0, 0, 0, i] = er
+        im[0, 0, 0, i] = ei
+    x = Complex(re=re, im=im)
+    xtt = ttnn.complex_tensor(
+        ttnn.Tensor(x.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(x.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+    )
+    tt_dev = ttnn.reciprocal(xtt, memory_config=memcfg)
+    tt_dev_r = tt_dev.real.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_dev_i = tt_dev.imag.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_dev = Complex(re=tt_dev_r, im=tt_dev_i).metal
+    tt_cpu = x.recip().metal
+
+    passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
+    logger.info(output)
+    assert passing
+
+
 @pytest.mark.skip(reason="This test is failing because ttnn.add doesn't support complex tensors")
 @pytest.mark.parametrize(
     "memcfg",

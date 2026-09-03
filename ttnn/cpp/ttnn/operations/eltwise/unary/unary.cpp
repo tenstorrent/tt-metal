@@ -100,16 +100,24 @@ Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_con
 }
 
 ComplexTensor reciprocal(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    Tensor a_plus_b = ttnn::add(input[0], input[1], std::nullopt, output_mem_config);
-    Tensor a_minus_b = ttnn::subtract(input[0], input[1], std::nullopt, output_mem_config);
-    Tensor asqr_plus_bsqr = ttnn::add(
-        ttnn::square(input[0], output_mem_config),
-        ttnn::square(input[1], output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    Tensor inv_dr = ttnn::reciprocal(asqr_plus_bsqr, output_mem_config);
-    Tensor conj_im = ttnn::multiply(ttnn::neg(input[1], output_mem_config), inv_dr, std::nullopt, output_mem_config);
-    Tensor conj_re = ttnn::multiply(input[0], inv_dr, std::nullopt, output_mem_config);
+    // Smith's scaled division: avoids computing a^2 + b^2 directly, which loses half the
+    // exponent range of the result (see #55315).
+    Tensor abs_a = ttnn::abs(input[0], output_mem_config);
+    Tensor abs_b = ttnn::abs(input[1], output_mem_config);
+    Tensor a_is_big = ttnn::ge(abs_a, abs_b, std::nullopt, output_mem_config);
+    Tensor big = ttnn::where(a_is_big, input[0], input[1], output_mem_config);
+    Tensor small = ttnn::where(a_is_big, input[1], input[0], output_mem_config);
+    Tensor r = ttnn::divide(small, big, std::nullopt, output_mem_config);
+    Tensor d = ttnn::add(big, ttnn::multiply(small, r, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor inv_d = ttnn::reciprocal(d, output_mem_config);
+    Tensor r_inv_d = ttnn::multiply(r, inv_d, std::nullopt, output_mem_config);
+
+    // |a| >= |b|: re = 1/d,  im = -r/d
+    // |a| <  |b|: re = r/d,  im = -1/d
+    Tensor conj_re = ttnn::where(a_is_big, inv_d, r_inv_d, output_mem_config);
+    Tensor neg_inv_d = ttnn::neg(inv_d, output_mem_config);
+    Tensor neg_r_inv_d = ttnn::neg(r_inv_d, output_mem_config);
+    Tensor conj_im = ttnn::where(a_is_big, neg_r_inv_d, neg_inv_d, output_mem_config);
     return operations::complex::ComplexTensor({conj_re, conj_im});
 }
 

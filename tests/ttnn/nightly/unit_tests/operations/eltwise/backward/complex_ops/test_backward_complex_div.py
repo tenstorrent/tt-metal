@@ -123,3 +123,59 @@ def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, functio
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         logger.info(output)
         assert passing
+
+
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
+@pytest.mark.parametrize("bs", ((1, 1),))
+@pytest.mark.parametrize("hw", ((32, 64),))
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+def test_level2_complex_div_bw_extreme(bs, hw, memcfg, dtype, device, function_level_defaults):
+    """Regression test for #55315: div_bw must stay finite when divisor |z| is extreme."""
+    input_shape = torch.Size([bs[0], bs[1], hw[0], hw[1]])
+
+    in_data = random_complex_tensor(input_shape, (-90, 90), (-70, 70))
+    in_data.requires_grad = True
+
+    other_re = torch.ones(input_shape, dtype=torch.bfloat16)
+    other_im = torch.zeros(input_shape, dtype=torch.bfloat16)
+    extreme_re = [1e20, 0.0, 3e19, 1e-20, 0.0, 1e-19, float(2**63), 3.0]
+    extreme_im = [0.0, 1e20, 4e19, 0.0, 1e-20, 1e-19, 0.0, 4.0]
+    for i, (er, ei) in enumerate(zip(extreme_re, extreme_im)):
+        other_re[0, 0, 0, i] = er
+        other_im[0, 0, 0, i] = ei
+    other_data = other_re + other_im * 1j
+    other_data.requires_grad = True
+
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(in_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(in_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+    )
+    other_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(other_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(other_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+    )
+
+    grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
+    grad_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(grad_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(grad_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+    )
+    tt_dev = ttnn.div_bw(grad_tensor, input_tensor, other_tensor, memory_config=memcfg)
+    tt_dev = convert_to_torch_tensor(tt_dev)
+
+    golden_function = ttnn.get_golden_function(ttnn.div_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
+
+    for i in range(len(tt_dev)):
+        passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
+        logger.info(output)
+        assert passing
+
