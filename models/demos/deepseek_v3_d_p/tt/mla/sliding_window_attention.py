@@ -200,8 +200,7 @@ class TtSWA(LightweightModule):
         )
         keep = ttnn.nez(ttnn.add(ttnn.nez(chip), ttnn.ge(jc, float(sw))))
         empty_carry = ttnn.typecast(ttnn.log(keep), self.dtype)
-        # Only chunk 0 differs: there chip 0's halo is the zeroed carry, and a zero key still
-        # counts in the softmax denominator.
+        # Only chunk 0 differs: chip 0's halo is the zeroed carry, and a zero key still counts in softmax.
         self._masks = {False: band, True: ttnn.add(band, empty_carry)}
 
     def _build_halo_bounds(self, chunk: int, seq_local: int):
@@ -278,8 +277,7 @@ class TtSWA(LightweightModule):
             ),
         )
 
-        # Device-tensor bounds keep only their shape in the program, so one program serves every
-        # real_len.
+        # Device-tensor bounds keep only their shape in the program, so one program serves every real_len.
         c_start, c_end = self._carry_index[self._carry_key(real_len)]
         next_carry = ttnn.slice(hist, c_start, c_end, slice_dim=2, num_devices=self._halo_num_devices)
 
