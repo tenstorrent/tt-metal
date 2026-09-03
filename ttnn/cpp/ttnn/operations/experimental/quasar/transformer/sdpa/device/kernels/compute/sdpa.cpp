@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t k_partial_col = get_arg(args::k_partial_col);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_arg(args::use_zigzag_balancing) == 1;
-    // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
+    // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl DFB.
     constexpr bool use_windowed_narrowing = get_arg(args::use_windowed_narrowing) == 1;
 
     const uint32_t core_id = get_arg(args::core_id);
@@ -139,8 +139,8 @@ void kernel_main() {
     }
 
     if constexpr (use_streaming_compute) {
-        // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
-        // No row buffers needed; a dedicated 1-tile CB is used as recip scratch.
+        // Streaming SDPA v2: direct dfb_qkt_im writes via dfb_push_back_hold_wr_ptr.
+        // No row buffers needed; a dedicated 1-tile DFB is used as recip scratch.
 
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
         dfb_identity_scale_in_obj.wait_front(1);
@@ -201,7 +201,7 @@ void kernel_main() {
             dfb_exp_max_diff,
             dfb_col_identity,
             dfb_recip_scratch,
-            dfb_out,  // normalized output goes directly to output CB
+            dfb_out,  // normalized output goes directly to output DFB
             dfb_mask_in,
             sliding_window_size,
             is_causal,

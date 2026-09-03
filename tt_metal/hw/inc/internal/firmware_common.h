@@ -49,7 +49,7 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
 extern uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
-void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, L1WordCount len);
+void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Clear bss.
@@ -61,7 +61,7 @@ inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
     if (__ldm_data_start != data_image) {
-        l1_to_local_mem_copy(__ldm_data_start, data_image, L1WordCount::from_range(__ldm_data_start, __ldm_data_end));
+        l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
     }
 }
 
@@ -74,7 +74,7 @@ inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
     // Copy thread initialized data.
     extern thread_local uint32_t __ldm_tdata_start[];
     extern thread_local uint32_t __ldm_tdata_end[];
-    l1_to_local_mem_copy(__ldm_tdata_start, data_image, L1WordCount::from_range(__ldm_tdata_start, __ldm_tdata_end));
+    l1_to_local_mem_copy(__ldm_tdata_start, data_image, __ldm_tdata_end - __ldm_tdata_start);
 }
 
 inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
@@ -85,49 +85,37 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     static_assert(
         l1_to_noc_size_bytes % 4 == 0, "l1_bank_to_noc_xy size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
-        (uint*)dram_bank_to_noc_xy,
-        (uint tt_l1_ptr*)mem_bank_to_noc_addr,
-        L1WordCount::from_bytes(dram_to_noc_size_bytes));
+        (uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
     l1_to_local_mem_copy(
         (uint*)l1_bank_to_noc_xy,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes),
-        L1WordCount::from_bytes(l1_to_noc_size_bytes));
+        l1_to_noc_size_bytes >> 2);
 
-    constexpr int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
-    static_assert(
-        dram_offsets_size_bytes % 4 == 0, "bank_to_dram_offset size must be 4-byte aligned for l1_to_local_mem_copy");
+    int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
     l1_to_local_mem_copy(
         (uint*)bank_to_dram_offset,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes),
-        L1WordCount::from_bytes(dram_offsets_size_bytes));
-    constexpr int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
-    static_assert(
-        l1_offsets_size_bytes % 4 == 0, "bank_to_l1_offset size must be 4-byte aligned for l1_to_local_mem_copy");
+        dram_offsets_size_bytes >> 2);
+    int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
     l1_to_local_mem_copy(
         (uint*)bank_to_l1_offset,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes +
                           dram_offsets_size_bytes),
-        L1WordCount::from_bytes(l1_offsets_size_bytes));
+        l1_offsets_size_bytes >> 2);
 }
 
 inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_virtual_map_addr) {
-    constexpr int32_t worker_logical_col_to_virtual_col_size_bytes = sizeof(worker_logical_col_to_virtual_col);
-    static_assert(
-        worker_logical_col_to_virtual_col_size_bytes % 4 == 0,
-        "worker_logical_col_to_virtual_col size must be 4-byte aligned for l1_to_local_mem_copy");
+    int32_t worker_logical_col_to_virtual_col_size_bytes = sizeof(worker_logical_col_to_virtual_col);
     l1_to_local_mem_copy(
         (uint*)worker_logical_col_to_virtual_col,
         (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr),
-        L1WordCount::from_bytes(worker_logical_col_to_virtual_col_size_bytes));
+        worker_logical_col_to_virtual_col_size_bytes >> 2);
 
-    constexpr int32_t worker_logical_row_to_virtual_row_size_bytes = sizeof(worker_logical_row_to_virtual_row);
-    static_assert(
-        worker_logical_row_to_virtual_row_size_bytes % 4 == 0,
-        "worker_logical_row_to_virtual_row size must be 4-byte aligned for l1_to_local_mem_copy");
+    int32_t worker_logical_row_to_virtual_row_size_bytes = sizeof(worker_logical_row_to_virtual_row);
     l1_to_local_mem_copy(
         (uint*)worker_logical_row_to_virtual_row,
         (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr + worker_logical_col_to_virtual_col_size_bytes),
-        L1WordCount::from_bytes(worker_logical_row_to_virtual_row_size_bytes));
+        worker_logical_row_to_virtual_row_size_bytes >> 2);
 }
 
 FORCE_INLINE
@@ -283,6 +271,9 @@ bool is_message_go() {
 #define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
+// NOTE: the tt-llk test harness keeps a synchronized copy of this function in
+// tt_metal/tt-llk/tests/helpers/include/boot.h, so its firmware boots in the same gathering
+// configuration this one does. test_gathering_config.py fails if the two drift apart; edit both.
 inline __attribute__((always_inline)) void configure_gathering() {
 #if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
     // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
