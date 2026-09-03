@@ -445,6 +445,30 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
+/**
+ * Sets NOC_TARG_ADDR_MID to route a transaction through the PCIe core. Must be called immediately before
+ * such a read/write and paired with noc_cmd_buf_clear_targ_addr_mid() immediately after: this register is
+ * sticky per command buffer, so a stale value would misroute a later, unrelated transaction on cmd_buf.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | addr     | Full NOC address from NOC_XY_PCIE_ENCODING(...)    | uint64_t  | 0..2^64-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_mid_pcie(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+}
+
+// Clears NOC_TARG_ADDR_MID back to 0. Call after every noc_cmd_buf_set_targ_addr_mid_pcie() use so later,
+// ordinary transactions on cmd_buf aren't misrouted.
+inline __attribute__((always_inline)) void noc_cmd_buf_clear_targ_addr_mid(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0);
+}
+
 // Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
 inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
