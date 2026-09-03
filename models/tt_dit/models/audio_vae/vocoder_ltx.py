@@ -427,15 +427,9 @@ class Vocoder(Module):
         x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        # Pad T so each per-chip shard holds at least one full tile (TILE_HEIGHT rows). Partitioning
-        # happens in ROW_MAJOR (no tile-aligned split offset needed -- see audio_ops.py's
-        # `_partition_t` header), so a long clip only needs T padded to a multiple of `factor`. But a
-        # SHORT clip whose per-shard height would drop below one tile (e.g. T=207 at factor 8 -> 26
-        # rows/shard) starves the HEIGHT_SHARDED depthwise resample conv1d (the DRAM auto-slicer
-        # can't fit its C*K-wide activation block). Flooring the per-shard height at TILE_HEIGHT lets
-        # factor 8 work on short inputs too; long clips (per-shard already >> a tile) are unchanged,
-        # since max(ceil(T/factor), TILE_HEIGHT) == ceil(T/factor) there. The extra pad rows
-        # propagate and get cropped from the final waveform.
+        # Pad T so each shard holds >= one tile: a short clip (T=207 at factor 8 -> 26 rows/shard,
+        # under a tile) starves the HEIGHT_SHARDED depthwise conv1d's DRAM slicer. Long clips are
+        # unchanged (already >> a tile/shard). Pad rows are masked and cropped from the waveform later.
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor

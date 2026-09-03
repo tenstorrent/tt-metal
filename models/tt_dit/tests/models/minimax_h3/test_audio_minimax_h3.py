@@ -475,12 +475,8 @@ MESH = [
 # because the partition indexes by the device's coordinate along the axis and assumes it covers it.
 # That is why this list is (4, axis 0) and (8, axis 1) rather than a scan.
 #
-# `KNOWN_BROKEN` must stay empty: an entry silences the per-factor PSNR assert below, the only thing
-# separating a speedup from a fast wrong answer. The invariant is that every FACTORS layout matches the
-# single-device decode (> 40 dB). Factor 8 on this short 207-latent clip relies on `Vocoder._upload_BCT`'s
-# per-shard tile-floor: without it a shard holds ~26 rows (< one tile=TILE_HEIGHT), starving the
-# HEIGHT_SHARDED depthwise resample conv1d's DRAM slicer; with it, factor 8 decodes at 84.9 dB (equal to
-# factor 4), 2.31x. Long clips already have >> a tile/shard and are unaffected.
+# KNOWN_BROKEN must stay empty -- an entry silences the per-factor PSNR assert, the only guard against a
+# fast wrong answer. Factor 8 on this short clip works via `Vocoder._upload_BCT`'s per-shard tile-floor.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
 KNOWN_BROKEN: set[tuple[int, int]] = set()
 
