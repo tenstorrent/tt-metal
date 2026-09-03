@@ -24,7 +24,7 @@ coverage stays visible instead of quietly shrinking.
 import pytest
 import torch
 from helpers.format_config import DataFormat
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.golden_generators import UnarySFPUGolden
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 
 # One tile: the base population size, and the smallest window __call__ can produce.
@@ -105,13 +105,33 @@ def _population(name):
 POPULATIONS = ["unit_interval", "positive", "signed_wide", "above_one", "specials"]
 
 
+# One instance for the file, built directly rather than fetched with
+# ``get_golden_generator``.
+#
+# The registry is what the device tests use, but it is not usable here: the harness
+# replaces ``get_golden_generator`` with one that hands back a ``DummyGoldenGenerator``
+# under ``--compile-producer`` -- which is how the Quasar compile lane runs the whole
+# suite -- and that stub has none of the vector tables, so consulting the registry turns
+# this file's *collection* into an error there rather than into a test result. Same fix,
+# and same reason, as ``test_eltwise_binary_sfpu.py``'s ``_classify_edge_result`` and
+# ``helpers/compressed_utils.py``'s matmul golden.
+#
+# Shared across the file rather than built per test, which is also what the registry did
+# before, so the change is only in where the instance comes from. Safe because the only
+# state the vector paths read is ``data_format`` / ``dst_format`` / ``dest_acc``, and every
+# test binds all three through ``_bind_formats`` before dispatching. (``__init__``
+# assembles a 114-entry dispatch dict; per-test instantiation measured ~0.5 s slower over
+# the file -- small, but there is no reason to pay it.)
+_GOLDEN = UnarySFPUGolden()
+
+
 def _by_name(ops):
     """Sorted so the parametrize ids are stable across runs."""
     return sorted(ops, key=lambda o: o.name)
 
 
 def _vector_ops():
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     return _by_name(
         set(golden._VECTOR_TORCH_FNS)
         | set(golden._VECTOR_DST_TORCH_FNS)
@@ -144,7 +164,7 @@ def _nan_rule_partition():
     Float16 and Float16_b are two different computations there and nothing can be said
     about the pair.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     rule = {
         "_VECTOR_TORCH_FNS": _by_name(golden._VECTOR_TORCH_FNS),
         "_VECTOR_SPECIAL_OPS": _by_name(
@@ -270,7 +290,7 @@ def _compare(golden, operation, vector, scalar, evaluable, values, label):
 @pytest.mark.parametrize("data_format", FORMATS, ids=lambda f: f.name)
 def test_vector_op_matches_scalar_op(operation, population, data_format):
     """Every table entry, over every population, at every window, under both NaN rules."""
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     _bind_formats(golden, data_format)
     base = _population(population).to(torch.float32)
 
@@ -309,7 +329,7 @@ def test_vector_op_matches_scalar_op_in_the_tile_dtype(operation, data_format):
     and what is being pinned here is the dtype the window arrives in, so the specials
     are the population that matters.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     _bind_formats(golden, data_format)
     values = _population("specials").to(format_dict[data_format])
 
@@ -337,7 +357,7 @@ def test_vector_op_preserves_shape_and_dtype(operation, window):
     int-returning table entry (several entries end in ``.to(d.dtype)`` for exactly that
     reason) into a passing float.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     _bind_formats(golden, DataFormat.Float16_b)
     values = _population("signed_wide").to(torch.float32).repeat(window // TILE)
     raw = golden._vector_op(operation)(values)
@@ -351,7 +371,7 @@ def test_every_table_entry_is_a_registered_op():
     ``_vector_op`` is consulted with whatever ``__call__`` was handed, so an entry whose
     MathOperation is not in ``self.ops`` is dead weight that reads as coverage.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     unreachable = sorted(op.name for op in VECTOR_OPS if op not in golden.ops)
     assert not unreachable, f"vector table entries with no registered op: {unreachable}"
 
@@ -367,7 +387,7 @@ def test_no_unlisted_op_is_silently_bit_exact_capable():
     ``golden.ops`` by construction, so any bound against ``len(golden.ops)`` holds even
     with every vector table emptied -- which is the regression the test exists for.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     scalar_only = sorted(op.name for op in golden.ops if op not in set(VECTOR_OPS))
     print(f"\n{len(VECTOR_OPS)} vectorised, {len(scalar_only)} still per-element:")
     print("  " + ", ".join(scalar_only))
@@ -412,7 +432,7 @@ def test_nan_rule_holds_for_every_op_that_carries_it(table):
     so keeps the rule even if ``_torch_unary_vec`` drops it -- stand in for the whole
     ``_VECTOR_TORCH_FNS`` table.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     values = _population("specials").to(torch.float32)
 
     exercised = []
@@ -458,7 +478,7 @@ def test_ops_without_the_nan_rule_are_format_invariant(operation):
     here (invariance broken) or in the sibling test (rule never exercised), rather than
     silently narrowing what the rule is checked against.
     """
-    golden = get_golden_generator(UnarySFPUGolden)
+    golden = _GOLDEN
     values = _population("specials").to(torch.float32)
     exponent_b = _eval_under(golden, operation, values, DataFormat.Float16_b)
     exponent_a = _eval_under(golden, operation, values, DataFormat.Float16)
