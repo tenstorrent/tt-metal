@@ -24,8 +24,12 @@ import ast
 from perf_schema_derive import (
     PARAM_BASES,
     ROOT,
+    class_field_specs,
+    class_post_init_copies,
     derive_perf_test_schemas,
+    emitted_fields,
     enum_member_names,
+    helper_returned_param_calls,
     iter_source_files,
     load_pure_module,
 )
@@ -222,6 +226,74 @@ def test_test_name_aliases_reject_missing_and_stale_key():
 
 
 # ── Metric-vocabulary drift (global) ──────────────────────────────────
+
+
+def test_emitted_fields_see_helper_returns_and_post_init_copies():
+    """The two constructs the plain None-default rule cannot see, and the one it must."""
+    specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    post_init = class_post_init_copies()
+
+    def fields(src):
+        call = ast.parse(src).body[0].value
+        return set(emitted_fields(call, specs, helpers, post_init))
+
+    # A helper that returns a param object: templates= holds the helper, not the class.
+    assert {"full_rt_dim", "full_ct_dim", "block_ct_dim", "block_rt_dim"} <= fields(
+        "generate_input_dim((32, 32), (32, 32))"
+    )
+    # __post_init__ copies: the call sets one field, the runtime emits three.
+    assert {"num_blocks", "input_num_blocks", "output_num_blocks"} <= fields(
+        "NUM_BLOCKS(4)"
+    )
+    # Still dropped: a genuinely optional None-default slot the call leaves unset.
+    assert "mathop" in fields("MATH_OP(MathOperation.Elwadd)")
+    assert not {"unary_extra", "pool_type"} & fields("MATH_OP(MathOperation.Elwadd)")
+
+    # Guard paths: with neither map passed, the plain None-default rule stands and
+    # a helper call resolves to nothing, so existing callers are unaffected.
+    plain = ast.parse("NUM_BLOCKS(4)").body[0].value
+    assert set(emitted_fields(plain, specs)) == {"num_blocks"}
+    helper = ast.parse("generate_input_dim((32, 32), (32, 32))").body[0].value
+    assert emitted_fields(helper, specs) == []
+
+
+# Run mode, not a sweep parameter: published, deliberately never in the catalog.
+NOT_A_SWEEP_COLUMN = {"speed_of_light"}
+
+
+def _published_test_columns(module_filename: str) -> set:
+    """Literal Column(...) names a test fills. Generated timing columns have no
+    literal to read and drop out; origin="ci" provenance is skipped."""
+    tree = ast.parse((ROOT / "helpers" / "perf" / module_filename).read_text())
+    return {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "Column"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and not any(
+            kw.arg == "origin" and getattr(kw.value, "value", None) == "ci"
+            for kw in node.keywords
+        )
+    }
+
+
+def test_no_published_column_without_a_perf_test():
+    """No dead column: a published column cannot outlive the test that filled it."""
+    ps = load_pure_module("test_schemas.py")
+    for module, catalog, arch in (
+        ("wide_schema.py", ps.PERF_TEST_SCHEMAS, "WH/BH"),
+        ("wide_schema_quasar.py", ps.PERF_TEST_SCHEMAS_QSR, "Quasar"),
+    ):
+        recorded = set().union(*(set(e["columns"]) for e in catalog.values()))
+        dead = sorted(_published_test_columns(module) - recorded - NOT_A_SWEEP_COLUMN)
+        assert not dead, (
+            f"{arch}: helpers/perf/{module} declares {dead}, which no perf test "
+            "produces. Drop the column, or add the test that fills it to "
+            "helpers/perf/test_schemas.py."
+        )
 
 
 def test_run_type_names_match_source():

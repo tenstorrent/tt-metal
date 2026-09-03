@@ -137,7 +137,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
+                shard_spec_opt = generate_shard_spec_all_cores(tensor_args.input, padded_out_shape, memory_layout);
             }
         }
 

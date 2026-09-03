@@ -570,7 +570,15 @@ class TtIndexer:
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
 
     def write_k(
-        self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
+        self,
+        hidden_states,
+        seq_len,
+        start_pos,
+        rope_tensors=None,
+        cache_user_id=0,
+        cache_layer_idx=0,
+        index_kbuf=None,
+        actual_end=None,
     ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
@@ -578,7 +586,11 @@ class TtIndexer:
         runs there.) Always block-cyclic (single-shot is folded onto it as one full-seq chunk at
         start_pos=0): rope the PER-CHIP shard at its block-cyclic positions, then write it in place via
         update_padded_kv_cache (per-(user,layer) slot, pad-aware kv_actual_global offset) — no SP
-        all-gather, no O(n^2) concat; the cache stays SP-sharded."""
+        all-gather, no O(n^2) concat; the cache stays SP-sharded.
+
+        ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
+        the cache end needs only its real tokens to fit. forward() reads back the same prefix
+        (``valid_pos``)."""
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,
@@ -621,6 +633,7 @@ class TtIndexer:
             num_layers=self._index_cache_layers,
             kv_actual_global=start_pos,
             cluster_axis=self.sp_axis,
+            valid_global=actual_end,
         )
         ttnn.deallocate(k)
 
@@ -634,6 +647,7 @@ class TtIndexer:
         cache_user_id: int = 0,
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        actual_end: int = None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
@@ -657,6 +671,10 @@ class TtIndexer:
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
+        # Read bound matching write_k's clamp, on the 32-row write grid: scoring and transport follow the
+        # POPULATED prefix, not the padded window. Real query rows all sit below actual_end so their top-k
+        # is unchanged; the pad rows past it have no keys, which indexer_score allows.
+        valid_pos = end_pos if actual_end is None else min(end_pos, -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
         assert index_kv_cache is not None, (
             "block-cyclic indexer requires an externally-allocated index_kv_cache passed to forward() "
@@ -675,6 +693,7 @@ class TtIndexer:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
+            actual_end=actual_end,
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
@@ -747,6 +766,8 @@ class TtIndexer:
         # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
         # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=224; larger OOMs).
         k_chunk = get_indexer_key_chunk(a.index_n_heads)
+        # Keyed on end_pos, NOT valid_pos: the program config is hashed, so keying it on a per-chunk
+        # runtime quantity would compile a second program. The valid extent travels in hash-excluded kv_len.
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(k_chunk, end_pos), head_group_size=0)
         # SP-sharded queries (rotation-safe): each chip scores its S/sp rows while the fused ring indexer
         # gathers remote block-cyclic K slabs into a shared persistent full-T buffer. The reader consumes
@@ -754,13 +775,10 @@ class TtIndexer:
         # the former blocking all-gather with score compute. Per-device causality remains cluster_axis=SP
         # (chip r: chunk_start = start_pos + r*Sq). All H_idx heads are resident, so each logit is complete.
         #
-        # Bound the score to the real written prefix (kv_len=end_pos) rather than the full preallocated
-        # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows
-        # push the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len
-        # only WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the
-        # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
-        # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
-        # unchanged.
+        # Bound the score to the populated prefix (kv_len=valid_pos), not the full width T nor the padded
+        # window, which on the last chunk runs past what was written. kv_len only writes
+        # logits[..., :valid_pos] and leaves the tail STALE (not -inf); top-k is told the valid length so it
+        # never ranks that tail — which is future anyway, so the selection is unchanged.
         # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
         # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
         # by kv_len; the score reader addresses its own shard directly in the original ND cache.
@@ -781,7 +799,7 @@ class TtIndexer:
             cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,
-            kv_len=end_pos,
+            kv_len=valid_pos,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -792,10 +810,10 @@ class TtIndexer:
         # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
         # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
         # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
-        assert end_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got end_pos={end_pos}"
-        # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
-        # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
-        topk_valid_length = end_pos
+        assert valid_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got valid_pos={valid_pos}"
+        # valid_length bounds top-k to the populated prefix so the stale [valid_pos, T) tail is never
+        # ranked. topk_large_indices also requires valid_length <= T, which valid_pos satisfies.
+        topk_valid_length = valid_pos
         idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's

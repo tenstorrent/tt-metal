@@ -99,7 +99,7 @@ inline uint32_t get_dynamic_Sk_chunk_t(int cur_pos) {
         // ie. divup(a, b) = (a - 1) / b + 1
         uint32_t seq_len_in_tiles = cur_pos / tt::constants::TILE_HEIGHT + 1;
 
-        // Use nearest power of 2 to nicely divide total CB size which is some factor of max_size
+        // Use nearest power of 2 to nicely divide total DFB size which is some factor of max_size
         // Technically, should not be an issue but seeing PCC issues when using 3 tiles eg.
         // - Can switch to nearest tile if this is fixed
         return nearest_pow_of_2_up_to_8<max_size>(seq_len_in_tiles);
