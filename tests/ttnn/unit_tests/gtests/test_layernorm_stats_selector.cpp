@@ -11,6 +11,7 @@
 namespace {
 
 using ttnn::prim::layernorm::BlackholeStatsSelectorParams;
+using ttnn::prim::layernorm::kBf16PartialAffineMinWidth;
 using ttnn::prim::layernorm::select_interleaved_statistics_backend;
 using ttnn::prim::layernorm::select_sharded_statistics_backend;
 using ttnn::prim::layernorm::StatisticsBackend;
@@ -139,9 +140,18 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
 
 TEST(LayerNormStatsSelector, InterleavedArchitectureAndLayoutPolicy) {
     const auto params = default_params();
+    auto bf16_partial_affine_below_crossover = params;
+    bf16_partial_affine_below_crossover.input_format = tt::DataFormat::Float16_b;
+    bf16_partial_affine_below_crossover.padded_width = kBf16PartialAffineMinWidth - 1;
+    bf16_partial_affine_below_crossover.has_beta = false;
+
     EXPECT_EQ(
         select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, true, params),
         StatisticsBackend::SFPU_TWO_PASS);
+    EXPECT_EQ(
+        select_interleaved_statistics_backend(
+            true, tt::ARCH::BLACKHOLE, false, false, true, bf16_partial_affine_below_crossover),
+        StatisticsBackend::TILE_REDUCTION);
     EXPECT_EQ(
         select_interleaved_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false, false, params),
         StatisticsBackend::TILE_REDUCTION);
