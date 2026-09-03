@@ -767,6 +767,24 @@ CITES = [
         421,
         "self.norm(hidden_states)",
     ),
+    # --- P7 additions (chunked prefill + golden KV). Each of these is a claim P7's docstrings and
+    # gate blocks make, and each would rot silently: a moved TT_FATAL, a renamed template hook, or
+    # a template default that flips.
+    (
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/"
+        "update_padded_kv_cache_device_operation.cpp",
+        230,
+        "cache and input num-heads dim must match",
+    ),
+    (f"{LL}/tt/attention/kv_cache.py", 130, "torch.zeros(num_users * num_layers, 1, seq_local, head_dim)"),
+    (f"{LL}/tt/attention/prefill.py", 218, "elif cached_len > 0:"),
+    (f"{LL}/tt/attention/prefill.py", 195, "if config.sequence_parallel and mesh_config.sp > 1:"),
+    (f"{LL}/tt/attention/dense_sp.py", 43, "def dense_sp_attention("),
+    (f"{GO}/tt/tt_prefill_runtime.py", 46, "def resolve_chunk_sizes("),
+    (f"{GO}/tt/tt_prefill_runtime.py", 185, 'getattr(self.hf_config, "rope_theta", 150000.0)'),
+    (f"{GO}/tt/tt_prefill_runtime.py", 555, "half * (m % 2) + (m // 2)"),
+    (f"{GO}/tt/runners/adapters/gpt_oss.py", 132, "default_chunk_size=params.chunk_size"),
+    (f"{M3}/scripts/generate_golden_kv_cache.py", 180, "ids = tokenizer.apply_chat_template("),
 ]
 
 
@@ -789,7 +807,19 @@ DOCS = [
 # check for it. Globbed rather than listed so a new file cannot be added without being scanned.
 DOCS += sorted(
     os.path.relpath(str(path), ROOT)
-    for pattern in ("tt/*.py", "tt/*/*.py", "tests/*.py", "tests/unit/*.py", "utils/*.py", "conftest.py")
+    # P7 addition: `scripts/*.py`. The two golden-KV scripts carry as many load-bearing `path:line`
+    # refs as any module and were the only Python in the package pass 2 could not see (Appendix F.7
+    # says extend the verifier every phase). `verify_citations.py` itself is matched by the glob and
+    # is harmless: its own citations are tuples, not backtick-quoted refs, so the regex skips them.
+    for pattern in (
+        "tt/*.py",
+        "tt/*/*.py",
+        "tests/*.py",
+        "tests/unit/*.py",
+        "utils/*.py",
+        "scripts/*.py",
+        "conftest.py",
+    )
     for path in __import__("pathlib").Path(os.path.join(ROOT, "models/demos/llama32_8b_d_p")).glob(pattern)
 )
 # package-relative shorthands used in the logs

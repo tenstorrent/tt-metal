@@ -2005,3 +2005,359 @@ Template: `BRINGUP_RECIPE.md` §1.3.
 - **Revisit if:** the sublayer gates are ever re-pointed at HF; check 2 would then become circular.
 - **Blast radius:** `tests/unit/test_model_vs_ref.py`, `G-MODEL`, and how `G-LAYER`'s reference is
   justified.
+
+### DEC-070 — Gate 2 (loopback migration) is OUT OF SCOPE for this bring-up, not blocked
+> Numbered DEC-070 deliberately, out of the sequential range the P7 session is writing into
+> (DEC-052+), so two concurrent writers cannot collide on an id.
+
+- **Phase / module:** P10 / disaggregated-prefill integration (orchestrator decision)
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `G-LOOPBACK` requires external binaries that are not obtainable in this environment.
+- **Question:** treat the engine's Gate 2 (loopback migration) as a required rung of this bring-up's
+  gate ladder, or as out of scope?
+- **What is actually unavailable:** `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md:14`
+  lists Gate 2's requirement as "+ tt-llm-engine binaries", and `:460` names them:
+  `migration_endpoint` and `migration_worker`, "pointed at the same tt-metal tree the runner uses",
+  plus the `_migration_client*.so` whose directory is `PREFILL_MIGRATION_CLIENT_DIR`
+  (`:109`, `:190`). Verified in this environment:
+  - no `tt-llm-engine` checkout or build exists on the machine (filesystem search, 7 levels);
+  - the repo cannot be cloned — `git ls-remote https://github.com/tenstorrent/tt-llm-engine.git`
+    returns `Missing or invalid credentials`, and `gh` is not authenticated to any host;
+  - OpenMPI 5 / PRRTE (`prte`, `prun`), which `migration_worker` is launched under, is absent —
+    but this one is NOT a blocker: passwordless sudo is available, so it is installable on demand.
+  So the single missing input is **source access to a private repository**, not build capability.
+- **Choice:** record `G-LOOPBACK` as **OUT-OF-SCOPE (by decision)**, not `BLOCKED`, and do not
+  request the binaries.
+- **Why:** Gate 2 exercises the **engine's** DRAM -> transport -> DRAM byte copy. Its default mode is
+  `--verify-migration dst-bytes`, which the doc itself describes as "golden-free and
+  **model-agnostic**" (`PREFILL_MIGRATION_TESTING.md`, *Verifying the migrated destination*) — it
+  asserts destination bytes equal source bytes and decodes nothing. No property of the Llama model,
+  its KV layout, or this package's code is verified by it that Gate 1 does not already verify.
+  Labelling it `BLOCKED` would imply our model has untested surface that it does not.
+  **This was an over-scoping error on the orchestrator's part**: the recipe transcribed the engine
+  doc's full gate ladder and then treated every rung as in-scope for a *model* bring-up.
+- **What still covers the integration:** `G-MOCK-MIG` (the doc's Gate 1, "tt-metal tree only",
+  `:13`) is the load-bearing one — it proves prefill wrote correct KV **and** that this package's
+  `build_kv_chunk_table` is correct, read device-lessly through the same `read_dram_umd` path the
+  real migration worker uses. Plus `G-ADAPTER` (contract) and `G-REQUEST` (request-mode serving).
+- **Evidence:** citations above; environment probes in this session's transcript.
+- **Confidence:** high on the scope judgement; the coverage boundary is enumerated in
+  `08_PREFILL_INTEGRATION.md` under "Migration coverage: what Gate 1 proves and what Gate 2 would add".
+- **Falsifier / revisit if:** anyone needs the **prefill -> decode handoff** proven end to end, or a
+  **multi-rank** KV-chunk table merged through the worker (see R-040 — Gate 1 is single-rank only, so
+  that merge is genuinely untested). At that point get the engine built; note it would want the
+  decode side too, not just loopback.
+- **Blast radius:** `G-LOOPBACK` only. No module, no other gate, no threshold.
+
+---
+
+## P7 — Chunked prefill + golden KV (DEC-052 .. DEC-061)
+
+### DEC-052 — Do **not** extend `reset_global_semaphores` to the barrier / ring-attention semaphores in P7
+- **Phase / module:** P7 / `tt/tt_prefill_runtime.py` (owner of `R-013`)
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `R-013` / Appendix F.10 assign P7 a decision either way: the barrier ping-pong is only
+  **2** deep, and `reset_global_semaphores` deliberately skips the barrier and ring-attention sets
+  (`models/demos/gpt_oss_d_p/tt/ccl.py:132`, an open upstream TODO) — while chunked prefill reuses
+  one `CCLManager` across every `prefill_chunk` call.
+- **Question:** should the runtime reset the barrier / ring-attention semaphores between chunks
+  (either by extending `reset_global_semaphores` upstream or by resetting them from the runtime),
+  or keep the inherited behaviour?
+- **Options considered:**
+  1. **Extend the reset** to cover all four sets, called once per `prefill_chunk`.
+  2. **Deepen the barrier ping-pong** from 2 to 4 handles.
+  3. **Keep the inherited behaviour**, and hand P8 a named hazard with a first move.
+- **Choice:** option 3.
+- **Why:** three reasons, in order of weight.
+  1. **It cannot be validated in P7, and an unvalidated CCL change is worse than none.** At `(1,1)`
+     TP=1 and SP=1, so `MeshConfig.allreduce` is a no-op (`tt/config.py`), `apply_allreduce` returns
+     its input, and **no collective runs at all** — `CCLManager`'s semaphores are allocated and
+     never acquired. `G-RACE` (3 runs bit-identical) is the gate that would show a reset bug, and it
+     is a P8 gate on the `(4,8)` target. Changing semaphore lifetime here would ship an untested
+     change into the one subsystem whose failures are *nondeterministic*, i.e. the one where "it
+     passed once" is not evidence.
+  2. **A reset is not obviously the safe direction.** `reset_global_semaphores` writes a zero to a
+     global semaphore; doing that while an in-flight collective still holds the handle is itself a
+     race, and the two sets it skips are exactly the ones with the shortest reuse distance (a
+     one-op gap for the barrier). The upstream TODO says the reset was written for a `CCLManager`
+     that is not reused across runs; extending it correctly needs a synchronisation point the
+     runtime does not currently have, not one more call.
+  3. **The blast radius is `tt/ccl.py`, which P7 does not own.** Extending the reset means editing
+     an existing `tt/` module (explicitly out of scope this phase), and doing it from the runtime
+     instead would put CCL-lifetime logic in the one file the engine drives.
+- **Evidence:** none from measurement, and that is stated deliberately. **P7 did not test this.**
+  What P7 can show is the *shape* of the problem: `04_CCL_PLAN.md` §7's 64 all-reduces per chunk =
+  128 barrier acquisitions cycling over 2 handles, and `tests/unit/test_ccl_semaphores.py`'s
+  measured **6 / 4 / 2 / 2** counts holding after that many getter calls
+  (`raw/G-MESH_20260903T173326Z.log`). Both are consistent with either choice.
+- **Confidence:** medium — high that deferring is right for P7, medium on which fix P8 will need.
+- **Falsifier:** `G-RACE` failing on `(4,8)` with 3 runs that are not bit-identical, or an
+  intermittent `G-MESH-KV` at a chunk count > 1.
+- **Revisit if:** `G-RACE` fails. **First move then is option 2, not option 1** — deepening the
+  ping-pong from 2 to 4 changes only `tt/ccl.py`'s handle count, needs no new synchronisation, and
+  Appendix F.10 already names it as the first thing to try. Option 1 second.
+- **Blast radius:** `tt/ccl.py` (P8), `G-RACE`, `G-MESH-KV`, `tt/tt_prefill_runtime.py`.
+
+### DEC-053 — The golden KV generator drives **one `LlamaDecoderLayer` at a time**, not `LlamaForCausalLM`
+- **Phase / module:** P7.1 / `scripts/generate_golden_kv_cache.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** the recipe requires "stream weights per layer via mmap and write per layer — do not
+  hold 32 layers of KV in RAM" (`BRINGUP_RECIPE.md:797`), while `01_REFERENCE.md` §1 fixes the
+  package's reference as `transformers` itself, reached directly.
+- **Question:** run `LlamaForCausalLM.from_pretrained(torch_dtype=float32)` once with a
+  `DynamicCache` and dump all layers, or build one `LlamaDecoderLayer`, fill it from the mmapped
+  shard, run it, save, and drop it?
+- **Options considered:**
+  1. **Whole model.** Simplest, and HF constructs the RoPE tables, the causal mask and the position
+     ids itself. Costs 32 GiB of resident fp32 weight plus a 32-layer cache, and violates the
+     streaming requirement.
+  2. **Vendor a self-contained torch reference** (what `models/demos/minimax_m3/reference/model.py`
+     does, because M3's checkpoint ships no modeling code). Rejected by `DEC-003` / `DEC-004`:
+     Llama is first-class in `transformers`, so a vendored reference is a second implementation to
+     keep in sync and a second thing to be wrong.
+  3. **Per-layer streaming driver over HF's own layer class.**
+- **Choice:** option 3.
+- **Why:** it satisfies the streaming requirement while keeping the *maths* HF's own — the same
+  `LlamaAttention` / `LlamaMLP` / `LlamaRMSNorm` code path `G-LAYER` and `G-MODEL` are already
+  gated against. What it adds is a driver, and a driver has exactly three places to be silently
+  wrong: the RoPE tables, the causal mask, and the position ids. So the driver is **checked against
+  option 1** rather than trusted:
+  `tests/unit/test_attention_chunked_vs_ref.py::test_golden_driver_agrees_with_hfs_own_model_loop`
+  builds a 2-layer `LlamaModel` from the same weights, lets it construct all three internally, and
+  requires the streamed golden to match its `DynamicCache` at **`rtol=atol=0`**. Two layers is
+  enough because the driver's loop body is identical at every depth.
+- **Evidence:** `raw/G-CHUNK_20260903T204519Z.log` — the bit-exactness test passes; 32 layers x 512
+  tokens generate in **38.2 s** and 32 x 2048 in **57.9 s**, peak resident well under one layer's
+  fp32 weight plus one layer's KV.
+- **Confidence:** high.
+- **Falsifier:** the bit-exactness test failing after a `transformers` upgrade — which is the point:
+  it would name the driver, not the device.
+- **Revisit if:** a partial-rotary or sliding-window Llama variant is added, where a single layer's
+  behaviour depends on its index.
+- **Blast radius:** `scripts/generate_golden_kv_cache.py`, `G-GOLDEN`, `G-CHUNK`, P8's `G-MESH-KV`.
+
+### DEC-054 — `TtPrefillRuntimeConfig.chunk_size` is a **property** aliasing `default_chunk_size`
+- **Phase / module:** P7.3 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md:117` says the engine reads
+  `chunk_size` off `runtime.config`; the template's dataclass has only `default_chunk_size` and its
+  adapter bridges the two at the call site
+  (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:132`).
+- **Question:** rename the field to `chunk_size`, keep the template's name and bridge it in P10's
+  adapter, or expose both?
+- **Options considered:**
+  1. **Rename.** Loses the "default among several supported sizes" meaning, which is real: the
+     runtime holds one indexed-RoPE table per supported size and `prefill_chunk(chunk_size=...)`
+     selects among them.
+  2. **Template's name only.** The engine then reads an attribute that does not exist unless P10
+     remembers the bridge — a `getattr` away from a silent default.
+  3. **Both**, with `chunk_size` a read-only property.
+- **Choice:** option 3.
+- **Why:** the engine reads the name it documents, the multi-size ergonomics survive, and because
+  `chunk_size` is derived rather than stored the two cannot drift.
+  `tests/unit/test_prefill_runtime_chunked.py::test_config_exposes_the_engine_contract_names`
+  asserts the alias and all five documented names, with
+  `test_the_contract_check_can_fail` as its negative control.
+- **Evidence:** `raw/G-RUNTIME_20260903T204925Z.log`.
+- **Confidence:** high.
+- **Falsifier:** an engine version that *writes* `config.chunk_size` — a read-only property would
+  then raise. No caller in `models/demos/common/prefill/` does.
+- **Revisit if:** the engine contract renames the field.
+- **Blast radius:** `tt/tt_prefill_runtime.py`, P10's adapter.
+
+### DEC-055 — `owns_kv_cache` defaults to **`False`**, inverting the template
+- **Phase / module:** P7.3 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:79` defaults it to `True` (its
+  standalone galaxy harness path) and its adapter passes `False`.
+- **Question:** keep the template's default?
+- **Choice:** no — default `False`; `True` stays available as the standalone-harness escape hatch.
+- **Why:** the contract is explicit that the runtime does not own the cache
+  (`ADDING_A_PREFILL_MODEL.md:105-108`), and the failure mode of the wrong default is quiet: a
+  runtime that allocates its own cache and is then handed the engine's still *works* — it fills
+  whichever cache the call passes — but a caller that forgets the keyword silently populates a
+  cache nobody reads, and the symptom is an empty decode, not an error. The reverse mistake
+  (`owns_kv_cache=False` when you wanted ownership) raises immediately from `_resolve_kv` with a
+  message naming the keyword. Choose the default whose mistake is loud.
+- **Evidence:** `test_config_exposes_the_engine_contract_names` asserts the default; the device test
+  asserts `runtime.kv_cache is None` after construction and that `prefill_chunk(..., None)` raises
+  "does not own a KV cache" (`raw/G-RUNTIME_20260903T204925Z.log`).
+- **Confidence:** high.
+- **Falsifier:** a standalone harness that forgets `owns_kv_cache=True` — it fails loudly on its
+  first `prefill_chunk`.
+- **Revisit if:** a harness lands that needs ownership as the common case.
+- **Blast radius:** `tt/tt_prefill_runtime.py`, P10's adapter, any P8 galaxy harness.
+
+### DEC-056 — Both single-device chunked blockers are re-raised as **runtime-level** refusals, and `_chunked_read_supported` **probes** the `dense_sp` stub
+- **Phase / module:** P7.3 / `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** two independent things stop a model-level N-chunk prefill on one card:
+  `tt/attention/prefill.py:218` refuses `cached_len > 0`, and the packed KV cache is one KV head per
+  chip so `TP` must equal `num_key_value_heads` (`R-027`, measured).
+- **Question:** let the callees raise, or restate both at the runtime boundary?
+- **Choice:** restate both, and derive the "is the chunked read available" predicate by probing
+  `tt/attention/dense_sp.dense_sp_attention` rather than hard-coding `False`.
+- **Why:** the two failures they replace are the wrong shape for a caller.
+  * Blocker 1 arrives from three frames down, *after* `write_kv_chunk` has already run
+    (`tt/attention/prefill.py:182` precedes `:218`), so a caller that swallowed it would hold a
+    half-populated cache. Checking it in `prefill_chunk` **before** the device is touched makes the
+    message name the offset, the reason, and the two real paths.
+  * Blocker 2 arrives as a C++ `TT_FATAL ... cache and input num-heads dim must match`, which names
+    neither TP nor the mesh. `_resolve_kv` turns it into a sentence naming both.
+  * The probe (rather than a `False` literal) means the predicate flips to `True` the moment P8
+    lands the port, with no edit here — and it costs nothing, because the stub's first statement
+    raises and a real implementation raises `TypeError` on a no-argument call before allocating.
+- **Evidence:** `raw/G-CHUNK_20260903T204519Z.log`
+  (`test_model_level_chunked_prefill_is_refused_on_one_card` — both refusals fire through the real
+  code path) and `raw/G-RUNTIME_20260903T204925Z.log` (9 refusals, each matched on its message).
+- **Confidence:** high.
+- **Falsifier:** either refusal silently *not* firing — which both tests would fail on, by design.
+- **Revisit if:** P8 lands `dense_sp_attention`; then `_chunked_read_supported` becomes `True` at
+  `sp > 1` and `G-CHUNK`'s blocked half becomes runnable with no change here.
+- **Blast radius:** `tt/tt_prefill_runtime.py`, `G-CHUNK`, `G-RUNTIME`, P8.
+
+### DEC-057 — The golden trace directory comes from `$PREFILL_TRACE_DIR`, not a new package env var
+- **Phase / module:** P7 / `tests/unit/test_attention_chunked_vs_ref.py`, `tt/tt_prefill_runtime.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `G-CHUNK` needs the golden trace's `token_ids` (the device must prefill exactly the
+  tokens the golden was built from), and `03_OUTLINE.md` §1 convention 10 budgets only two
+  *behaviour* env vars for the package.
+- **Question:** add `$LLAMA32_8B_GOLDEN_TRACE`, or reuse the engine's existing name?
+- **Choice:** `$PREFILL_TRACE_DIR`, the name `models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:539`
+  and `models/demos/common/prefill/runners/runner_utils.py` already use.
+- **Why:** it selects a filesystem location, not a code path, so it is not one of the two budgeted
+  behaviour variables — the same argument `DEC-048` makes for `$TT_CACHE_PATH`. Reusing the engine's
+  name also means P10 needs no translation, and a machine that already has a trace exported for
+  gpt-oss can run this gate unchanged. Unset -> `pytest.skip` with the generator command, never a
+  silent pass.
+- **Evidence:** `raw/G-CHUNK_20260903T204519Z.log` (the gate ran with
+  `PREFILL_TRACE_DIR=/home/mstojkovic/llama32_8b_golden/p7_s2048`).
+- **Confidence:** high.
+- **Falsifier:** a machine where `$PREFILL_TRACE_DIR` points at a *gpt-oss* trace — the shapes
+  differ (`[1, 8, S, 128]` vs gpt-oss's 64-wide head), and `compare_device_dump`'s shape assert
+  fires rather than producing a low PCC.
+- **Revisit if:** the package needs two traces at once.
+- **Blast radius:** `tests/unit/test_attention_chunked_vs_ref.py`, `README.md` (P9), P10's runner.
+
+### DEC-058 — `G-CHUNK` is decomposed: deltas 1-2 measured through the cache's public functions, delta 3 recorded `BLOCKED`
+- **Phase / module:** P7 / `tests/unit/test_attention_chunked_vs_ref.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** the gate as written wants "one-shot vs N-chunk prefill" KV caches. On one card the
+  N-chunk *model* prefill cannot run at all: `R-028` (the cache-read attention) and `R-027` (TP must
+  equal `num_key_value_heads = 8`) are both hard stops, and both live in modules P7 does not own.
+- **Question:** drop the gate to `BLOCKED` entirely, weaken a threshold, move to a `(1,8)` mesh, or
+  decompose it?
+- **Options considered:**
+  1. **All `BLOCKED`.** Accurate about delta 3 and needlessly silent about deltas 1-2, which are
+     P7's actual deliverables (the indexed RoPE offset and the chunked cache write) and *are*
+     measurable.
+  2. **Run it on `(1,8)`** (TP=8 makes the cache writable). Rejected: it is multi-device, which this
+     phase is explicitly told not to enable, and it would fold the untested TP all-reduce into P7's
+     numbers — `G-TP-PARITY` is P8's gate and must stay a clean comparison.
+  3. **Lower the mutual threshold** so a partial path passes. Refused outright (Appendix E.1).
+  4. **Decompose.** A chunked prefill differs from a one-shot in exactly three places: the RoPE
+     table/op and its offset (1), the cache write offset (2), and the attention core (3). Feed
+     **the same hidden states** — from one one-shot forward of the real 32-layer model — to both
+     paths; that isolates 1 and 2 exactly and leaves 3 to P8.
+- **Choice:** option 4, with delta 3 recorded as a separate `BLOCKED` gate row (`G-CHUNK-ATTN`) and
+  `R-028` naming what P8 must change.
+- **Why:** the decomposition is exact rather than approximate — given identical inputs, deltas 1+2
+  are the *entire* difference between the two KV producers — so the measured 1.00000 mutual PCC is a
+  real statement about the chunked path, not a proxy. And the parts that cannot run are named in a
+  gate row a reviewer will see, not buried. The KV cache is driven through `write_kv_chunk` one head
+  at a time (head `h` -> slot `h`), which is the same op, the same DRAM `NdShard` geometry and the
+  same `head_dim=128` a chip performs at TP=8.
+- **Evidence:** `raw/G-CHUNK_20260903T204519Z.log`. Mutual K/V **1.00000** at both (512,128) and
+  (2048,512); vs golden min K **0.99818** / **0.99838**, min V **0.99206** / **0.99182**; negative
+  control (every chunk roped at `kv_actual_global=0`) collapses to **0.70637** / **0.65493**.
+- **Confidence:** high for deltas 1-2; the gate makes no claim about delta 3.
+- **Falsifier:** P8 measuring a chunked-vs-one-shot KV difference on `(4,8)` that this gate did not
+  predict — that difference would then be attributable to delta 3 or to the collectives, which is
+  exactly the localisation the decomposition buys.
+- **Revisit if:** `dense_sp_attention` lands; re-run with the model driving the cache.
+- **Blast radius:** `tests/unit/test_attention_chunked_vs_ref.py`, `G-CHUNK`, `G-CHUNK-ATTN`, P8.
+
+### DEC-059 — The stored golden K/V dtype defaults to **`float32`**, not the template's `bfloat16`
+- **Phase / module:** P7.1 / `scripts/generate_golden_kv_cache.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `models/demos/minimax_m3/scripts/generate_golden_kv_cache.py:144` defaults `--dtype`
+  to `bfloat16` "(bf16 matches the device cache)".
+- **Question:** store bf16 (matching the device) or fp32 (matching the computation)?
+- **Choice:** fp32.
+- **Why:** Appendix E.1's rule, applied to storage. A golden stored in a dtype the device also
+  rounds to **shares the device's rounding**, which inflates every PCC — the exact defect E.1
+  documents in `models/tt_transformers`' bf16-weight references. Our device cache is `bfloat8_b`
+  anyway, so bf16 storage would not even match it; it would just discard reference precision for
+  nothing. The cost is 4x disk (0.13 GB at 512 tokens, 0.50 GB at 2048), which is irrelevant at
+  bring-up scale, and `--dtype bfloat16` remains available for a very long trace.
+- **Evidence:** the noise-floor accounting in `raw/G-CHUNK_20260903T204519Z.log` — layer 0's
+  `err_ratio` of **1.30x** against the bf8_b storage floor is only meaningful because the reference
+  itself carries no storage rounding.
+- **Confidence:** high.
+- **Falsifier:** a 128 k-token trace where fp32 storage is the binding cost (32 layers x 8 heads x
+  128 k x 128 x 4 B x 2 = 34 GB) — then `--dtype bfloat16` per trace, logged.
+- **Revisit if:** a full-context golden is generated.
+- **Blast radius:** `scripts/generate_golden_kv_cache.py`, disk for every trace.
+
+### DEC-060 — `R-025` answered by re-measuring `MAX_LAYER_ERROR_STEP` on the KV curve at two chunk sizes, with `DEC-047`'s numbers **carried over unchanged**
+- **Phase / module:** P7 / `tests/unit/test_attention_chunked_vs_ref.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** `R-025` — `DEC-047`'s `MAX_LAYER_ERROR_STEP = 4.0` was derived from one sequence
+  length (128), one input and one dtype, and P7 owes the curve at the real chunk size.
+- **Question:** re-derive the threshold from the P7 data, or carry `DEC-047`'s numbers over and
+  test them?
+- **Choice:** carry **both** numbers over verbatim — the `4.0` ceiling *and* `STEP_CHECK_FROM_LAYER
+  = 3` — and report the measurement.
+- **Why:** re-picking a threshold from the data it is about makes the measurement unfalsifiable, and
+  that is precisely the failure Appendix E.1 was written against. Carrying the numbers over turns
+  `R-025` into a real test with a real chance of failing. It **did** fail on the first run, and the
+  reason was informative rather than a threshold problem: with the step checked from layer 1, the
+  max K step is **4.49x at layer 2** (4.18x at seq 2048) — because layer 1's K error is **3.34e-5**, about 1/55th of the
+  deepest layer's 1.8e-3, so layer 2's ratio is measuring a near-exact baseline. That is verbatim
+  the situation `STEP_CHECK_FROM_LAYER = 3` exists for
+  (`tests/unit/test_model_vs_ref.py:89-90`), and applying the *same* start layer to a
+  re-measurement of the *same* threshold is not moving a goalpost. From layer 3 onward:
+  **max K step 1.95x (L13) / 1.81x (L8), max V step 1.48x (L15) / 1.60x (L8)** at (512,128) / (2048,512) — half the
+  ceiling, at two chunk sizes instead of one. The excluded early steps are logged, not dropped.
+- **Also decided here (Appendix E.5 accounting):** the `err_ratio` against the bf8_b **storage**
+  floor is asserted at **layer 0 only** (`MAX_LAYER0_ERR_RATIO = 3.0`, measured **1.30x / 1.32x**).
+  Layer 0's input is the exact embedding, so the storage floor really is its whole budget. From
+  layer 1 on, the input hidden state already carries the accumulated bf8_b-weight error of every
+  layer below it (`G-MODEL` measured the 32-layer hidden state at **0.9997646**), so the
+  storage-only floor models the wrong thing and the worst-layer **47.05x / 42.54x** is *not* a
+  finding against it. Naming the dominant term instead of granting the slack is E.5's rule; the step
+  curve is the instrument for those layers.
+- **Evidence:** `raw/G-CHUNK_20260903T204519Z.log` (both parametrised cases), and the failing first
+  run `raw/G-CHUNK_20260903T204108Z.log` which is what produced the layer-2 finding.
+- **Confidence:** high for chunk sizes up to 512; the 8192 default is still unmeasured.
+- **Falsifier:** a step above 4.0 from layer 3 onward at a larger chunk size.
+- **Revisit if:** a long-context run at chunk 8192 is attempted — see `R-025`'s updated status:
+  the *hidden-state* curve at 8192 remains unmeasured and is now P8/P9's.
+- **Blast radius:** `tests/unit/test_attention_chunked_vs_ref.py`, `R-025`, P8's `G-MESH-KV`.
+
+### DEC-061 — `verify_golden_kv.py` implements its own `pcc()` rather than importing `comp_pcc`
+- **Phase / module:** P7.2 / `scripts/verify_golden_kv.py`
+- **Date (UTC):** 2026-09-03
+- **Trigger:** Appendix A lists `G-GOLDEN`'s device as **host**, and every other PCC in this package
+  comes from `models.common.utility_functions.comp_pcc`.
+- **Question:** import `comp_pcc` (one definition of PCC in the package) or write a local one (the
+  script stays host-only)?
+- **Choice:** local, in fp64, with the constant-tensor case handled explicitly.
+- **Why:** importing `comp_pcc` pulls in the module that imports the device stack, which would make
+  a *host* gate require a working `ttnn` — and the script's whole point is to validate a trace on a
+  machine with no device (and to be runnable by the golden's producer). The duplication is 8 lines
+  of textbook arithmetic, and the two are cross-checked in practice: `G-CHUNK` computes every
+  per-layer number with `comp_pcc` and then re-computes the same comparison through
+  `compare_device_dump`'s `pcc`, in the same run, against the same thresholds — a disagreement would
+  show up as one table passing and the other failing.
+  The `denom == 0` branch is not defensive padding: a zeroed cache makes both norms 0 and the naive
+  formula returns `nan`, which reads as a broken comparison rather than a dead producer. It returns
+  `1.0` only for two *identical* constants and `0.0` otherwise, and `verify_structure` rejects a
+  constant tensor before it can get that far.
+- **Evidence:** `raw/G-GOLDEN_20260903T204828Z.log` — the script runs with no `ttnn` import; and
+  `raw/G-CHUNK_20260903T204519Z.log`, where the `comp_pcc` line and the `compare_device_dump` table
+  agree to the printed 5 decimals on all 32 layers.
+- **Confidence:** high.
+- **Falsifier:** the two definitions disagreeing on a layer — visible in every `G-CHUNK` run.
+- **Revisit if:** `comp_pcc` moves to a device-free module.
+- **Blast radius:** `scripts/verify_golden_kv.py`, `G-GOLDEN`.

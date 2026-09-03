@@ -25,6 +25,11 @@ Template: `BRINGUP_RECIPE.md` §1.4. Full gate index and thresholds: `BRINGUP_RE
 | G-LAYER | P6.1 | one decoder layer (norm -> attn -> residual -> norm -> MLP -> residual) vs fp32 torch, (1,1) — **integration check only** | PCC >= **0.999** **and** <= 8x the torch noise floor | @bf8_b **0.9995864 / 0.9996884 / 0.9997914** (seq 128/512/2048), floors 0.9997390/0.9997954/0.9998512, **1.59/1.52/1.40x**; @bf16 **0.9997674 / 0.9998324 / 0.9998975**, floors 0.9999196/0.9999392/0.9999581, **2.89/2.76/2.45x**; negative control (norm gains swapped) **0.9470707**; masking attenuation measured **1.12x** vs closed-form 1.06x (random) and **1.73x/1.23x** (real layer-0 weights) — the layer scores **below** its own attention block, `DEC-040` | **PASS** | 2026-09-03 | `raw/G-LAYER_20260903T191826Z.log` |
 | G-WEIGHTS | P6.2 | the REAL 291-tensor checkpoint loads with nothing missing and nothing silently unused; cache-only rebuild is bit-identical | 0 missing / 0 unused of 291 (both sets printed); cache-only rebuild bit-identical | **291 = 291 = 291** keys (checkpoint / model-consumed / `ModelArgs`-expected), **0 missing, 0 unused**; 291 device weights; cache-only rebuild **21/21 SHA-256 identical, 0 differ**; **39** device weights bit-exact vs the checkpoint (`rtol=atol=0`) through each loader's transpose + Q/K Meta swizzle + dtype ladder; cache path carries **`1x1`** and the dtype; negative control (`map_hf_to_meta_keys`) **291 missing / 291 unused** + construction refuses | **PASS** | 2026-09-03 | `raw/G-WEIGHTS_20260903T195111Z.log` |
 | G-MODEL | P6.3 | embedding -> N x DecoderLayer -> final norm -> LM head vs fp32 HuggingFace on the same real weights, (1,1) — **integration check only** | hidden PCC >= **0.999**; **top-1 = 100%**; <= 8x the noise floor; no step in the per-layer curve (<= 4x from layer 3) | 2L **0.9997219** (s128) / **0.9997530** (s512), 4L **0.9995237** / **0.9995976**, floors 0.9998103/0.9998331/0.9997114/0.9997565, **1.47/1.48/1.65/1.65x**; **32L 0.9997646**, floor 0.9997630, **0.99x** (at the floor); **top-1 5/5 exact** (63075, 24744, 20007, 76216, 220); per-layer curve smooth, max step **1.38x @ L30** (threshold 4x) — **no step**; negative control (layer weights rotated) **0.1612**; HF causality `max\|Δ\|` on rows [:-1] = **0.0**; in-test fp32 reference vs HF **PCC 1.0** | **PASS** | 2026-09-03 | `raw/G-MODEL_20260903T195420Z.log` |
+| G-CHUNK | P7 | chunked (N-chunk) KV production == one-shot, and both == the fp32 golden, over all 32 layers — the indexed-RoPE offset and the chunked cache write (`DEC-058` deltas 1-2) | >= 0.999 mutual; >= 0.99 K / >= 0.98 V vs golden; step <= 4x from L3; negative control must collapse | mutual K/V **1.00000 / 1.00000** at both (512,128) and (2048,512); min vs golden K **0.99818 / 0.99838**, V **0.99206 / 0.99182**; mean K **0.99904 / 0.99905**, V **0.99673 / 0.99621**; layer-0 err_ratio **1.30x / 1.32x** of the bf8_b storage floor; max step from L3 K **1.95x / 1.81x**, V **1.48x / 1.60x**; negative control (every chunk roped at `kv_actual_global=0`) **0.70637 / 0.65493** | **PASS-WITH-DEVIATION** (`DEC-058`) | 2026-09-03 | `raw/G-CHUNK_20260903T204519Z.log`, `raw/G-GOLDEN-TABLE_20260903T204519Z.log` |
+| G-CHUNK-ATTN | P7 | the third of chunked prefill P7 cannot reach: chunk *k*'s queries attending the prefix read back out of the cache | >= 0.999 chunked == one-shot on the attention OUTPUT | — | **BLOCKED** (`R-028`; second blocker `R-027`) | 2026-09-03 | `raw/G-CHUNK_20260903T204519Z.log` (both refusals asserted) |
+| G-GOLDEN | P7 | the fp32 golden-KV pipeline works over all 32 layers, and the per-layer table is produced by the shipped script | clean table; generator + verifier exit 0; driver == HF's own model loop | 32/32 layers x 512 and x 2048 tokens, all present / correctly shaped `[1,8,S,128]` / finite / non-constant; generator **38.2 s** (512) and **57.9 s** (2048), streaming per layer; streamed driver == `LlamaModel`'s own loop at **rtol=atol=0**; per-layer table printed by `verify_golden_kv.compare_device_dump`; negative controls (one layer zeroed, one layer deleted) both exit **1** | **PASS** | 2026-09-03 | `raw/G-GOLDEN_20260903T204828Z.log`, `raw/G-GOLDEN-TABLE_20260903T204519Z.log` |
+| G-RUNTIME | P7 | `TtPrefillRuntime` satisfies the engine's §2 runtime contract, and every refusal is loud and named | 5/5 `config` names; 3/3 engine methods with the documented parameters; all refusals matched on message; audit's negative control must fail | 9/9 tests pass in 22.82 s; `chunk_size` aliases `default_chunk_size`; `owns_kv_cache` defaults **False**; chunk sizes largest-first `(512, 128)`; 2 indexed-RoPE tables; `make_chunk_input` `[1,1,1,chunk/sp]` uint32 ROW_MAJOR and a bf16 TILE placeholder off-first-rank; **9 refusals** each matched on its message; contract audit rejects a missing name | **PASS** | 2026-09-03 | `raw/G-RUNTIME_20260903T204925Z.log` |
+| G-P7-REGRESSION | P7 | the whole package suite still passes after P7's additions | 0 failed | **118 passed, 0 failed** in 724.87 s (P5+P6 were 72 passing; P7 adds 16 tests and modifies no existing test) | **PASS** | 2026-09-03 | `raw/G-P7-REGRESSION_20260903T205009Z.log` |
 
 ## Checklist (recipe phase map, `BRINGUP_RECIPE.md:37-49`)
 
@@ -37,7 +42,7 @@ Template: `BRINGUP_RECIPE.md` §1.4. Full gate index and thresholds: `BRINGUP_RE
 | **P4** CCL plan | `G-CCL-PLAN` | ✅ PASS |
 | **P5** Modules | `G-MESH` `G-RMS` `G-ROPE` `G-MLP` `G-ATTN` `G-KV` | ✅ **all 6 PASS** — `G-MESH` ✅ `G-RMS` ✅ (re-run under `DEC-031`) `G-ROPE` ✅ `G-MLP` ✅ `G-ATTN` ✅ `G-KV` ✅ |
 | **P6** Assembly | `G-LAYER` `G-WEIGHTS` `G-MODEL` | ✅ **all 3 PASS** — `G-LAYER` ✅ `G-WEIGHTS` ✅ (real checkpoint, 291/291) `G-MODEL` ✅ (2/4/32 layers, top-1 5/5) |
-| **P7** Chunked + golden | `G-CHUNK` `G-GOLDEN` | ⬜ (**not** blocked — `R-003` is void) |
+| **P7** Chunked + golden | `G-CHUNK` `G-GOLDEN` `G-RUNTIME` `G-CHUNK-ATTN` | 🟡 `G-GOLDEN` ✅ `G-RUNTIME` ✅ `G-CHUNK` ✅ **PASS-WITH-DEVIATION** (`DEC-058`) · `G-CHUNK-ATTN` ⛔ **BLOCKED** (`R-028`, `R-027`) |
 | **P8** Multi-device | `G-TP-PARITY` `G-RACE` `G-SEMAPHORE` `G-MESH-KV` | ⬜ (**not** blocked — `R-003` is void) |
 | **P9** Cleanliness | `G-CLEAN` | ⬜ |
 
@@ -1028,3 +1033,260 @@ Handover to P7: tt/layer.py (DecoderLayer), tt/model.py (Model), tt/embedding.py
   * `DecoderLayer(scatter_output=True)` raises by design (DEC-049); scheme B is P8's.
   * Re-derive MAX_LAYER_ERROR_STEP at the real chunk size before trusting it (R-025).
 ```
+
+---
+
+## P7 — Chunked prefill + golden KV
+
+### G-GOLDEN — the fp32 golden-KV pipeline over all 32 layers
+- **Command:**
+  ```
+  python3 models/demos/llama32_8b_d_p/scripts/generate_golden_kv_cache.py \
+      --prompt-file prompt.txt --max-tokens 2048 --pad-to 2048 --out $TRACE
+  python3 models/demos/llama32_8b_d_p/scripts/verify_golden_kv.py $TRACE
+  pytest models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py -q \
+      -k "golden or permutation or contract"
+  ```
+- **Mesh / device:** **host** (Appendix A lists `G-GOLDEN`'s device as host, and the script imports
+  no `ttnn` — `DEC-061`). The device read-back half is scored inside `G-CHUNK`.
+- **Inputs:** the real `Llama-3.1-8B-Instruct` checkpoint at `$HF_MODEL`; a 4020-character English
+  prompt tokenized with the chat template. Two traces: **512** tokens (40 real + pad) and **2048**
+  tokens (**2048 real**, no pad).
+- **Threshold:** clean table; both scripts exit 0 over all 32 layers; the streaming driver must equal
+  HF's own model loop.
+- **Measured:**
+  - `verify_golden_kv.py` **PASS** on both traces: 32/32 layer files present, K and V both exactly
+    `[1, 8, S, 128]`, all finite, none constant.
+  - Generation **38.2 s** (32 x 512) and **57.9 s** (32 x 2048), fp32, 64 threads, streaming one
+    layer of weights and one layer of KV at a time; 0.13 GB / 0.50 GB on disk.
+  - `test_golden_driver_agrees_with_hfs_own_model_loop`: the per-layer streaming driver reproduces a
+    2-layer `LlamaModel`'s own `DynamicCache` at **`rtol = atol = 0`** (bit-exact) on real weights.
+  - Per-layer table: `raw/G-GOLDEN-TABLE_20260903T204519Z.log` (both chunk cases, 32 rows each).
+  - **Negative controls, both required to fail and both did:** zeroing one layer's K ->
+    `FAIL layer 7 K: constant tensor (std == 0)`, exit **1**; deleting `layer_9.safetensors` ->
+    `FAIL layer 9: ... missing`, exit **1**.
+- **Verdict:** **PASS**
+- **Input distribution:** none — a real tokenized prompt and the real checkpoint. There is no random
+  tensor whose distribution could be chosen (the strongest form of Appendix E.1's rule).
+- **Reference dtype policy:** checkpoint `bfloat16` upcast to fp32 **exactly** (every bf16 value is
+  an fp32 value, so no rounding is introduced or removed); **all arithmetic fp32**; K/V stored
+  **fp32** (`DEC-059`, against the template's bf16 default). The device holds bf8_b weights, bf16
+  activations and a bf8_b cache, so this reference shares **none** of the device's rounding — the
+  defect Appendix E.1 documents in `models/tt_transformers`' bf16-weight references.
+- **Deviations:** none.
+- **Notes:** `cfg._attn_implementation = "eager"` **and** an explicit `create_causal_mask(...)`, with
+  an assert that it is not `None` (Appendix F.2: eager attention applies only the mask it is handed,
+  so `attention_mask=None` is silently non-causal — layer 0's K/V would still be right and every
+  later layer subtly wrong, the worst possible failure for a golden). The stored K is in HF's
+  **half-split** rotary convention; consumers must apply
+  `verify_golden_kv.hf_to_meta_lane_permutation`, which is the single definition of that permutation
+  in this package and is checked semantically (frequency `i` must land on Meta lanes `2i`, `2i+1`)
+  rather than by an algebraic shortcut — it is **not** an involution
+  (`perm[perm][:4] == [0, 32, 64, 96]`), so "apply it to whichever side" would be wrong.
+  Landmine found here: `R-026`.
+
+### G-CHUNK — chunked vs one-shot KV production, and both vs the fp32 golden
+- **Command:**
+  ```
+  export PREFILL_TRACE_DIR=/home/mstojkovic/llama32_8b_golden/p7_s2048
+  pytest models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py -q
+  ```
+- **Mesh / device:** (1,1), Blackhole. TP=1, SP=1 — **no collective runs at all**.
+- **Inputs:** the golden trace's own `token_ids` (the device must prefill exactly the tokens the
+  golden was built from), real 32-layer weights at `bfloat8_b`, bf16 activations, `bfloat8_b` cache,
+  `head_dim = 128`. Two parametrised cases: **(seq 512, chunk 128)** and **(seq 2048, chunk 512)**,
+  4 chunks each.
+- **Threshold:** mutual (chunked vs one-shot) PCC >= **0.999**; vs golden >= **0.99** K /
+  >= **0.98** V; per-layer error step <= **4.0x** from layer 3 (`DEC-047`'s numbers, carried over
+  unchanged — `DEC-060`); layer-0 `err_ratio` <= **3.0x**; the negative control must fall to
+  <= **0.90**.
+- **Measured** (`raw/G-CHUNK_20260903T204519Z.log`, 7 passed, 121.81 s; full table in
+  `raw/G-GOLDEN-TABLE_20260903T204519Z.log`):
+
+  | statistic | seq 512 / chunk 128 | seq 2048 / chunk 512 |
+  |---|---|---|
+  | chunked vs one-shot, min K / min V | **1.00000 / 1.00000** | **1.00000 / 1.00000** |
+  | vs golden, min K (layer) | **0.99818** (L22) | **0.99838** (L21) |
+  | vs golden, mean K | **0.99904** | **0.99905** |
+  | vs golden, min V (layer) | **0.99206** (L28) | **0.99182** (L28) |
+  | vs golden, mean V | **0.99673** | **0.99621** |
+  | layer-0 `err_ratio` (bf8_b storage floor) | **1.30x** | **1.32x** |
+  | worst-layer `err_ratio` (same floor) | 47.05x — *named, not granted; see below* | 42.54x |
+  | max error step from L3 (K / V) | **1.95x** (L13) / **1.48x** (L15) | **1.81x** (L8) / **1.60x** (L8) |
+  | excluded early steps (K, L1 / L2) | 0.91x / 4.49x | 0.89x / 4.18x |
+  | K error span | 3.34e-05 .. 1.82e-03 | 3.29e-05 .. 1.62e-03 |
+  | **negative control** (every chunk roped at `kv_actual_global = 0`), worst K | **0.70637** | **0.65493** |
+
+- **Verdict:** **PASS-WITH-DEVIATION** (`DEC-058`) — every threshold cleared, on the two thirds of
+  chunked prefill that are reachable on one card. The third third is `G-CHUNK-ATTN`, below.
+- **Input distribution:** none (real prompt, real weights) — see `G-GOLDEN`.
+- **Reference dtype policy:** as `G-GOLDEN` (fp32 reference, no shared rounding). **Noise floor:**
+  the golden K/V through ttnn's own `bfloat8_b` quantiser, i.e. the cache dtype, which is the whole
+  **storage** budget.
+- **Deviations (all in `DEC-058`, and each with its measurement):**
+  1. **The attention core is not exercised.** A chunked prefill differs from a one-shot in exactly
+     three places: the RoPE table/op and its offset, the cache write offset, and the attention core.
+     This gate feeds **the same hidden states** — from one one-shot forward of the real 32-layer
+     model, captured through the `on_layer_complete(layer_idx, hidden_states)` seam — to both paths,
+     which isolates the first two **exactly** (given identical inputs they are the entire
+     difference) and leaves the third to P8. It is not an approximation of the gate; it is two of its
+     three parts, measured, and the third recorded `BLOCKED`.
+  2. **The cache is driven through `write_kv_chunk`, one KV head per call, not through
+     `Model.prefill_forward`.** Forced by `R-027`: the packed cache is one KV head per chip, so a
+     model-level write needs `TP == num_key_value_heads == 8` and dies in a C++ `TT_FATAL` at
+     `(1,1)`. Head `h` is written into slot `h` — the same op, the same DRAM `NdShard` geometry, the
+     same `head_dim = 128`, one head per write, which is exactly what a chip does at TP=8. The real
+     `input_layernorm -> q/k/v_proj -> nlp_create_qkv_heads -> RoPE` sequence
+     (`models/demos/llama32_8b_d_p/tt/attention/prefill.py:139-176`) runs unchanged, with the model's
+     own Meta-swizzled weights and its own compute-kernel config.
+  3. **The `err_ratio` assert applies at layer 0 only** (Appendix E.5 accounting). Layer 0's input is
+     the exact embedding, so the bf8_b storage floor really is its whole budget: **1.30x / 1.32x**.
+     From layer 1 on, the input hidden state already carries the accumulated bf8_b-weight error of
+     every layer below it (`G-MODEL` measured the 32-layer hidden state at **0.9997646**), so a
+     storage-only floor models the wrong thing and the worst-layer 47.05x is **not** a finding
+     against it. Naming the dominant term rather than granting the slack is E.5's rule; the step
+     curve is the instrument for those layers, and it is flat (<= 1.95x against a 4x ceiling).
+- **Notes:**
+  - **`R-025` is answered here** for the KV product, at two chunk sizes instead of one, with
+    `DEC-047`'s threshold **and** its `STEP_CHECK_FROM_LAYER = 3` carried over unchanged so the
+    measurement could fail — and it did on the first run (`raw/G-CHUNK_20260903T204108Z.log`,
+    max K step **4.49x at layer 2**), which is exactly the near-exact-baseline case that start layer
+    exists for: layer 1's K error is 3.34e-05, ~1/55th of the deepest layer's.
+  - **`R-020` is closed by measurement**, not by the assert that mitigated it: the indexed RoPE was
+    exercised at chunk offsets 0/128/256/384 and at 0/512/1024/1536, and chunked-vs-one-shot K is
+    **1.00000** at every layer.
+  - `raw/G-CHUNK_20260903T203900Z.log` is a **truncated** transcript from a run the harness killed
+    at a 2-minute wall clock, and `raw/G-CHUNK_20260903T204108Z.log` is the genuine first failure
+    described above. Both are kept rather than deleted; the authoritative log is `204519Z`.
+
+### G-CHUNK-ATTN — chunked cache-read attention (the third of `G-CHUNK` P7 cannot reach)
+- **Command:** would be
+  `pytest models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py -q` with the
+  *model* driving the cache, i.e. `prefill_chunk(actual_start > 0)`.
+- **Mesh / device:** needs `sp > 1` (the SP ring), so `(4,8)` — P8.
+- **Threshold:** chunk 1's attention **output** vs the one-shot's `[chunk:2*chunk]` slice,
+  PCC >= 0.999 (the shape of `models/demos/minimax_m3/tests/unit/test_attention_chunked_vs_ref.py:177`).
+- **Measured:** — (not run).
+- **Verdict:** **BLOCKED** — `R-028` (primary: the cache-read attention is unimplemented) and
+  `R-027` (secondary: `TP` must equal `num_key_value_heads`, so even chunk 0's model-level cache
+  write is impossible on one card).
+- **Why this is not a threshold that was quietly dropped:** both blockers are asserted as **loud
+  refusals** in this very gate's test file
+  (`test_model_level_chunked_prefill_is_refused_on_one_card`), through the real code path, so if
+  either ever stops raising the suite fails. A silent success there would mean chunked prefill had
+  started returning plausible, wrong KV.
+- **Scope it honestly:** this is **not a flag flip.** `tt/attention/prefill.py:218` raises because a
+  plain `is_causal` SDPA assumes Q row 0 aligns with K row 0 and is off by `cached_len` otherwise.
+  The SP branch at `:195` needs `sequence_parallel=True` **and** `sp > 1` **and** a real
+  `tt/attention/dense_sp.dense_sp_attention`, which is still the P5 stub
+  (`tt/attention/dense_sp.py:43`). Landing it means porting the ring-joint SDPA over the block-cyclic
+  cache, or adding a paged `chunked_scaled_dot_product_attention` path with a page table (the op
+  exists on this build; the cache does not have pages). Both live in `tt/attention/`, which P7 does
+  not own. `R-028` lists the three steps.
+- **What P8 does not have to re-debug:** the indexed RoPE at every non-zero `kv_actual_global` and
+  the chunked cache write offsets are both measured at 1.00000 by `G-CHUNK`.
+
+### G-RUNTIME — `TtPrefillRuntime` satisfies the engine's §2 runtime contract
+- **Command:** `pytest models/demos/llama32_8b_d_p/tests/unit/test_prefill_runtime_chunked.py -q`
+- **Mesh / device:** (1,1), Blackhole; four host-only tests need no device.
+- **Inputs:** a 1-layer stack from random weights (this gate is about interfaces and refusals — every
+  *number* in P7 comes from `G-CHUNK` / `G-GOLDEN` on real weights), `max_seq_len = 512`, chunk sizes
+  `{128, 512}`.
+- **Threshold:** all five `config` names from
+  `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md:117` resolve; all three engine methods
+  accept the documented parameters; every refusal matched on its message; the contract audit's own
+  negative control must fail.
+- **Measured** (`raw/G-RUNTIME_20260903T204925Z.log`, 9 passed, 22.82 s):
+  - **5/5** config names (`chunk_size` `max_seq_len` `first_layer_idx` `is_first_rank`
+    `is_last_rank`); `chunk_size == default_chunk_size == 128` as a property (`DEC-054`);
+    `owns_kv_cache` defaults **`False`** (`DEC-055`) and `runtime.kv_cache is None` after
+    construction; `(4,8) -> sp=4, tp=8`.
+  - **3/3** engine methods with the documented parameters (`compile(kv_cache)`,
+    `make_chunk_input(token_ids)`, `prefill_chunk(input_tensor, kv_cache, *, slot_id, actual_start,
+    actual_end, request_id)`).
+  - Shape constraints at (1,1) / (1,8) / (4,8): `CHUNK % (TILE_SIZE*sp) == 0` (128 % 32 / 32 / 128),
+    `MAX_SEQ % CHUNK == 0`, and `actual_start % 32 == 0` enforced in `prefill_chunk`.
+  - `make_chunk_input` -> `[1, 1, 1, chunk/sp]` `uint32` `ROW_MAJOR`, which `Model.embedding` turns
+    into `[1, 1, chunk/sp, 4096]` bf16 TILE; off-first-rank -> a bf16 TILE activation placeholder.
+  - **9 refusals**, each matched on its message: `actual_start > 0` ("needs the cache-read
+    attention"), non-tile-aligned `actual_start`, out-of-range `slot_id`, over-capacity chunk,
+    `TP != num_key_value_heads` ("ONE KV head per chip") from both `prefill_chunk` and `compile`,
+    `kv_cache=None` with `owns_kv_cache=False`, `build_kv_chunk_table` ("P10's deliverable"),
+    `d2h_service`, `set_layer_ack_channel` before `compile`; plus, at construction, a raw-dict
+    `hf_config`, `sequence_parallel=True` against the stub, and a `mesh_shape`/device mismatch.
+  - **Negative control:** `_audit_engine_contract` run against an object missing `config.chunk_size`
+    returns exactly `["runtime.config.chunk_size missing"]`, and against one with no `config` returns
+    `["runtime.config missing"]`. Without this an audit built from `getattr(..., default)` would pass
+    against anything.
+  - `LlamaHFConfig.rope_theta` observed **500000.0** (a `getattr` default of 10000.0 would be
+    silently wrong at every position — Appendix F.2, `R-014`).
+- **Verdict:** **PASS**
+- **Input distribution / reference dtype policy:** not applicable — no PCC is measured.
+- **Deviations:** none. **New gate**, added with its test file in the same edit (Appendix F.9).
+- **Notes:** `gather_layer` / `dump_slot_kv` / `kv_cache_pcc_check` are **not** executed on device
+  (they route through the same TP invariant) — `R-029`. Their format contract is asserted instead:
+  `G-CHUNK` writes a dump in exactly `dump_slot_kv`'s layout and scores it with the same
+  `compare_device_dump`, and
+  `test_device_dump_metadata_contract_matches_the_verifier` asserts from the source text that every
+  key the writer writes is a key the reader reads.
+
+```
+STATUS after P7: gates PASS=16 FAIL=0 DEVIATION=1 BLOCKED=1 | next: P8 (multi-device TP/SP + CCL gates)
+  New this phase: G-GOLDEN PASS, G-RUNTIME PASS, G-CHUNK PASS-WITH-DEVIATION (DEC-058),
+  G-CHUNK-ATTN BLOCKED (R-028 primary, R-027 secondary).
+Open DECs needing review: DEC-052 (R-013 deferred to P8 — reasoned, NOT tested: at (1,1) no
+  collective runs), DEC-055 (owns_kv_cache default inverted vs the template), DEC-058 (G-CHUNK's
+  decomposition), DEC-060 (R-025 answered for KV, still open for the hidden state at chunk 8192).
+Regression: the whole package suite re-run after P7's additions — **118 passed, 0 failed** in
+  724.87 s (`raw/G-P7-REGRESSION_20260903T205009Z.log`). P5+P6 were 72 passing; P7 adds 16 tests
+  (7 in `test_attention_chunked_vs_ref.py`, 9 in `test_prefill_runtime_chunked.py`), and the count
+  differs from 72+16 because the whole suite is run here rather than the P5/P6 subsets.
+  No pre-existing test was modified.
+Handover to P8:
+  * `TtPrefillRuntimeConfig(num_layers, max_seq_len, mesh_shape=(4,8), default_chunk_size=8192,
+    additional_chunk_sizes=(), num_users=1, sp_axis=0, tp_axis=1, topology=Ring,
+    cache_dtype=bfloat8_b, weight_dtype=bfloat8_b, weight_cache_path=None, owns_kv_cache=False,
+    is_first_rank=True, is_last_rank=True, first_layer_idx=0, sequence_parallel=False)`;
+    `config.chunk_size` is a read-only alias of `default_chunk_size`.
+  * `TtPrefillRuntime(mesh_device, hf_config, state_dict, config)` — `hf_config` MUST be the
+    `LlamaHFConfig` from `tt/model_config.llama_hf_config()`; a raw dict is refused (R-014).
+  * `compile(kv_cache)`, `make_chunk_input(token_ids, chunk_size=None)`,
+    `prefill_chunk(input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0,
+    chunk_size=None, skip_lm_head=True, get_last_token=-1)`,
+    `set_layer_ack_channel(channel)`, `kv_migration_base_address(kv_cache)`,
+    `gather_layer(*, slot_id, layer_idx, n_tokens, kv_cache=None, chunk_size=None)`,
+    `dump_slot_kv(out_dir, *, slot_id, n_tokens, kv_cache=None, chunk_size=None)`,
+    `kv_cache_pcc_check(kv_cache=None, *, slot_id, n_chunks, trace_dir=None, chunk_size=None,
+    real_len=None)`.
+  * **`TP` must equal `num_key_value_heads` = 8** or no KV write is possible at all (R-027). The
+    cheapest way to close that hole is a `(1,8)`/TP=8 parametrisation of `G-CHUNK` — do it BEFORE
+    `dense_sp_attention`, so a TP bug and an SP bug cannot arrive together.
+  * To unblock `G-CHUNK-ATTN`: implement `tt/attention/dense_sp.dense_sp_attention`, then set
+    `sequence_parallel=True` on a mesh with `sp > 1`. `_chunked_read_supported()` PROBES the stub,
+    so both the two-chunk `compile()` warm-up and `prefill_chunk(actual_start>0)` start working with
+    no edit to `tt/tt_prefill_runtime.py` (DEC-056).
+  * R-013 was NOT changed and NOT tested (DEC-052). If `G-RACE` fails, deepen the barrier ping-pong
+    2 -> 4 first (`tt/ccl.py`), before extending `reset_global_semaphores`.
+  * `build_kv_chunk_table` raises, naming P10 (R-030). `PREFILL_ENABLE_MIGRATION=1` cannot work yet.
+  * Golden traces are at `/home/mstojkovic/llama32_8b_golden/p7_s512` and `.../p7_s2048`; point
+    `$PREFILL_TRACE_DIR` at one (DEC-057). Regenerate with
+    `scripts/generate_golden_kv_cache.py --prompt-file ... --max-tokens N --pad-to N --out DIR`.
+```
+
+### G-LOOPBACK — loopback KV migration (engine Gate 2)
+- **Verdict:** **OUT-OF-SCOPE (by decision)** — see `DEC-070`. Deliberately *not* recorded as
+  `BLOCKED`: nothing about this model or package is left untested by skipping it (rationale below).
+- **Command:** not run. Would be the three-terminal recipe in
+  `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md` "Gate 2 — loopback migration"
+  (`:456`+), driven by `run_migration_driver.sh` with `--verify-migration dst-bytes`.
+- **Why not run:** requires `migration_endpoint` + `migration_worker` + `_migration_client*.so` from
+  the private `tt-llm-engine` repo (`:14`, `:460`, `:109`). Not present on this machine and not
+  clonable — no GitHub credentials (`git ls-remote` -> `Missing or invalid credentials`; `gh` not
+  authenticated). PRRTE is also absent but installable (sudo available), so it is not the blocker.
+- **What it would have proven:** that the real DRAM -> transport -> DRAM copy lands, and that the
+  destination slots read back byte-identical to the source. Its default mode decodes nothing and is
+  **model-agnostic** by the doc's own description.
+- **What covers the integration instead:** `G-MOCK-MIG` (engine Gate 1, "tt-metal tree only"),
+  `G-ADAPTER`, `G-REQUEST`.
+- **Residual risk:** `R-040` — the multi-rank KV-chunk-table merge is untested, because
+  `PREFILL_MOCK_MIGRATION=1` is single-rank only by design.

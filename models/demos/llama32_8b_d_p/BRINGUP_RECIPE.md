@@ -993,8 +993,8 @@ limitations you inherited (loopback-only verification; cross-talk invisible with
 | `G-LAYER` | P6.1 | decoder layer | PCC ≥ 0.99 | (1,1) |
 | `G-WEIGHTS` | P6.2 | no missing/unused keys; cache-only rebuild identical | exact | 1 card |
 | `G-MODEL` | P6.3 | full stack hidden states; top-1 agreement | ≥ 0.99; 100% top-1 | (1,1) |
-| `G-CHUNK` | P7 | chunked ≡ one-shot | ≥ 0.999 mutual; ≥ 0.99 K / ≥ 0.98 V vs golden | (1,1)+ |
-| `G-GOLDEN` | P7 | golden pipeline works over all layers | clean table | host |
+| `G-CHUNK` | P7 | chunked ≡ one-shot | ≥ 0.999 mutual; ≥ 0.99 K / ≥ 0.98 V vs golden | **(1,8)+** for the KV half (TP must equal 8 — Appendix F.6); **(4,8)** for the attention half |
+| `G-GOLDEN` | P7 | golden trace structure is sound over all layers | clean table | host (imports no ttnn); the device-vs-golden comparison is scored inside `G-CHUNK` |
 | `G-TP-PARITY` | P8 | collectives are exact | PCC ≥ 0.999 vs single-device | (1,TP) |
 | `G-RACE` | P8 | no semaphore races | 3 runs bit-identical | target mesh |
 | `G-SEMAPHORE` | P8 | CCL state allocated once | exact | target mesh |
@@ -1289,12 +1289,31 @@ So `update_padded_kv_cache` and the ring SDPA are both exercised at `n_kv=1` at 
 (mesh, TP, SP). **No topology change is needed and the `(8,4)`/TP=4 fallback is not on the critical
 path.**
 
-**The residual delta is `head_dim`, not head count:** gpt-oss runs `head_dim=64`, Llama is **128**.
-The DRAM shard spec is `shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK(=32), head_dim]`
-(`kv_cache.py:87`), so head_dim is parameterised and 128 is tile-aligned (4 tiles) — but it doubles
-the shard row and is the one number in that layout Llama changes. **`G-KV` must therefore run at the
-real head_dim=128 and assert the block-cyclic read-back, not just PCC.** That is a cheap, targeted
-check; it replaces the vague "P8 owns an n_kv risk".
+**CORRECTED BY P7 — this section had the risk backwards.** It concluded "the residual delta is
+`head_dim`, not head count". The head *count* is in fact the binding constraint, and it constrains the
+**mesh**, not the cache:
+
+- The packed cache allocates **exactly one KV head per chip** (`tt/attention/kv_cache.py:130` hard-codes
+  the `1`). Llama has `num_key_value_heads = 8`. Therefore **`TP` must equal 8** — it is the only mesh
+  width whose per-chip KV-head count the cache can hold.
+- At any smaller TP the model produces more local KV heads than the cache slot, and
+  `update_padded_kv_cache` dies with `TT_FATAL: cache and input num-heads dim must match`
+  (`update_padded_kv_cache_device_operation.cpp:230`) — **including for chunk 0**. So on a single card
+  **no model-level KV write is possible at all.**
+- Consequence for a gate already recorded PASS: **`G-KV` ran at `(1,1)` with `nkv = tp = 1`, a head
+  count the model never produces on that mesh.** It is a valid test of the cache *primitive* and of the
+  head_dim=128 geometry, but it does **not** cover the model -> cache path. `R-027` tracks this.
+- `head_dim` 64 -> 128 was real but minor: the shard spec
+  `shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK(=32), head_dim]` (`kv_cache.py:87`)
+  parameterises it and 128 is tile-aligned; P7 measured it clean.
+- Also note `write_kv_chunk` takes **one KV head per call** (`kv_cache.py:181`); handing it a
+  `[1,8,S,128]` tensor silently writes only head 0. Slice per head — which is exactly what a chip does
+  at TP=8.
+
+**So the first thing P8 must run is a `(1,8)`/TP=8 parametrisation** — no SP, cheap, and it proves the
+model -> cache mesh-mapper step (KV head `c` -> mesh column `c`) *before* any sequence-parallel bug can
+arrive tangled up with it. The general lesson: a gate that passes on a mesh the deployment never uses
+can be testing a configuration the model cannot produce.
 
 ### F.7 Verify your own citations mechanically
 `models/demos/llama32_8b_d_p/scripts/verify_citations.py` (built in P0) caught 5 wrong `path:line`

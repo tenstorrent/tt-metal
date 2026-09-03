@@ -1,0 +1,739 @@
+2026-09-03 20:41:11.594 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 7 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_trace_structure_is_valid 2026-09-03 20:41:14.080 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_golden_trace_structure_is_valid:259 - [G-GOLDEN]  metadata OK: 32 layers, 2048 tokens, K/V shape (1, 8, 2048, 128)
+2026-09-03 20:41:14.081 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_golden_trace_structure_is_valid:259 - [G-GOLDEN]  all 32 layer files present, correctly shaped, finite and non-constant
+2026-09-03 20:41:14.081 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_golden_trace_structure_is_valid:269 - [G-GOLDEN] trace OK: 32 layers x 2048 tokens (2048 real), K/V [1, 8, 2048, 128], dtype float32, reference: transformers.models.llama.modeling_llama.LlamaDecoderLayer, one layer at a time, fp32 compute, weights streamed per layer via mmap (DEC-053)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_hf_to_meta_lane_permutation_carries_frequencies_to_adjacent_lanes 2026-09-03 20:41:14.285 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_hf_to_meta_lane_permutation_carries_frequencies_to_adjacent_lanes:300 - [G-GOLDEN] HF->Meta lane permutation puts frequency i on Meta lanes (2i, 2i+1); perm[:4] = [0, 64, 1, 65]; it is NOT an involution
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_driver_agrees_with_hfs_own_model_loop 2026-09-03 20:41:23.935 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_golden_driver_agrees_with_hfs_own_model_loop:369 - [G-GOLDEN] the per-layer streaming driver reproduces LlamaModel's own loop BIT-EXACTLY (rtol=atol=0) for 2 layers x 64 tokens on real weights
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_device_dump_metadata_contract_matches_the_verifier 2026-09-03 20:41:24.708 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_device_dump_metadata_contract_matches_the_verifier:389 - [G-GOLDEN] dump_slot_kv <-> compare_device_dump metadata contract intact
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0] 2026-09-03 20:41:24.709 | INFO     | llama32_8b_d_p.conftest:state_dict:63 - [llama32_8b_d_p] loading state dict from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-03 20:41:24.714 | INFO     | llama32_8b_d_p.conftest:state_dict:65 - [llama32_8b_d_p] loaded 291 tensors
+2026-09-03 20:41:24.906 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 20:41:24.906 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 20:41:24.923 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 20:41:24.923 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 20:41:25.006 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 20:41:25.011 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 20:41:26.455 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 20:41:26.455 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 20:41:26.455 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 20:41:26.455 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 20:41:26.473 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 20:41:26.510 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 20:41:30.343 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 20:41:30.343 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 20:41:30.361 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 20:41:30.361 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 20:41:31.152 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 20:41:31.836 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 20:41:31.845 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 20:42:17.634 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 0: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99996 V=0.99994 | (one-shot) K=0.99996 | bf8_b K floor=0.99997 err_ratio=1.30x | offset-0 control K=0.70916
+2026-09-03 20:42:17.740 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 1: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99997 V=0.99990 | (one-shot) K=0.99997 | bf8_b K floor=0.99998 err_ratio=1.55x | offset-0 control K=0.70637
+2026-09-03 20:42:17.846 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 2: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99985 V=0.99968 | (one-shot) K=0.99985 | bf8_b K floor=0.99997 err_ratio=4.39x | offset-0 control K=0.79865
+2026-09-03 20:42:17.953 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 3: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99990 V=0.99957 | (one-shot) K=0.99990 | bf8_b K floor=0.99996 err_ratio=2.46x | offset-0 control K=0.73964
+2026-09-03 20:42:18.059 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 4: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99990 V=0.99948 | (one-shot) K=0.99990 | bf8_b K floor=0.99996 err_ratio=2.55x | offset-0 control K=0.75797
+2026-09-03 20:42:18.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 5: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99986 V=0.99946 | (one-shot) K=0.99986 | bf8_b K floor=0.99996 err_ratio=3.96x | offset-0 control K=0.75346
+2026-09-03 20:42:18.266 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 6: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99986 V=0.99937 | (one-shot) K=0.99986 | bf8_b K floor=0.99996 err_ratio=3.60x | offset-0 control K=0.73992
+2026-09-03 20:42:18.372 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 7: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99982 V=0.99926 | (one-shot) K=0.99982 | bf8_b K floor=0.99996 err_ratio=4.09x | offset-0 control K=0.76880
+2026-09-03 20:42:18.478 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 8: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99971 V=0.99892 | (one-shot) K=0.99971 | bf8_b K floor=0.99996 err_ratio=7.04x | offset-0 control K=0.80029
+2026-09-03 20:42:18.584 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 9: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99956 V=0.99844 | (one-shot) K=0.99956 | bf8_b K floor=0.99996 err_ratio=11.27x | offset-0 control K=0.80951
+2026-09-03 20:42:18.689 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L10: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99948 V=0.99824 | (one-shot) K=0.99948 | bf8_b K floor=0.99996 err_ratio=13.10x | offset-0 control K=0.83100
+2026-09-03 20:42:18.796 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L11: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99933 V=0.99792 | (one-shot) K=0.99933 | bf8_b K floor=0.99996 err_ratio=17.14x | offset-0 control K=0.82172
+2026-09-03 20:42:18.901 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L12: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99943 V=0.99715 | (one-shot) K=0.99943 | bf8_b K floor=0.99995 err_ratio=12.23x | offset-0 control K=0.79344
+2026-09-03 20:42:19.008 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L13: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99888 V=0.99673 | (one-shot) K=0.99888 | bf8_b K floor=0.99996 err_ratio=31.78x | offset-0 control K=0.90067
+2026-09-03 20:42:19.115 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L14: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99897 V=0.99701 | (one-shot) K=0.99897 | bf8_b K floor=0.99996 err_ratio=27.24x | offset-0 control K=0.87833
+2026-09-03 20:42:19.222 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L15: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99894 V=0.99557 | (one-shot) K=0.99894 | bf8_b K floor=0.99996 err_ratio=28.82x | offset-0 control K=0.83902
+2026-09-03 20:42:19.331 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L16: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99903 V=0.99673 | (one-shot) K=0.99903 | bf8_b K floor=0.99996 err_ratio=25.52x | offset-0 control K=0.85321
+2026-09-03 20:42:19.437 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L17: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99863 V=0.99550 | (one-shot) K=0.99863 | bf8_b K floor=0.99996 err_ratio=34.78x | offset-0 control K=0.85470
+2026-09-03 20:42:19.544 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L18: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99860 V=0.99661 | (one-shot) K=0.99860 | bf8_b K floor=0.99996 err_ratio=38.92x | offset-0 control K=0.86595
+2026-09-03 20:42:19.651 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L19: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99864 V=0.99625 | (one-shot) K=0.99864 | bf8_b K floor=0.99996 err_ratio=35.52x | offset-0 control K=0.82999
+2026-09-03 20:42:19.756 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L20: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99846 V=0.99573 | (one-shot) K=0.99846 | bf8_b K floor=0.99996 err_ratio=39.72x | offset-0 control K=0.84940
+2026-09-03 20:42:19.861 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L21: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99830 V=0.99531 | (one-shot) K=0.99830 | bf8_b K floor=0.99996 err_ratio=42.56x | offset-0 control K=0.82813
+2026-09-03 20:42:19.967 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L22: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99818 V=0.99538 | (one-shot) K=0.99818 | bf8_b K floor=0.99996 err_ratio=47.05x | offset-0 control K=0.85867
+2026-09-03 20:42:20.073 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L23: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99826 V=0.99497 | (one-shot) K=0.99826 | bf8_b K floor=0.99996 err_ratio=43.25x | offset-0 control K=0.84475
+2026-09-03 20:42:20.178 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L24: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99847 V=0.99510 | (one-shot) K=0.99847 | bf8_b K floor=0.99996 err_ratio=39.47x | offset-0 control K=0.82740
+2026-09-03 20:42:20.284 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L25: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99849 V=0.99462 | (one-shot) K=0.99849 | bf8_b K floor=0.99996 err_ratio=33.84x | offset-0 control K=0.82946
+2026-09-03 20:42:20.388 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L26: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99826 V=0.99297 | (one-shot) K=0.99826 | bf8_b K floor=0.99996 err_ratio=43.42x | offset-0 control K=0.85769
+2026-09-03 20:42:20.494 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L27: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99827 V=0.99432 | (one-shot) K=0.99827 | bf8_b K floor=0.99996 err_ratio=42.09x | offset-0 control K=0.84311
+2026-09-03 20:42:20.598 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L28: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99833 V=0.99206 | (one-shot) K=0.99833 | bf8_b K floor=0.99995 err_ratio=34.89x | offset-0 control K=0.83529
+2026-09-03 20:42:20.703 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L29: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99848 V=0.99319 | (one-shot) K=0.99848 | bf8_b K floor=0.99996 err_ratio=35.11x | offset-0 control K=0.83251
+2026-09-03 20:42:20.808 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L30: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99828 V=0.99355 | (one-shot) K=0.99828 | bf8_b K floor=0.99996 err_ratio=43.69x | offset-0 control K=0.83947
+2026-09-03 20:42:20.914 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L31: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99911 V=0.99644 | (one-shot) K=0.99911 | bf8_b K floor=0.99996 err_ratio=23.98x | offset-0 control K=0.78086
+2026-09-03 20:42:20.917 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:571 - [G-CHUNK] 32 layers, seq=512, 4 x 128: min chunked-vs-one-shot K=1.00000 V=1.00000 (threshold 0.999) | min vs golden K=0.99818 (>= 0.99) V=0.99206 (>= 0.98) | worst K err_ratio=47.05x of the bf8_b storage floor | negative control (offset-0 rope) worst K=0.70637 (must be <= 0.9)
+2026-09-03 20:42:20.917 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:590 - [G-CHUNK] R-025 KV error-step curve at seq=512 chunk=128: max K step = 4.49x at L2, max V step = 3.15x at L2 (ceiling 4.0x)
+2026-09-03 20:42:21.092 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   metadata OK: 32 layers, 2048 tokens, K/V shape (1, 8, 2048, 128)
+2026-09-03 20:42:21.092 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   all 32 layer files present, correctly shaped, finite and non-constant
+2026-09-03 20:42:21.092 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:42:21.092 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] dump /tmp/pytest-of-mstojkovic/pytest-10/test_chunked_kv_equals_one_sho0/device_dump
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] convention=meta n_tokens=512 layers=32
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] thresholds: K >= 0.99, V >= 0.98
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   layer |        K PCC |        V PCC | verdict
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   ------+--------------+--------------+--------
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       0 |      0.99996 |      0.99994 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       1 |      0.99997 |      0.99990 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       2 |      0.99985 |      0.99968 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       3 |      0.99990 |      0.99957 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       4 |      0.99990 |      0.99948 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       5 |      0.99986 |      0.99946 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       6 |      0.99986 |      0.99937 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       7 |      0.99982 |      0.99926 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       8 |      0.99971 |      0.99892 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       9 |      0.99956 |      0.99844 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      10 |      0.99948 |      0.99824 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      11 |      0.99933 |      0.99792 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      12 |      0.99943 |      0.99715 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      13 |      0.99888 |      0.99673 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      14 |      0.99897 |      0.99701 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      15 |      0.99894 |      0.99557 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      16 |      0.99903 |      0.99673 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      17 |      0.99863 |      0.99550 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      18 |      0.99860 |      0.99661 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      19 |      0.99864 |      0.99625 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      20 |      0.99846 |      0.99573 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      21 |      0.99830 |      0.99531 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      22 |      0.99818 |      0.99538 | PASS
+2026-09-03 20:42:21.093 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      23 |      0.99826 |      0.99497 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      24 |      0.99847 |      0.99510 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      25 |      0.99849 |      0.99462 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      26 |      0.99826 |      0.99297 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      27 |      0.99827 |      0.99432 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      28 |      0.99833 |      0.99206 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      29 |      0.99848 |      0.99319 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      30 |      0.99828 |      0.99355 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      31 |      0.99911 |      0.99644 | PASS
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   ------+--------------+--------------+--------
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   min   |      0.99818 |      0.99206 | (layers 22/28)
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   mean  |      0.99904 |      0.99673 |
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:42:21.094 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] PASS: min K = 0.99818 (>= 0.99), min V = 0.99206 (>= 0.98)
+FAILED2026-09-03 20:42:21.175 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_model_level_chunked_prefill_is_refused_on_one_card[blackhole-mesh_device0] 2026-09-03 20:42:22.199 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 20:42:22.274 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 20:42:22.277 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 20:42:22.787 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] NotImplementedError message="single-device chunked cache-read attention"
+2026-09-03 20:42:22.807 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] NotImplementedError message="single-device chunked cache-read attention"
+2026-09-03 20:42:22.809 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="ONE KV head per chip"
+2026-09-03 20:42:22.809 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="ONE KV head per chip"
+2026-09-03 20:42:22.809 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_model_level_chunked_prefill_is_refused_on_one_card:696 - [G-CHUNK] both single-device blockers refuse loudly: cached_len>0 attention (tt/attention/prefill.py) and TP != num_key_value_heads (TtPrefillRuntime._resolve_kv)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0] 2026-09-03 20:42:23.866 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 20:42:23.957 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 20:42:23.959 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 20:43:01.168 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 0: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99996 V=0.99994 | (one-shot) K=0.99996 | bf8_b K floor=0.99997 err_ratio=1.32x | offset-0 control K=0.67026
+2026-09-03 20:43:01.506 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 1: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99997 V=0.99990 | (one-shot) K=0.99997 | bf8_b K floor=0.99998 err_ratio=1.55x | offset-0 control K=0.65493
+2026-09-03 20:43:01.831 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 2: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99986 V=0.99968 | (one-shot) K=0.99986 | bf8_b K floor=0.99997 err_ratio=4.15x | offset-0 control K=0.78578
+2026-09-03 20:43:02.159 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 3: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99991 V=0.99954 | (one-shot) K=0.99991 | bf8_b K floor=0.99996 err_ratio=2.29x | offset-0 control K=0.72358
+2026-09-03 20:43:02.480 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 4: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99990 V=0.99944 | (one-shot) K=0.99990 | bf8_b K floor=0.99996 err_ratio=2.39x | offset-0 control K=0.72767
+2026-09-03 20:43:02.806 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 5: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99986 V=0.99941 | (one-shot) K=0.99986 | bf8_b K floor=0.99996 err_ratio=3.72x | offset-0 control K=0.73925
+2026-09-03 20:43:03.126 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 6: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99986 V=0.99925 | (one-shot) K=0.99986 | bf8_b K floor=0.99996 err_ratio=3.38x | offset-0 control K=0.72697
+2026-09-03 20:43:03.444 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 7: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99982 V=0.99911 | (one-shot) K=0.99982 | bf8_b K floor=0.99996 err_ratio=4.10x | offset-0 control K=0.75247
+2026-09-03 20:43:03.810 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 8: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99968 V=0.99859 | (one-shot) K=0.99968 | bf8_b K floor=0.99996 err_ratio=7.87x | offset-0 control K=0.78070
+2026-09-03 20:43:04.129 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L 9: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99948 V=0.99782 | (one-shot) K=0.99948 | bf8_b K floor=0.99996 err_ratio=12.64x | offset-0 control K=0.77883
+2026-09-03 20:43:04.445 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L10: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99933 V=0.99725 | (one-shot) K=0.99933 | bf8_b K floor=0.99996 err_ratio=16.40x | offset-0 control K=0.79462
+2026-09-03 20:43:04.770 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L11: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99901 V=0.99635 | (one-shot) K=0.99901 | bf8_b K floor=0.99996 err_ratio=25.59x | offset-0 control K=0.78702
+2026-09-03 20:43:05.132 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L12: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99914 V=0.99518 | (one-shot) K=0.99914 | bf8_b K floor=0.99995 err_ratio=16.12x | offset-0 control K=0.78023
+2026-09-03 20:43:05.483 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L13: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99851 V=0.99485 | (one-shot) K=0.99851 | bf8_b K floor=0.99996 err_ratio=41.61x | offset-0 control K=0.85591
+2026-09-03 20:43:05.849 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L14: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99857 V=0.99525 | (one-shot) K=0.99857 | bf8_b K floor=0.99996 err_ratio=38.71x | offset-0 control K=0.84204
+2026-09-03 20:43:06.196 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L15: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99872 V=0.99369 | (one-shot) K=0.99872 | bf8_b K floor=0.99996 err_ratio=34.08x | offset-0 control K=0.80566
+2026-09-03 20:43:06.518 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L16: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99882 V=0.99542 | (one-shot) K=0.99882 | bf8_b K floor=0.99996 err_ratio=29.81x | offset-0 control K=0.82555
+2026-09-03 20:43:06.846 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L17: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99844 V=0.99393 | (one-shot) K=0.99844 | bf8_b K floor=0.99996 err_ratio=39.64x | offset-0 control K=0.82212
+2026-09-03 20:43:07.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L18: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99848 V=0.99571 | (one-shot) K=0.99848 | bf8_b K floor=0.99996 err_ratio=42.54x | offset-0 control K=0.82868
+2026-09-03 20:43:07.482 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L19: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99870 V=0.99560 | (one-shot) K=0.99870 | bf8_b K floor=0.99996 err_ratio=32.56x | offset-0 control K=0.79883
+2026-09-03 20:43:07.803 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L20: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99856 V=0.99513 | (one-shot) K=0.99856 | bf8_b K floor=0.99996 err_ratio=35.37x | offset-0 control K=0.81545
+2026-09-03 20:43:08.127 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L21: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99838 V=0.99476 | (one-shot) K=0.99838 | bf8_b K floor=0.99996 err_ratio=39.52x | offset-0 control K=0.78999
+2026-09-03 20:43:08.447 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L22: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99839 V=0.99508 | (one-shot) K=0.99839 | bf8_b K floor=0.99996 err_ratio=39.55x | offset-0 control K=0.82353
+2026-09-03 20:43:08.773 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L23: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99850 V=0.99478 | (one-shot) K=0.99850 | bf8_b K floor=0.99995 err_ratio=32.77x | offset-0 control K=0.81549
+2026-09-03 20:43:09.091 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L24: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99868 V=0.99520 | (one-shot) K=0.99868 | bf8_b K floor=0.99995 err_ratio=28.52x | offset-0 control K=0.80652
+2026-09-03 20:43:09.438 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L25: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99868 V=0.99461 | (one-shot) K=0.99868 | bf8_b K floor=0.99995 err_ratio=27.14x | offset-0 control K=0.79445
+2026-09-03 20:43:09.762 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L26: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99857 V=0.99287 | (one-shot) K=0.99857 | bf8_b K floor=0.99995 err_ratio=31.49x | offset-0 control K=0.82788
+2026-09-03 20:43:10.079 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L27: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99860 V=0.99484 | (one-shot) K=0.99860 | bf8_b K floor=0.99996 err_ratio=31.97x | offset-0 control K=0.80897
+2026-09-03 20:43:10.409 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L28: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99864 V=0.99182 | (one-shot) K=0.99864 | bf8_b K floor=0.99995 err_ratio=25.30x | offset-0 control K=0.80777
+2026-09-03 20:43:10.731 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L29: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99875 V=0.99302 | (one-shot) K=0.99875 | bf8_b K floor=0.99995 err_ratio=24.25x | offset-0 control K=0.80905
+2026-09-03 20:43:11.056 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L30: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99860 V=0.99382 | (one-shot) K=0.99860 | bf8_b K floor=0.99996 err_ratio=32.97x | offset-0 control K=0.80274
+2026-09-03 20:43:11.389 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:540 - [G-CHUNK] L31: chunked-vs-one-shot K=1.00000 V=1.00000 | vs golden (chunked) K=0.99927 V=0.99686 | (one-shot) K=0.99927 | bf8_b K floor=0.99996 err_ratio=20.45x | offset-0 control K=0.74787
+2026-09-03 20:43:11.400 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:571 - [G-CHUNK] 32 layers, seq=2048, 4 x 512: min chunked-vs-one-shot K=1.00000 V=1.00000 (threshold 0.999) | min vs golden K=0.99838 (>= 0.99) V=0.99182 (>= 0.98) | worst K err_ratio=42.54x of the bf8_b storage floor | negative control (offset-0 rope) worst K=0.65493 (must be <= 0.9)
+2026-09-03 20:43:11.401 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:590 - [G-CHUNK] R-025 KV error-step curve at seq=2048 chunk=512: max K step = 4.18x at L2, max V step = 3.21x at L2 (ceiling 4.0x)
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   metadata OK: 32 layers, 2048 tokens, K/V shape (1, 8, 2048, 128)
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   all 32 layer files present, correctly shaped, finite and non-constant
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] dump /tmp/pytest-of-mstojkovic/pytest-10/test_chunked_kv_equals_one_sho1/device_dump
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] convention=meta n_tokens=2048 layers=32
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] thresholds: K >= 0.99, V >= 0.98
+2026-09-03 20:43:12.164 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   layer |        K PCC |        V PCC | verdict
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   ------+--------------+--------------+--------
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       0 |      0.99996 |      0.99994 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       1 |      0.99997 |      0.99990 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       2 |      0.99986 |      0.99968 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       3 |      0.99991 |      0.99954 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       4 |      0.99990 |      0.99944 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       5 |      0.99986 |      0.99941 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       6 |      0.99986 |      0.99925 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       7 |      0.99982 |      0.99911 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       8 |      0.99968 |      0.99859 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]       9 |      0.99948 |      0.99782 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      10 |      0.99933 |      0.99725 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      11 |      0.99901 |      0.99635 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      12 |      0.99914 |      0.99518 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      13 |      0.99851 |      0.99485 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      14 |      0.99857 |      0.99525 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      15 |      0.99872 |      0.99369 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      16 |      0.99882 |      0.99542 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      17 |      0.99844 |      0.99393 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      18 |      0.99848 |      0.99571 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      19 |      0.99870 |      0.99560 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      20 |      0.99856 |      0.99513 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      21 |      0.99838 |      0.99476 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      22 |      0.99839 |      0.99508 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      23 |      0.99850 |      0.99478 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      24 |      0.99868 |      0.99520 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      25 |      0.99868 |      0.99461 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      26 |      0.99857 |      0.99287 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      27 |      0.99860 |      0.99484 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      28 |      0.99864 |      0.99182 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      29 |      0.99875 |      0.99302 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      30 |      0.99860 |      0.99382 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]      31 |      0.99927 |      0.99686 | PASS
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   ------+--------------+--------------+--------
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   min   |      0.99838 |      0.99182 | (layers 21/28)
+2026-09-03 20:43:12.165 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]   mean  |      0.99905 |      0.99621 |
+2026-09-03 20:43:12.166 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN]
+2026-09-03 20:43:12.166 | INFO     | llama32_8b_d_p.tests.unit.test_attention_chunked_vs_ref:test_chunked_kv_equals_one_shot_and_golden:602 - [G-GOLDEN] [device] PASS: min K = 0.99838 (>= 0.99), min V = 0.99182 (>= 0.98)
+FAILED2026-09-03 20:43:12.194 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0] __
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+state_dict = {'lm_head.weight': tensor([[ 0.0082,  0.0072,  0.0125,  ...,  0.0095, -0.0215, -0.0138],
+        [-0.0070,  0.0041,  0...10, -0.0160],
+        [-0.0038,  0.0068,  0.0087,  ..., -0.0063, -0.0054, -0.0116]],
+       dtype=torch.bfloat16), ...}
+seq_len = 512, chunk = 128, reset_seeds = None
+tmp_path = PosixPath('/tmp/pytest-of-mstojkovic/pytest-10/test_chunked_kv_equals_one_sho0')
+
+    @pytest.mark.parametrize("mesh_device", [TestFactory.SINGLE_CARD_MESH_SHAPE], indirect=True)
+    @pytest.mark.parametrize("seq_len, chunk", CHUNK_CASES, ids=[f"s{s}c{c}" for s, c in CHUNK_CASES])
+    @requires_hf_reference
+    @torch.no_grad()
+    def test_chunked_kv_equals_one_shot_and_golden(  # noqa: C901
+        mesh_device, state_dict, seq_len, chunk, reset_seeds, tmp_path
+    ):
+        """`G-CHUNK`: N-chunk KV production == one-shot, and both == the fp32 golden, over all 32 layers.
+
+        Also writes the device dump and runs it through `verify_golden_kv.compare_device_dump`, so
+        `G-GOLDEN`'s per-layer table comes out of the shipped script rather than out of this test.
+        """
+        trace_dir = _trace_dir()
+        metadata = _load_golden_meta(trace_dir)
+        token_ids = list(metadata["token_ids"])
+        assert len(token_ids) >= seq_len, f"golden has {len(token_ids)} tokens, need >= {seq_len}"
+        token_ids = token_ids[:seq_len]
+        if not state_dict:
+            pytest.skip("no real checkpoint loaded; G-CHUNK is a real-weight gate")
+
+        dims = llama_config_dims()
+        hf_config = llama_hf_config(dims)
+        n_heads, n_kv_heads, head_dim = hf_config.num_attention_heads, hf_config.num_key_value_heads, hf_config.head_dim
+        num_layers = min(int(metadata["num_layers"]), hf_config.num_hidden_layers)
+        assert seq_len % chunk == 0
+        n_chunks = seq_len // chunk
+
+        objs = TestFactory.setup_test(mesh_device)
+        tt_model = Model(
+            mesh_device,
+            hf_config,
+            state_dict,
+            mesh_config=objs["mesh_config"],
+            ccl_manager=objs["ccl_manager"],
+            max_seq_len=seq_len,
+            num_layers=num_layers,
+            with_lm_head=False,
+        )
+
+        # --- the shared hidden states: one one-shot forward of the real stack (delta 3 is P8's) ---
+        h_in = _one_shot_hidden_states(mesh_device, tt_model, token_ids, hf_config, seq_len)
+
+        rope_one_shot = build_prefill_rope(mesh_device, hf_config, seq_len=seq_len, start_pos=0)
+        rope_indexed = build_indexed_rope(mesh_device, hf_config, max_seq_len=seq_len, chunk_size=chunk)
+        perm = hf_to_meta_lane_permutation(head_dim, head_dim)
+
+        def _fresh_cache():
+            # slot == KV head (the per-chip cache is one head wide, R-027); one layer at a time.
+            return allocate_kv_cache(
+                mesh_device,
+                num_layers=1,
+                max_seq_len=seq_len,
+                sp_axis=0,
+                num_users=n_kv_heads,
+                head_dim=head_dim,
+                cache_dtype=ttnn.bfloat8_b,
+            )
+
+        cache_one_shot = _fresh_cache()
+        cache_chunked = _fresh_cache()
+        cache_bug = _fresh_cache()  # negative control: every chunk roped at offset 0
+
+        dump_dir = tmp_path / "device_dump"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        from safetensors.torch import save_file
+
+        rows = []
+        worst = {"mutual_k": 1.0, "mutual_v": 1.0, "golden_k": 1.0, "golden_v": 1.0, "ratio_k": 0.0}
+        bug_worst = 1.0
+        for layer_idx in range(num_layers):
+            layer = tt_model.layers[layer_idx]
+
+            # --- path A: one shot over the whole sequence ---
+            tt_k, tt_v = _produce_kv(
+                mesh_device,
+                layer,
+                h_in[layer_idx],
+                n_heads=n_heads,
+                n_kv_heads=n_kv_heads,
+                rope_mats=rope_one_shot,
+                kv_actual=None,
+                indexed=False,
+            )
+            _write_heads(cache_one_shot, tt_k, tt_v, n_kv_heads=n_kv_heads, span=seq_len, head_dim=head_dim, kv_actual=0)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+
+            # --- path B: N chunks, indexed rope at each chunk's own global offset ---
+            for chunk_idx in range(n_chunks):
+                lo = chunk_idx * chunk
+                tt_k, tt_v = _produce_kv(
+                    mesh_device,
+                    layer,
+                    h_in[layer_idx][:, :, lo : lo + chunk, :],
+                    n_heads=n_heads,
+                    n_kv_heads=n_kv_heads,
+                    rope_mats=rope_indexed,
+                    kv_actual=lo,
+                    indexed=True,
+                )
+                _write_heads(cache_chunked, tt_k, tt_v, n_kv_heads=n_kv_heads, span=chunk, head_dim=head_dim, kv_actual=lo)
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
+
+                # --- negative control: the same chunks with kv_actual_global pinned at 0 ---
+                tt_k, tt_v = _produce_kv(
+                    mesh_device,
+                    layer,
+                    h_in[layer_idx][:, :, lo : lo + chunk, :],
+                    n_heads=n_heads,
+                    n_kv_heads=n_kv_heads,
+                    rope_mats=rope_indexed,
+                    kv_actual=0,
+                    indexed=True,
+                )
+                _write_heads(cache_bug, tt_k, tt_v, n_kv_heads=n_kv_heads, span=chunk, head_dim=head_dim, kv_actual=lo)
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
+            ttnn.synchronize_device(mesh_device)
+
+            read = dict(n_kv_heads=n_kv_heads, n_tokens=seq_len, max_seq_len=seq_len)
+            k_one, v_one = _read_cache(mesh_device, cache_one_shot, chunk_size=seq_len, **read)
+            k_chunk, v_chunk = _read_cache(mesh_device, cache_chunked, chunk_size=chunk, **read)
+            k_bug, _v_bug = _read_cache(mesh_device, cache_bug, chunk_size=chunk, **read)
+            g_k, g_v = _golden_layer(trace_dir, layer_idx, n_tokens=seq_len, perm=perm)
+
+            _, mutual_k = comp_pcc(k_one, k_chunk, 0.0)
+            _, mutual_v = comp_pcc(v_one, v_chunk, 0.0)
+            _, golden_k = comp_pcc(g_k, k_chunk, 0.0)
+            _, golden_v = comp_pcc(g_v, v_chunk, 0.0)
+            _, golden_k_one = comp_pcc(g_k, k_one, 0.0)
+            _, bug_k = comp_pcc(g_k, k_bug, 0.0)
+            # Appendix E.2 floor: the cache stores K and nothing else, so its dtype is the whole
+            # STORAGE budget. The measured value also carries bf8_b weights and bf16 activations, so a
+            # ratio above 1 is expected here and is *named*, not attributed to the cache (E.5).
+            _, floor_k = comp_pcc(g_k, quantize_like_device(g_k, ttnn.bfloat8_b), 0.0)
+            ratio_k = err_ratio(golden_k, floor_k)
+
+            rows.append((layer_idx, float(mutual_k), float(mutual_v), float(golden_k), float(golden_v), ratio_k))
+            worst["mutual_k"] = min(worst["mutual_k"], float(mutual_k))
+            worst["mutual_v"] = min(worst["mutual_v"], float(mutual_v))
+            worst["golden_k"] = min(worst["golden_k"], float(golden_k))
+            worst["golden_v"] = min(worst["golden_v"], float(golden_v))
+            worst["ratio_k"] = max(worst["ratio_k"], ratio_k)
+            bug_worst = min(bug_worst, float(bug_k))
+            logger.info(
+                f"[G-CHUNK] L{layer_idx:>2}: chunked-vs-one-shot K={mutual_k:.5f} V={mutual_v:.5f} | "
+                f"vs golden (chunked) K={golden_k:.5f} V={golden_v:.5f} | (one-shot) K={golden_k_one:.5f} | "
+                f"bf8_b K floor={floor_k:.5f} err_ratio={ratio_k:.2f}x | offset-0 control K={bug_k:.5f}"
+            )
+
+            save_file(
+                {
+                    f"key_cache_layer_{layer_idx}": k_chunk.contiguous(),
+                    f"value_cache_layer_{layer_idx}": v_chunk.contiguous(),
+                },
+                str(dump_dir / f"layer_{layer_idx}.safetensors"),
+            )
+
+        with open(dump_dir / "metadata.json", "w") as handle:
+            json.dump(
+                {
+                    "convention": "meta",
+                    "n_tokens": seq_len,
+                    "layers": list(range(num_layers)),
+                    "head_dim": head_dim,
+                    "rotary_dim": head_dim,
+                    "num_kv_heads": n_kv_heads,
+                    "mesh_shape": list(tuple(mesh_device.shape)),
+                    "chunk_size": chunk,
+                    "cache_dtype": str(ttnn.bfloat8_b),
+                },
+                handle,
+                indent=2,
+            )
+
+        logger.info(
+            f"[G-CHUNK] {num_layers} layers, seq={seq_len}, {n_chunks} x {chunk}: "
+            f"min chunked-vs-one-shot K={worst['mutual_k']:.5f} V={worst['mutual_v']:.5f} "
+            f"(threshold {MUTUAL_PCC}) | min vs golden K={worst['golden_k']:.5f} (>= {GOLDEN_PCC_K}) "
+            f"V={worst['golden_v']:.5f} (>= {GOLDEN_PCC_V}) | worst K err_ratio={worst['ratio_k']:.2f}x "
+            f"of the bf8_b storage floor | negative control (offset-0 rope) worst K={bug_worst:.5f} "
+            f"(must be <= {NEGATIVE_CONTROL_MAX_PCC})"
+        )
+
+        # --- R-025: the per-layer error-STEP curve, re-measured at this chunk size ---
+        # DEC-047 set MAX_LAYER_ERROR_STEP = 4.0 from the hidden-state curve at seq 128 and R-025 asks
+        # for it to be re-derived at a realistic chunk size. This is the same statistic on the KV
+        # product (which is what P7 owns): consecutive (1 - pcc) ratios. A *step* is a single-layer
+        # bug; smooth growth is accumulation. Recorded for both parametrised cases so the threshold has
+        # two chunk sizes behind it instead of one.
+        steps_k = [(rows[i][0], (1 - rows[i][3]) / max(1 - rows[i - 1][3], 1e-12)) for i in range(1, len(rows))]
+        steps_v = [(rows[i][0], (1 - rows[i][4]) / max(1 - rows[i - 1][4], 1e-12)) for i in range(1, len(rows))]
+        max_step_k = max(s for _i, s in steps_k)
+        max_step_v = max(s for _i, s in steps_v)
+        logger.info(
+            f"[G-CHUNK] R-025 KV error-step curve at seq={seq_len} chunk={chunk}: max K step = "
+            f"{max_step_k:.2f}x at L{max(steps_k, key=lambda t: t[1])[0]}, max V step = "
+            f"{max_step_v:.2f}x at L{max(steps_v, key=lambda t: t[1])[0]} (ceiling {MAX_KV_ERROR_STEP}x)"
+        )
+
+        # --- G-GOLDEN's per-layer table, produced by the shipped script ---
+        lines = []
+        dump_ok, _dump_rows, summary = compare_device_dump(
+            trace_dir, dump_dir, pcc_k=GOLDEN_PCC_K, pcc_v=GOLDEN_PCC_V, out=lines.append
+        )
+        for line in lines:
+            logger.info(f"[G-GOLDEN] {line}")
+
+        assert worst["mutual_k"] >= MUTUAL_PCC, (
+            f"[G-CHUNK] chunked KV differs from one-shot: min K PCC {worst['mutual_k']} < {MUTUAL_PCC}. "
+            f"Both paths store the same values from the same hidden states, so this is the indexed RoPE "
+            f"offset or the cache write offset, not precision."
+        )
+        assert worst["mutual_v"] >= MUTUAL_PCC, f"[G-CHUNK] chunked V differs from one-shot: {worst['mutual_v']}"
+        assert worst["golden_k"] >= GOLDEN_PCC_K, f"[G-CHUNK] chunked K vs golden: {worst['golden_k']} < {GOLDEN_PCC_K}"
+        assert worst["golden_v"] >= GOLDEN_PCC_V, f"[G-CHUNK] chunked V vs golden: {worst['golden_v']} < {GOLDEN_PCC_V}"
+>       assert max(max_step_k, max_step_v) <= MAX_KV_ERROR_STEP, (
+            f"[G-CHUNK] a single layer multiplies the KV error by more than {MAX_KV_ERROR_STEP}x "
+            f"(K {max_step_k:.2f}x, V {max_step_v:.2f}x at seq={seq_len}): that is a per-layer bug, "
+            f"not accumulation — chase the layer, not the depth (R-025 / DEC-047)"
+        )
+E       AssertionError: [G-CHUNK] a single layer multiplies the KV error by more than 4.0x (K 4.49x, V 3.15x at seq=512): that is a per-layer bug, not accumulation — chase the layer, not the depth (R-025 / DEC-047)
+E       assert 4.486422779317435 <= 4.0
+E        +  where 4.486422779317435 = max(4.486422779317435, 3.1459026777821264)
+
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py:612: AssertionError
+_ test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices)
+state_dict = {'lm_head.weight': tensor([[ 0.0082,  0.0072,  0.0125,  ...,  0.0095, -0.0215, -0.0138],
+        [-0.0070,  0.0041,  0...10, -0.0160],
+        [-0.0038,  0.0068,  0.0087,  ..., -0.0063, -0.0054, -0.0116]],
+       dtype=torch.bfloat16), ...}
+seq_len = 2048, chunk = 512, reset_seeds = None
+tmp_path = PosixPath('/tmp/pytest-of-mstojkovic/pytest-10/test_chunked_kv_equals_one_sho1')
+
+    @pytest.mark.parametrize("mesh_device", [TestFactory.SINGLE_CARD_MESH_SHAPE], indirect=True)
+    @pytest.mark.parametrize("seq_len, chunk", CHUNK_CASES, ids=[f"s{s}c{c}" for s, c in CHUNK_CASES])
+    @requires_hf_reference
+    @torch.no_grad()
+    def test_chunked_kv_equals_one_shot_and_golden(  # noqa: C901
+        mesh_device, state_dict, seq_len, chunk, reset_seeds, tmp_path
+    ):
+        """`G-CHUNK`: N-chunk KV production == one-shot, and both == the fp32 golden, over all 32 layers.
+
+        Also writes the device dump and runs it through `verify_golden_kv.compare_device_dump`, so
+        `G-GOLDEN`'s per-layer table comes out of the shipped script rather than out of this test.
+        """
+        trace_dir = _trace_dir()
+        metadata = _load_golden_meta(trace_dir)
+        token_ids = list(metadata["token_ids"])
+        assert len(token_ids) >= seq_len, f"golden has {len(token_ids)} tokens, need >= {seq_len}"
+        token_ids = token_ids[:seq_len]
+        if not state_dict:
+            pytest.skip("no real checkpoint loaded; G-CHUNK is a real-weight gate")
+
+        dims = llama_config_dims()
+        hf_config = llama_hf_config(dims)
+        n_heads, n_kv_heads, head_dim = hf_config.num_attention_heads, hf_config.num_key_value_heads, hf_config.head_dim
+        num_layers = min(int(metadata["num_layers"]), hf_config.num_hidden_layers)
+        assert seq_len % chunk == 0
+        n_chunks = seq_len // chunk
+
+        objs = TestFactory.setup_test(mesh_device)
+        tt_model = Model(
+            mesh_device,
+            hf_config,
+            state_dict,
+            mesh_config=objs["mesh_config"],
+            ccl_manager=objs["ccl_manager"],
+            max_seq_len=seq_len,
+            num_layers=num_layers,
+            with_lm_head=False,
+        )
+
+        # --- the shared hidden states: one one-shot forward of the real stack (delta 3 is P8's) ---
+        h_in = _one_shot_hidden_states(mesh_device, tt_model, token_ids, hf_config, seq_len)
+
+        rope_one_shot = build_prefill_rope(mesh_device, hf_config, seq_len=seq_len, start_pos=0)
+        rope_indexed = build_indexed_rope(mesh_device, hf_config, max_seq_len=seq_len, chunk_size=chunk)
+        perm = hf_to_meta_lane_permutation(head_dim, head_dim)
+
+        def _fresh_cache():
+            # slot == KV head (the per-chip cache is one head wide, R-027); one layer at a time.
+            return allocate_kv_cache(
+                mesh_device,
+                num_layers=1,
+                max_seq_len=seq_len,
+                sp_axis=0,
+                num_users=n_kv_heads,
+                head_dim=head_dim,
+                cache_dtype=ttnn.bfloat8_b,
+            )
+
+        cache_one_shot = _fresh_cache()
+        cache_chunked = _fresh_cache()
+        cache_bug = _fresh_cache()  # negative control: every chunk roped at offset 0
+
+        dump_dir = tmp_path / "device_dump"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        from safetensors.torch import save_file
+
+        rows = []
+        worst = {"mutual_k": 1.0, "mutual_v": 1.0, "golden_k": 1.0, "golden_v": 1.0, "ratio_k": 0.0}
+        bug_worst = 1.0
+        for layer_idx in range(num_layers):
+            layer = tt_model.layers[layer_idx]
+
+            # --- path A: one shot over the whole sequence ---
+            tt_k, tt_v = _produce_kv(
+                mesh_device,
+                layer,
+                h_in[layer_idx],
+                n_heads=n_heads,
+                n_kv_heads=n_kv_heads,
+                rope_mats=rope_one_shot,
+                kv_actual=None,
+                indexed=False,
+            )
+            _write_heads(cache_one_shot, tt_k, tt_v, n_kv_heads=n_kv_heads, span=seq_len, head_dim=head_dim, kv_actual=0)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+
+            # --- path B: N chunks, indexed rope at each chunk's own global offset ---
+            for chunk_idx in range(n_chunks):
+                lo = chunk_idx * chunk
+                tt_k, tt_v = _produce_kv(
+                    mesh_device,
+                    layer,
+                    h_in[layer_idx][:, :, lo : lo + chunk, :],
+                    n_heads=n_heads,
+                    n_kv_heads=n_kv_heads,
+                    rope_mats=rope_indexed,
+                    kv_actual=lo,
+                    indexed=True,
+                )
+                _write_heads(cache_chunked, tt_k, tt_v, n_kv_heads=n_kv_heads, span=chunk, head_dim=head_dim, kv_actual=lo)
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
+
+                # --- negative control: the same chunks with kv_actual_global pinned at 0 ---
+                tt_k, tt_v = _produce_kv(
+                    mesh_device,
+                    layer,
+                    h_in[layer_idx][:, :, lo : lo + chunk, :],
+                    n_heads=n_heads,
+                    n_kv_heads=n_kv_heads,
+                    rope_mats=rope_indexed,
+                    kv_actual=0,
+                    indexed=True,
+                )
+                _write_heads(cache_bug, tt_k, tt_v, n_kv_heads=n_kv_heads, span=chunk, head_dim=head_dim, kv_actual=lo)
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
+            ttnn.synchronize_device(mesh_device)
+
+            read = dict(n_kv_heads=n_kv_heads, n_tokens=seq_len, max_seq_len=seq_len)
+            k_one, v_one = _read_cache(mesh_device, cache_one_shot, chunk_size=seq_len, **read)
+            k_chunk, v_chunk = _read_cache(mesh_device, cache_chunked, chunk_size=chunk, **read)
+            k_bug, _v_bug = _read_cache(mesh_device, cache_bug, chunk_size=chunk, **read)
+            g_k, g_v = _golden_layer(trace_dir, layer_idx, n_tokens=seq_len, perm=perm)
+
+            _, mutual_k = comp_pcc(k_one, k_chunk, 0.0)
+            _, mutual_v = comp_pcc(v_one, v_chunk, 0.0)
+            _, golden_k = comp_pcc(g_k, k_chunk, 0.0)
+            _, golden_v = comp_pcc(g_v, v_chunk, 0.0)
+            _, golden_k_one = comp_pcc(g_k, k_one, 0.0)
+            _, bug_k = comp_pcc(g_k, k_bug, 0.0)
+            # Appendix E.2 floor: the cache stores K and nothing else, so its dtype is the whole
+            # STORAGE budget. The measured value also carries bf8_b weights and bf16 activations, so a
+            # ratio above 1 is expected here and is *named*, not attributed to the cache (E.5).
+            _, floor_k = comp_pcc(g_k, quantize_like_device(g_k, ttnn.bfloat8_b), 0.0)
+            ratio_k = err_ratio(golden_k, floor_k)
+
+            rows.append((layer_idx, float(mutual_k), float(mutual_v), float(golden_k), float(golden_v), ratio_k))
+            worst["mutual_k"] = min(worst["mutual_k"], float(mutual_k))
+            worst["mutual_v"] = min(worst["mutual_v"], float(mutual_v))
+            worst["golden_k"] = min(worst["golden_k"], float(golden_k))
+            worst["golden_v"] = min(worst["golden_v"], float(golden_v))
+            worst["ratio_k"] = max(worst["ratio_k"], ratio_k)
+            bug_worst = min(bug_worst, float(bug_k))
+            logger.info(
+                f"[G-CHUNK] L{layer_idx:>2}: chunked-vs-one-shot K={mutual_k:.5f} V={mutual_v:.5f} | "
+                f"vs golden (chunked) K={golden_k:.5f} V={golden_v:.5f} | (one-shot) K={golden_k_one:.5f} | "
+                f"bf8_b K floor={floor_k:.5f} err_ratio={ratio_k:.2f}x | offset-0 control K={bug_k:.5f}"
+            )
+
+            save_file(
+                {
+                    f"key_cache_layer_{layer_idx}": k_chunk.contiguous(),
+                    f"value_cache_layer_{layer_idx}": v_chunk.contiguous(),
+                },
+                str(dump_dir / f"layer_{layer_idx}.safetensors"),
+            )
+
+        with open(dump_dir / "metadata.json", "w") as handle:
+            json.dump(
+                {
+                    "convention": "meta",
+                    "n_tokens": seq_len,
+                    "layers": list(range(num_layers)),
+                    "head_dim": head_dim,
+                    "rotary_dim": head_dim,
+                    "num_kv_heads": n_kv_heads,
+                    "mesh_shape": list(tuple(mesh_device.shape)),
+                    "chunk_size": chunk,
+                    "cache_dtype": str(ttnn.bfloat8_b),
+                },
+                handle,
+                indent=2,
+            )
+
+        logger.info(
+            f"[G-CHUNK] {num_layers} layers, seq={seq_len}, {n_chunks} x {chunk}: "
+            f"min chunked-vs-one-shot K={worst['mutual_k']:.5f} V={worst['mutual_v']:.5f} "
+            f"(threshold {MUTUAL_PCC}) | min vs golden K={worst['golden_k']:.5f} (>= {GOLDEN_PCC_K}) "
+            f"V={worst['golden_v']:.5f} (>= {GOLDEN_PCC_V}) | worst K err_ratio={worst['ratio_k']:.2f}x "
+            f"of the bf8_b storage floor | negative control (offset-0 rope) worst K={bug_worst:.5f} "
+            f"(must be <= {NEGATIVE_CONTROL_MAX_PCC})"
+        )
+
+        # --- R-025: the per-layer error-STEP curve, re-measured at this chunk size ---
+        # DEC-047 set MAX_LAYER_ERROR_STEP = 4.0 from the hidden-state curve at seq 128 and R-025 asks
+        # for it to be re-derived at a realistic chunk size. This is the same statistic on the KV
+        # product (which is what P7 owns): consecutive (1 - pcc) ratios. A *step* is a single-layer
+        # bug; smooth growth is accumulation. Recorded for both parametrised cases so the threshold has
+        # two chunk sizes behind it instead of one.
+        steps_k = [(rows[i][0], (1 - rows[i][3]) / max(1 - rows[i - 1][3], 1e-12)) for i in range(1, len(rows))]
+        steps_v = [(rows[i][0], (1 - rows[i][4]) / max(1 - rows[i - 1][4], 1e-12)) for i in range(1, len(rows))]
+        max_step_k = max(s for _i, s in steps_k)
+        max_step_v = max(s for _i, s in steps_v)
+        logger.info(
+            f"[G-CHUNK] R-025 KV error-step curve at seq={seq_len} chunk={chunk}: max K step = "
+            f"{max_step_k:.2f}x at L{max(steps_k, key=lambda t: t[1])[0]}, max V step = "
+            f"{max_step_v:.2f}x at L{max(steps_v, key=lambda t: t[1])[0]} (ceiling {MAX_KV_ERROR_STEP}x)"
+        )
+
+        # --- G-GOLDEN's per-layer table, produced by the shipped script ---
+        lines = []
+        dump_ok, _dump_rows, summary = compare_device_dump(
+            trace_dir, dump_dir, pcc_k=GOLDEN_PCC_K, pcc_v=GOLDEN_PCC_V, out=lines.append
+        )
+        for line in lines:
+            logger.info(f"[G-GOLDEN] {line}")
+
+        assert worst["mutual_k"] >= MUTUAL_PCC, (
+            f"[G-CHUNK] chunked KV differs from one-shot: min K PCC {worst['mutual_k']} < {MUTUAL_PCC}. "
+            f"Both paths store the same values from the same hidden states, so this is the indexed RoPE "
+            f"offset or the cache write offset, not precision."
+        )
+        assert worst["mutual_v"] >= MUTUAL_PCC, f"[G-CHUNK] chunked V differs from one-shot: {worst['mutual_v']}"
+        assert worst["golden_k"] >= GOLDEN_PCC_K, f"[G-CHUNK] chunked K vs golden: {worst['golden_k']} < {GOLDEN_PCC_K}"
+        assert worst["golden_v"] >= GOLDEN_PCC_V, f"[G-CHUNK] chunked V vs golden: {worst['golden_v']} < {GOLDEN_PCC_V}"
+>       assert max(max_step_k, max_step_v) <= MAX_KV_ERROR_STEP, (
+            f"[G-CHUNK] a single layer multiplies the KV error by more than {MAX_KV_ERROR_STEP}x "
+            f"(K {max_step_k:.2f}x, V {max_step_v:.2f}x at seq={seq_len}): that is a per-layer bug, "
+            f"not accumulation — chase the layer, not the depth (R-025 / DEC-047)"
+        )
+E       AssertionError: [G-CHUNK] a single layer multiplies the KV error by more than 4.0x (K 4.18x, V 3.21x at seq=2048): that is a per-layer bug, not accumulation — chase the layer, not the depth (R-025 / DEC-047)
+E       assert 4.184041343533093 <= 4.0
+E        +  where 4.184041343533093 = max(4.184041343533093, 3.2121858148178295)
+
+models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py:612: AssertionError
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+49.25s call     models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0]
+48.21s call     models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0]
+10.03s call     models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_driver_agrees_with_hfs_own_model_loop
+7.13s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0]
+1.13s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0]
+1.10s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_model_level_chunked_prefill_is_refused_on_one_card[blackhole-mesh_device0]
+0.53s call     models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_model_level_chunked_prefill_is_refused_on_one_card[blackhole-mesh_device0]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_device_dump_metadata_contract_matches_the_verifier
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_trace_structure_is_valid
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_hf_to_meta_lane_permutation_carries_frequencies_to_adjacent_lanes
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_driver_agrees_with_hfs_own_model_loop
+0.07s call     models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_trace_structure_is_valid
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_model_level_chunked_prefill_is_refused_on_one_card[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0]
+
+(6 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_trace_structure_is_valid
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_hf_to_meta_lane_permutation_carries_frequencies_to_adjacent_lanes
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_golden_driver_agrees_with_hfs_own_model_loop
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_device_dump_metadata_contract_matches_the_verifier
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_model_level_chunked_prefill_is_refused_on_one_card[blackhole-mesh_device0]
+FAILED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s512c128-mesh_device0]
+FAILED models/demos/llama32_8b_d_p/tests/unit/test_attention_chunked_vs_ref.py::test_chunked_kv_equals_one_shot_and_golden[blackhole-s2048c512-mesh_device0]
+============== 2 failed, 5 passed, 1 warning in 119.60s (0:01:59) ==============
+2026-09-03 20:43:14.345 | info     |    BuildKernels | JIT cache stats: 291/291 hits (100.0%) [291 cached, 214 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 20:43:14.345 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 20:43:14.567 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 20:43:14.567 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 20:43:22.698 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 20:43:22.698 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 20:43:22.698 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

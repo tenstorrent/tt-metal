@@ -1,0 +1,112 @@
+=== G-GOLDEN raw log ===
+date (UTC): 2026-09-03T20:48:28+00:00
+--- generator (regenerating the 512-token trace from scratch, timed) ---
+[load] prompt: 16080 characters
+[tokenize] truncating 3179 -> 512 tokens
+[tokenize] padded 512 -> 512 tokens with id 128009
+[load] 512 tokens (512 real)
+[forward] fp32 reference, 64 threads, streaming per layer
+[load] checkpoint has 291 tensors; streaming per layer via mmap
+[forward] layer  0/31 saved  (1.2s elapsed)
+[forward] layer  1/31 saved  (2.4s elapsed)
+[forward] layer  2/31 saved  (3.6s elapsed)
+[forward] layer  3/31 saved  (4.8s elapsed)
+[forward] layer  4/31 saved  (6.0s elapsed)
+[forward] layer  5/31 saved  (7.2s elapsed)
+[forward] layer  6/31 saved  (8.3s elapsed)
+[forward] layer  7/31 saved  (9.5s elapsed)
+[forward] layer  8/31 saved  (10.7s elapsed)
+[forward] layer  9/31 saved  (11.9s elapsed)
+[forward] layer 10/31 saved  (13.2s elapsed)
+[forward] layer 11/31 saved  (14.3s elapsed)
+[forward] layer 12/31 saved  (15.5s elapsed)
+[forward] layer 13/31 saved  (16.7s elapsed)
+[forward] layer 14/31 saved  (17.9s elapsed)
+[forward] layer 15/31 saved  (19.1s elapsed)
+[forward] layer 16/31 saved  (20.2s elapsed)
+[forward] layer 17/31 saved  (21.4s elapsed)
+[forward] layer 18/31 saved  (22.6s elapsed)
+[forward] layer 19/31 saved  (24.0s elapsed)
+[forward] layer 20/31 saved  (25.2s elapsed)
+[forward] layer 21/31 saved  (26.4s elapsed)
+[forward] layer 22/31 saved  (27.6s elapsed)
+[forward] layer 23/31 saved  (28.9s elapsed)
+[forward] layer 24/31 saved  (30.0s elapsed)
+[forward] layer 25/31 saved  (31.2s elapsed)
+[forward] layer 26/31 saved  (32.4s elapsed)
+[forward] layer 27/31 saved  (33.5s elapsed)
+[forward] layer 28/31 saved  (34.7s elapsed)
+[forward] layer 29/31 saved  (35.9s elapsed)
+[forward] layer 30/31 saved  (37.2s elapsed)
+[forward] layer 31/31 saved  (38.4s elapsed)
+[save] 32 layers -> /home/mstojkovic/llama32_8b_golden/p7_s512/kv_cache (0.13 GB)
+[save] metadata -> /home/mstojkovic/llama32_8b_golden/p7_s512/metadata.json
+[done] 38.4s for 512 tokens
+[next] python3 models/demos/llama32_8b_d_p/scripts/verify_golden_kv.py /home/mstojkovic/llama32_8b_golden/p7_s512
+--- verify_golden_kv.py: structure, 512-token trace ---
+[verify] golden trace /home/mstojkovic/llama32_8b_golden/p7_s512
+  metadata OK: 32 layers, 512 tokens, K/V shape (1, 8, 512, 128)
+  all 32 layer files present, correctly shaped, finite and non-constant
+[verify] PASS
+--- verify_golden_kv.py: structure, 2048-token trace ---
+[verify] golden trace /home/mstojkovic/llama32_8b_golden/p7_s2048
+  metadata OK: 32 layers, 2048 tokens, K/V shape (1, 8, 2048, 128)
+  all 32 layer files present, correctly shaped, finite and non-constant
+[verify] PASS
+--- metadata.json (2048-token trace) ---
+{
+  "model_path": "/home/mstojkovic/models/Llama-3.1-8B-Instruct",
+  "model_config": "Llama-3.1-8B-Instruct",
+  "reference": "transformers.models.llama.modeling_llama.LlamaDecoderLayer, one layer at a time, fp32 compute, weights streamed per layer via mmap (DEC-053)",
+  "reference_dtype_policy": "checkpoint bfloat16 upcast exactly to fp32; all arithmetic fp32; K/V stored as float32",
+  "attn_implementation": "eager",
+  "explicit_causal_mask": true,
+  "kv_convention": "post-RoPE K (HF half-split rotary), raw V, HF layout",
+  "prompt_source": "/home/mstojkovic/llama32_8b_golden/prompt.txt",
+  "prompt": "Tenstorrent's Blackhole processors are built around a grid of Tensix cores, each pairing five RISC-V baby cores with a matrix engine and a vector engine, so a kernel can overlap data movement with compute inside one core. Prefill and decode place very different demands on that grid: prefill is a long sequence of large matrix multiplications that saturates the matrix engines, while decode is latency bound and dominated by weight bandwidth. Chunked prefill splits a long prompt into fixed-size piec...",
+  "prompt_length_chars": 16080,
+  "chat_template": true,
+  "token_ids": [
+    128000,
+    128006,
+    9125,
+    128007,
+    271,
+    38766,
+    1303,
+    33025,
+    "..."
+  ],
+  "n_real_tokens": 2048,
+  "padded": true,
+  "dtype": "float32",
+  "kv_cache_format": "separate_k_v",
+  "num_layers": 32,
+  "model_num_layers": 32,
+  "num_kv_heads": 8,
+  "head_dim": 128,
+  "hidden_size": 4096,
+  "n_tokens": 2048,
+  "key_cache_shape": [
+    1,
+    8,
+    2048,
+    128
+  ],
+  "value_cache_shape": [
+    1,
+    8,
+    2048,
+    128
+  ],
+  "forward_time_seconds": 57.89148664474487
+}
+--- negative control: verify_golden_kv rejects a corrupted trace (one layer zeroed) ---
+[verify] golden trace /tmp/tmpyagv0t6b/bad
+  metadata OK: 32 layers, 512 tokens, K/V shape (1, 8, 512, 128)
+  FAIL layer 7 K: constant tensor (std == 0)
+[verify] FAIL
+exit code: 1 (must be non-zero)
+['  FAIL layer 9: /tmp/tmpyagv0t6b/bad/kv_cache/layer_9.safetensors missing', '[verify] FAIL']
+exit code: 1 (must be non-zero)
+negative controls PASS

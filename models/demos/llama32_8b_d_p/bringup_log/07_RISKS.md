@@ -19,11 +19,16 @@ One row per risk. `Owner` is a slot for a human name. `Status` ∈ open / mitiga
 | `R-010` | medium | P2 | `get_rot_transformation_mat(dhead)` **ignores its argument** and hard-codes `dhead = 32` | mitigated (informational) | _(unassigned)_ |
 | `R-011` | low | P0/P1 | `test_factory.TestFactory.setup_test` cannot run until P5 creates `tt/config.py` + `tt/ccl.py` | open by design | _(unassigned)_ |
 | `R-012` | medium | P4 | `G-TP-PARITY` runs on `(1,N)` meshes, which use `num_links=1` + `Topology.Linear`; the 2-link `Ring` path is exercised **only** by `G-MESH-KV`/`G-RACE` on `(4,8)` | open | _(unassigned)_ |
-| `R-013` | medium | P4 | The barrier-semaphore ping-pong is only **2** deep (a one-op gap), and `reset_global_semaphores` deliberately skips the barrier and ring-attention semaphores that chunked prefill now reuses across chunks | open | _(unassigned)_ |
+| `R-013` | medium | P4 | The barrier-semaphore ping-pong is only **2** deep (a one-op gap), and `reset_global_semaphores` deliberately skips the barrier and ring-attention semaphores that chunked prefill now reuses across chunks | **deferred to P8 by `DEC-052`** — unchanged in P7 and *not tested* there (at `(1,1)` no collective runs at all); if `G-RACE` fails, first move is deepening the ping-pong 2→4 | _(unassigned)_ |
 | `R-014` | medium | P3 | **`R-002` is factually wrong** as measured: `cfg.rope_theta` does not exist (raises `AttributeError`), `cfg.rope_scaling` is a full dict, and `getattr(cfg, "rope_theta", D)` returns `D` — so the hazard is a *silent default*, not a silent `None` | mitigated (`DEC-010`) | _(unassigned)_ |
 | `R-015` | low | P3 | **`DEC-006`'s stated premise is false**: `gpt_oss_d_p` and `minimax_m3` both cross-import `models.demos.deepseek_v3_d_p.tt.*` extensively, so "no demo package imports another demo's `tt/`" is not the tree's convention | open (informational) | _(unassigned)_ |
 | `R-017` | medium | P3 | The tilized **weight cache is mesh-shape dependent** but no gate checks a cache-only rebuild at TP>1: `G-WEIGHTS` runs on 1 card, and `TestFactory.setup_test` takes a raw `tensor_cache_path` with no mesh in it | open | _(unassigned)_ |
 | `R-016` | medium | P3 | **`R-008`'s proposed fix would break P8**: deriving the SDPA program grid from `compute_with_storage_grid_size()` (measured 12×10) violates the ring-joint assert `ccl_core_grid_offset.x >= sdpa_grid.x` at offset 11 | mitigated (`DEC-012`) | _(unassigned)_ |
+| `R-026` | medium | P7 | `tokenizer.apply_chat_template(..., tokenize=True)` returns a **`BatchEncoding`** on transformers 5.12.1 (`return_dict` now defaults to `True`), so `list(...)` yields the dict KEYS — a plausible 2-element "token list" of strings | mitigated (`return_dict=False` + an int assert); latent in `models/demos/minimax_m3/scripts/generate_golden_kv_cache.py:180` | _(unassigned)_ |
+| `R-027` | **high** | P7 | The packed KV cache is **one KV head per chip**, so `TP` must equal `num_key_value_heads` (8). No model-level KV write is possible at `(1,1)` — it dies in a C++ `TT_FATAL`. `G-KV`'s `(1,1)` coverage used `nkv = tp = 1`, a head count the model never produces there | mitigated by a loud runtime assert; **the coverage hole is open and is P8's** | _(unassigned)_ |
+| `R-028` | **high** | P7 | Chunked cache-read attention (`cached_len > 0`) is unimplemented on a single device, so `G-CHUNK`'s attention-core third is `BLOCKED`; it needs `tt/attention/dense_sp.py` (P8) or a paged chunked SDPA | open — blocks `G-CHUNK-ATTN` | _(unassigned)_ |
+| `R-029` | medium | P7 | `TtPrefillRuntime.gather_layer` / `dump_slot_kv` / `kv_cache_pcc_check` are **never executed on device** in P7 (they need TP=8); only their format contract is asserted | open — P8's `G-MESH-KV` is the first real exercise | _(unassigned)_ |
+| `R-030` | medium | P7 | `TtPrefillRuntime.build_kv_chunk_table` **raises**; the KV chunk-address table is P10's `tt/runners/kv_chunk_table.py`, so `PREFILL_ENABLE_MIGRATION=1` cannot work yet | open by design — P10 | _(unassigned)_ |
 
 ---
 
@@ -797,3 +802,215 @@ relying on 4.0 for a long-context run.
   `pre-commit run --files ...` clean (black, autoflake, isort, prefer-expect-error). No
   `pytest.raises` anywhere in the new tests; the root `expect_error(ErrorClass, "substring")` fixture
   is used, message mandatory.
+
+### R-040 — The multi-rank KV-chunk-table merge is untested (consequence of DEC-070)
+> Numbered R-040 out of the P7 session's sequential range to avoid an id collision.
+
+**Status:** OPEN, accepted for this bring-up. **Owner:** whoever first runs pipelined (multi-rank)
+prefill for this model.
+
+Skipping Gate 2 (`DEC-070`) leaves exactly one piece of *our own* surface unexercised, and it is worth
+stating precisely rather than hiding behind "migration is out of scope":
+
+- **`PREFILL_MOCK_MIGRATION=1` is single-rank only.** The runner rejects it for `num_ranks > 1`,
+  because each rank would publish a table covering only its own layer slice and a merged mock table is
+  not implemented (`models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md`, *Shared setup*).
+- So `G-MOCK-MIG` validates `build_kv_chunk_table` for **one rank's** layer slice. The real path
+  merges per-rank stage layouts through the worker
+  (`deliver_device_map_and_gather_stage_layouts`) to publish one table spanning every rank's layers —
+  and **only Gate 2 exercises that merge**.
+- Consequently `kv_migration_base_address` / `kv_migration_stages` (the anchors the engine all-gathers
+  to build the merged table) are implemented against the documented contract but never executed.
+
+**What this does NOT affect:** single-rank prefill correctness, the KV cache contents, the chunk
+table for one rank, the adapter/runtime contract, or any PCC gate. All of those are covered.
+
+**How to close it:** build the `tt-llm-engine` migration component (see `DEC-070` for the exact
+products and constraints) and run Gate 2 on a 2- or 4-rank binding — note the doc's warning that a
+multi-host driver verifies only its own host's layers unless launched via `run_migration_driver.sh`
+with the full rank-ordered host list, so a single-process `PASSED` there would be telling the truth
+about a fraction of the model.
+
+
+---
+
+## R-026 — `apply_chat_template(tokenize=True)` returns a `BatchEncoding`, not `list[int]` (measured, P7.1)
+
+**Status:** mitigated here; **latent in `models/demos/minimax_m3/scripts/generate_golden_kv_cache.py:180`.**
+
+Measured on transformers 5.12.1 while writing `scripts/generate_golden_kv_cache.py`. Three distinct
+return types from one method, and only the third is what a caller wants:
+
+| call | actual return |
+|---|---|
+| `apply_chat_template(msgs, add_generation_prompt=True)` | the rendered chat **string** (`tokenize` defaults `True`, but `return_dict` also defaults `True`... see below) |
+| `apply_chat_template(msgs, ..., tokenize=True)` | a **`BatchEncoding`** — `{'input_ids': [...], 'attention_mask': [...]}` |
+| `apply_chat_template(msgs, ..., tokenize=True, return_dict=False)` | **`list[int]`** |
+
+The signature is
+`(conversation, ..., tokenize: bool = True, ..., return_dict: bool = True, ...)`.
+
+**Why it matters more than an argument mistake.** `list(BatchEncoding)` returns
+`['input_ids', 'attention_mask']` — a 2-element list of *strings*. Downstream that is either a loud
+`ValueError: too many dimensions 'str'` (what happened here) or, in a script that indexes or
+re-tokenizes it, a **plausible short token sequence** that generates a valid-looking golden for the
+wrong prompt. Since the golden's `token_ids` are what the device is then required to prefill, a wrong
+`token_ids` produces a KV comparison that is internally consistent and meaningless.
+
+**Mitigation:** `return_dict=False` plus
+`assert all(isinstance(i, int) for i in ids)` in `tokenize_prompt`, so a future default change fails
+at tokenization rather than 32 layers later.
+
+**Latent elsewhere:** `models/demos/minimax_m3/scripts/generate_golden_kv_cache.py:180` passes
+`tokenize=True` and not `return_dict=False`. On this transformers version that script's `ids` would
+be a `BatchEncoding`. Not filed upstream by P7 (different model package, and M3 may pin an older
+transformers), but it is the same shape of bug and it is what `scripts/verify_citations.py` now pins.
+
+---
+
+## R-027 — The packed KV cache needs `TP == num_key_value_heads`, so no model-level KV write is possible on one card (measured, P7)
+
+**Status:** mitigated by a loud assert; the **coverage hole it exposes is open and belongs to P8.**
+
+`allocate_kv_cache` allocates a per-chip cache of
+`[num_users*num_layers, 1, seq_local, head_dim]` — one KV head per chip, hard-coded and commented as
+such (`models/demos/llama32_8b_d_p/tt/attention/kv_cache.py:130`). The model's attention produces
+`mesh_config.shard_size(num_kv_heads)` local KV heads. Those agree only when `TP == 8`.
+
+Measured at `(1,1)`, running a 1-layer `Model.prefill_forward` with a cache attached:
+
+```
+TT_FATAL: cache and input num-heads dim must match
+  ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/
+  update_padded_kv_cache_device_operation.cpp:230
+RuntimeError ... cache_shape[1] == input_shape[1]
+```
+
+The write fires for **both** `cached_len = 0` and `cached_len = 128`, i.e. this is not the chunked
+blocker (`R-028`) — it stops the *first* chunk too.
+
+**Two consequences, and the second is the important one.**
+
+1. `TtPrefillRuntime._resolve_kv` asserts `tp_factor == num_key_value_heads` with a message naming
+   the mesh, the head counts and the C++ assert, so the failure is a sentence instead of a
+   `TT_FATAL` (`DEC-056`).
+2. **`G-KV`'s single-card coverage does not exercise the head count the model actually produces.**
+   `tests/unit/test_kv_cache_vs_ref.py:101` sets `nkv = tp`, which is **1** at `(1,1)` — correct for
+   what a chip holds at TP=8, and therefore a configuration the model never produces on the mesh the
+   test runs on. `G-KV` is not wrong (the layout it pins is the deployment layout), but the
+   *model→cache* interface is unproven until TP=8. `G-CHUNK` narrows the hole by driving the real
+   device projections and RoPE into the real cache one head at a time (head `h` → slot `h`), which
+   is exactly the per-chip write; what remains unproven is the mesh-mapper step that puts head `c`
+   on column `c`.
+
+**How to close it:** P8's `G-MESH-KV` on `(4,8)`, or a `(1,8)`/TP=8 parametrisation of `G-CHUNK`.
+The latter is cheap and would close it without the SP ring — recommended as P8's first KV step,
+before `dense_sp_attention`.
+
+---
+
+## R-028 — Chunked cache-read attention is unimplemented, so `G-CHUNK`'s attention-core third is blocked (P7)
+
+**Status:** open. Blocks `G-CHUNK-ATTN`. Owner: P8.
+
+A chunked prefill differs from a one-shot in three places. P7 measured two of them
+(`DEC-058`); the third cannot run:
+
+`tt/attention/prefill.py:218` raises `NotImplementedError` for `cached_len > 0` outside the SP
+branch, because a plain `is_causal` SDPA assumes Q row 0 aligns with K row 0 — with a non-empty
+cache it is off by `cached_len` and **silently wrong** (a correctly-shaped, plausible tensor). The
+SP branch at `:195` needs `sequence_parallel=True` **and** `mesh_config.sp > 1` **and** a real
+`tt/attention/dense_sp.dense_sp_attention`, which is still the P5 stub
+(`tt/attention/dense_sp.py:43`).
+
+**Scope this honestly:** enabling it is not a flag flip. It requires porting
+`models/demos/gpt_oss_d_p/tt/attention/dense_sp.py`'s ring-joint SDPA over the block-cyclic cache
+(dropping `attention_sink` / `sliding_window_size`, keeping the cache at bf8_b, the SDPA grid at
+8x8, and `fp32_dest_acc_en=False` for the ring op) **or** adding a paged
+`chunked_scaled_dot_product_attention` path with a page table. Both touch
+`tt/attention/`, which P7 does not own. `ttnn.transformer.chunked_scaled_dot_product_attention`
+does exist on this build (verified by `dir(ttnn.transformer)`), so the paged route is available —
+but it wants a paged cache, and this cache is a DRAM `NdShard`, not pages.
+
+**What P8 must change, precisely:**
+1. Implement `tt/attention/dense_sp.dense_sp_attention` (the ring-joint port).
+2. Then set `TtPrefillRuntimeConfig(sequence_parallel=True)` on a mesh with `sp > 1`.
+   `TtPrefillRuntime._chunked_read_supported()` **probes** the stub, so it becomes `True`
+   automatically and both the `compile()` two-chunk warm-up and `prefill_chunk(actual_start>0)`
+   start working with no edit to `tt/tt_prefill_runtime.py` (`DEC-056`).
+3. Re-run `tests/unit/test_attention_chunked_vs_ref.py` with the *model* driving the cache, and
+   promote `G-CHUNK-ATTN` from `BLOCKED`.
+
+**What is already known to work, so P8 does not re-debug it:** the indexed RoPE at every non-zero
+`kv_actual_global` (`raw/G-CHUNK_20260903T204519Z.log`, chunked-vs-one-shot K/V PCC **1.00000** over
+32 layers at two chunk sizes) and the chunked cache write offsets (same log; `G-KV`'s bit-exact
+positional read-back).
+
+---
+
+## R-029 — The runtime's KV read-back helpers are unexercised on device (P7)
+
+**Status:** open. First real exercise is P8's `G-MESH-KV`.
+
+`TtPrefillRuntime.gather_layer`, `dump_slot_kv` and `kv_cache_pcc_check` all route through
+`_resolve_kv`, which asserts `TP == num_key_value_heads` (`R-027`), so at `(1,1)` they refuse rather
+than run. P7 narrows the gap two ways rather than leaving it silent:
+
+* `G-CHUNK` writes a device dump in **the same format** `dump_slot_kv` writes and scores it with the
+  same `compare_device_dump`, so the format and the golden comparison are both exercised end to end;
+* `tests/unit/test_attention_chunked_vs_ref.py::test_device_dump_metadata_contract_matches_the_verifier`
+  asserts, from the source text, that every metadata key `dump_slot_kv` writes is a key
+  `compare_device_dump` reads — the two live in different files and would otherwise be free to drift
+  on the only mesh this phase can run.
+
+What is **not** covered: the `blockcyclic_positions` inverse at `sp > 1` on a real device (it is
+proved host-only by `G-KV`'s `test_blockcyclic_positions_are_an_exact_inverse`), and the
+`r * cols + col` device-tensor indexing that maps KV head `c` to column `c`.
+
+---
+
+## R-030 — `build_kv_chunk_table` raises; migration is not wireable until P10 (P7)
+
+**Status:** open by design. Owner: P10.
+
+`TtPrefillRuntime.build_kv_chunk_table` raises `NotImplementedError` naming
+`tt/runners/kv_chunk_table.py` (P10's deliverable per `03_OUTLINE.md` §3.21), so
+`PREFILL_ENABLE_MIGRATION=1` cannot work. Raising rather than returning an empty table is the point:
+the engine publishes whatever it returns to the migration worker, and a structurally valid but wrong
+table migrates the wrong DRAM ranges — which surfaces as a corrupted decode long after prefill, with
+nothing pointing at the table.
+
+`kv_migration_base_address` **is** implemented (`int(kv.k.buffer_address())`), and the geometry the
+table must encode is already fixed and gated by `G-KV`:
+`NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32`, shard row `[1, 1, 32, 128]`, `ROUND_ROBIN_1D` over
+`mesh_device.dram_grid_size().x` (measured **8**) banks.
+
+---
+
+## Corrections and status updates from P7
+
+* **`R-020` is closed, and by measurement rather than by argument.** The mitigation was an assert
+  naming `build_indexed_rope`; P7 ran that path. The indexed RoPE at `(1,1)` over four chunk offsets
+  (0, 128, 256, 384) reproduces a torch absolute-position Meta rotation at **PCC 1.0000008**, and
+  chunked-vs-one-shot K is **1.00000** over all 32 layers at both (512,128) and (2048,512)
+  (`raw/G-CHUNK_20260903T204519Z.log`). The residual noted in `R-020` — "if P7 ever wants a one-shot
+  RoPE for a mid-stream chunk" — did not arise: the indexed path serves every chunk.
+* **`R-025` is answered for the KV product and still open for the hidden state.** `DEC-060` carried
+  `MAX_LAYER_ERROR_STEP = 4.0` **and** `STEP_CHECK_FROM_LAYER = 3` over unchanged and re-measured
+  them on the per-layer KV curve at chunk 128 and chunk 512: max K step **1.95x** / **1.81x**, max V
+  step **1.48x** / **1.60x** — half the ceiling, at two chunk sizes instead of one. The excluded
+  layer-2 step (**4.49x** / **4.18x**) is real and is exactly what `STEP_CHECK_FROM_LAYER` exists
+  for: layer 1's K error is 3.34e-5, ~1/55th of the deepest layer's 1.82e-3. **Still open:** the
+  *hidden-state* curve at the 8192-token default chunk, which P7 did not measure (a 32-layer fp32 HF
+  reference at 8192 tokens is a much larger host run, and the SDPA program config crosses
+  `ProgramConfig.prefill_threshold = 2048` again above it). Re-assigned to P8/P9.
+* **`R-004` (n_kv=1 at TP=8) is superseded by `R-027`, in the opposite direction.** `R-004` and
+  Appendix F.6 worried that TP=8 leaving 1 KV head per chip was under-exercised. Measured: `nkv = 1`
+  per chip is the **only** configuration the cache supports, and the untested case is every *smaller*
+  TP — including the `(1,1)` mesh five gates ran on. F.6's "no topology change is needed" stands;
+  its framing ("the residual delta is `head_dim`") missed that the head *count* constrains the mesh.
+* **Numbering irregularity in the logs, not a code fault.** `05_DECISIONS.md` contains a lone
+  `DEC-070` and `07_RISKS.md` an `R-040` (with `06_GATES.md`'s `G-LOOPBACK` block), with **no**
+  `DEC-062`-`DEC-069` and no `R-026`-`R-039`. §1.3 specifies monotonic numbering, and P7 was told to
+  continue from `DEC-052`, so P7 used `DEC-052`-`DEC-061` and `R-026`-`R-030`. There is no collision,
+  but a reviewer should know the gap is a reservation someone made, not a lost block.
