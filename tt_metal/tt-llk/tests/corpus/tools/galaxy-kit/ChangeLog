@@ -1,0 +1,40 @@
+2026-09-03  laneLQ  (owner-ordered pytest-session batching, opt-in)
+
+	* lib/worker.py: add OPT-IN batched mode behind LK_BATCH=1 (default
+	OFF; the solo default path is unchanged).  New: _batch_session,
+	_demux_outcomes, _demux_perfdata, _emit_cell, _solo_perf_cell,
+	_kernel_cycles, _audit_op, run_batch, steal_loop_batched.  Knobs:
+	LK_BATCH_OPS (ops per claimed batch, default 8), LK_BATCH_NODE_SECS
+	(per-node timeout increment, default 60), LK_BATCH_AUDIT (per-batch
+	solo audit, default on), LK_BATCH_AUDIT_TOL (audit tolerance in
+	cycles, default 2).  Grain: one corr session per batch group, one
+	session per rep index over all corr-gated perf nodes, one batched
+	retry over a failed session's missing tail, then solo fallback.
+	Honesty: batched corr FAILs are re-checked solo before CORR-FAIL is
+	booked (solo pass after batch fail => BATCH-ESCAPE-SUSPECT-<arm>.txt);
+	per-batch audit books AUDIT-<arm>.txt always and
+	AUDIT-DIVERGE-<arm>.txt beyond tolerance.
+
+	* lib/lk_batch_plugin.py: new kit pytest plugin (active only when
+	LK_BATCH_DEMUX is set).  Attributes perf frames to the node that
+	appended them (frame-identity tracking, with a single-schema-guarded
+	row-slice for tests that call perf_report.frame() mid-test) and
+	replays the harness's own dump/post_process/combine code per node, so
+	a batched cell's perf_data/ tree has the solo schema and byte-
+	comparable verdict CSVs.  Fail-closed: unproven nodes are simply not
+	indexed and the worker reruns them solo.
+
+	* stage.sh: ship lk_batch_plugin.py in the bundle.
+
+	* run_bench.sh: new --batch [N] flag (exports LK_BATCH=1
+	LK_BATCH_OPS=N to the launch).
+
+	* lib/galaxy_launch.sh: report batch mode in the banner.
+
+	* README.md, EXABOX.md: document the batched mode and the
+	verification: on the quietbox p150 chip 0 (pin-55 ON-39, 8 unary
+	ops, 96 solo sessions) solo 302s vs batched 46s (~6.5x wall per op);
+	REPLICATION-PAIRS/VERDICTS byte-identical, 80/80 per-rep
+	kernel_cycles equal; earlier 5-op mixed run (exp/abs/signbit/recip/
+	sdpa) 50/50 kernel_cycles equal with flaky-session tails recovered by
+	solo fallback.  Evidence: ~/sfpi-uplift/laneLQ-evidence-20260903/.

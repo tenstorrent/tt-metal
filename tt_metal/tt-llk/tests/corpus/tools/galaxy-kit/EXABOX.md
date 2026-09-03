@@ -75,3 +75,13 @@ run execute-only), run_bench.sh (per-chip work-stealing workers under
 srun --overlap; --pilot gate first), collect.sh (pull + emit
 REPLICATION-LEDGER.tsv). See README.md for the exact commands and
 prerequisites.
+
+run_bench.sh --batch turns on OPT-IN pytest-session batching (default off):
+one corr session per claimed batch of ops and one session per rep index over
+all gated perf nodes, with per-node demux by the kit's pytest plugin and a
+per-batch solo audit. Verified on the quietbox p150: verdict ledgers
+byte-identical to the solo grain at ~6.5x less wall time per op — a full
+146-row x 8-chip campaign's session count drops from ~14k to ~2k. Honesty
+rules are unchanged (same-chip pairs, corr-gate-first, 5 reps, one-shot
+upfront reset only); anything a batch cannot prove falls back to solo
+sessions automatically.

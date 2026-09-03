@@ -14,6 +14,7 @@ cd ~/sfpi-uplift/galaxy-kit
 # 2. red/green pilot, then the full run (job 75439 = the owner's hold)
 ./run_bench.sh -j 75439 --pilot exp            # must reproduce the board's exp cell
 ./run_bench.sh -j 75439 -c all -r 5 -k 8       # 32 chips, 5 reps, 8 chips/row
+#   add --batch for ~6.5x faster wall time per op (opt-in; see below)
 
 # 3. pull results + build the ledger
 ./collect.sh -w ~/my-run
@@ -56,6 +57,45 @@ Outputs land in the workdir: `REPLICATION-LEDGER.tsv` (every rep),
   launcher does exactly one marker-guarded upfront `tt-smi -r`.
 - **Not canon**: galaxy cycles are NOT p150-canon. The valid statistic is
   the same-chip sem/hand ratio; the p150 board stays canon.
+
+## Batched sessions (`--batch`, opt-in — default is the solo grain)
+
+The default worker pays a full pytest startup (~3s of imports/collection)
+for every (op, chip, arm, rep) measurement — ~14k startups per campaign for
+~1s of device work each.  `--batch [N]` (env `LK_BATCH=1`,
+`LK_BATCH_OPS=N`, default 8) amortizes that: a worker claims up to N ops at
+once and runs
+
+- ONE corr session over the whole batch, then
+- ONE session PER REP INDEX over all corr-gated perf nodes (pytest dedups
+  identical node ids, so one node's five reps stay in five sessions —
+  exactly the solo grain's rep structure), then
+- ONE batched retry per rep session over any missing tail (a mid-session
+  device hang fails everything after it), then solo sessions for whatever
+  is still missing.
+
+Per-node attribution comes from `lib/lk_batch_plugin.py`: it observes the
+frames each test appends to the harness's module-scoped perf report and
+replays the harness's OWN dump/post-process/combine code on just that
+node's frames, so a batched cell's `perf_data/` tree is the same files the
+solo path writes (verdict CSVs byte-comparable).  Anything the plugin
+cannot prove (a failed node, a mid-test `perf_report.frame()` collapse it
+cannot slice soundly, a schema surprise) is NOT booked — that cell falls
+back to a solo default session.  All honesty rules hold unchanged:
+same-chip pairs, corr gate before any perf rep (a batched corr FAIL is
+re-checked solo before `CORR-FAIL` is booked, and a solo pass after a batch
+fail is flagged `BATCH-ESCAPE-SUSPECT`), 5 reps, no resets.  On top, every
+batch gets an AUDIT: one op per flags-group is also measured solo per arm
+(`<arm>-perf-audit`) and its ledger kernel_cycles compared against the
+batched reps (tolerance `LK_BATCH_AUDIT_TOL`, default 2 cycles — solo
+sessions themselves jitter 0-2); a bigger difference books
+`AUDIT-DIVERGE-<arm>.txt` for adjudication.  `LK_BATCH_AUDIT=0` disables.
+
+Measured on the quietbox p150 (chip 0, pin-55 ON-39, 8 unary ops = 96
+sessions solo): 302s solo vs 46s batched (~6.5x wall per op), with
+`REPLICATION-PAIRS.tsv`/`REPLICATION-VERDICTS.tsv` byte-identical and all
+80 per-rep kernel_cycles equal to the solo run's.  The result tree keeps
+the solo schema, so `collect.sh`/`ledger.py` need no changes.
 
 ## Anatomy
 - `stage.sh`  spec generation (`lib/gen_spec.py`), one

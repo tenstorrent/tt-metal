@@ -129,7 +129,8 @@ for g in "$WORK"/builds/*/; do
 done
 cp -r "$WORK/flags" "$SHIPD/flags"
 cp "$WORK/ARMS.tsv" "$WORK/ROWS.tsv" "$WORK/TOOLCHAIN.txt" "$SHIPD/"
-cp "$KIT/lib/worker.py" "$KIT/lib/seed.py" "$KIT/lib/galaxy_launch.sh" "$SHIPD/"
+cp "$KIT/lib/worker.py" "$KIT/lib/lk_batch_plugin.py" "$KIT/lib/seed.py" \
+   "$KIT/lib/galaxy_launch.sh" "$SHIPD/"
 cp "$FARMDIR/tests/requirements.txt" "$SHIPD/requirements.txt"
 tar -C "$SHIPD" -cf - . | zstd -T8 -8 -q -o "$WORK/ship.tar.zst" -f
 sha256sum "$WORK/ship.tar.zst" | tee "$WORK/ship.tar.zst.sha256"
