@@ -143,8 +143,9 @@ constexpr uint64_t kCyclesPerUs = 1350;  // DRISC wall clock at the 1.35 GHz AIC
 // Idle backoff ceiling. 20 us exceeded a lane's fill time at high rates.
 constexpr uint32_t kCvIdleGapMax = 5 * kCyclesPerUs;
 constexpr uint32_t kCvIdleGapMinInc = 256;
-// Worst-case host staleness for a workload too light to reach the occupancy bands.
-constexpr uint64_t kSpoolFreshCycles = 50'000 * kCyclesPerUs;
+// Below the first band the host is otherwise fed nothing until the spool fills that far; one pass every this many
+// sweeps keeps it busy at a bounce per stride, and bounds host staleness to the stride.
+constexpr uint32_t kIdlePumpStride = 8;
 constexpr uint64_t kStopDrainCycles = 1'000'000 * kCyclesPerUs;
 // How long the exit lets the posted head writes stream out; small packets leave in nanoseconds.
 constexpr uint64_t kPostedDrainCycles = 1000 * kCyclesPerUs;
@@ -173,13 +174,10 @@ static_assert(
 struct SpoolPump {
     enum : uint32_t { kEmpty = 0, kReading = 1, kReady = 2, kShipping = 3 };
     static constexpr uint32_t kNone = 2;  // no bounce in the asked-for state
-    // Pump effort by spool occupancy: idle sweeps only, every other sweep, every sweep, also per batch and
-    // inside the read-wait spin.
-    enum : uint32_t { kLevelIdle = 0, kLevelHalf = 1, kLevelEverySweep = 2, kLevelInline = 3 };
-    static constexpr uint32_t kBandHalf = kSpoolBytes / 4u + kSpoolBytes / 8u;
+    // Pump effort by spool occupancy: the sweep cadence, every sweep, also per batch and inside the read-wait spin.
+    enum : uint32_t { kLevelIdle = 0, kLevelEverySweep = 1, kLevelInline = 2 };
     static constexpr uint32_t kBandEverySweep = kSpoolBytes / 2u;
     static constexpr uint32_t kBandInline = kSpoolBytes / 2u + kSpoolBytes / 8u;
-    static constexpr uint32_t kFreshTickStride = 64;
     // At most one READING and one SHIPPING bounce at a time, so every pass is a poll.
     struct Bounce {
         uint32_t state;
@@ -203,10 +201,6 @@ struct SpoolPump {
     Bounce b[2] = {};
     bool notify_pending = false;  // ships owe the host a bytes_sent notify (batched per sweep)
     uint32_t level = kLevelIdle;
-    // Latched trickle for a workload too light to reach the bands; cleared when the spool empties.
-    bool fresh_boost = false;
-    uint64_t oldest = 0;  // when the spool last went non-empty; 0 = empty
-    uint32_t fresh_tick = 0;
     SocketSenderInterface& sender_;
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
@@ -231,10 +225,7 @@ struct SpoolPump {
     // Call wherever wr or rd advance.
     FORCE_INLINE void rebalance() {
         const uint32_t occ = occupancy();
-        level = occ >= kBandInline       ? kLevelInline
-                : occ >= kBandEverySweep ? kLevelEverySweep
-                : occ >= kBandHalf       ? kLevelHalf
-                                         : kLevelIdle;
+        level = occ >= kBandInline ? kLevelInline : occ >= kBandEverySweep ? kLevelEverySweep : kLevelIdle;
     }
 
     FORCE_INLINE void append(uint32_t src, uint32_t len) {
@@ -365,27 +356,6 @@ struct SpoolPump {
         if (notify_pending) {
             notify_bytes_sent(sender_);
             notify_pending = false;
-        }
-    }
-
-    // The wall clock is read every 64th call: one read per sweep stalls producers at saturation, and ~1 ms of
-    // stride is noise against the 50 ms bound.
-    FORCE_INLINE void freshness_tick(uint64_t deadline_cycles) {
-        if (++fresh_tick < kFreshTickStride) {
-            return;
-        }
-        fresh_tick = 0;
-        if (wr == rd) {
-            oldest = 0;
-            fresh_boost = false;
-            return;
-        }
-        const uint64_t now = get_timestamp();
-        if (oldest == 0 || level >= kLevelHalf || fresh_boost) {
-            oldest = now;
-            fresh_boost = level == kLevelIdle && fresh_boost;
-        } else if (now - oldest > deadline_cycles) {
-            fresh_boost = true;
         }
     }
 };
@@ -1051,9 +1021,8 @@ void kernel_main() {
 
         // Busy sweeps below the first band skip the post-sweep pump: a capture that fits the spool gets pure gather.
         if constexpr (kSpool) {
-            const bool half_turn = pump.level == SpoolPump::kLevelHalf && (sweeps & 1u) != 0;
-            if (pump.level >= SpoolPump::kLevelEverySweep || half_turn || pump.fresh_boost ||
-                relieved == relieved_at_sweep_start) {
+            const bool cadence = (sweeps & (kIdlePumpStride - 1u)) == 0;
+            if (pump.level >= SpoolPump::kLevelEverySweep || cadence || relieved == relieved_at_sweep_start) {
                 pump.pass();
                 pump.notify();
             }
@@ -1069,9 +1038,6 @@ void kernel_main() {
                 grow_streak = 0;
             }
             grid_busy = grow_streak >= kBatchArmSweeps;
-        }
-        if constexpr (kSpool) {
-            pump.freshness_tick(kSpoolFreshCycles);
         }
         // Collapse on work, creep toward the ceiling when idle; live-but-untriggered lanes count as work, since a
         // head only reaches a producer on a ship.
