@@ -50,6 +50,17 @@ class Gemma4DFlashDrafterConfig:
     def target_feature_size(self) -> int:
         return len(self.target_layer_ids) * self.hidden_size  # 6 * 5376 = 32256
 
+    @property
+    def layer_configs(self) -> tuple[tuple[bool, int | None], ...]:
+        """Per-layer (is_causal, sliding_window) for dflash_drafter_forward, derived from
+        layer_types/sliding_window -- "sliding_attention" layers are causal with the
+        configured window, "full_attention" layers are non-causal/bidirectional with no
+        window. Confirmed against the real checkpoint's own module attributes:
+        4x (True, 2048) + 1x (False, None)."""
+        return tuple(
+            (True, self.sliding_window) if lt == "sliding_attention" else (False, None) for lt in self.layer_types
+        )
+
     @classmethod
     def from_pretrained(cls, path: str = "z-lab/gemma-4-31B-it-DFlash") -> "Gemma4DFlashDrafterConfig":
         """Build the device drafter config from the checkpoint's config.json."""
@@ -58,6 +69,11 @@ class Gemma4DFlashDrafterConfig:
         c = AutoConfig.from_pretrained(path, trust_remote_code=True)
         dfc = dict(getattr(c, "dflash_config", None) or {})
         d = cls()
+        # Newer transformers versions nest rope_theta under `rope_parameters` instead of
+        # exposing it as a top-level config attribute -- check both, since getattr's
+        # default would otherwise silently mask a real mismatch against the checkpoint.
+        rope_params = dict(getattr(c, "rope_parameters", None) or {})
+        rope_theta = rope_params.get("rope_theta", getattr(c, "rope_theta", d.rope_theta))
         return cls(
             hidden_size=c.hidden_size,
             head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
@@ -72,7 +88,7 @@ class Gemma4DFlashDrafterConfig:
             num_target_layers=int(getattr(c, "num_target_layers", d.num_target_layers)),
             layer_types=tuple(getattr(c, "layer_types", d.layer_types)),
             sliding_window=int(getattr(c, "sliding_window", d.sliding_window)),
-            rope_theta=float(getattr(c, "rope_theta", d.rope_theta)),
+            rope_theta=float(rope_theta),
             final_logit_softcapping=float(getattr(c, "final_logit_softcapping", d.final_logit_softcapping)),
             vocab_size=int(getattr(c, "vocab_size", d.vocab_size)),
             tie_word_embeddings=bool(getattr(c, "tie_word_embeddings", d.tie_word_embeddings)),
