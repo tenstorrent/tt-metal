@@ -559,7 +559,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         // Flag the drop so the host's DROPPED_ZONES warning fires instead of silently thinning data.
         if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
                 kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
-            kernel_profiler::mark_dropped_timestamps(kernel_profiler::myRiscID);
+            kernel_profiler::mark_dropped_timestamps(myRiscID);
         }
         kernel_profiler::timeStampedData<
             PERF_COUNTER_PROFILER_ID,
@@ -652,7 +652,7 @@ inline void read_l1_client_event_counter(uint32_t start_cycles) {
     PerfCounter counter(count, elapsed, PerfCounterType::QUASAR_L1_CLIENT_EVENT, QUASAR_L1_CLIENT_SEL);
     if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
             kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
-        kernel_profiler::mark_dropped_timestamps(kernel_profiler::myRiscID);
+        kernel_profiler::mark_dropped_timestamps(myRiscID);
     }
     kernel_profiler::timeStampedData<
         PERF_COUNTER_PROFILER_ID,
