@@ -1,0 +1,59 @@
+=== G-CARD  2026-09-03T16:06:50Z ===
+Document review gate. Mechanical checks over bringup_log/00_MODEL_CARD.md.
+
+--- [1] every architecture-fact row (section 2) has a non-empty Source cell ---
+rows found: 31
+rows with empty Source: 0
+
+--- [2] zero rows say 'from memory' / 'recall' (anywhere in the card) ---
+hits: 0
+8:Every row below has a `Source`. Nothing here is from memory. Rows whose provenance is a *derivation*
+
+--- [3] 'does NOT have' section exists ---
+107:## 3. What this model does **NOT** have
+OK
+  rows in that table:
+12
+
+--- [4] (mesh, TP, SP) arithmetic is shown ---
+3
+153:### 4.3 TP constraints — derived, one line each
+  TP constraint derivation OK
+178:### 4.4 SP constraints
+  SP constraint derivation OK
+195:### 4.5 The choice
+  choice + alternative OK
+  alternative (8,4) stated with numbers:
+1
+
+--- [5] every UNVERIFIED / open item in the card appears in 07_RISKS.md ---
+  R-001: card=2 risks_detail_section=1
+  R-002: card=2 risks_detail_section=1
+  R-003: card=1 risks_detail_section=1
+  R-004: card=1 risks_detail_section=1
+  literal 'UNVERIFIED' occurrences in card: 3
+
+--- [6] every config value in the card matches the source config.json ---
+  num_hidden_layers: config=32 card_claims=32 match=True
+  hidden_size: config=4096 card_claims=4096 match=True
+  intermediate_size: config=14336 card_claims=14336 match=True
+  num_attention_heads: config=32 card_claims=32 match=True
+  num_key_value_heads: config=8 card_claims=8 match=True
+  vocab_size: config=128256 card_claims=128256 match=True
+  max_position_embeddings: config=131072 card_claims=131072 match=True
+  rope_theta: config=500000.0 card_claims=500000.0 match=True
+  rms_norm_eps: config=1e-05 card_claims=1e-05 match=True
+  rope_scaling: {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3'}
+  head_dim key present in config: False -> card derives 4096/32 = 128
+  absent-key assertions (qk_norm/sliding_window/layer_types/experts/sinks/partial_rotary): all absent OK
+  ALL CONFIG VALUES MATCH: True
+
+--- [7] package skeleton + nine log files exist with SPDX ---
+9
+  py files and their SPDX:
+  OK ./__init__.py
+  OK ./tests/__init__.py
+  OK ./tests/unit/__init__.py
+  OK ./tt/__init__.py
+
+=== VERDICT: PASS (all seven checks clean; zero UNVERIFIED architecture rows) ===

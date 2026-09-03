@@ -1,0 +1,11 @@
+=== G-CITE-P6 — mechanical re-verification of every load-bearing path:line ref (Appendix F.7)
+=== command: python models/demos/llama32_8b_d_p/scripts/verify_citations.py
+=== date (UTC): 2026-09-03T20:02:47+00:00
+
+citations checked : 598
+  verified        : 598
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 598
+  resolved        : 598
+  unresolved      : 0

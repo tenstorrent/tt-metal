@@ -1,0 +1,58 @@
+=== G-SURVEY (final) 2026-09-03T16:26:11Z ===
+--- [1] reuse-vs-write rows with Decision + path:line ---
+component rows: 38
+rows failing: 0
+decision histogram:
+     18 adapt
+      8 import
+      2 readonly
+      2 adapt(copy)
+      1 write(thin)/defer
+      1 import(op)/adapt(callsite)
+      1 import(op)
+      1 adapt—unionoftwo
+      1 adaptsharedcode
+      1 adapt,dormant
+      1 adapt+fix
+      1 adapt(ifschemeB)
+
+--- [2] recipe's 20 minimum components ---
+missing: 0 / 20
+
+--- [3] 'not bringing over' list ---
+99:## 3. What we will **NOT** bring over
+rows: 13
+
+--- [4] 'write' decisions ---
+ **adapt** | **KV cache alloc + chunk write** | —
+ **import** | **KV write op** | —
+ **write (thin) / defer** | **LM head** | P3
+167:  | [4] rows deciding **write** | **1** (row 17, the thin LM head) — carries a stated finding: prefill's product is the KV cache, so logits exist only for `G-MODEL`'s top-1 check; deferred to P3 |
+
+--- [5] MECHANICAL CITATION RE-VERIFICATION (in-package verifier) ---
+citations checked : 200
+  verified        : 200
+  mismatched      : 0
+  missing files   : 0
+
+--- [6..8] required sections ---
+131:## 5. What the recipe's "where to look" table **omits**
+146:## 6. Recipe citations re-checked — **5 of 31 are wrong**
+189:## 7. What P3 inherits
+
+--- cross-file consistency ---
+DECs defined:   8
+DEC ids:        DEC-001 DEC-002 DEC-003 DEC-004 DEC-005 DEC-006 DEC-007 DEC-008
+Risk detail secs: 11
+Risk ids:       R-001 R-002 R-003 R-004 R-005 R-006 R-007 R-008 R-009 R-010 R-011
+Risk table rows:  11
+raw logs:       G-CARD_20260903T160650Z.log G-REF_20260903T161226Z.log G-SURVEY_20260903T162328Z.log G-SURVEY_20260903T162611Z.log
+
+--- every DEC referenced somewhere is defined ---
+  UNDEFINED: DEC-014
+(DEC-014 is the recipe's own template example, not ours)
+
+--- every R- referenced is defined ---
+(none printed = all defined)
+
+=== VERDICT: PASS ===

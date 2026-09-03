@@ -1,0 +1,161 @@
+2026-09-03 19:19:45.131 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_no_missing_and_no_unused_keys[blackhole-mesh_device0] 2026-09-03 19:19:47.360 | INFO     | llama32_8b_d_p.conftest:state_dict:63 - [llama32_8b_d_p] loading state dict from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-03 19:19:47.365 | INFO     | llama32_8b_d_p.conftest:state_dict:65 - [llama32_8b_d_p] loaded 291 tensors
+2026-09-03 19:19:47.562 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 19:19:47.562 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 19:19:47.579 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 19:19:47.579 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 19:19:47.676 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 19:19:47.681 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 19:19:49.101 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 19:19:49.101 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 19:19:49.101 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 19:19:49.101 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 19:19:49.120 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 19:19:49.869 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 19:19:50.799 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 19:19:54.607 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 19:19:54.607 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 19:19:54.625 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 19:19:54.625 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 19:19:55.239 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:19:55.939 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:19:55.940 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 19:20:44.921 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_no_missing_and_no_unused_keys:119 - [G-WEIGHTS] checkpoint keys = 291 | model consumed = 291 | missing = 0 | unused = 0
+2026-09-03 19:20:44.921 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_no_missing_and_no_unused_keys:123 - [G-WEIGHTS] missing set: []
+2026-09-03 19:20:44.921 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_no_missing_and_no_unused_keys:124 - [G-WEIGHTS] unused  set: []
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical[blackhole-mesh_device0] 2026-09-03 19:20:45.944 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:20:46.039 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:20:46.041 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 19:20:46.043 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:20:46.537 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.embed_tokens/model.embed_tokens.weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128256, 4096]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:47.880 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:47.880 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:48.154 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:48.511 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:48.866 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 14336, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.020 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wq_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.044 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wk_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.062 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wv_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.147 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.161 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:49.161 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:49.457 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:49.831 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.216 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 14336, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.381 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wq_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.405 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wk_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.438 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wv_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.527 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:20:50.541 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32]), dtype BFLOAT16, layout ROW_MAJOR
+2026-09-03 19:20:53.092 | DEBUG    | core:from_torch_and_dump:702 - Generating cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/lm_head/lm_head.weight_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128256]), dtype BFLOAT8_B, layout TILE
+2026-09-03 19:21:07.936 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:21:08.470 | info     |           Metal | Pinned source memory start address 0x7647c55ff158 must be aligned 64 B (dispatch.cpp:1202)
+2026-09-03 19:21:09.133 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.embed_tokens/model.embed_tokens.weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128256, 4096])
+2026-09-03 19:21:09.133 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-03 19:21:09.133 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-03 19:21:09.204 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336])
+2026-09-03 19:21:09.275 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336])
+2026-09-03 19:21:09.346 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 14336, 4096])
+2026-09-03 19:21:09.349 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wq_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096])
+2026-09-03 19:21:09.349 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wk_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024])
+2026-09-03 19:21:09.350 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/wv_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024])
+2026-09-03 19:21:09.353 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.0/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096])
+2026-09-03 19:21:09.353 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-03 19:21:09.353 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-03 19:21:09.424 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/gate_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336])
+2026-09-03 19:21:09.495 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/up_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 14336])
+2026-09-03 19:21:09.564 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/mlp/down_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 14336, 4096])
+2026-09-03 19:21:09.568 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wq_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096])
+2026-09-03 19:21:09.568 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wk_meta_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024])
+2026-09-03 19:21:09.569 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/wv_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 1024])
+2026-09-03 19:21:09.572 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.layers.1/self_attn/o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 4096])
+2026-09-03 19:21:09.572 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/model.norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 128, 32])
+2026-09-03 19:21:10.194 | DEBUG    | core:as_tensor:719 - Loaded cache for /tmp/pytest-of-mstojkovic/pytest-4/test_cache_only_rebuild_is_bit0/cache/lm_head/lm_head.weight_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 128256])
+2026-09-03 19:21:24.407 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_cache_only_rebuild_is_bit_identical:185 - [G-WEIGHTS] cache-only rebuild: 21 device tensors compared by SHA-256, 0 differ
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_device_weights_match_the_checkpoint[blackhole-mesh_device0] 2026-09-03 19:21:25.420 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:21:26.113 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:21:26.114 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 19:22:37.608 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_device_weights_match_the_checkpoint:258 - [G-WEIGHTS] 39 device weights (layers (0, 1, 16, 31) + the 3 global ones) are bit-exactly the checkpoint's, through each loader's own transpose / Meta-swizzle / dtype ladder
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_meta_renaming_is_caught_by_the_audit[blackhole-mesh_device0] 2026-09-03 19:22:38.670 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:22:39.341 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:22:39.342 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 19:22:39.361 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_meta_renaming_is_caught_by_the_audit:291 - [G-WEIGHTS] negative control (map_hf_to_meta_keys applied): 291 missing, 291 unused of 291 — e.g. missing ['lm_head.weight', 'model.embed_tokens.weight'], unused ['layers.0.attention.wk.weight', 'layers.0.attention.wo.weight']
+2026-09-03 19:22:39.361 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="cache"
+2026-09-03 19:22:39.361 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 1-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:22:39.364 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="cache"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_weight_cache_path_carries_the_mesh_shape[blackhole-mesh_device0] 2026-09-03 19:22:40.430 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:22:40.522 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:22:40.524 | INFO     | llama32_8b_d_p.tests.unit.test_weight_loading:test_weight_cache_path_carries_the_mesh_shape:336 - [G-WEIGHTS] weight_cache_path @ (1, 1): bf8_b -> /tmp/pytest-of-mstojkovic/pytest-4/test_weight_cache_path_carries0/llama32_8b_d_p_bh_1dev/1x1/tensor_cache_bfp8 | bf16 -> /tmp/pytest-of-mstojkovic/pytest-4/test_weight_cache_path_carries0/llama32_8b_d_p_bh_1dev/1x1/tensor_cache_bf16
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_state_dict_prefix_and_audit_refusals[blackhole-mesh_device0] 2026-09-03 19:22:41.572 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:22:41.647 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:22:41.648 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="unknown module"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="unknown module"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="not a per-layer module"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="not a per-layer module"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="per-layer"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="per-layer"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="checkpoint directory"
+2026-09-03 19:22:41.649 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="checkpoint directory"
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+71.51s call     models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_device_weights_match_the_checkpoint[blackhole-mesh_device0]
+48.98s call     models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_no_missing_and_no_unused_keys[blackhole-mesh_device0]
+38.37s call     models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical[blackhole-mesh_device0]
+8.58s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_no_missing_and_no_unused_keys[blackhole-mesh_device0]
+1.70s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_meta_renaming_is_caught_by_the_audit[blackhole-mesh_device0]
+1.69s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_device_weights_match_the_checkpoint[blackhole-mesh_device0]
+1.14s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_weight_cache_path_carries_the_mesh_shape[blackhole-mesh_device0]
+1.11s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_state_dict_prefix_and_audit_refusals[blackhole-mesh_device0]
+1.10s setup    models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical[blackhole-mesh_device0]
+0.52s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_state_dict_prefix_and_audit_refusals[blackhole-mesh_device0]
+0.02s call     models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_meta_renaming_is_caught_by_the_audit[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_meta_renaming_is_caught_by_the_audit[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_no_missing_and_no_unused_keys[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_device_weights_match_the_checkpoint[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_weight_cache_path_carries_the_mesh_shape[blackhole-mesh_device0]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_no_missing_and_no_unused_keys[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_cache_only_rebuild_is_bit_identical[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_device_weights_match_the_checkpoint[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_meta_renaming_is_caught_by_the_audit[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_weight_cache_path_carries_the_mesh_shape[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py::test_state_dict_prefix_and_audit_refusals[blackhole-mesh_device0]
+=================== 6 passed, 1 warning in 176.05s (0:02:56) ===================
+2026-09-03 19:22:44.239 | info     |    BuildKernels | JIT cache stats: 18/18 hits (100.0%) [18 cached, 48 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 19:22:44.239 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 19:22:44.457 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 19:22:44.457 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 19:22:52.392 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 19:22:52.392 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 19:22:52.393 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

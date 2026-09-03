@@ -1,0 +1,799 @@
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+# 07 — Risks, open questions, `UNVERIFIED` facts
+
+One row per risk. `Owner` is a slot for a human name. `Status` ∈ open / mitigated / closed / blocked.
+
+| Id | Severity | Phase found | Summary | Status | Owner |
+|---|---|---|---|---|---|
+| `R-001` | **high** | P0 | Model identity is an assumption: `llama32_8b` ⇒ Llama-3.1-8B-Instruct | open — **needs user confirmation** | _(unassigned)_ |
+| `R-002` | medium | P0/P1 | Installed `transformers` is 5.12.1; `config.rope_theta` is `None` (moved into `rope_parameters`) | mitigated (use `get_rope_theta`) | _(unassigned)_ |
+| `R-003` | **high** | P0 | No checkpoint anywhere on this machine → all real-weight gates are `BLOCKED` | blocked | _(unassigned)_ |
+| `R-004` | medium | P0 | TP=8 ⇒ **1 KV head per chip**; no op in the SDPA/KV-write path checked for a `num_kv_heads > 1` assumption | partially mitigated | _(unassigned)_ |
+| `R-005` | medium | P1 | `tt_transformers.ModelArgs` **raises** without `HF_MODEL`, so the recipe's preferred `reference_*` oracles are unreachable here | mitigated (`DEC-004`) | _(unassigned)_ |
+| `R-006` | medium | P2 | `compute_llama3_parameters` **hard-codes** `low_freq_factor=1` / `high_freq_factor=4` — it does *not* read them from `config.json` | mitigated for this model; latent for others | _(unassigned)_ |
+| `R-007` | medium | P2 | `gpt_oss_d_p`'s distributed-RMSNorm branch is **hard-disabled upstream**, i.e. never exercised — Llama's scheme-B path would be first use | open | _(unassigned)_ |
+| `R-008` | low | P2 | `ProgramConfig.get_prefill_sdpa_config` hard-codes an 8×8 core grid; Blackhole is wider | open | _(unassigned)_ |
+| `R-009` | low | P2 | `MeshConfig` is duplicated in two packages with **divergent** feature sets; neither is importable-as-is | open | _(unassigned)_ |
+| `R-010` | medium | P2 | `get_rot_transformation_mat(dhead)` **ignores its argument** and hard-codes `dhead = 32` | mitigated (informational) | _(unassigned)_ |
+| `R-011` | low | P0/P1 | `test_factory.TestFactory.setup_test` cannot run until P5 creates `tt/config.py` + `tt/ccl.py` | open by design | _(unassigned)_ |
+| `R-012` | medium | P4 | `G-TP-PARITY` runs on `(1,N)` meshes, which use `num_links=1` + `Topology.Linear`; the 2-link `Ring` path is exercised **only** by `G-MESH-KV`/`G-RACE` on `(4,8)` | open | _(unassigned)_ |
+| `R-013` | medium | P4 | The barrier-semaphore ping-pong is only **2** deep (a one-op gap), and `reset_global_semaphores` deliberately skips the barrier and ring-attention semaphores that chunked prefill now reuses across chunks | open | _(unassigned)_ |
+| `R-014` | medium | P3 | **`R-002` is factually wrong** as measured: `cfg.rope_theta` does not exist (raises `AttributeError`), `cfg.rope_scaling` is a full dict, and `getattr(cfg, "rope_theta", D)` returns `D` — so the hazard is a *silent default*, not a silent `None` | mitigated (`DEC-010`) | _(unassigned)_ |
+| `R-015` | low | P3 | **`DEC-006`'s stated premise is false**: `gpt_oss_d_p` and `minimax_m3` both cross-import `models.demos.deepseek_v3_d_p.tt.*` extensively, so "no demo package imports another demo's `tt/`" is not the tree's convention | open (informational) | _(unassigned)_ |
+| `R-017` | medium | P3 | The tilized **weight cache is mesh-shape dependent** but no gate checks a cache-only rebuild at TP>1: `G-WEIGHTS` runs on 1 card, and `TestFactory.setup_test` takes a raw `tensor_cache_path` with no mesh in it | open | _(unassigned)_ |
+| `R-016` | medium | P3 | **`R-008`'s proposed fix would break P8**: deriving the SDPA program grid from `compute_with_storage_grid_size()` (measured 12×10) violates the ring-joint assert `ccl_core_grid_offset.x >= sdpa_grid.x` at offset 11 | mitigated (`DEC-012`) | _(unassigned)_ |
+
+---
+
+## R-001 — Model identity is an assumption
+
+**Fact.** No public "Llama-3.2 8B" exists. The in-tree Llama-3.2 family is 1B / 3B (text) and
+11B / 90B (Vision) — `ls models/tt_transformers/model_params/` shows no `Llama-3.2-8B*`. The only 8B
+Llama in the tree is `Llama-3.1-8B-Instruct`.
+
+**Decision taken.** `DEC-001`: proceed on `meta-llama/Llama-3.1-8B-Instruct` dims. The recipe
+explicitly instructs not to stall (`BRINGUP_RECIPE.md:233-234`).
+
+**What the user must confirm.** Whether the intended target is Llama-3.1-8B-Instruct. If it is a
+Llama-3.2 *text* model instead, the delta is exactly three config keys
+(`00_MODEL_CARD.md` §1): `rope_scaling.factor` (8.0 → 32.0), `tie_word_embeddings` (false → true),
+and an explicit `head_dim`. No structural code changes.
+
+**Mitigation now in place.** All three of those values are read from the config at runtime and none
+is hard-coded, so retargeting is a `configs/<Name>/config.json` swap. **P3+ must preserve this**:
+never inline `8.0`, never assume `lm_head.weight` exists as a distinct tensor without checking
+`tie_word_embeddings`, never inline `128` for `head_dim`.
+
+---
+
+## R-002 — `transformers` 5.12.1 moved `rope_theta` into `rope_parameters`
+
+**Fact, measured.** With `transformers 5.12.1` installed
+(`python_env/lib/python3.12/site-packages/transformers/`):
+
+```
+LlamaConfig.from_pretrained('models/tt_transformers/model_params/Llama-3.1-8B-Instruct')
+  .rope_theta      -> None                      # <-- attribute EXISTS and is None
+  .rope_parameters -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0,
+                       'original_max_position_embeddings': 8192, 'rope_type': 'llama3',
+                       'rope_theta': 500000.0}
+  .rope_scaling    -> (aliased to rope_parameters, same dict)
+```
+
+The bundled `config.json` was authored for `transformers_version: 4.42.3`
+(`Llama-3.1-8B-Instruct/config.json:35`) where `rope_theta` was top-level.
+
+**Why this is dangerous.** `getattr(cfg, "rope_theta", DEFAULT)` returns **`None`**, not `DEFAULT`,
+because the attribute exists. A silent `None` θ produces a RoPE that is wrong at every position —
+exactly the Appendix B "Attention PCC ~0.5–0.9, norms fine" failure mode, but with no exception.
+`models/demos/gpt_oss_d_p/tt/model_config.py:76` and
+`models/demos/gpt_oss_d_p/tt/tt_prefill_runtime.py:185` both use that `getattr(..., default)` shape
+and are therefore latently affected under transformers 5.x. **Do not copy that pattern into
+`llama32_8b_d_p`.**
+
+**Mitigation.** The repo already has the correct helper, added for exactly this:
+`models/tt_transformers/tt/common.py:165` `def get_rope_theta(config: dict, default=None)` — it
+checks top-level `rope_theta`, then `rope_parameters["rope_theta"]` (flat, Qwen/Llama), then
+`rope_parameters["full_attention"]["rope_theta"]` (Gemma-style). Note it takes a **dict**, not a
+config object. The explanatory comment is at `common.py:160-163`. Sibling helper `get_rope_scaling`
+at `common.py:183`. **P3+ must route every θ read through `get_rope_theta`** and must assert the
+result is not `None`. This package reads dims from the raw JSON dict, which keeps `rope_theta`
+top-level and sidesteps the issue for dimension-only paths.
+
+---
+
+## R-003 — No checkpoint on this machine: real-weight gates are `BLOCKED`
+
+**Fact.** `HF_MODEL` is empty; the orchestrating session verified nothing under `/proj_sw`,
+`/mnt/MLPerf`, or `~/.cache/huggingface`. No safetensors for any Llama exist here.
+
+**What is unaffected.** Every module-level PCC gate (`G-RMS`, `G-ROPE`, `G-MLP`, `G-ATTN`, `G-KV`,
+`G-LAYER`), because the recipe's own pattern drives the torch reference and the TT module from
+*identical random weights* (`BRINGUP_RECIPE.md:305-308`, `:588`). `G-REF` is unaffected for the same
+reason. Key-*name* work is unaffected: `LlamaForCausalLM(config)` / `from_config` yields a randomly
+initialised model with the real state-dict key names.
+
+**What is `BLOCKED`, and must be recorded as `BLOCKED` rather than `PASS`:**
+
+| Gate | Why blocked |
+|---|---|
+| `G-WEIGHTS` (real-checkpoint key consumption) | needs actual safetensors to prove no key is silently unused/missing. The *structural* half (cache-only rebuild) can run on random weights. |
+| `G-GOLDEN` | `scripts/generate_golden_kv_cache.py` must run the real reference on real weights |
+| `G-CHUNK` / `G-MESH-KV` vs golden | depend on `G-GOLDEN` |
+| `G-MODEL` top-1 token agreement | random weights give meaningless tokens; hidden-state PCC on random weights is still meaningful |
+| `G-REQUEST`, `G-MOCK-MIG` | need a populated weight cache + staged golden trace |
+
+**Do not attempt a multi-GB download.** Instruction from the orchestrating session.
+
+**Mitigation.** Structure every test so the real-weight case is a `pytest.mark.skipif` on `HF_MODEL`
+(the `requires_hf_reference` marker, `tests/test_factory.py`), not a hard failure — so the same test
+file goes green on this machine and covers more on a machine with weights.
+
+---
+
+## R-004 — TP = 8 gives exactly one KV head per chip
+
+`8 num_key_value_heads / TP 8 = 1`. Nothing in the SDPA or KV-write path has been *executed* at
+`num_kv_heads = 1`; only read.
+
+**Partial mitigation — the SDPA op is confirmed safe.** `ttnn.transformer.scaled_dot_product_attention`
+supports GQA natively and its only head-count constraint is
+`ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp:97-101` (non-paged) and
+`:325-329` (paged/chunked), both:
+
+```cpp
+TT_FATAL(nqh >= nkv && nqh % nkv == 0,
+         "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
+         nqh, nkv);
+```
+
+At TP=8 that is `4 >= 1 && 4 % 1 == 0` ✓. Head counts are read at `:61-62`; K and V head counts must
+match each other (`:89`, `:317`). This also settles the recipe's open question at
+`BRINGUP_RECIPE.md:680-681` ("verify this against the op's signature and log it"): **no on-chip KV
+repeat is needed** — see `02_SURVEY.md`.
+
+**Still unverified:** `ttnn.experimental.deepseek_prefill.update_padded_kv_cache` and
+`ttnn.transformer.ring_joint_scaled_dot_product_attention` at `n_kv = 1`. First real exercise is
+`G-KV` (single card, TP=1 → 8 KV heads, so it does *not* cover this) and then `G-TP-PARITY` /
+`G-MESH-KV` in P8. **P8 owns closing this.** If it bites, `(8, 4)` / TP=4 (2 KV heads per chip) is
+the pre-costed fallback — see `DEC-002`.
+
+---
+
+## R-005 — `tt_transformers.ModelArgs` requires `HF_MODEL`, so the recipe's preferred oracle is unreachable
+
+The recipe's P1 option 1 (`BRINGUP_RECIPE.md:294-300`) is "HF `transformers` `LlamaForCausalLM`
+directly … `models/tt_transformers/tt/model_config.py` already exposes per-module accessors …
+`reference_transformer` (`:4037`), `reference_decoder` (`:4393`), `reference_attention` (`:4410`),
+`reference_mlp` (`:4365`), `reference_rms_norm` (`:4167`), `reference_embedding` (`:4379`),
+`reference_lm_head` (`:4027`)". **All seven line numbers are correct.**
+
+But those are methods on `ModelArgs`, and `ModelArgs.__init__` **raises** without a checkpoint:
+`models/tt_transformers/tt/model_config.py:702` —
+`raise ValueError("Please set HF_MODEL to a HuggingFace name ...")` (`HF_MODEL` read at `:683`,
+`self.CKPT_DIR = HF_MODEL` at `:687`). Every `reference_*` accessor funnels through
+`reference_transformer` (`:4037`), which calls `model_cls.from_pretrained(self.CKPT_DIR, ...)`
+(`:4126-4144`) and therefore wants real weights on disk.
+
+There is an escape hatch — `ModelArgs(dummy_weights=True, ...)` (ctor kwarg at `:617`) plus
+`load_checkpoint=False` takes an `AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[...])` /
+`from_config` path at `:4044-4076` — but `self.CKPT_DIR` is still consulted first at `:4064`, and the
+whole object still demands `HF_MODEL` at construction.
+
+**Mitigation.** `DEC-004`: use `transformers` directly (`LlamaConfig` + `LlamaDecoderLayer` /
+`LlamaForCausalLM`) rather than through `ModelArgs`. This is *more* faithful to the recipe's stated
+first preference ("nothing to vendor, nothing to keep in sync") than the accessor route is, and it
+removes `HF_MODEL` from the P1–P6 critical path entirely. **P3+ note:** the `reference_*` accessors
+become usable and worth switching to the moment a checkpoint is staged — they handle the Meta↔HF
+weight conversion for you (`reference_mlp` monkey-patches `load_state_dict`, `:4368-4376`).
+
+---
+
+## R-006 — `compute_llama3_parameters` hard-codes `low_freq_factor` and `high_freq_factor`
+
+The recipe states (`BRINGUP_RECIPE.md:620-624`) that `rope_type="llama3"` uses
+`compute_llama3_parameters:405` "with `factor`, `low_freq_factor`, `high_freq_factor`,
+`original_max_position_embeddings` straight from `config.json:rope_scaling`".
+
+**That is not what the code does.** `models/tt_transformers/tt/common.py:405` is
+`def compute_llama3_parameters(freqs, scale_factor, orig_context_len)` — three arguments. Lines
+`:407-408` are:
+
+```python
+low_freq_factor = 1
+high_freq_factor = 4
+```
+
+They are **local constants, not parameters**. Only `factor` (as `scale_factor`) and
+`original_max_position_embeddings` (as `orig_context_len`) are threaded through from the config.
+
+**Impact on this model: none.** Llama-3.1-8B's config has exactly `low_freq_factor: 1.0` and
+`high_freq_factor: 4.0` (`Llama-3.1-8B-Instruct/config.json:28-29`), so the hard-coded values
+coincide. Llama-3.2-1B/3B also use 1.0/4.0. So the function is correct for the whole Llama-3.x
+family.
+
+**Impact if the identity assumption changes or another model is added: silent wrongness.** A config
+with different low/high factors would be silently ignored. `tt/rope.py` must therefore **assert** the
+config's `low_freq_factor == 1.0` and `high_freq_factor == 4.0` before delegating, rather than
+passing them and trusting they are used. This turns a silent-wrong into a loud-fail.
+Recipe correction filed.
+
+---
+
+## R-007 — `gpt_oss_d_p`'s distributed-RMSNorm branch is dead code upstream
+
+`models/demos/gpt_oss_d_p/tt/rms_norm.py:33` reads:
+
+```python
+self.is_distributed = False  # self.mesh_config.tp > 1
+```
+
+The condition is commented out and the flag pinned `False`. So the 3-op distributed path
+(`ttnn.rms_norm_pre_all_gather` `:67` → `ttnn.all_gather` `:70-78` → `ttnn.rms_norm_post_all_gather`
+`:82-90`) is **present but never executed** in the package it is being borrowed from; the plain
+`ttnn.rms_norm` else-branch (`:93-99`) is what is actually validated.
+
+**Impact.** The recipe (`BRINGUP_RECIPE.md:613`, `:786`) says to keep the branch and leave it `False`
+until P8 — which is right — but it should not be assumed working. If P4 selects residual scheme B
+(TP-sharded residual), that branch becomes load-bearing and Llama would be its **first real user**.
+`04_CCL_PLAN.md` must state this when it records the residual decision. Recipe recommends scheme A
+(replicated residual, `:561`), which keeps the branch dead for this iteration — the right call given
+this risk.
+
+---
+
+## R-008 — SDPA program config hard-codes an 8×8 core grid
+
+`models/demos/gpt_oss_d_p/tt/attention/config.py:90` `get_prefill_sdpa_config(self, mesh_device, seq_len)`
+hard-codes `ttnn.CoreCoord(8, 8)` at `:96`, and `get_compute_kernel_config()` at `:102` returns a
+`ttnn.WormholeComputeKernelConfig` (`:103`) — on Blackhole hardware.
+
+This is the same class of bug the recipe warns about for the *CCL* grid
+(`BRINGUP_RECIPE.md:511-512`, Appendix B row 4: "Ring-SDPA assert `ccl_core_grid_offset.x >=
+sdpa_grid.x`"), except here it is the SDPA compute grid rather than the CCL grid. `CCLManager` does
+derive its grid correctly — `models/demos/gpt_oss_d_p/tt/ccl.py:44` calls
+`compute_with_storage_grid_size()` and `:61` sets
+`ring_attention_ccl_core_grid_offset = (compute_grid_size.x - 1, 0)`. So the CCL side adapts to
+Blackhole's wider grid while the SDPA side does not, and the two must stay consistent for the
+ring-SDPA assert to hold.
+
+**Action for P3/P5:** derive the SDPA grid from `mesh_device.compute_with_storage_grid_size()` rather
+than copying the literal, and pick the compute-kernel-config class by arch
+(`models/common/utility_functions.py:1043` `is_blackhole()`).
+
+---
+
+## R-009 — `MeshConfig` is duplicated with divergent feature sets
+
+Two near-identical `MeshConfig` classes exist and **neither is a superset**:
+
+| | `models/demos/minimax_m3/config.py:21` | `models/demos/gpt_oss_d_p/tt/config.py:19` |
+|---|---|---|
+| `reduce_scatter` | **yes**, `:155` | **no** |
+| `sp` property | no (reads `mesh_shape[sp_axis]` inline, `:175`) | **yes**, `:55-56` |
+| `_validate` | `:40`, lenient — mismatch is a `logger.warning` (`:45-49`) | `:38`, strict — hard `raise` (`:44-48`) |
+| `allreduce` / `allgather` | `:77` / `:135` | `:85` / `:138` |
+| `_VALIDATED_MESH_SHAPE` / `_VALIDATED_TP` | `(8, 4)` / `4` (`:17-18`) | `(4, 8)` / `8` (`:15-16`) |
+
+The recipe's P4 text (`BRINGUP_RECIPE.md:518-523`) describes `MeshConfig` as owning "the three
+collectives `allreduce`, `allgather`, `reduce_scatter`" and cites minimax `config.py:21`
+(`allreduce:77`, `allgather:135`, `reduce_scatter:155`) — **all four line numbers correct** — but does
+not mention that `gpt_oss_d_p` has its own copy lacking `reduce_scatter`, nor that the recipe's own
+`(4,8)`/TP=8 target already lives in `gpt_oss_d_p/tt/config.py:15-16`.
+
+**Consequence.** "Reuse means import, not copy-paste" (`BRINGUP_RECIPE.md:72-73`) cannot be honoured
+for `MeshConfig` without importing across sibling demo packages, which the templates themselves do
+not do (`gpt_oss_d_p/README.md:46` states the Wormhole gpt_oss demo was "a code-lineage source only
+and is **not** imported"). P5 will need a `DEC` for the copy, and it should take the **union**:
+minimax's `reduce_scatter` + gpt_oss's `sp` property and strict `_validate`. Consolidating the three
+copies into `models/demos/common/` is the right long-term fix and is out of scope here.
+
+---
+
+## R-010 — `get_rot_transformation_mat` ignores its argument
+
+`models/tt_transformers/tt/common.py:562` is `def get_rot_transformation_mat(dhead=32)`, but `:564`
+hard-codes `dhead = 32`, overwriting the parameter, before delegating to
+`get_rot_transformation_mat_v2(dhead)`.
+
+That is *correct* for `ttnn.experimental.rotary_embedding_llama`, whose transformation matrix is a
+per-tile 32×32 construct independent of `head_dim` — but the signature invites the reader to pass
+`head_dim` (128) and believe it mattered. Informational: **call it with no argument** so no one later
+"fixes" the call site by passing 128 and concludes something changed. Recipe cites the line correctly
+(`BRINGUP_RECIPE.md:624`, `:630`) without noting this.
+
+---
+
+## R-011 — `TestFactory.setup_test` is inert until P5
+
+`tests/test_factory.py::TestFactory.setup_test` is specified by the recipe
+(`BRINGUP_RECIPE.md:323-324`) to build `MeshConfig` + `CCLManager`, which are P5 deliverables
+(`tt/config.py`, `tt/ccl.py`). The function is written now with those imports **inside the function
+body** so that importing `test_factory` — and therefore every dimension-only test — works today, and
+`setup_test` starts working the moment P5 lands, with no edit. Calling it before then raises
+`ModuleNotFoundError` with the module path in the message. Open by design; closes in P5.
+
+---
+
+## R-012 — `G-TP-PARITY` does not cover the 2-link ring path
+
+`get_default_num_links` returns **1** for any single-row mesh
+(`models/demos/gpt_oss_d_p/utils/general_utils.py:33`) and 2 on Blackhole otherwise (`:35`). The P8
+parity meshes are `(1,2)`, `(1,4)`, `(1,8)` — all single-row — so `G-TP-PARITY` runs at
+`num_links = 1` with `Topology.Linear` (`DEC-020`).
+
+**Consequence.** `G-TP-PARITY` proves the *sharding math* (each chip holds the right slice and the
+collective sums the right partials). It proves nothing about the 2-link, ring-routed fabric path that
+the deployment target uses. The first and only exercise of `num_links=2` + `Ring` is
+`G-MESH-KV`/`G-RACE` on `(4,8)`.
+
+**How to read a failure.** A `(4,8)`-only failure after a green `G-TP-PARITY` is a fabric/topology
+problem (link count, ring route, torus descriptor), not a sharding one — check
+`TT_MESH_GRAPH_DESC_PATH`, `FABRIC_1D_RING`, and `PREFILL_TOPOLOGY=linear` as a bisect, before
+touching any module. **Mitigation to consider in P8:** add a `(2,8)` or `(4,8)`-with-TP-only
+parametrisation to `test_tp_parity.py` so at least one parity run uses `num_links=2`.
+
+---
+
+## R-013 — Barrier ping-pong depth is 2, and the reset skips barrier/ring semaphores
+
+Two inherited properties of `CCLManager`, both fine for one-shot prefill and both worth stating
+before P7/P8 rely on them:
+
+1. **Depth 2.** `get_barrier_semaphore()` cycles over exactly two handles
+   (`models/demos/gpt_oss_d_p/tt/ccl.py:78`, index at `:105`). Inside one `allreduce` the
+   reduce-scatter takes `barrier[0]` and the all-gather takes `barrier[1]`
+   (`models/demos/minimax_m3/config.py:102` then `:124`), so the *next* `allreduce`'s
+   reduce-scatter takes `barrier[0]` again — a one-op gap. At 64 all-reduces per chunk
+   (`04_CCL_PLAN.md` §7) that is 128 acquisitions cycling over 2 handles. This is the template's
+   design and `G-RACE` (3 runs bit-identical) is what validates it. **If `G-RACE` fails, deepening
+   the barrier ping-pong from 2 to 4 is the first thing to try**, before suspecting a module.
+2. **The reset is partial.** `reset_global_semaphores()` resets only the RS and AG ping-pong sets
+   (`models/demos/gpt_oss_d_p/tt/ccl.py:129`) and deliberately not the barrier or ring-attention
+   semaphores — the upstream comment (`:132`) says one-shot prefill never reuses a `CCLManager`
+   across runs and marks extending it as an open TODO. **Chunked prefill does reuse one across
+   `prefill_chunk` calls.** P7 must decide whether to extend the reset; if it does, that is a `DEC`
+   with `G-RACE` as its evidence, and if it does not, that is also a `DEC`.
+
+---
+
+## R-014 — `R-002` is wrong: `rope_theta` does not exist on the config object
+
+`R-002` states "`.rope_theta -> None   # <-- attribute EXISTS and is None`". Measured on this
+machine (transformers 5.12.1, four construction paths — `LlamaConfig.from_pretrained`,
+`AutoConfig.from_pretrained`, `LlamaConfig()`, `LlamaConfig(**raw_json)`), raw log
+`raw/G-OUTLINE_20260903T170527Z.log`:
+
+```
+cfg.rope_theta                        -> AttributeError: 'LlamaConfig' object has no attribute 'rope_theta'
+hasattr(cfg, "rope_theta")            -> False
+getattr(cfg, "rope_theta", 500000.0)  -> 500000.0          # the DEFAULT, not None
+cfg.rope_scaling                      -> {..., 'rope_theta': 500000.0}      # a full dict, not None
+[k for k in cfg.to_dict() if "rope" in k] -> ['rope_parameters']
+```
+
+**Why the correction matters rather than being pedantry.** `R-002` and Appendix F.2 describe the
+hazard as a silent `None` propagating into the RoPE. The actual behaviour is the **inverse and
+worse**: attribute access fails *loudly*, and the `getattr(..., DEFAULT)` pattern
+(`models/demos/gpt_oss_d_p/tt/model_config.py:76`, `tt_prefill_runtime.py:185`) *succeeds* while
+substituting a hard-coded θ. A default of `10000.0` against Llama-3.1-8B's `500000.0` produces a
+RoPE wrong at every position with no exception — the Appendix B "attention PCC 0.5–0.9, norms fine"
+signature. The mitigation is unchanged (`get_rope_theta`, assert non-`None`, `DEC-010`); only the
+reason is. Also: `cfg.rope_scaling` is **not** `None`, so any code written on the assumption that
+it is will read a dict where it expected a fallback.
+
+---
+
+## R-015 — `DEC-006`'s premise ("no demo imports another demo's `tt/`") is false
+
+`DEC-006` justifies copying `MeshConfig`/`CCLManager`/`utils` partly on the claim that "No demo
+package in this tree imports another demo package's `tt/`", citing
+`models/demos/gpt_oss_d_p/README.md:46`. Measured by grep, both templates cross-import
+`deepseek_v3_d_p` heavily:
+
+| importer | line | imports |
+|---|---|---|
+| `models/demos/gpt_oss_d_p/tt/rope.py` | `:25` | `models.demos.deepseek_v3_d_p.tt.mla.utils.block_cyclic_reorder` |
+| `models/demos/gpt_oss_d_p/tt/mlp.py` | `:21` | `deepseek_v3_d_p.tt.moe.init_helpers` |
+| `models/demos/gpt_oss_d_p/tt/moe/tt_gpt_oss_moe.py` | `:30-35` | six `deepseek_v3_d_p.tt.moe.*` modules |
+| `models/demos/minimax_m3/tt/moe/tt_minimax_moe.py` | `:24-27` | four `deepseek_v3_d_p.tt.moe.*` modules |
+
+**What this does and does not change.** It does not overturn `DEC-006` — the recipe explicitly
+instructs the copy (`BRINGUP_RECIPE.md:600-603`), the union requirement stands (`R-009`), and
+`README.md:46`'s statement is about the *Wormhole* `models/demos/gpt_oss` demo specifically, not a
+tree-wide rule. But `DEC-006`'s generalisation from it is unsupported, and a reviewer who checks
+will find that out. It also has a concrete P3 consequence: importing `block_cyclic_reorder` from
+`deepseek_v3_d_p` in `tt/rope.py` (rather than copying it) is **precedented by gpt-oss's own
+`rope.py:25`**, and `03_OUTLINE.md` §3.5 takes that route.
+
+---
+
+## R-016 — `R-008`'s proposed fix would break the ring-joint SDPA assert
+
+`R-008` (and `02_SURVEY.md` row 11) instruct P3/P5 to "derive the SDPA grid from
+`mesh_device.compute_with_storage_grid_size()` rather than copying the literal
+`ttnn.CoreCoord(8, 8)`". Measured: that grid is **(12, 10)** on this Blackhole. The ring-joint SDPA
+op asserts, in the column-major branch that gpt-oss selects
+(`use_column_major_ccl=True`, `models/demos/gpt_oss_d_p/tt/attention/dense_sp.py:134`):
+
+```cpp
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.cpp:421
+TT_FATAL(args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
+         "SDPA coregrid overlaps with AllGather coregrid (column-major)");
+```
+
+with the offset fixed at `(grid.x - 1, 0) = (11, 0)`
+(`models/demos/gpt_oss_d_p/tt/ccl.py:61`). `11 >= 8` ✓; `11 >= 12` ✗. So the "fix" turns a working
+configuration into a `TT_FATAL` the moment SP > 1 — and it would pass every P5 single-card gate
+first, surfacing only in P8.
+
+**Resolution:** `DEC-012` keeps 8×8 as an explicit, named `ProgramConfig` field (the real defect is
+that it was a buried literal) and adds `assert sdpa_core_grid[0] <= grid.x - 1` for SP > 1.
+Appendix D was right; `R-008` and survey row 11 are hereby corrected. The related survey claim that
+one should "pick the compute-kernel-config class by arch" is also void, measured two ways:
+`hasattr(ttnn, "BlackholeComputeKernelConfig")` is **False** (the name is not exported —
+`ttnn/ttnn/__init__.py:305` exports only the Wormhole one), and where it is defined it is the same
+object (`ttnn/ttnn/types.py:61`, `BlackholeComputeKernelConfig = WormholeComputeKernelConfig`).
+Use `ttnn.init_device_compute_kernel_config(mesh_device.arch(), ...)` (`DEC-013`).
+
+---
+
+## Corrections to earlier risk entries (P3/P4)
+
+Earlier entries are left intact above; these are the amendments.
+
+| Entry | Amendment |
+|---|---|
+| `R-002` | **Superseded by `R-014`.** The attribute does not exist; the hazard is a silent *default*, not a silent `None`. |
+| `R-003` | **Void.** Appendix F.1: real weights are staged at `/home/mstojkovic/models/Llama-3.1-8B-Instruct`. `G-WEIGHTS` (real half), `G-GOLDEN`, `G-CHUNK`/`G-MESH-KV`-vs-golden, `G-MODEL` top-1, `G-REQUEST` and `G-MOCK-MIG` are **runnable, not `BLOCKED`**. Keep the `requires_hf_reference` marker so the suite still runs on a weightless machine. `06_GATES.md`'s P6–P8 checklist rows that say `BLOCKED, R-003` are stale. |
+| `R-007` | **Narrowed.** The dormant distributed-RMSNorm branch is only load-bearing for residual scheme B in its `distributed` norm mode. Minimax ships scheme B by **default** with `norm_mode = "gather_first"` (`models/demos/minimax_m3/tt/residual.py:26`, `:32`), which never enters that branch. So "scheme B is unproven" is false as stated; "B-with-distributed-norm is unproven" is true. See `DEC-018`. |
+| `R-008` | **Corrected by `R-016` / `DEC-012`.** The recommended fix is wrong; the literal is kept and made explicit. |
+| `R-011` | **Unchanged, closes in P5.1** — `tt/config.py` + `tt/ccl.py` are P5.1 deliverables, and `setup_test` must additionally wrap its dict in `llama_hf_config()` per `DEC-009`. |
+
+---
+
+## R-017 — the weight cache is mesh-shape dependent, and no gate covers cache-only at TP>1
+
+Every module loads weights through
+`ttnn.as_tensor(..., mesh_mapper=..., cache_file_name=get_cache_file_name(path, name))`
+(`models/demos/minimax_m3/tt/dense_mlp.py:64`, `:70`). The cached file therefore holds the
+**already-sharded, already-tilized** per-device tensor, so a cache written on one mesh shape is not
+interchangeable with one written on another — and cache-only mode (an empty `state_dict` plus a
+populated cache) is a load-bearing path: the disaggregated runner relies on it
+(`GPT_OSS_WEIGHTS_FROM_CACHE=1` in `models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py:121`
+region).
+
+**The gap.** `G-WEIGHTS` (Appendix A) runs on **1 card**, so the cache-only half is only ever proven
+at TP=1. Nothing in the ladder rebuilds from cache on `(4,8)`/TP=8 and compares. A stale or
+wrong-shape cache would then present as garbage weights in one or more layers — the
+Appendix B "one layer runs on garbage" signature — first observed at `G-MESH-KV`, three phases
+downstream.
+
+**Two mitigations, both cheap, both owed by P6.2:**
+1. **Put the mesh shape in the path.** `ModelArgs.weight_cache_path(dtype)` must include it, exactly
+   as the adapter does — `<cache>/llama32_8b_d_p_bh_<N>dev/<sp>x<tp>`
+   (`models/demos/gpt_oss_d_p/tt/runners/adapters/gpt_oss.py:75`). Then a `(1,1)` cache and a
+   `(4,8)` cache cannot collide, and `TestFactory.setup_test`'s raw `tensor_cache_path` should be
+   derived from it rather than passed in bare.
+2. **Extend `G-WEIGHTS`'s cache-only assertion to the target mesh in P8**, alongside
+   `G-TP-PARITY`: build once with weights, build again from `{}` + cache, and assert the device
+   tensors are bit-identical on `(4,8)`.
+
+---
+
+## R-018 — Appendix E's threshold method is input-distribution-sensitive (measured, P5.2)
+
+**Status:** measured and mitigated for `G-RMS`; **open for `G-MLP` / `G-ATTN` / `G-KV`.**
+
+Appendix E's method is: *measure what the existing implementation gets on the same op set, dtype and
+silicon, then set the new module's threshold from that measurement.* P5.2 found the method has an
+unstated fourth variable — the **input distribution**.
+
+The oracle (`models/tt_transformers/tests/test_rms_norm.py:80`) drives its input with
+`torch.rand(1, 1, 32, dim)`: uniform on `[0, 1)`, strictly positive, mean large relative to spread.
+Appendix E reports **0.9999867 / 0.9999886** from it and revises `G-RMS` to **>= 0.9999**.
+
+Measured on this box, `tt/rms_norm.py` on `(1,1)`, identical seed and weights, **only the input
+distribution changed**:
+
+| input | seq 32 | seq 512 | vs the 0.9999 gate |
+|---|---|---|---|
+| `randn` (what `G-RMS` uses) | 0.9999637 | 0.9999629 | passes |
+| `rand[0,1)` (the oracle's own) | **0.9998979** | **0.9998413** | **FAILS** |
+
+So reproducing the oracle's input distribution would have failed the gate that distribution's own
+measurement produced. PCC on a positive-mean signal is dominated by the mean, so bf16 activation
+rounding costs more correlation there than on a zero-mean signal.
+
+**Why this is a risk and not just a note:** the same reasoning applies to every remaining
+Appendix-E-derived threshold (`G-MLP` >= 0.999 @bf8_b, `G-ATTN` >= 0.999, `G-LAYER` >= 0.999). A
+P5.4-P5.6 gate that lands at, say, 0.9985 must not be assumed broken before its input distribution
+is compared with the oracle's.
+
+**Mitigation, owed by P5.4-P5.6 and P6:**
+1. State the input distribution in every gate detail block (`DEC-026`).
+2. When a gate lands in the band between the Appendix E number and the recipe's original guess,
+   **re-run it under the oracle's distribution before suspecting the module** — that is a two-minute
+   check that distinguishes "the threshold's provenance is distribution-dependent" from "the module
+   is wrong".
+3. Recipe change worth folding in: Appendix E should record the *input distribution* of each oracle
+   alongside its PCC, because the number is not portable without it.
+
+---
+
+## R-019 — This package is untracked in git, so P0-P4 never ran the repo's `pre-commit` hooks
+
+**Status:** partially resolved in P5.1 (all 32 files are now hook-clean); the **process** gap remains.
+
+`git ls-files -o --exclude-standard` lists every file in `models/demos/llama32_8b_d_p/` — the
+directory has never been committed, and the recipe forbids committing (`BRINGUP_RECIPE.md:91`). The
+consequence is that no P0-P4 deliverable had been through `black`, `isort`, `autoflake`, or the
+repo's local hooks, even though P9's `G-CLEAN` requires them.
+
+Two concrete effects, both hit in P5.1:
+
+1. **`black` moved a cited line.** It collapsed `UPSTREAM_CONFIG_JSON` in `tests/test_factory.py`
+   from three lines to one, moving `llama_config_dims` from `:49` to `:47` — breaking the citation
+   that `03_OUTLINE.md` §3.23 and `DEC-009` both record. Corrected in `DEC-027`.
+2. **A local hook rejects `pytest.raises` in any `tests/` file.** `.pre-commit-config.yaml:51-56`
+   defines `prefer-expect-error`, a `pygrep` hook matching
+   `(?<!allow-)pytest\.raises(?!.*allow-pytest\.raises)` over `(^|/)tests/.*\.py$`. The repo-root
+   `expect_error` fixture (`conftest.py:948`) is the required form; it wraps `pytest.raises` and logs
+   `[EXPECTED_ERROR BEGIN/END]` so CI log triage can tell an expected error from a real one. Its
+   signature is `expect_error(error, message)` and **`message` is mandatory** (it becomes `match=`),
+   so a bare `pytest.raises(Exception)` has to be given a real error class and substring. Neither
+   the recipe nor `03_OUTLINE.md` mentions this hook.
+
+**Mitigation:** run `pre-commit run --files <the files you touched>` **before** writing any
+`path:line` into a log, and before declaring a doc gate. P5.4-P5.6 and P6 own this for their own
+files; it is stated as `DEC-027`.
+
+---
+
+## Corrections to earlier risk entries (P5)
+
+- **`R-002` is superseded by `R-014`, and `tests/test_factory.py` still carried the wrong wording.**
+  `R-002`'s claim that `rope_theta` "EXISTS and is `None`" was already corrected by `R-014` and
+  `03_OUTLINE.md` §1.1 (it raises `AttributeError`; `getattr` returns the *default*). But
+  `llama_config_dims`' docstring in `tests/test_factory.py` still repeated the `R-002` version. P5.1
+  rewrote that docstring to the measured behaviour and pointed it at Appendix F.2. Re-measured this
+  phase on `transformers` 5.12.1, and recorded as a positive test rather than a comment
+  (`test_mesh_config.py::test_llama_hf_config_from_transformers_object`):
+  `cfg.rope_theta` → `AttributeError`; `getattr(cfg, "rope_theta", 10000.0)` → **10000.0**;
+  `cfg.to_dict()` → neither key; `get_rope_theta(cfg.to_dict())` → **500000.0**.
+- **`R-006` is now enforced in two places, not one.** The hard-coded `low_freq_factor = 1` /
+  `high_freq_factor = 4` are asserted in `llama_hf_config()` (the single dict-read point) **and**
+  re-asserted in `tt/rope.py::_assert_llama3_scaling` from the normalised object, so a config that
+  never went through the normaliser also cannot reach `compute_llama3_parameters` (`DEC-025`).
+- **`R-007` (the dormant distributed-RMSNorm branch) is unchanged but now reachable by
+  configuration.** `is_distributed` is a constructor argument defaulting to `False` rather than a
+  pinned literal with the condition commented out, so P8 enables scheme B without editing a module
+  (`DEC-024`). It is still **unexercised** — no PCC number exists for it.
+- **`R-008` / `R-016` are now a build-time assert.** `test_ccl_semaphores.py` asserts
+  `ring_attention_ccl_core_grid_offset.x >= 8` (the pinned SDPA program grid) on the real device, so
+  the `11 >= 8` vs `11 >= 12` distinction Appendix F.8 warns about is checked in P5 instead of
+  surfacing at SP > 1 in P8. Measured: grid **(12, 10)**, offset **(11, 0)**.
+- **`R-010` confirmed on device.** `get_rot_transformation_mat()` called with no argument yields the
+  `(1, 1, 32, 32)` tile `rotary_embedding_llama` expects; asserted in `G-ROPE`.
+- **`R-011` is closed.** `TestFactory.setup_test` is live: `tt/config.py`, `tt/ccl.py` and
+  `tt/model_config.py` all exist, and it now returns `hf_config` as a **`LlamaHFConfig` object**
+  (`DEC-009`), not the raw dict.
+- **One P4 citation error found and corrected.** `04_CCL_PLAN.md` §3 cites
+  `models/demos/gpt_oss_d_p/tt/config.py:55` for the `sp` property; `:55` is the bare `@property`
+  decorator and `def sp` is on `:56`. It slipped through because that reference was never in
+  `CITES` and pass 2 only checked in-range — the identical hole `03_OUTLINE.md` §8 flagged for
+  `02_SURVEY.md:76`. `DEC-030` closes it by making pass 2 resolve abbreviated references and by
+  scanning `05_DECISIONS.md` and `06_GATES.md` too (**333/333** doc references now resolve).
+
+---
+
+## R-020 — `build_prefill_rope` cannot serve a chunked prefill past chunk 1 (found P5.3, owed by P7)
+
+**Status:** guarded by an assert; the real fix is P7 using the indexed path.
+
+`models/tt_transformers/tt/common.py:534` `get_prefill_rot_mat` precomputes a frequency table of
+exactly `seq_len * 2` positions (`:536`) and then gathers `[start_pos, start_pos + seq_len)` from it
+(`:538`). Measured:
+`gather_cos_sin(torch.arange(1024, 1536), *precompute_freqs(128, 1024, ...))` →
+`RuntimeError: index 1024 is out of bounds for dimension 0 with size 1024`.
+
+So the bound is `start_pos <= seq_len`. A chunked prefill at `chunk = 512` works for chunk 0
+(`start_pos = 0`) and chunk 1 (`start_pos = 512`) and **breaks on chunk 2** (`start_pos = 1024`) —
+with an `IndexError`-class message from inside a delegate that mentions neither RoPE nor chunking.
+P7 is the phase that would hit it, two phases after `tt/rope.py` looks settled.
+
+**Mitigation in place:** `tt/rope.py:108` asserts the bound with a message naming
+`build_indexed_rope()` as the correct chunked path, and `G-ROPE` covers both the last legal offset
+and the refusal (`DEC-029`).
+
+**Residual risk:** if P7 ever wants a one-shot (non-indexed) RoPE for a mid-stream chunk, the fix is
+upstream — `get_prefill_rot_mat` would have to size its table from `start_pos + seq_len` rather than
+`seq_len * 2`.
+
+---
+
+## R-021 — `ttnn` compute-kernel defaults differ per op, so "copy the template" is unsafe (measured, P5.4-P5.5)
+
+**Status:** measured and mitigated for `G-MLP` / `G-ATTN`; **open for every op P6-P8 adds.**
+
+`DEC-031` established that `ttnn.rms_norm` with no `compute_kernel_config` is ~25x worse than
+HiFi4 + `fp32_dest_acc_en=True`. P5.4-P5.5 measured the same A/B on the matmul and attention paths
+and found the polarity is **not consistent across ops**:
+
+| op | no config passed | `fp32_dest_acc_en=True` | `fp32_dest_acc_en=False` |
+|---|---|---|---|
+| `ttnn.rms_norm` (`DEC-031`) | 0.9999652 | **0.9999971** | 0.9999607 |
+| `ttnn.linear` / MLP, bf8_b weights | 0.9999143 | **0.9999143** (identical) | 0.9925392 |
+| `ttnn.linear` / MLP, bf16 weights | 0.9999852 | **0.9999852** (identical) | 0.9917529 |
+| attention block (proj + SDPA + `o_proj`), bf8_b | — | **0.9997449** | 0.9963324 |
+| attention block, bf16 | — | **0.9998033** | 0.9959098 |
+
+So the matmul's own default *already* enables fp32 destination accumulation (bit-identical PCC),
+while the norm's does not. Two consequences:
+
+1. **Explicitly passing the flag is right for both ops, for different reasons** — it fixes the norm
+   and it pins the matmul against a future default change.
+2. **The real hazard is the opposite of an omission: it is copying the template's explicit `False`.**
+   `models/demos/gpt_oss_d_p/tt/attention/config.py:71` ships `fp32_dest_acc_en: bool = False`. Carried
+   forward unexamined that costs **14x** (bf8_b) to **21x** (bf16) of measured attention error — and
+   at bf8_b it still scores 0.9963, i.e. it **still clears the recipe's 0.999 gate** and would have
+   been recorded as a clean PASS. This is exactly the failure `DEC-032`'s noise-floor gating exists
+   to catch, and it is the first time it caught something.
+
+**Owed by P6-P8:** every op that accepts a `compute_kernel_config` gets one explicitly, and any op
+where `fp32_dest_acc_en=True` is refused or measurably worse needs a `DEC` recording **both**
+numbers. The ring-joint SDPA is the one known `False` (it is required —
+`models/demos/gpt_oss_d_p/tt/attention/prefill.py:200`), which is why `dense_sp.py` must build its own
+config rather than reuse `ProgramConfig.get_compute_kernel_config`.
+
+---
+
+## R-022 — a storage-dtype noise floor does not model a kernel's interior (measured, P5.5)
+
+**Status:** measured, attributed and fenced for `G-ATTN`; **the method needs the same treatment
+wherever a fused kernel appears** (P7's chunked SDPA, P8's ring SDPA).
+
+`DEC-032`'s noise floor rounds every *stored* tensor to its device dtype and does the arithmetic in
+fp32. That is exactly right for a norm or a matmul chain, and **wrong for a flash-attention kernel**,
+whose online softmax and chunked accumulation are internal to the op and have no stored intermediate
+to round.
+
+Measured: `ttnn.transformer.scaled_dot_product_attention` fed bf16 Q/K/V directly (GQA 32/8,
+head_dim 128, seq 128, no projections) scores **0.9999204** against a bf16-input fp32-math reference
+whose own floor is **0.9999989** — **71x**. `q_chunk`/`k_chunk` ∈ {32, 128, 256} moves it <4%;
+`exp_approx_mode` not at all. It is the kernel, not the configuration.
+
+That one term is the entire reason `G-ATTN`'s block-level ratio is 2.6x (bf8_b) / 5.1x (bf16) while
+the stages this package implements — projections, GQA split, RoPE — sit at **1.00-1.47x**.
+
+**Why this is a risk and not a footnote:** the naive reading of `DEC-032` ("anything over ~3x is a
+finding") would have condemned a correct attention module. The equally bad reading ("just widen the
+budget") would have hidden a real bug. The method that works, and that `DEC-034` records, is:
+
+1. measure the fused kernel **alone** against its own floor, and keep that probe in the suite;
+2. gate the stages you implement at a **tight** ratio, excluding the kernel;
+3. let the block-level budget be the sum, with the kernel term named in the gate block.
+
+**Owed by P7/P8:** the paged chunked SDPA and the ring-joint SDPA need their own standalone
+kernel-vs-floor probes before their block gates are interpreted. Without one, a genuine regression
+in the ring path is indistinguishable from the 71x that is already there.
+
+---
+
+## Corrections to earlier risk entries (P5.4-P5.6)
+
+**`R-018` is superseded, not just closed.** It framed Appendix E's threshold method as
+*input-distribution-sensitive* and its "mitigation" was to re-run under the oracle's distribution
+before suspecting the module. `DEC-032` (raised by the orchestrator during P5.4) shows the framing
+was wrong: the bf16 torch floor is 0.9999986 under **both** `rand[0,1)` and `randn`, so distribution
+does not move the floor — the oracle looked better because its *reference* loads HF weights at
+`torch_dtype: bfloat16` and shares the device's own rounding. P5.4-P5.6 therefore did **not** perform
+`R-018`'s prescribed re-run; it computed torch noise floors instead. `R-018`'s surviving requirement
+— *state the input distribution in every gate detail block* — is honoured by `G-MLP`, `G-ATTN` and
+`G-KV`, each of which also states the reference's dtype policy. Its item 3 (fold input distributions
+into Appendix E) is subsumed by `DEC-032`.
+
+**`R-016` is confirmed on device.** It predicted that deriving the SDPA program grid from
+`compute_with_storage_grid_size()` would break the ring-joint assert. Measured in P5.5: the grid is
+**(12, 10)**, the pinned 8x8 passes `assert_sdpa_grid_fits`, and a `(12, 10)` `ProgramConfig` is
+refused at `Attention.__init__` (`raw/G-ATTN_20260903T180817Z.log`). The check is deliberately
+**unconditional** rather than gated on SP > 1 (`DEC-036` item 4) — gating it would have reproduced
+the very Appendix F.8 failure mode of passing every single-card gate and failing in P8.
+
+**`R-019`'s process gap is still open, and it bit again.** `black` reformatted three of the eleven
+files written in P5.4-P5.6 on their first `pre-commit` run; `pre-commit` was run **before** any
+`path:line` was recorded, per `DEC-027`, so no citation was harmed. But the package remains untracked
+in git, so nothing enforces that ordering for the next session.
+
+---
+
+## R-023 — Appendix E's masking caveat is a cross-test comparison, and the recipe builds a rule on it (measured, P6.1)
+
+**Status:** measured and corrected in `DEC-040`; **the recipe text is still wrong** and P7+ will read it.
+
+`BRINGUP_RECIPE.md:1131-1141` and `03_OUTLINE.md` §5.1 assert that a decoder-layer PCC comes out
+*higher* than either of its sublayers' "because the residual stream dominates the correlation", from
+the `tt_transformers` oracles 0.9999985 (decoder) vs 0.9996099 (attention) / 0.9995823 (MLP).
+Measured on this box against **one** fp32 reference, one input distribution and one dtype ladder:
+
+| | @bf8_b | @bf16 |
+|---|---|---|
+| `G-ATTN` attention block, seq 128 | 0.9997554 | 0.9998129 |
+| `G-LAYER` whole layer, seq 128 | **0.9995864** | **0.9997674** |
+
+The layer is **worse** than its own attention block at both dtypes, because the layer's noise floor is
+itself lower (0.9997390 vs 0.9999067) — the MLP's bf8_b weights add quantisation the attention block
+never sees. And the masking mechanism, measured directly, is 1.06-1.73x, not orders of magnitude:
+for `y = r + s` the attenuation is exactly `||y||/||s||`, which is **1.06x** on the gate's random
+weights and **1.73x (attn) / 1.23x (mlp)** on real layer-0 weights with real embedding inputs. A
+1.1-1.7x attenuation cannot turn 0.9996 into 0.9999985.
+
+The 0.9999985-vs-0.9996099 comparison is therefore a **cross-test** comparison between two
+`tt_transformers` test files with different reference constructions, different input distributions
+and different dtype ladders — the exact error Appendix **E.1** identifies and forbids, not applied to
+E's own caveat section.
+
+**What is NOT affected:** the *rule* ("`G-LAYER`/`G-MODEL` are integration checks and never sublayer
+evidence") stands, on two grounds that are measured rather than assumed — an aggregate PCC cannot
+localise which sublayer is wrong, and a layer's floor is looser than its sublayers', so a layer
+threshold a sublayer would fail is arithmetically normal. No threshold was changed.
+
+**Owed by whoever edits the recipe:** replace Appendix E's "Caveat that matters more than the
+numbers" and `03_OUTLINE.md` §5.1's justification with `DEC-040`'s. Falsifier for the remaining
+open question (why the oracle scores 0.9999985): instrument `tt_transformers`'
+`test_decoder_prefill` and `test_attention_prefill` against one fp32 reference on one input.
+
+---
+
+## R-024 — `models/tt_transformers` HF->Meta key conversion is prescribed for a package that consumes HF keys (measured, P6.2)
+
+**Status:** closed for this package by `DEC-039`; **the recipe and `03_OUTLINE.md` §3.3 still
+prescribe the harmful version**, and P7/P10 load weights.
+
+`BRINGUP_RECIPE.md:762-764` and `03_OUTLINE.md` §3.3 tell P6.2 to run the checkpoint through
+`map_hf_to_meta_keys` / `convert_hf_qkv_to_meta_format` (via `convert_hf_to_meta`) and to expose
+`load_state_dict(weights_path, convert_to_meta_format=True)`. Both halves are actively harmful here:
+
+1. `models/demos/llama32_8b_d_p/tt/attention/weights.py:71` already applies the Q/K
+   `reverse_permute` (`DEC-033`), so a second permute at load is the transform applied twice —
+   neither HF nor Meta layout.
+2. Every module in this package strips **HF** sub-dicts (`substate(sd, "mlp")`), so Meta renaming
+   makes every `substate()` return `{}`. With a populated `tensor_cache_path` that is **not an
+   error**: `ttnn.as_tensor` silently loads whatever the cache holds. Measured: the rename produces
+   **291 missing and 291 unused of 291** keys (`raw/G-WEIGHTS_*.log`).
+
+**Owed by P7/P10:** load weights through
+`models/demos/llama32_8b_d_p/tt/model_config.py:298` `ModelArgs.load_state_dict`, which keeps HF
+naming and layout and refuses a Meta-keyed dict via
+`models/demos/llama32_8b_d_p/tt/model_config.py:245` `state_dict_uses_meta_keys`. Do **not**
+reintroduce a `convert_to_meta_format` flag.
+
+---
+
+## R-025 — the per-layer PCC step threshold is calibrated at one sequence length (open, P6.3)
+
+**Status:** open, owned by P7.
+
+`DEC-047` sets `MAX_LAYER_ERROR_STEP = 4.0` from the measured 32-layer curve at **seq 128**, where
+the consecutive per-layer error ratio stays in 0.99x-1.38x from layer 3 onward
+(`raw/G-MODEL-CURVE_20260903T195712Z.log`). Two limits:
+
+* it is one sequence length, one input, one dtype. A longer sequence changes the SDPA chunk sizes
+  (`ProgramConfig.prefill_threshold = 2048`) and therefore the per-layer error, so the curve's shape
+  at 4K-16K is unmeasured;
+* a *small* wrong weight in one layer produces a step below 4.0 and would pass. The defences that do
+  not depend on this threshold are `G-WEIGHTS`'s per-key value check
+  (`models/demos/llama32_8b_d_p/tests/unit/test_weight_loading.py:197`) and the delta probe
+  (`DEC-041`).
+
+**Owed by P7:** record the curve at the real chunk size and re-derive the threshold there before
+relying on 4.0 for a long-context run.
+
+---
+
+## Corrections to earlier risk entries (P6)
+
+* **`R-003` (no checkpoint) is void and was already marked so by P3.** P6 confirms it operationally:
+  the full 291-tensor checkpoint loads, and `G-WEIGHTS` / `G-MODEL` both ran against real weights
+  with `requires_hf_reference` still in place so the suite skips rather than fails on a weightless
+  machine.
+* **`R-005` is confirmed and routed around, not inherited.** `models/demos/llama32_8b_d_p/tt/model_config.py:257`
+  `ModelArgs` is a fresh class, not a subclass of `models/tt_transformers/tt/model_config.py:539`.
+  P6 did however use that module's `:4393` `reference_decoder` docstring as a *rejected* option, for
+  the Appendix E.1 reason (its HF weights load at the checkpoint's `torch_dtype: bfloat16`, so its
+  reference shares the device's own rounding), not for the `HF_MODEL` reason.
+* **Appendix F.2's "always pass an explicit causal mask" does not apply to `LlamaModel.forward`.**
+  Measured (`raw/G-MODEL_*.log`, `test_hf_reference_is_causal`): with `attention_mask=None` and
+  `attn_implementation="eager"`, changing only the **last** token id leaves every earlier row of
+  `last_hidden_state` **bit-identical** (`max|delta| = 0.0`), i.e. `create_causal_mask`
+  (`python_env/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py:399`) does
+  build the mask. F.2's warning is correct and load-bearing for hand-written
+  `eager_attention_forward` calls (which is how P5's sublayer references are written); it is not a
+  reason to distrust the full-model reference. The probe stays in the gate so a transformers upgrade
+  that changes this is caught rather than assumed.
+* **`R-019` (this package never ran `pre-commit`) — P6 ran it on every file it created or changed.**
+  `pre-commit run --files ...` clean (black, autoflake, isort, prefer-expect-error). No
+  `pytest.raises` anywhere in the new tests; the root `expect_error(ErrorClass, "substring")` fixture
+  is used, message mandatory.

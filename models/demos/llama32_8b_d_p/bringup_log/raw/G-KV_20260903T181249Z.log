@@ -1,0 +1,112 @@
+=== G-KV raw log ===
+Thu Sep  3 18:12:49 UTC 2026
+host: 7f2b636ca8d3  arch: blackhole  devices: 32  compute grid: (12,10)  dram banks: 8
+cmd: pytest models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py -q -rA
+
+2026-09-03 18:12:52.378 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 6 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf8_b-s128-u2xl2-mesh_device0] 2026-09-03 18:12:54.695 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 18:12:54.695 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 18:12:54.713 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 18:12:54.713 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 18:12:54.802 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 18:12:54.807 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 18:12:56.237 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 18:12:56.237 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 18:12:56.237 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 18:12:56.237 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 18:12:56.256 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 18:12:57.963 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 18:13:01.748 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 18:13:01.748 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 18:13:01.766 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 18:13:01.766 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 18:13:02.394 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 18:13:03.099 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 18:13:03.143 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT8_B (user=0, layer=0) slot=0: K PCC = 0.9999734511440976 | V PCC = 0.9999745763425454 | dtype floor (K) = 0.9999733313927821 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:03.145 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT8_B (user=0, layer=1) slot=1: K PCC = 0.9999726249765609 | V PCC = 0.9999733929088364 | dtype floor (K) = 0.9999727601178466 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:03.147 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT8_B (user=1, layer=0) slot=2: K PCC = 0.9999747515237373 | V PCC = 0.9999731666678662 | dtype floor (K) = 0.9999748281687488 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:03.149 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT8_B (user=1, layer=1) slot=3: K PCC = 0.9999732754935254 | V PCC = 0.9999731024648953 | dtype floor (K) = 0.9999735240489853 | err ratio = 1.01x | threshold 0.99
+2026-09-03 18:13:03.149 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:182 - [G-KV] DataType.BFLOAT8_B: 2x2 slots, worst PCC = 0.9999726249765609, head_dim = 128
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_readback_is_positionally_exact[blackhole-c64x4-mesh_device0] 2026-09-03 18:13:04.194 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 18:13:04.289 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 18:13:04.312 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_readback_is_positionally_exact:246 - [G-KV] positional read-back EXACT (rtol=atol=0) for 4 x 64 tokens at head_dim=128: every one of 256 rows is at its own position
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_writes_touch_only_their_own_region[blackhole-mesh_device0] 2026-09-03 18:13:05.355 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 18:13:05.447 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 18:13:05.467 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_writes_touch_only_their_own_region:331 - [G-KV] written-region-only: other slot exactly 0; chunk 0 bit-identical after chunk 1's write; pad tail [256, 384) exactly 0; both chunks readable at PCC = 0.999998607528891
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_dram_shard_geometry_at_head_dim_128[blackhole-mesh_device0] 2026-09-03 18:13:06.506 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 18:13:06.599 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 18:13:06.600 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_dram_shard_geometry_at_head_dim_128:353 - [G-KV] DRAM shard geometry: shard_shape = [1, 1, 32, 128] = 4096 values (4 tiles wide, 2x gpt-oss's 64); DRAM banks = 8
+2026-09-03 18:13:06.600 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="multiple of TILE_SIZE\*sp"
+2026-09-03 18:13:06.600 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="multiple of TILE_SIZE\*sp"
+2026-09-03 18:13:06.600 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="head_dim"
+2026-09-03 18:13:06.600 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="head_dim"
+2026-09-03 18:13:06.610 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="head_dim"
+2026-09-03 18:13:06.610 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="head_dim"
+2026-09-03 18:13:06.610 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="tile-aligned"
+2026-09-03 18:13:06.612 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="tile-aligned"
+2026-09-03 18:13:06.612 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="layer_idx"
+2026-09-03 18:13:06.612 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="layer_idx"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf16-s128-u2xl2-mesh_device0] 2026-09-03 18:13:07.638 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 18:13:07.734 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 18:13:07.757 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT16 (user=0, layer=0) slot=0: K PCC = 0.9999986231600466 | V PCC = 0.9999986379638819 | dtype floor (K) = 0.9999986231600466 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:07.759 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT16 (user=0, layer=1) slot=1: K PCC = 0.9999985909047342 | V PCC = 0.9999986300806439 | dtype floor (K) = 0.9999985909047342 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:07.762 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT16 (user=1, layer=0) slot=2: K PCC = 0.9999986264241923 | V PCC = 0.9999986049354013 | dtype floor (K) = 0.9999986264241923 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:07.764 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:171 - [G-KV] DataType.BFLOAT16 (user=1, layer=1) slot=3: K PCC = 0.9999986259208355 | V PCC = 0.9999986070586058 | dtype floor (K) = 0.9999986259208355 | err ratio = 1.00x | threshold 0.99
+2026-09-03 18:13:07.764 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_kv_cache_write_read_vs_ref:182 - [G-KV] DataType.BFLOAT16: 2x2 slots, worst PCC = 0.9999985909047342, head_dim = 128
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_blockcyclic_positions_are_an_exact_inverse 2026-09-03 18:13:07.981 | INFO     | llama32_8b_d_p.tests.unit.test_kv_cache_vs_ref:test_blockcyclic_positions_are_an_exact_inverse:417 - [G-KV] block-cyclic layout exact-inverse at sp=4, chunk=128, seq_len=384, head_dim=128
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.60s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf8_b-s128-u2xl2-mesh_device0]
+1.12s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_readback_is_positionally_exact[blackhole-c64x4-mesh_device0]
+1.12s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_writes_touch_only_their_own_region[blackhole-mesh_device0]
+1.11s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_dram_shard_geometry_at_head_dim_128[blackhole-mesh_device0]
+1.10s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf16-s128-u2xl2-mesh_device0]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_blockcyclic_positions_are_an_exact_inverse
+0.04s call     models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf8_b-s128-u2xl2-mesh_device0]
+0.03s call     models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf16-s128-u2xl2-mesh_device0]
+0.02s call     models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_readback_is_positionally_exact[blackhole-c64x4-mesh_device0]
+0.02s call     models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_writes_touch_only_their_own_region[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_writes_touch_only_their_own_region[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf16-s128-u2xl2-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_readback_is_positionally_exact[blackhole-c64x4-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_dram_shard_geometry_at_head_dim_128[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf8_b-s128-u2xl2-mesh_device0]
+0.01s call     models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_dram_shard_geometry_at_head_dim_128[blackhole-mesh_device0]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf8_b-s128-u2xl2-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_readback_is_positionally_exact[blackhole-c64x4-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_writes_touch_only_their_own_region[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_dram_shard_geometry_at_head_dim_128[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_kv_cache_write_read_vs_ref[blackhole-cbf16-s128-u2xl2-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_kv_cache_vs_ref.py::test_blockcyclic_positions_are_an_exact_inverse
+============================== 6 passed in 14.61s ==============================
+2026-09-03 18:13:09.677 | info     |    BuildKernels | JIT cache stats: 42/42 hits (100.0%) [42 cached, 60 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 18:13:09.677 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 18:13:09.894 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 18:13:09.894 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 18:13:17.733 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 18:13:17.733 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 18:13:17.733 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,302 @@
+2026-09-03 19:12:36.817 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L2-mesh_device0] 2026-09-03 19:12:40.447 | INFO     | llama32_8b_d_p.conftest:state_dict:63 - [llama32_8b_d_p] loading state dict from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-03 19:12:40.452 | INFO     | llama32_8b_d_p.conftest:state_dict:65 - [llama32_8b_d_p] loaded 291 tensors
+2026-09-03 19:12:40.647 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 19:12:40.647 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 19:12:40.664 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 19:12:40.664 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 19:12:40.757 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 19:12:40.762 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 19:12:42.209 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 19:12:42.209 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 19:12:42.209 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 19:12:42.209 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 19:12:42.228 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 19:12:43.974 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 19:12:47.788 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 19:12:47.788 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 19:12:47.806 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 19:12:47.806 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 19:12:48.425 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:12:49.113 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:12:49.120 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:00<00:03,  6.05it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 101.56it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:12:49.495 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 2 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:13:03.614 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:13:10.752 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_hf_reduced_depth:288 - [G-MODEL] n_layers=2 seq_len=128: hidden PCC = 0.9997218685348175 | torch noise floor = 0.9998103181533922 | err ratio = 1.47x | threshold 0.999 | logits PCC = 0.9996632393056094 | top-1 HF=63075 device=63075 floor=63075
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve[blackhole-s128-mesh_device0] 2026-09-03 19:13:11.788 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:13:11.871 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:13:11.872 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]Loading weights:   0%|          | 1/291 [00:00<00:51,  5.65it/s]Loading weights:  16%|█▌        | 47/291 [00:00<00:01, 208.68it/s]Loading weights:  26%|██▌       | 76/291 [00:00<00:00, 229.59it/s]Loading weights:  38%|███▊      | 112/291 [00:00<00:00, 256.21it/s]Loading weights:  50%|████▉     | 145/291 [00:00<00:00, 277.05it/s]Loading weights:  60%|██████    | 175/291 [00:00<00:00, 274.08it/s]Loading weights:  73%|███████▎  | 211/291 [00:00<00:00, 281.01it/s]Loading weights:  84%|████████▍ | 244/291 [00:00<00:00, 292.49it/s]Loading weights:  94%|█████████▍| 274/291 [00:01<00:00, 284.48it/s]Loading weights: 100%|██████████| 291/291 [00:01<00:00, 265.24it/s]
+2026-09-03 19:13:13.489 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 32 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] G-MODEL — per-layer hidden-state PCC curve
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] model      : Llama-3.1-8B-Instruct, 32 layers, real weights
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] mesh       : (1, 1), TP=1, SP=1
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] seq_len    : 128; token ids uniform over vocab, seed 3
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] reference  : transformers LlamaForCausalLM, fp32 weights + fp32 activations, eager attention
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] device     : activations bf16, projections bf8_b, KV cache unused (no kv_cache passed)
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] comparison : per-layer forward-hook output vs tt/layer.py output, same layer index
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL]
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | layer | PCC | error = 1-PCC | step vs previous |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] |---|---|---|---|
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 0 | 0.9999151 | 8.493e-05 | — |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 1 | 0.9999813 | 1.874e-05 | 0.22x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 2 | 0.9999808 | 1.920e-05 | 1.02x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 3 | 0.9999798 | 2.021e-05 | 1.05x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 4 | 0.9999777 | 2.230e-05 | 1.10x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 5 | 0.9999756 | 2.444e-05 | 1.10x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 6 | 0.9999736 | 2.637e-05 | 1.08x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 7 | 0.9999713 | 2.873e-05 | 1.09x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 8 | 0.9999692 | 3.079e-05 | 1.07x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 9 | 0.9999675 | 3.252e-05 | 1.06x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 10 | 0.9999678 | 3.224e-05 | 0.99x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 11 | 0.9999659 | 3.408e-05 | 1.06x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 12 | 0.9999640 | 3.602e-05 | 1.06x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 13 | 0.9999640 | 3.604e-05 | 1.00x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 14 | 0.9999622 | 3.780e-05 | 1.05x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 15 | 0.9999624 | 3.755e-05 | 0.99x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 16 | 0.9999601 | 3.988e-05 | 1.06x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 17 | 0.9999585 | 4.148e-05 | 1.04x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 18 | 0.9999574 | 4.259e-05 | 1.03x |
+2026-09-03 19:15:25.186 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 19 | 0.9999536 | 4.640e-05 | 1.09x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 20 | 0.9999515 | 4.853e-05 | 1.05x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 21 | 0.9999473 | 5.273e-05 | 1.09x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 22 | 0.9999446 | 5.541e-05 | 1.05x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 23 | 0.9999415 | 5.849e-05 | 1.06x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 24 | 0.9999399 | 6.011e-05 | 1.03x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 25 | 0.9999360 | 6.396e-05 | 1.06x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 26 | 0.9999313 | 6.867e-05 | 1.07x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 27 | 0.9999253 | 7.468e-05 | 1.09x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 28 | 0.9999186 | 8.138e-05 | 1.09x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 29 | 0.9999053 | 9.475e-05 | 1.16x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 30 | 0.9998692 | 1.308e-04 | 1.38x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] | 31 | 0.9998524 | 1.476e-04 | 1.13x |
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL]
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] final hidden PCC (post final norm) : 0.9997646
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] torch noise floor                  : 0.9997630
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] err ratio                          : 0.99x
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] top-1 at position 127                : HF 220 / device 220
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL] max step from layer 3 onward       : 1.38x (threshold 4.0x)
+2026-09-03 19:15:25.187 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_full_stack_per_layer_pcc_curve:378 - [G-MODEL]
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_rotated_layer_weights_fail[blackhole-mesh_device0] 2026-09-03 19:15:26.266 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:15:26.957 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:15:26.959 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/39 [00:00<?, ?it/s]Loading weights:   3%|▎         | 1/39 [00:00<00:05,  6.67it/s]Loading weights:  79%|███████▉  | 31/39 [00:00<00:00, 141.69it/s]Loading weights: 100%|██████████| 39/39 [00:00<00:00, 146.81it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{4...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{4...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{4...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{4...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:15:27.346 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 4 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:15:28.238 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 4-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:15:36.730 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 4-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:15:45.173 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_rotated_layer_weights_fail:427 - [G-MODEL] negative control: correct layer order PCC = 0.9995236585616903, rotated = 0.16124065776136765
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_get_last_token_slice_matches_the_full_sequence[blackhole-mesh_device0] 2026-09-03 19:15:46.205 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:15:46.287 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:15:46.289 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 19:15:46.291 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:15:53.381 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_get_last_token_slice_matches_the_full_sequence:461 - [G-MODEL] get_last_token=96 returns rows [96, 128) of the full-sequence logits bit-exactly, and process_output_prefill(tile, 31) is the last token's row
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0] 2026-09-03 19:15:54.419 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:15:54.512 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:15:54.514 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/39 [00:00<?, ?it/s]Loading weights:   3%|▎         | 1/39 [00:00<00:07,  4.95it/s]Loading weights: 100%|██████████| 39/39 [00:00<00:00, 141.18it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{4...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{4...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{4...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{4...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:15:54.894 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 4 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:16:13.657 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 4-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:16:22.258 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_hf_reduced_depth:288 - [G-MODEL] n_layers=4 seq_len=128: hidden PCC = 0.9995236585616903 | torch noise floor = 0.9997113784194988 | err ratio = 1.65x | threshold 0.999 | logits PCC = 0.9994642129079025 | top-1 HF=20007 device=20007 floor=20007
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L2-mesh_device0] 2026-09-03 19:16:23.310 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:16:23.402 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:16:23.403 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:00<00:04,  4.86it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 100.61it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:16:23.699 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 2 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:16:39.506 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 2-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:16:48.056 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_hf_reduced_depth:288 - [G-MODEL] n_layers=2 seq_len=512: hidden PCC = 0.9997530429575116 | torch noise floor = 0.9998330536232402 | err ratio = 1.48x | threshold 0.999 | logits PCC = 0.9996939815171336 | top-1 HF=24744 device=24744 floor=24744
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L4-mesh_device0] 2026-09-03 19:16:49.160 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:16:49.847 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:16:49.850 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/39 [00:00<?, ?it/s]Loading weights:   3%|▎         | 1/39 [00:00<00:07,  4.94it/s]Loading weights: 100%|██████████| 39/39 [00:00<00:00, 145.82it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{4...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{4...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{4...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{4...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:16:50.238 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 4 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:17:11.630 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 4-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:17:21.427 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_hf_reduced_depth:288 - [G-MODEL] n_layers=4 seq_len=512: hidden PCC = 0.9995976324683649 | torch noise floor = 0.9997565450570454 | err ratio = 1.65x | threshold 0.999 | logits PCC = 0.9995330172054451 | top-1 HF=76216 device=76216 floor=76216
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_reference_is_causal Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:00<00:04,  4.66it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 97.67it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:17:22.017 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 2 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:17:22.546 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_hf_reference_is_causal:487 - [G-MODEL] HF causality probe: max|delta| on rows [:-1] = 0.000e+00, on the last row = 1.394e+01
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_in_test_torch_reference_agrees_with_hf Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:00<00:03,  5.80it/s]Loading weights: 100%|██████████| 21/21 [00:00<00:00, 97.57it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{2...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:17:23.424 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 2 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:17:24.812 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_in_test_torch_reference_agrees_with_hf:526 - [G-MODEL] in-test fp32 reference vs HF, layer 0: PCC = 1.0
+2026-09-03 19:17:24.813 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_in_test_torch_reference_agrees_with_hf:526 - [G-MODEL] in-test fp32 reference vs HF, layer 1: PCC = 1.0
+2026-09-03 19:17:24.833 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_in_test_torch_reference_agrees_with_hf:530 - [G-MODEL] in-test fp32 reference vs HF: hidden PCC = 1.0, logits PCC = 1.0
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+133.34s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve[blackhole-s128-mesh_device0]
+31.64s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L4-mesh_device0]
+27.76s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+24.72s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L2-mesh_device0]
+21.65s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L2-mesh_device0]
+18.21s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_rotated_layer_weights_fail[blackhole-mesh_device0]
+8.67s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L2-mesh_device0]
+7.10s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_get_last_token_slice_matches_the_full_sequence[blackhole-mesh_device0]
+1.72s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_in_test_torch_reference_agrees_with_hf
+1.72s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_rotated_layer_weights_fail[blackhole-mesh_device0]
+1.71s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L4-mesh_device0]
+1.20s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_reference_is_causal
+1.11s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+1.11s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L2-mesh_device0]
+1.10s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_get_last_token_slice_matches_the_full_sequence[blackhole-mesh_device0]
+1.08s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve[blackhole-s128-mesh_device0]
+0.21s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_in_test_torch_reference_agrees_with_hf
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_reference_is_causal
+0.03s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve[blackhole-s128-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L2-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L2-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L4-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_get_last_token_slice_matches_the_full_sequence[blackhole-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_rotated_layer_weights_fail[blackhole-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L2-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_full_stack_per_layer_pcc_curve[blackhole-s128-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_rotated_layer_weights_fail[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_get_last_token_slice_matches_the_full_sequence[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L2-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s512-L4-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_hf_reference_is_causal
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_in_test_torch_reference_agrees_with_hf
+=================== 9 passed, 1 warning in 287.54s (0:04:47) ===================
+2026-09-03 19:17:27.099 | info     |    BuildKernels | JIT cache stats: 171/186 hits (91.9%) [171 cached, 431 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 19:17:27.099 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 19:17:27.316 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 19:17:27.316 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 19:17:35.073 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 19:17:35.074 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 19:17:35.074 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,95 @@
+2026-09-03 19:27:55.968 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items / 8 deselected / 1 selected
+
+models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0] 2026-09-03 19:27:59.489 | INFO     | llama32_8b_d_p.conftest:state_dict:63 - [llama32_8b_d_p] loading state dict from /home/mstojkovic/models/Llama-3.1-8B-Instruct
+2026-09-03 19:27:59.494 | INFO     | llama32_8b_d_p.conftest:state_dict:65 - [llama32_8b_d_p] loaded 291 tensors
+2026-09-03 19:27:59.696 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 19:27:59.696 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 19:27:59.714 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 19:27:59.714 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 19:27:59.814 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 19:27:59.819 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 19:28:01.257 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 19:28:01.257 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 19:28:01.257 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 19:28:01.257 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 19:28:01.276 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 19:28:01.401 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 19:28:02.929 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 19:28:06.737 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 19:28:06.737 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 19:28:06.755 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 19:28:06.755 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 19:28:07.379 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 19:28:08.068 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 19:28:08.074 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+Loading weights:   0%|          | 0/39 [00:00<?, ?it/s]Loading weights:   3%|▎         | 1/39 [00:00<00:07,  4.87it/s]Loading weights: 100%|██████████| 39/39 [00:00<00:00, 149.64it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/mstojkovic/models/Llama-3.1-8B-Instruct
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{4...31}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{4...31}.mlp.down_proj.weight            | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{4...31}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{4...31}.post_attention_layernorm.weight | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-09-03 19:28:08.528 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:_hf_model:119 - [G-MODEL] HF reference: 4 layers, fp32, eager, rope={'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+2026-09-03 19:28:27.605 | WARNING  | models.demos.llama32_8b_d_p.tt.model:__init__:114 - [llama32_8b_d_p] building a REDUCED 4-layer stack (full model is 32 layers) — G-MODEL's ladder, not a deployable model.
+2026-09-03 19:28:36.839 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 0] attn_out: L2=5.766  mean|x|=0.0052  signed_mean=0.00009  max|x|=0.389
+2026-09-03 19:28:36.872 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 0] mlp_out : L2=18.283  mean|x|=0.0132  signed_mean=-0.00011  max|x|=1.836
+2026-09-03 19:28:36.875 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 1] attn_out: L2=16.950  mean|x|=0.0119  signed_mean=0.00006  max|x|=0.984
+2026-09-03 19:28:36.878 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 1] mlp_out : L2=506.821  mean|x|=0.0141  signed_mean=-0.00057  max|x|=310.000
+2026-09-03 19:28:36.881 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 2] attn_out: L2=7.063  mean|x|=0.0061  signed_mean=0.00004  max|x|=0.414
+2026-09-03 19:28:36.884 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 2] mlp_out : L2=14.111  mean|x|=0.0150  signed_mean=-0.00020  max|x|=0.488
+2026-09-03 19:28:36.887 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 3] attn_out: L2=12.736  mean|x|=0.0128  signed_mean=-0.00005  max|x|=0.582
+2026-09-03 19:28:36.889 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 3] mlp_out : L2=19.333  mean|x|=0.0209  signed_mean=-0.00010  max|x|=0.447
+2026-09-03 19:28:36.897 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 0] attn_out: L2=5.766  mean|x|=0.0052  signed_mean=0.00009  max|x|=0.389
+2026-09-03 19:28:36.900 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 0] mlp_out : L2=18.283  mean|x|=0.0132  signed_mean=-0.00011  max|x|=1.836
+2026-09-03 19:28:36.903 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 1] attn_out: L2=16.950  mean|x|=0.0119  signed_mean=0.00006  max|x|=0.984
+2026-09-03 19:28:36.906 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 1] mlp_out : L2=506.821  mean|x|=0.0141  signed_mean=-0.00057  max|x|=310.000
+2026-09-03 19:28:36.908 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 2] attn_out: L2=7.063  mean|x|=0.0061  signed_mean=0.00004  max|x|=0.414
+2026-09-03 19:28:36.911 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 2] mlp_out : L2=14.111  mean|x|=0.0150  signed_mean=-0.00020  max|x|=0.488
+2026-09-03 19:28:36.914 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 3] attn_out: L2=12.736  mean|x|=0.0128  signed_mean=-0.00005  max|x|=0.582
+2026-09-03 19:28:36.917 | INFO     | models.demos.llama32_8b_d_p.tt.layer:_delta_stats:86 - [delta-probe L 3] mlp_out : L2=19.333  mean|x|=0.0209  signed_mean=-0.00010  max|x|=0.447
+2026-09-03 19:28:37.281 | INFO     | llama32_8b_d_p.tests.unit.test_model_vs_ref:test_model_vs_hf_reduced_depth:289 - [G-MODEL] n_layers=4 seq_len=128: hidden PCC = 0.9995236585616903 | torch noise floor = 0.9997113784194988 | err ratio = 1.65x | threshold 0.999 | logits PCC = 0.9994642129079025 | top-1 HF=20007 device=20007 floor=20007
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+29.23s call     models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+8.58s setup    models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_model_vs_ref.py::test_model_vs_hf_reduced_depth[blackhole-s128-L4-mesh_device0]
+================= 1 passed, 8 deselected, 1 warning in 40.50s ==================
+2026-09-03 19:28:39.287 | info     |    BuildKernels | JIT cache stats: 108/108 hits (100.0%) [108 cached, 6 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 19:28:39.287 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 19:28:39.504 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 19:28:39.504 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 19:28:47.415 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 19:28:47.415 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 19:28:47.415 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

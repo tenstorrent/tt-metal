@@ -1,0 +1,14 @@
+Thu Sep  3 18:26:14 UTC 2026
+final citation pass for P5.4-P5.6
+citations checked : 526
+  verified        : 525
+  mismatched      : 1
+  missing files   : 0
+
+FAILURES:
+  MISMATCH      models/demos/llama32_8b_d_p/tt/rms_norm.py:37 expected 'class RMSNorm'
+                got: 'def norm_compute_kernel_config(mesh_device):'
+                needle actually on lines: [66]
+doc refs scanned  : 413
+  resolved        : 413
+  unresolved      : 0

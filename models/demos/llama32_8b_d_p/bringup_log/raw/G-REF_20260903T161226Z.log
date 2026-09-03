@@ -1,0 +1,67 @@
+2026-09-03 16:12:29.340 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+collecting ... collected 9 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[full] 2026-09-03 16:12:36.015 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:291 - [G-REF/full] HF LlamaDecoderLayer determinism: sha256 run0 = 82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b
+2026-09-03 16:12:36.015 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:292 - [G-REF/full] HF LlamaDecoderLayer determinism: sha256 run1 = 82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b
+2026-09-03 16:12:36.015 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:293 - [G-REF/full] torch.equal = True, max|delta| = 0.0
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[tiny] 2026-09-03 16:12:36.292 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:291 - [G-REF/tiny] HF LlamaDecoderLayer determinism: sha256 run0 = e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c
+2026-09-03 16:12:36.292 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:292 - [G-REF/tiny] HF LlamaDecoderLayer determinism: sha256 run1 = e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c
+2026-09-03 16:12:36.292 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_reference_is_deterministic:293 - [G-REF/tiny] torch.equal = True, max|delta| = 0.0
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[full] 2026-09-03 16:12:40.711 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_handwritten_reference_is_deterministic:321 - [G-REF/full] hand-written determinism: sha256 = 82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b / 82cea4baa3e1e5210f88107b7044ee7be25f733331148cc4c1fd5ab84d28fb4b
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[tiny] 2026-09-03 16:12:40.989 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_handwritten_reference_is_deterministic:321 - [G-REF/tiny] hand-written determinism: sha256 = e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c / e19a867af264f74f01c6225b9489dc854af534cadde1deb0a9643a1ae904071c
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[full] 2026-09-03 16:12:43.334 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_handwritten_matches_hf_decoder_layer:371 - [G-REF/full] hand-written vs HF LlamaDecoderLayer: 1.0 (threshold 0.9999), max|delta| = 0.000e+00, rel-L2 = 0.000e+00
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[tiny] 2026-09-03 16:12:43.604 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_handwritten_matches_hf_decoder_layer:371 - [G-REF/tiny] hand-written vs HF LlamaDecoderLayer: 1.0 (threshold 0.9999), max|delta| = 0.000e+00, rel-L2 = 0.000e+00
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active 2026-09-03 16:12:43.796 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_llama3_rope_scaling_is_active:416 - [G-REF] llama3 rope scaling: factor=8.0, orig_max_pos=8192, theta=500000.0, low_freq_wavelen=8192.0, high_freq_wavelen=2048.0
+2026-09-03 16:12:43.796 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_llama3_rope_scaling_is_active:420 - [G-REF] inv_freq slots differing scaled-vs-unscaled: 35/64; max relative diff = 0.875000 (expected 1 - 1/factor = 0.875000)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_tt_transformers_precompute_freqs_matches_hf 2026-09-03 16:12:43.987 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_tt_transformers_precompute_freqs_matches_hf:485 - [G-REF] precompute_freqs vs HF llama3 (S=256, head_dim=128): max|cos delta| = 0.000e+00, max|sin delta| = 0.000e+00
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_upstream 2026-09-03 16:12:44.177 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_bundled_config_matches_upstream:510 - [G-REF] bundled config sha256   = 29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e
+2026-09-03 16:12:44.177 | INFO     | llama32_8b_d_p.tests.unit.test_reference_model:test_bundled_config_matches_upstream:511 - [G-REF] upstream config sha256  = 29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e
+PASSED
+
+=============================== warnings summary ===============================
+models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[full]
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+4.37s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[full]
+4.29s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[full]
+2.22s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[full]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[tiny]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[full]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[tiny]
+0.20s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[tiny]
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[full]
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[full]
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_upstream
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_tt_transformers_precompute_freqs_matches_hf
+0.02s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[tiny]
+0.02s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[tiny]
+0.01s call     models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[tiny]
+
+(10 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[full]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_reference_is_deterministic[tiny]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[full]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_reference_is_deterministic[tiny]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[full]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_handwritten_matches_hf_decoder_layer[tiny]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_llama3_rope_scaling_is_active
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_tt_transformers_precompute_freqs_matches_hf
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_reference_model.py::test_bundled_config_matches_upstream
+======================== 9 passed, 1 warning in 13.84s =========================

@@ -1,0 +1,261 @@
+### G-OUTLINE / G-CCL-PLAN — P3/P4 gate transcript
+### date (UTC): 2026-09-03T17:05:27+00:00
+### host: Blackhole Galaxy, 32 devices; transformers 5.12.1; HF_MODEL staged
+### both gates share this transcript: the document checks are per-gate, the citation
+### verification (check [8]) covers 03_OUTLINE.md and 04_CCL_PLAN.md together.
+
+2026-09-03 17:05:31.478 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 17:05:31.478 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 17:05:31.495 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 17:05:31.495 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 17:05:31.593 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 17:05:31.598 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 17:05:33.037 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 17:05:33.037 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 17:05:33.037 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 17:05:33.037 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 17:05:33.056 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 17:05:33.748 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
+2026-09-03 17:05:34.726 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 17:05:38.505 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 17:05:38.505 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 17:05:38.523 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 17:05:38.523 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 17:05:39.127 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+==============================================================================
+MEASUREMENT A — transformers 5.x RoPE config access (DEC-010 / R-014)
+==============================================================================
+transformers.__version__ = 5.12.1
+
+--- LlamaConfig.from_pretrained(dir)   (type=LlamaConfig)
+    cfg.rope_theta                          -> RAISES AttributeError: 'LlamaConfig' object has no attribute 'rope_theta'
+    hasattr(cfg, 'rope_theta')              -> False
+    'rope_theta' in cfg.__dict__            -> False
+    getattr(cfg, 'rope_theta', 500000.0)    -> 500000.0
+    getattr(cfg, 'rope_theta', 10000.0)     -> 10000.0   <-- the silent-default trap
+    cfg.rope_scaling                        -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    cfg.rope_parameters                     -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    [k for k in cfg.to_dict() if 'rope' in k]-> ['rope_parameters']
+    cfg.head_dim                            -> 128
+
+--- AutoConfig.from_pretrained(dir)   (type=LlamaConfig)
+    cfg.rope_theta                          -> RAISES AttributeError: 'LlamaConfig' object has no attribute 'rope_theta'
+    hasattr(cfg, 'rope_theta')              -> False
+    'rope_theta' in cfg.__dict__            -> False
+    getattr(cfg, 'rope_theta', 500000.0)    -> 500000.0
+    getattr(cfg, 'rope_theta', 10000.0)     -> 10000.0   <-- the silent-default trap
+    cfg.rope_scaling                        -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    cfg.rope_parameters                     -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    [k for k in cfg.to_dict() if 'rope' in k]-> ['rope_parameters']
+    cfg.head_dim                            -> 128
+
+--- LlamaConfig()   (type=LlamaConfig)
+    cfg.rope_theta                          -> RAISES AttributeError: 'LlamaConfig' object has no attribute 'rope_theta'
+    hasattr(cfg, 'rope_theta')              -> False
+    'rope_theta' in cfg.__dict__            -> False
+    getattr(cfg, 'rope_theta', 500000.0)    -> 500000.0
+    getattr(cfg, 'rope_theta', 10000.0)     -> 10000.0   <-- the silent-default trap
+    cfg.rope_scaling                        -> {'rope_theta': 10000.0, 'rope_type': 'default'}
+    cfg.rope_parameters                     -> {'rope_theta': 10000.0, 'rope_type': 'default'}
+    [k for k in cfg.to_dict() if 'rope' in k]-> ['rope_parameters']
+    cfg.head_dim                            -> 128
+
+--- LlamaConfig(**raw_json)   (type=LlamaConfig)
+    cfg.rope_theta                          -> RAISES AttributeError: 'LlamaConfig' object has no attribute 'rope_theta'
+    hasattr(cfg, 'rope_theta')              -> False
+    'rope_theta' in cfg.__dict__            -> False
+    getattr(cfg, 'rope_theta', 500000.0)    -> 500000.0
+    getattr(cfg, 'rope_theta', 10000.0)     -> 10000.0   <-- the silent-default trap
+    cfg.rope_scaling                        -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    cfg.rope_parameters                     -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    [k for k in cfg.to_dict() if 'rope' in k]-> ['rope_parameters']
+    cfg.head_dim                            -> 128
+
+--- the mandated route (models/tt_transformers/tt/common.py:165 / :183), which takes a DICT
+    get_rope_theta(cfg.to_dict())     -> 500000.0
+    get_rope_scaling(cfg.to_dict())   -> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+    get_rope_theta(raw_bundled_json)  -> 500000.0
+    get_rope_scaling(raw_bundled_json)-> {'factor': 8.0, 'low_freq_factor': 1.0, 'high_freq_factor': 4.0, 'original_max_position_embeddings': 8192, 'rope_type': 'llama3', 'rope_theta': 500000.0}
+
+CONCLUSION: cfg.rope_theta does NOT exist (AttributeError); rope_scaling is a FULL DICT,
+not None; getattr(..., DEFAULT) returns the DEFAULT. R-002 / Appendix F.2 are corrected by
+R-014: the hazard is a silent hard-coded default, not a silent None.
+
+==============================================================================
+MEASUREMENT B — device geometry (DEC-012 / R-016)
+==============================================================================
+ttnn.TILE_SIZE          = 32
+ttnn.get_arch_name()    = blackhole
+ttnn.get_num_devices()  = 32
+compute_with_storage_grid_size() = (12, 10)     <-- NOT 8x8
+dram_grid_size()                 = (8, 1)   -> get_num_dram_banks = 8
+ring-attention CCL offset (grid.x-1, 0) = (11, 0)
+ring_joint assert: ccl_offset.x >= sdpa_grid.x  ->  11 >= 8  : True
+                                                    11 >= 12 : False   <-- deriving the SDPA grid from the device grid FAILS the assert
+
+CONCLUSION: R-008 / 02_SURVEY row 11's 'derive the SDPA grid' would break
+ring_joint_sdpa_device_operation.cpp:421 at SP>1. Appendix D is right; see DEC-012 / R-016.
+
+Compute-kernel-config naming (DEC-013):
+    hasattr(ttnn, 'WormholeComputeKernelConfig')  -> True
+    hasattr(ttnn, 'BlackholeComputeKernelConfig') -> False   <-- NOT exported by the ttnn package
+    ttnn.types.BlackholeComputeKernelConfig is ttnn.WormholeComputeKernelConfig -> True   (ttnn/ttnn/types.py:61 — one class, two names)
+    hasattr(ttnn, 'init_device_compute_kernel_config') -> True   <-- the arch-derived factory DEC-013 uses
+    -> nothing to branch on by arch; 02_SURVEY row 11 is a no-op. See DEC-013.
+2026-09-03 17:05:40.606 | info     |    BuildKernels | JIT cache stats: 8/8 hits (100.0%) [8 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 17:05:40.606 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 17:05:40.823 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 17:05:40.823 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 17:05:48.478 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 17:05:48.478 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 17:05:48.478 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+
+
+==============================================================================
+G-OUTLINE check [1] — per-file contracts: 4 items each
+==============================================================================
+contract subsections found: 23
+  OK  3.3.1   `tt/config.py` — `MeshConfig`
+  OK  3.3.2   `tt/ccl.py` — `CCLManager`
+  OK  3.3.3   `tt/model_config.py` — `LlamaHFConfig` (P5.1) + `Mod
+  OK  3.3.4   `tt/rms_norm.py` — `RMSNorm`
+  OK  3.3.5   `tt/rope.py` — llama3-scaled RoPE
+  OK  3.3.6   `tt/mlp.py` — dense SwiGLU
+  OK  3.3.7   `tt/attention/config.py` — `AttentionConfig` + `Prog
+  OK  3.3.8   `tt/attention/weights.py` — projection weights
+  OK  3.3.9   `tt/attention/operations.py` — primitive ops
+  OK  3.3.10  `tt/attention/prefill.py` — `attention_forward`
+  OK  3.3.11  `tt/attention/kv_cache.py` — `LlamaKVCache`
+  OK  3.3.12  `tt/attention/dense_sp.py` — SP ring SDPA (P5 stub →
+  OK  3.3.13  `tt/attention/__init__.py` — `class Attention`
+  OK  3.3.14  `tt/embedding.py`
+  OK  3.3.15  `tt/lm_head.py`
+  OK  3.3.16  `tt/layer.py` — `DecoderLayer`
+  OK  3.3.17  `tt/model.py` — `Model`
+  OK  3.3.18  `tt/tt_prefill_runtime.py` (P7)
+  OK  3.3.19  `utils/general_utils.py`, `utils/substate.py`, `util
+  OK  3.3.20  `scripts/generate_golden_kv_cache.py`, `scripts/veri
+  OK  3.3.21  `tt/runners/` (P10)
+  OK  3.3.22  `tests/` — per-file contracts
+  OK  3.3.23  Support files
+  -> 23/23 subsections carry all four required items
+
+==============================================================================
+G-OUTLINE check [2] — planned-tree files all have a contract or an explicit exemption
+==============================================================================
+  files named in the tree: 44; covered by a contract (or __init__): 44
+
+==============================================================================
+G-OUTLINE check [3] — per-layer shape table filled with real numbers
+==============================================================================
+  shape-table rows (incl. weight table): 38
+  OK  [1, 1, S_loc, 4096]
+  OK  [1, 4, S_loc, 128]
+  OK  [1, 1, S_loc, 128]
+  OK  [1, 1, S_loc, 1792]
+  OK  [1, 1, S_loc, 512]
+  OK  [1, 1, 32, 16032]
+  OK  [1, 1, 4096, 512]
+  OK  [1, 1, 4096, 1792]
+  OK  [1, 1, 1792, 4096]
+  OK  [1, 1, 4096, 128]
+  OK  [1, 1, 512, 4096]
+  OK  max_seq_len/4, 128]
+  OK  num_users, 1, max_seq_len/4, 128]
+  OK  [1, 1, 128, 32]
+  no placeholders (an upstream TODO cited with a path:line is not one)
+
+==============================================================================
+G-OUTLINE check [4] — dtype + layout present on every shape row
+==============================================================================
+  rows mentioning a dtype : 24
+  rows mentioning a layout: 36
+
+==============================================================================
+G-OUTLINE check [5] — the two mandated design questions are settled by a DEC
+==============================================================================
+  OK  DEC-009 (hf_config dict-vs-object) present in 05_DECISIONS.md and cited by 03_OUTLINE.md
+  OK  DEC-010 (rope_theta / rope_scaling access) present in 05_DECISIONS.md and cited by 03_OUTLINE.md
+  DEC blocks total: 21
+
+==============================================================================
+G-OUTLINE check [6] — TTTv2 / llama3_8b rejection rationale recorded for P9
+==============================================================================
+  OK  only supports 1D mesh topologies
+  OK  mlp_2d.py:461
+  OK  no `Attention2D`
+  OK  Universal Module Contract
+
+==============================================================================
+G-OUTLINE check [7] — Appendix E thresholds carried + masking caveat stated
+==============================================================================
+  OK  0.9999867
+  OK  0.9995823
+  OK  0.9996099
+  OK  0.9999985
+  OK  integration check
+  OK  launders
+
+==============================================================================
+G-CCL-PLAN check [1] — (mesh, TP, SP) arithmetic present
+==============================================================================
+  OK  mesh_shape        = (SP, TP) = (4, 8)
+  OK  32 / 8 = 4
+  OK  8 / 8 = 1
+  OK  4096 / 8  =  512
+  OK  14336 / 8 = 1792
+  OK  num_links = 2
+  OK  compute_with_storage_grid_size() = (12, 10)
+
+==============================================================================
+G-CCL-PLAN check [2] — collective-placement table, every row justified
+==============================================================================
+  placement rows: 12
+  every row carries a >=40-char justification
+
+==============================================================================
+G-CCL-PLAN check [3] — residual-scheme DEC
+==============================================================================
+  OK  DEC-018 present and cited
+
+==============================================================================
+G-CCL-PLAN check [4] — semaphore-lifetime statement
+==============================================================================
+  OK  allocated exactly once
+  OK  CCLManager.__init__
+  OK  Never per layer
+  OK  6 / 4 / 2 / 2
+
+==============================================================================
+G-CCL-PLAN check [5] — every collective call site with cluster_axis / dim / topology
+==============================================================================
+  numbered call-site rows: 10
+  OK  site  1  cluster_axis=**1** (`tp_axis`) dim=**3**    topology=Ring
+  OK  site  2  cluster_axis=**1**          dim=**3**    topology=Ring
+  OK  site  3  cluster_axis=**1**          dim=**3**    topology=Ring
+  OK  site  4  cluster_axis=**1**          dim=**3**    topology=Ring
+  OK  site  5  cluster_axis=**0** (`sp_axis`) dim=**2**    topology=Ring (`:132`)
+  OK  site  6  cluster_axis=1              dim=3        topology=Ring
+  OK  site  7  cluster_axis=1              dim=3        topology=Ring (`:77`)
+  OK  site  8  cluster_axis=**0**          dim=**2**    topology=Ring
+  OK  site  9  cluster_axis=**0**          dim=**2**    topology=Ring
+  OK  site 10  cluster_axis=1              dim=3        topology=per `DEC-020`
+  -> 10/10 call sites carry cluster_axis + dim + topology
+
+==============================================================================
+check [8] — citation verification (both gates share this run)
+==============================================================================
+citations checked : 380
+  verified        : 380
+  mismatched      : 0
+  missing files   : 0
+doc refs scanned  : 164
+  resolved        : 164
+  unresolved      : 0
+
+==============================================================================
+VERDICT
+==============================================================================
+G-OUTLINE  : PASS
+G-CCL-PLAN : PASS
+EXIT=0

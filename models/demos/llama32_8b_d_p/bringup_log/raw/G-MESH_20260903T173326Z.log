@@ -1,0 +1,170 @@
+2026-09-03 17:33:32.478 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mstojkovic/.cache/ttnn,model_cache_path=/home/mstojkovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/mstojkovic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mstojkovic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, anyio-4.15.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, dash-2.15.0, benchmark-5.2.3, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 23 items
+
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_validated_target_matches_dec_002 PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[4x8_tp8] 2026-09-03 17:33:33.896 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic:66 - [G-MESH] MeshConfig((4, 8), tp=8, sp=4, tp_axis=1) -> shard_size(4096)=512, shard_size(14336)=1792
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x1_tp1] 2026-09-03 17:33:34.046 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:34.047 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic:66 - [G-MESH] MeshConfig((1, 1), tp=1, sp=1, tp_axis=1) -> shard_size(4096)=4096, shard_size(14336)=14336
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x8_tp8] 2026-09-03 17:33:34.198 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 8), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:34.198 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic:66 - [G-MESH] MeshConfig((1, 8), tp=8, sp=1, tp_axis=1) -> shard_size(4096)=512, shard_size(14336)=1792
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[8x4_tp4] 2026-09-03 17:33:34.350 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(8, 4), tp=4) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:34.350 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_mesh_config_arithmetic:66 - [G-MESH] MeshConfig((8, 4), tp=4, sp=8, tp_axis=1) -> shard_size(4096)=1024, shard_size(14336)=3584
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_target_shard_sizes_are_the_gate_numbers 2026-09-03 17:33:34.503 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_target_shard_sizes_are_the_gate_numbers:90 - [G-MESH] target MeshConfig((4, 8), tp=8, sp=4, tp_axis=1): shard_size(4096)=512, shard_size(14336)=1792 OK
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x8_tp4] 2026-09-03 17:33:34.654 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.655 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.655 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_sub_axis_tp_is_refused:105 - [G-MESH] MeshConfig((1, 8), tp=4) raised ValueError as required
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp4] 2026-09-03 17:33:34.807 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.807 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.807 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_sub_axis_tp_is_refused:105 - [G-MESH] MeshConfig((4, 8), tp=4) raised ValueError as required
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp16] 2026-09-03 17:33:34.958 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.958 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must equal mesh_"
+2026-09-03 17:33:34.958 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_sub_axis_tp_is_refused:105 - [G-MESH] MeshConfig((4, 8), tp=16) raised ValueError as required
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x1_tp2] 2026-09-03 17:33:35.109 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must equal mesh_"
+2026-09-03 17:33:35.109 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must equal mesh_"
+2026-09-03 17:33:35.109 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_sub_axis_tp_is_refused:105 - [G-MESH] MeshConfig((1, 1), tp=2) raised ValueError as required
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_tp_axis_zero_flips_the_sp_axis 2026-09-03 17:33:35.261 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(8, 4), tp=8) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_reduce_scatter_exists 2026-09-03 17:33:35.418 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_dict 2026-09-03 17:33:35.570 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_llama_hf_config_from_dict:128 - [G-MESH] llama_hf_config(dict): theta=500000.0, factor=8.0, orig_ctx=8192, head_dim=128
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_transformers_object 2026-09-03 17:33:36.797 | INFO     | llama32_8b_d_p.tests.unit.test_mesh_config:test_llama_hf_config_from_transformers_object:190 - [G-MESH] llama_hf_config(LlamaConfig).rope_theta = 500000.0 (to_dict has no rope_theta key)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_bad_source 2026-09-03 17:33:36.990 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="dict or an object with to_dict"
+2026-09-03 17:33:36.990 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="dict or an object with to_dict"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_missing_theta 2026-09-03 17:33:37.173 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="rope_theta resolved to None"
+2026-09-03 17:33:37.174 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="rope_theta resolved to None"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[low] 2026-09-03 17:33:37.358 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="low_freq_factor"
+2026-09-03 17:33:37.358 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="low_freq_factor"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[high] 2026-09-03 17:33:37.545 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="high_freq_factor"
+2026-09-03 17:33:37.545 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="high_freq_factor"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_is_frozen 2026-09-03 17:33:37.730 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] FrozenInstanceError message="cannot assign to field"
+2026-09-03 17:33:37.730 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] FrozenInstanceError message="cannot assign to field"
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0] 2026-09-03 17:33:37.914 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-09-03 17:33:37.914 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-03 17:33:37.931 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-03 17:33:37.931 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-03 17:33:38.024 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-03 17:33:38.029 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-03 17:33:39.457 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-09-03 17:33:39.457 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-03 17:33:39.457 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-03 17:33:39.457 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-03 17:33:39.475 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-03 17:33:41.226 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-03 17:33:45.030 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-03 17:33:45.030 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-03 17:33:45.048 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3368)
+2026-09-03 17:33:45.048 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3376)
+2026-09-03 17:33:45.669 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 17:33:46.368 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 17:33:46.370 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:46.375 | INFO     | llama32_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_manager_constructs_and_allocates_once:66 - [G-MESH] CCLManager semaphore lists at construction (rs/ag/barrier/ring) = (6, 4, 2, 2)
+2026-09-03 17:33:46.375 | INFO     | llama32_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_manager_constructs_and_allocates_once:94 - [G-MESH] after 64 all-reduce-equivalents: lists = (6, 4, 2, 2) (unchanged)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0] 2026-09-03 17:33:47.426 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 17:33:47.521 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 17:33:47.521 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:47.524 | INFO     | llama32_8b_d_p.tests.unit.test_ccl_semaphores:test_ping_pong_indices_cycle_depth_two:125 - [G-MESH] ping-pong depth = 2 for rs / ag / barrier, as designed
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0] 2026-09-03 17:33:48.562 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 17:33:48.655 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 17:33:48.656 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+2026-09-03 17:33:48.658 | INFO     | llama32_8b_d_p.tests.unit.test_ccl_semaphores:test_ccl_core_grid_is_derived_from_the_device:134 - [G-MESH] compute_with_storage_grid_size() = (12, 10); ring_attention_ccl_core_grid_offset = (11, 0)
+PASSED
+models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0] 2026-09-03 17:33:49.717 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-03 17:33:49.809 | DEBUG    | conftest:mesh_device:668 - multidevice with 1 devices is created
+2026-09-03 17:33:49.810 | WARNING  | models.demos.llama32_8b_d_p.tt.config:_validate:64 - MeshConfig(mesh_shape=(1, 1), tp=1) is untested; only mesh_shape=(4, 8), tp=8 (SP=4) is the Llama-3.1-8B target.
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/mstojkovic/tt-metal/python_env/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mstojkovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.64s setup    models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+1.13s setup    models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0]
+1.12s setup    models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0]
+1.11s setup    models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0]
+1.07s call     models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_transformers_object
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_bad_source
+0.19s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[high]
+0.18s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_is_frozen
+0.18s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[low]
+0.18s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_missing_theta
+0.16s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_validated_target_matches_dec_002
+0.16s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_reduce_scatter_exists
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_transformers_object
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_target_shard_sizes_are_the_gate_numbers
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp4]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[8x4_tp4]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_tp_axis_zero_flips_the_sp_axis
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_dict
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x8_tp4]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x8_tp8]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[4x8_tp8]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x1_tp2]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x1_tp1]
+0.15s setup    models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp16]
+0.02s teardown models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_validated_target_matches_dec_002
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[4x8_tp8]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x1_tp1]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[1x8_tp8]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_mesh_config_arithmetic[8x4_tp4]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_target_shard_sizes_are_the_gate_numbers
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x8_tp4]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp4]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[4x8_tp16]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_sub_axis_tp_is_refused[1x1_tp2]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_tp_axis_zero_flips_the_sp_axis
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_reduce_scatter_exists
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_dict
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_from_transformers_object
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_bad_source
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_missing_theta
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[low]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_rejects_unhandled_limb_factors[high]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_mesh_config.py::test_llama_hf_config_is_frozen
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_manager_constructs_and_allocates_once[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ping_pong_indices_cycle_depth_two[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_ccl_core_grid_is_derived_from_the_device[blackhole-mesh_device0]
+PASSED models/demos/llama32_8b_d_p/tests/unit/test_ccl_semaphores.py::test_reset_global_semaphores_runs[blackhole-mesh_device0]
+======================== 23 passed, 1 warning in 16.35s ========================
+2026-09-03 17:33:51.569 | info     |    BuildKernels | JIT cache stats: 8/8 hits (100.0%) [8 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-03 17:33:51.569 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-03 17:33:51.786 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:550)
+2026-09-03 17:33:51.786 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-03 17:33:59.585 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-03 17:33:59.585 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-03 17:33:59.585 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

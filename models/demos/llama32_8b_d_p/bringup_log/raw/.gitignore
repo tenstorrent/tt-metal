@@ -1,0 +1,5 @@
+# The repo root .gitignore has a blanket `*.log` (.gitignore:7), which would exclude
+# every raw gate log in this directory. These logs are the EVIDENCE for the gate
+# ledger in ../06_GATES.md -- the bring-up recipe's rule is that a gate with no raw
+# log did not happen -- so they are deliberately tracked. Re-include them here.
+!*.log
