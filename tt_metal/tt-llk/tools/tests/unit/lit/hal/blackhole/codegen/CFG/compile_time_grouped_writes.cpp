@@ -33,13 +33,13 @@ extern "C" __attribute__((noinline, used)) void write_interleaved_constant_group
 {
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>(),
-        cfg::set<cfg::StateReset::EN, cfg::Sec::S0, 1>(),
+        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>(),
         cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, 1>());
 }
 
 // CHECK-LABEL: <write_interleaved_constant_groups>:
 // CHECK-NEXT: ttrmwcib3 96,96,1
-// CHECK-NEXT: ttrmwcib0 1,1,4
+// CHECK-NEXT: ttrmwcib0 1,1,5
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_constant_group()
@@ -57,7 +57,7 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
         cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
         cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(cfg::gpr<4, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>()),
         cfg::from_gpr<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0>(hal::gpr<5>()),
-        cfg::set<cfg::StateReset::EN, cfg::Sec::S0, 1>(),
+        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>(),
         cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 2>());
 }
 
@@ -66,7 +66,7 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 // CHECK-NEXT: ttwrcfg 4,0,76
 // CHECK-NEXT: ttwrcfg 5,0,80
 // CHECK-NEXT: ttnop
-// CHECK-NEXT: ttrmwcib0 1,1,4
+// CHECK-NEXT: ttrmwcib0 1,1,5
 // CHECK-NEXT: ttrmwcib0 224,64,0
 // CHECK-NEXT: ttrmwcib1 1,0,0
 // CHECK-NEXT: ret
@@ -87,12 +87,12 @@ extern "C" __attribute__((noinline, used)) void write_constant_operations_batch(
         {
             out(cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
                 cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(cfg::gpr<4, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>()),
-                cfg::set<cfg::StateReset::EN, cfg::Sec::S0, 1>());
+                cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>());
         });
 }
 
 // CHECK-LABEL: <write_constant_operations_batch>:
 // CHECK-NEXT: ttrmwcib0 15,1,0
 // CHECK-NEXT: ttwrcfg 4,0,76
-// CHECK-NEXT: ttrmwcib0 1,1,4
+// CHECK-NEXT: ttrmwcib0 1,1,5
 // CHECK-NEXT: ret

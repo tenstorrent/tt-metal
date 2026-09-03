@@ -74,3 +74,15 @@ extern "C" __attribute__((noinline, used)) void write_thcon_policy_gpr_128_scala
 // CHECK-LABEL: <write_thcon_policy_gpr_128_scalar>:
 // CHECK-NEXT: ttreg2flop 0,0,0,0,48,16
 // CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
+{
+    // A field-granular Tensix write to the state-reset register lowers to
+    // RMWCIB, which hardware ignores; a whole-word GPR transfer reaches it.
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::StateReset::EN, cfg::Sec::S0>(hal::gpr<4>());
+}
+
+// CHECK-LABEL: <write_state_reset_via_gpr>:
+// CHECK-NEXT: ttwrcfg 4,0,4
+// CHECK-NEXT: ttnop
+// CHECK-NEXT: ret
