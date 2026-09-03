@@ -150,9 +150,13 @@ class TtSWA(LightweightModule):
         assert batch == 1, f"SWA state is single-user for now, got batch={batch}"
         chunk = int(chunk_tokens or max_seq_len)
         sw, sp = self.sliding_window, self.sp_factor
-        assert chunk % (sw * sp) == 0, (
-            f"the slab is {chunk} wide, which is not a multiple of sliding_window * sp_factor "
-            f"({sw} * {sp} = {sw * sp}); every chip's share has to be a whole number of windows"
+        assert chunk % (TILE_HEIGHT * sp) == 0, (
+            f"the slab is {chunk} wide, which is not a multiple of tile height * sp_factor "
+            f"({TILE_HEIGHT} * {sp} = {TILE_HEIGHT * sp}); a chip's share must be whole tiles"
+        )
+        assert chunk % sw == 0, (
+            f"the slab is {chunk} wide, which is not a multiple of sliding_window {sw}; the halo and "
+            f"carry slices size their output as (sw + chunk) / num_devices"
         )
         seq_local = chunk // sp
 

@@ -98,6 +98,7 @@ _CHUNKED_SCENARIOS = [
     # Non-final chunks below chunk_size: real_len and the padded slab width must not be confused.
     ("chunk5120-varying", 5120, [1024, 256, 5120]),
     ("chunk1024-ragged", 1024, [1024, 1024, 1000]),  # a final chunk 8 tokens past a tile row
+    ("chunk1280", 1280, [1280, 1280, 1000]),  # whole tiles per chip, but not a whole number of windows
     # Non-final chunks below the window, which the carry can serve only by reaching back into itself.
     ("sub-window", 5120, [1024, 32, 96, 128, 5120, 1000]),
 ]
