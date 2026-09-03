@@ -1190,6 +1190,26 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
 # test body.  Whichever call runs first was always correct; it is the second that regressed.
 
 
+def _where_variant(device, variant, pred, true_t, false_t, scalar_true=1.5, scalar_false=-2.5):
+    """Dispatch `variant` and return (ttnn result, torch golden). TTS/TST replace one operand
+    with a scalar, which exercises the packed-scalar compute arg and the TTS/TST reader layout
+    (buffers at slots 0/1, slot 2 a plain 0) rather than TTT's three-buffer layout."""
+    pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    if variant == "TTT":
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        return ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt)), torch.where(pred.bool(), true_t, false_t)
+    if variant == "TTS":
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        golden = torch.where(pred.bool(), true_t, torch.full_like(true_t, scalar_false))
+        return ttnn.to_torch(ttnn.where(pred_tt, true_tt, scalar_false)), golden
+    # TST
+    false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    golden = torch.where(pred.bool(), torch.full_like(false_t, scalar_true), false_t)
+    return ttnn.to_torch(ttnn.where(pred_tt, scalar_true, false_tt)), golden
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
 @pytest.mark.parametrize(
     "pred_shape_1, pred_shape_2",
     [
@@ -1198,7 +1218,7 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
         ((2, 2, 1, 32, 32), (1, 2, 2, 32, 32)),
     ],
 )
-def test_where_program_cache_same_volume_different_leading_dims(device, pred_shape_1, pred_shape_2):
+def test_where_program_cache_same_volume_different_leading_dims(device, variant, pred_shape_1, pred_shape_2):
     """Predicates that hash identically (same padded volume, same H/W) but need different strides."""
     torch.manual_seed(42)
     # The true/false tensors are the broadcast target: same shape for both calls, so the ONLY
@@ -1206,17 +1226,25 @@ def test_where_program_cache_same_volume_different_leading_dims(device, pred_sha
     out_shape = [max(a, b) for a, b in zip(pred_shape_1, pred_shape_2)]
 
     results = []
+    entries_after_first = None
     for pred_shape in (pred_shape_1, pred_shape_2):
         pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
         true_t = torch.randn(out_shape, dtype=torch.bfloat16)
         false_t = torch.randn(out_shape, dtype=torch.bfloat16)
-        expected = torch.where(pred.bool(), true_t, false_t)
 
-        pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        result = ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt))
+        result, expected = _where_variant(device, variant, pred, true_t, false_t)
         results.append((result, expected))
+        if entries_after_first is None:
+            entries_after_first = device.num_program_cache_entries()
+
+    # The two dispatches must actually SHARE a cache entry, or this test is not exercising the
+    # regression at all: if the hash is ever widened so these shapes stop colliding, both calls
+    # become independent, both pass, and the coverage silently disappears.
+    assert device.num_program_cache_entries() == entries_after_first, (
+        f"{pred_shape_1} and {pred_shape_2} no longer collide in the program cache "
+        f"({entries_after_first} -> {device.num_program_cache_entries()} entries); "
+        "this test no longer covers issue 54235"
+    )
 
     for result, expected in results:
         assert_equal(expected, result)
@@ -1236,6 +1264,7 @@ def test_where_program_cache_same_input_volume_different_output_volume(device):
         ((4, 1, 32, 32), (4, 1, 32, 32), (1, 1, 32, 32)),
     ]
 
+    entries_after_first = None
     for pred_shape, true_shape, false_shape in cases:
         pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
         true_t = torch.randn(true_shape, dtype=torch.bfloat16)
@@ -1248,3 +1277,12 @@ def test_where_program_cache_same_input_volume_different_output_volume(device):
         result = ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt))
 
         assert_equal(expected, result)
+        if entries_after_first is None:
+            entries_after_first = device.num_program_cache_entries()
+
+    # As above: the two dispatches must share a cache entry for this to be a regression test.
+    assert device.num_program_cache_entries() == entries_after_first, (
+        "the two output-volume cases no longer collide in the program cache "
+        f"({entries_after_first} -> {device.num_program_cache_entries()} entries); "
+        "this test no longer covers issue 54235"
+    )
