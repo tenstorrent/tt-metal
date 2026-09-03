@@ -372,6 +372,20 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t fi
     TTI_SFPNOP;
 }
 
+// Keep this hot prologue as a macro: equivalent sfpi_inline helpers alter register
+// allocation in partial-row GroupNorm kernels.
+#define TWO_PASS_BLOCK_ROW_BOUNDS(I, J)                 \
+    constexpr std::uint32_t block_min = I * 16 + J * 4; \
+    constexpr std::uint32_t block_max = block_min + 4
+#define TWO_PASS_BLOCK_ROW_INTERSECTION(I, J)                               \
+    TWO_PASS_BLOCK_ROW_BOUNDS(I, J);                                        \
+    if (start_row >= block_max || end_row <= block_min)                     \
+    {                                                                       \
+        return;                                                             \
+    }                                                                       \
+    const std::uint32_t first = std::max(start_row, block_min) - block_min; \
+    const std::uint32_t last  = std::min(end_row, block_max) - block_min
+
 /**
  * Initialise the shift anchor from the first selected row, then accumulate the block.
  * @tparam dual_sum Whether to use two shifted-sum accumulators.
@@ -381,14 +395,7 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t fi
 template <bool dual_sum, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_initialize_anchor_and_accumulate_block_(std::uint32_t start_row, std::uint32_t end_row)
 {
-    constexpr std::uint32_t block_min = I * 16 + J * 4;
-    constexpr std::uint32_t block_max = block_min + 4;
-    if (start_row >= block_max || end_row <= block_min)
-    {
-        return;
-    }
-    const std::uint32_t first = std::max(start_row, block_min) - block_min;
-    const std::uint32_t last  = std::min(end_row, block_max) - block_min;
+    TWO_PASS_BLOCK_ROW_INTERSECTION(I, J);
     _welfords_load_block_<I, J>();
     if (first == 0)
     {
@@ -482,14 +489,7 @@ template <bool accumulate_m2, bool dual_accumulator, bool shifted_mean, std::uin
 sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
     static_assert(accumulate_m2 || shifted_mean, "plain-sum accumulation is not a supported two-pass state");
-    constexpr std::uint32_t block_min = I * 16 + J * 4;
-    constexpr std::uint32_t block_max = block_min + 4;
-    if (start_row >= block_max || end_row <= block_min)
-    {
-        return;
-    }
-    const std::uint32_t first = std::max(start_row, block_min) - block_min;
-    const std::uint32_t last  = std::min(end_row, block_max) - block_min;
+    TWO_PASS_BLOCK_ROW_INTERSECTION(I, J);
     _welfords_load_block_<I, J>();
     if constexpr (accumulate_m2)
     {
@@ -536,8 +536,7 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
 template <bool initialize_anchor, bool dual_sum, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_shifted_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
-    constexpr std::uint32_t block_min = I * 16 + J * 4;
-    constexpr std::uint32_t block_max = block_min + 4;
+    TWO_PASS_BLOCK_ROW_BOUNDS(I, J);
     if constexpr (initialize_anchor)
     {
         if (start_row >= block_min && start_row < block_max)
@@ -548,6 +547,9 @@ sfpi_inline void _two_pass_shifted_block_rows_(std::uint32_t start_row, std::uin
     }
     _two_pass_block_rows_<false, dual_sum, true, I, J>(start_row, end_row);
 }
+
+#undef TWO_PASS_BLOCK_ROW_INTERSECTION
+#undef TWO_PASS_BLOCK_ROW_BOUNDS
 
 /**
  * Accumulate centred M2 over a contiguous range of rows in the current input tile.
