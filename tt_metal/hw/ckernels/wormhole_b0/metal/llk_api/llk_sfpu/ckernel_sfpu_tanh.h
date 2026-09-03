@@ -209,8 +209,24 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
+        // Continuous piecewise-linear tanh. The knot at |x| = 1 is placed to minimise the
+        // worst error over both adjoining segments instead of at a round number: the old
+        // table interpolated (0,0) -> (1, 0.90625) -> (2, 1.0), and tanh(1) = 0.7616, so
+        // that one knot value carried the whole 0.1447 error budget on both sides of it.
+        // Preserves tanh(0) = 0 exactly, continuity at |x| = 1 and 2 (0.8125 and 1.0 from
+        // both sides), monotonicity, and the exact 1.0 saturation.
+        // Measured on n300: overall max |err| 0.144656 -> 0.056339 (2.57x), the new worst
+        // point sitting on [0, 1); on [1, 2) it is 0.144656 -> 0.050906.
+        // 0.056339 is what makes this mode testable: passed_test bounds each element at
+        // atol + rtol*|golden|, and at the worst point (|x| ~ 0.56, tanh ~ 0.51) that is
+        // 0.0755. So test_eltwise_unary_sfpu's blanket skip of Tanh/approx=Yes is gone --
+        // all 80 variants pass here, 56 of them fail on the pre-retune table.
+        // ckernel_sfpu_tanh_derivative.h holds a second, independent copy of this table and
+        // deliberately stays on the pre-retune values: its golden hardcodes those exact
+        // coefficients as the model of the LUT, so the two must be retuned in lockstep or not
+        // at all. tech_reports/SFPU_LUT_Retune_Wormhole/ has the numbers for that follow-up.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1AFF);  // 0.8125*x
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x3814);  // 0.1875*x + 0.625
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
     } else {
         if constexpr (is_fp32_dest_acc_en) {

@@ -40,8 +40,12 @@ inline void _calculate_tanh_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_tanh_()
 {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1DFF)); // 0.90625*x
-    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x481A)); // 0.09375*x + 0.8125
+    // Minimax knot placement; see the Wormhole metal copy of this table in
+    // hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h for the rationale.
+    // Measured on n300: overall max |err| 0.144656 -> 0.056339 (2.57x), the new worst point
+    // sitting on [0, 1); on [1, 2) it is 0.144656 -> 0.050906.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1AFF)); // 0.8125*x
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x3814)); // 0.1875*x + 0.625
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(static_cast<std::uint16_t>(0xFF00)); // 1
 }
 

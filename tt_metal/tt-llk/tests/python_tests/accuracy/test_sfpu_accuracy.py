@@ -61,6 +61,10 @@ APPROX_CAPABLE_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
     MathOperation.Gelu,
+    # tanh's approx path is the 3-entry SFPLUT. This sweep measures error rather than
+    # gating on a threshold, so it runs on both arches whichever table the arch ships --
+    # it is the instrument that would have shown the retune's effect.
+    MathOperation.Tanh,
 ]
 
 FORMATS = input_output_formats(
@@ -105,9 +109,6 @@ def _skip_if_unsupported(
     formats: InputOutputFormat,
 ) -> None:
     """Skip variants the hardware / metal stack does not support."""
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
     if (
         dest_acc == DestAccumulation.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE

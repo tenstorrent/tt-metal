@@ -35,8 +35,21 @@ inline void calculate_sigmoid_appx() {
 }
 
 inline void sigmoid_appx_init() {
-    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x3DFF));
-    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x21D8));
+    // 3-entry SFPLUT, minimax per segment. A = imm[15:8], B = imm[7:0]; the byte format is
+    // s(1)|e(3)|m(4) = (-1)^s * 2^-e * (1 + m/16), and byte 0xFF reads back as exactly 0.0.
+    // sigmoid(x) = 0.5 + lut(x), so the table fits sigmoid(|x|) - 0.5, which is concave:
+    //   |x| < 1 : 0.234375  *|x|                 (was 0.2265625*|x|)
+    //   |x| < 2 : 0.1484375 *|x| + 0.08984375    (was 0.265625 *|x| - 0.046875 -- a slope
+    //                                             LARGER than segment 0's, which a concave
+    //                                             target cannot use; that was the defect)
+    //   else    : 0.5, so sigmoid saturates at exactly 1.0 (unchanged)
+    // Measured on n300: max |err| on [1, 2) drops 0.102936 -> 0.007223 and on [0, 1)
+    // 0.009755 -> 0.005275. Segment 2 is untouched, so its 0.119203 is unchanged and remains
+    // the kernel's overall max: with the last breakpoint fixed at |x| = 2 that segment must be
+    // a constant, and sigmoid(inf) = 1.0 forces it to 0.5 against sigmoid(2) - 0.5 = 0.3808.
+    // Error is pointwise non-increasing over the whole line.
+    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x3EFF));
+    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x3347));
     l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF10));
 }
 
