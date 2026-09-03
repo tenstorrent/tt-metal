@@ -35,7 +35,10 @@ constexpr bool reduce_trigger_supported = true;
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_KERNEL)
+#if defined(PROFILE_STREAMING)
+// Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
+#define MaybeDeviceZoneScopedN(ENABLED, name)
+#elif defined(PROFILE_KERNEL)
 template <bool Enabled, uint32_t timer_id>
 struct MaybeProfileScope {
     inline __attribute__((always_inline)) MaybeProfileScope() {}
@@ -44,16 +47,10 @@ struct MaybeProfileScope {
 template <uint32_t timer_id>
 struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
 
-#if defined(PROFILE_STREAMING)
-#define MaybeDeviceZoneScopedN(ENABLED, name) \
-    TT_ZONE_DEFINE_ID(hash, name);            \
-    MaybeProfileScope<ENABLED, hash> zone;
-#else
 #define MaybeDeviceZoneScopedN(ENABLED, name)                                  \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     MaybeProfileScope<ENABLED, hash> zone;
-#endif
 #else
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
