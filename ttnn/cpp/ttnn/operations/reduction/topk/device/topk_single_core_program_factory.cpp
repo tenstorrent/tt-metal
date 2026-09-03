@@ -386,8 +386,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"output_tiles", Ktiles},                             // K value in tiles
                 {"largest", static_cast<uint32_t>(args.largest)},     // Sort order: largest (true) or smallest (false)
                 {"stable_sort", static_cast<uint32_t>(args.stable)},  // Stable sort: ties keep the lowest index
-                // Rank-stamped stable mode: local-rank tags in the value lo16 carry the tie order,
-                // so the network itself runs unstable.
                 {"rank_stamped", static_cast<uint32_t>(rank_stamped_stable)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core"}},
