@@ -119,7 +119,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kMaxGridX;
     uint32_t GRID_Y = MAX_GRID_Y;
-    // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 8). The host
+    // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
     // from the device-read per-expert token count (adaptive_chunk.hpp) and never
@@ -127,7 +127,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // pick just uses fewer of the reserved tiles. Sizing per EXPERT at runtime
     // also beats any single host-side seed here, since each local expert carries a
     // different token count. (Owned by the op, not the caller.)
-    constexpr uint32_t kMaxChunkMTiles = 8 * MAX_GRID_Y;  // per_core_M <= 8 (L1 cap)
+    //
+    // Why 4 rows/core and not the 8 that L1 can hold: per_core_M_max and the gate/up
+    // K-block width in0_block_w_gu compete for the same L1, and the width is worth
+    // more. The x-staging CBs are sized M * in0_block_w_gu tiles, so per_core_M_max
+    // sets the PRICE of a wider K-block. At M=8 width 16 does not fit and the guard
+    // below narrows it to 8, doubling the K-block count; each block costs a fixed
+    // mcast-ready barrier round plus read tail that does NOT shrink with width.
+    // Halving the max buys width 16 and halves the block count.
+    //
+    // Keep this a POWER OF TWO * MAX_GRID_Y: per_core_M_for_chunk() quantizes tail
+    // chunks to divisors of per_core_M_max.
+    constexpr uint32_t kMaxChunkMTiles = 4 * MAX_GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
@@ -322,9 +333,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
 
+        // Candidate per_core_M values: DIVISORS of the requested per_core_M_max, largest
+        // first. per_core_M_for_chunk() quantizes a tail chunk to the smallest divisor
+        // of per_core_M_max that covers it, so a max with a coarse divisor ladder leaves
+        // the tail nowhere fine to land and silently inflates its M-work. Walking M down
+        // by 1 could stop on a prime: at per_core_M_max=5 a 16-tile tail needs 2
+        // rows/core but the only divisors are {1,5}, so it would run 5 — 2.5x the
+        // M-work. Restricting to divisors of the request keeps the tail ladder as fine
+        // as the request's own.
+        const uint32_t requested_per_core_M = per_core_M;
+        std::vector<uint32_t> m_gu_candidates;
+        for (uint32_t M = requested_per_core_M; M >= 1; --M) {
+            if (requested_per_core_M % M == 0) {
+                m_gu_candidates.push_back(M);
+            }
+        }
+
         uint32_t fit_M = 0;
         uint32_t fit_w = 0;
-        for (uint32_t M = per_core_M; M >= 1; --M) {
+        for (const uint32_t M : m_gu_candidates) {
             for (const uint32_t w : w_gu_candidates) {
                 if (cb_footprint_bytes(M, w) <= l1_budget) {
                     fit_M = M;
