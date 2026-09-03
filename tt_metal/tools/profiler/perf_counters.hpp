@@ -258,9 +258,11 @@ enum PerfCounterType : std::uint16_t {
     SRCA_STALL_MATH,
     // The l1_client CSR event counter; the (subport, event) selection travels in counter_sel.
     QUASAR_L1_CLIENT_EVENT,
+    // Quasar runs 3 unpackers per thread.
+    UNPACK2_BUSY_THREAD0,
     // counter_type is an 8-bit field on tt-1xx; keep every value below 256.
 };
-static_assert(QUASAR_L1_CLIENT_EVENT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(UNPACK2_BUSY_THREAD0 <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {
