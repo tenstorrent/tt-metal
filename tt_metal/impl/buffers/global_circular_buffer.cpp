@@ -222,7 +222,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     hdr->num_receivers = max_num_receivers_per_sender;
     hdr->buffer_address = buffer_address;
     hdr->fifo_size_per_receiver = size_;
-    hdr->max_num_receivers = max_num_receivers_per_sender;
 
     auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
 
@@ -238,10 +237,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
     const uint64_t pages_sent_write_addr = dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
     auto& cluster = metal_ctx.get_cluster();
-    // Per-sender bank-local slab offset (see recv_index_bases_per_sender): senders are ordered
-    // [bank b sender 0, bank b sender 1, bank b+1 sender 0, ...] (sender_logical.x == bank_id);
-    // when two senders share a bank, the second reads slabs that start where the first's end.
-    const std::vector<uint32_t> recv_index_bases = recv_index_bases_per_sender(sender_receiver_core_mapping_);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const CoreCoord& sender_logical = sender_receiver_core_mapping_[s].first;
         const std::vector<CoreCoord>& receivers_vec = receiver_logical_cores_per_sender_[s];
@@ -249,7 +244,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
 
         // Per-sender header fields (the rest of block_bytes is constant across senders).
         hdr->num_receivers = this_num_receivers;
-        hdr->recv_index_base = recv_index_bases[s];
         hdr->num_receivers_and_remote_pages_sent_ptr =
             remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
