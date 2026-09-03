@@ -14,26 +14,24 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc, comp_ulp
+from tests.ttnn.utils_for_testing import comp_ulp
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp.cpp"
 FIXED_BLOCK_TAIL_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_chunked_fixed_tail.cpp"
+MULTISLOT_TAIL_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_multislot_tail.cpp"
 
 # Accuracy bound for the Exp<> (Approx::Exact) chains below, in bf16 ULPs of the float32
-# golden. PCC is scale-invariant, so it cannot catch a systematic accuracy loss on its own.
+# golden.  ULP is sensitive to systematic accuracy loss that correlation would miss.
 EXP_ULP_THRESHOLD = 2
 
 
 def _assert_matches_golden(golden, actual, label):
-    """Correlation (PCC) plus accuracy (ULP) against the float32 exp golden.
+    """ULP accuracy against the float32 exp golden.
 
     The device result is bf16, so the ULP error is measured in bf16 ULPs: comp_ulp keeps the
     float32 golden as the higher-precision reference and sizes one ULP from its bf16 cast.
     """
-    pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.debug(f"{label} | {msg}")
-    assert pcc_ok, msg
     ulp_ok, ulp_msg = comp_ulp(golden, actual.to(torch.bfloat16), EXP_ULP_THRESHOLD)
     logger.debug(f"{label} | {ulp_msg}")
     assert ulp_ok, ulp_msg
@@ -166,3 +164,29 @@ def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     actual = ttnn.to_torch(output).to(torch.float32)
     golden = torch.exp(torch_in.to(torch.float32))
     _assert_matches_golden(golden, actual, f"clamped PerBlockSize tail Ht={Ht}, Wt={Wt}")
+
+
+@pytest.mark.parametrize("n", [1, 3, 5])
+def test_multislot_dest_partial_tail(device, n):
+    """D1 gives each lane a two-slot footprint; n=1/3/5 exercises partial tails at block_size=4."""
+    block_size = 4  # DEST_AUTO_LIMIT(8) / lane_width(2)
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=903 + n)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [
+        lib.cb_descriptor(0, dt, 2 * block_size, core_grid),
+        lib.cb_descriptor(16, dt, 2 * block_size, core_grid),
+    ]
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, n, core_grid),
+            lib.build_compute_kernel(MULTISLOT_TAIL_KERNEL, [n, block_size], core_grid),
+        ],
+        semaphores=[],
+        cbs=cbs,
+    )
+    actual = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
+    _assert_matches_golden(torch.exp(torch_in.to(torch.float32)), actual, f"multislot partial tail n={n}")

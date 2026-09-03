@@ -3014,6 +3014,12 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         Owner == InitReconfigOwner::Chain || ((!is_runtime_conditional_op_v<Es>) && ...),
         "InitReconfigOwner::Caller cannot be used with runtime-conditional elements because their "
         "selected init must execute inside each chain invocation.");
+    // An empty walk is a valid no-op.  Return before any init or DFB lifecycle operation: an
+    // upfront wait/reserve for zero tiles is not merely redundant, it can consume a caller-owned
+    // window that the chain was asked not to touch.
+    if (shape.Ht == 0 || shape.Wt == 0) {
+        return;
+    }
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;

@@ -12,15 +12,13 @@ Index and broadcast axes for eltwise helpers.
     Col           ht          (one tile per row)
     TileAddressing    base + index
 
-Golden changes if the wrong tile is read: a Row<->Col swap or dropped TileAddressing base fails PCC.
+Golden changes if the wrong tile is read: a Row<->Col swap or dropped TileAddressing base fails the numerical comparison.
 The broadcast case separately validates which row, column, or scalar is replicated within a tile.
 """
 
 import torch
 import pytest
 import ttnn
-from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 ADDRESSING_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/tile_addressing.cpp"
@@ -58,9 +56,7 @@ def test_tile_addressing_base(device, base):
     in_f = torch_in.to(torch.float32)
     golden = in_f[:, :, :, 32 * base : 32 * (base + n)]
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.debug(f"TileAddressing base={base} -> output[i]==input[base+i] | {msg}")
-    assert pcc_ok, msg
+    lib.assert_close(golden, out, f"TileAddressing base={base}")
 
 
 # =============================================================================
@@ -102,15 +98,13 @@ def test_index_2d_axes_are_correct_and_distinct(device):
     """Run each axis once, check both goldens, then prove the outputs discriminate an axis swap."""
     results = {axis: _run_index_2d(device, axis) for axis in ("row", "col")}
     for axis, (golden, out) in results.items():
-        pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.debug(f"index axis={axis} | {msg}")
-        assert pcc_ok, msg
+        lib.assert_close(golden, out, f"index axis={axis}")
 
     col_golden, _ = results["col"]
     _, row_out = results["row"]
-    ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.debug(f"index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
-    assert not ok_cross, "ROW-index output matched COL golden — a Row<->Col index swap would slip through."
+    assert not torch.allclose(
+        col_golden, row_out, rtol=0.01, atol=0.01
+    ), "ROW-index output matched COL golden — a Row<->Col index swap would slip through."
 
 
 def test_strided_tile_range(device):
@@ -143,9 +137,7 @@ def test_strided_tile_range(device):
 
     golden_region = torch_in.to(torch.float32)[:, :, :, 32 * input_base : 32 * (input_base + Wt)]
     output_region = out[:, :, :, 32 * output_base : 32 * (output_base + Wt)]
-    pcc_ok, msg = comp_pcc(golden_region, output_region, lib.pcc_threshold([dt]))
-    logger.debug(f"strided tile range | {msg}")
-    assert pcc_ok, msg
+    lib.assert_close(golden_region, output_region, "strided tile range")
 
 
 BCAST_DIM = {"row": 2, "col": 1, "scalar": 3}
@@ -189,12 +181,10 @@ def test_bcast_axes_are_correct_and_distinct(device):
     """Validate all intra-tile broadcast axes and ensure row/column are distinguishable."""
     results = {axis: _run_bcast_add(device, axis) for axis in ("row", "col", "scalar")}
     for axis, (golden, out) in results.items():
-        pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.debug(f"bcast add axis={axis} | {msg}")
-        assert pcc_ok, msg
+        lib.assert_close(golden, out, f"bcast add axis={axis}")
 
     col_golden, _ = results["col"]
     _, row_out = results["row"]
-    ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.debug(f"cross-check: ROW-out vs COL-golden pcc (expect low) | {msg}")
-    assert not ok_cross, "ROW output matched COL golden; an axis swap would slip through."
+    assert not torch.allclose(
+        col_golden, row_out, rtol=0.01, atol=0.01
+    ), "ROW output matched COL golden; an axis swap would slip through."

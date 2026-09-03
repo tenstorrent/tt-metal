@@ -4,10 +4,7 @@
 import pytest
 import torch
 import ttnn
-from loguru import logger
-
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
-from tests.ttnn.utils_for_testing import comp_pcc
 
 KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/accumulation.cpp"
 
@@ -71,7 +68,6 @@ def test_dest_accumulation_modes_and_lifecycle_equivalence(device, whole_shape):
     golden = reduced.sum(dim=0) if whole_shape else torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
     # Whole-shape reduction preserves one hardware DEST accumulation across all rows, so its
     # addition order intentionally differs from torch's tree reduction over the reshaped tensor.
-    threshold = 0.999 if whole_shape else lib.pcc_threshold([dtype])
     results = {}
     for block_size in (1, 2, 8):
         for caller_managed in (False, True):
@@ -87,12 +83,13 @@ def test_dest_accumulation_modes_and_lifecycle_equivalence(device, whole_shape):
                 caller_managed,
                 whole_shape,
             )
-            pcc_ok, message = comp_pcc(golden, out, threshold)
-            logger.debug(
-                f"DEST accumulation block={block_size}, caller_managed={caller_managed}, "
-                f"whole_shape={whole_shape} | {message}"
+            lib.assert_close(
+                golden,
+                out,
+                f"DEST accumulation block={block_size}, caller_managed={caller_managed}, whole_shape={whole_shape}",
+                rtol=0.1,
+                atol=0.1,
             )
-            assert pcc_ok, message
             results[(block_size, caller_managed)] = out
 
     reference = results[(1, False)]
@@ -132,9 +129,7 @@ def test_l1_accumulation_managed_and_caller_managed_are_equivalent(device):
     outputs = {}
     for caller_managed in (False, True):
         out = _run_l1_configuration(device, tt_in, caller_managed)
-        pcc_ok, message = comp_pcc(golden, out, 0.999)
-        logger.debug(f"L1 accumulation caller_managed={caller_managed} | {message}")
-        assert pcc_ok, message
+        lib.assert_close(golden, out, f"L1 accumulation caller_managed={caller_managed}", rtol=0.1, atol=0.1)
         outputs[caller_managed] = out
 
     assert torch.equal(outputs[False], outputs[True]), "L1 accumulation changed with lifecycle ownership"

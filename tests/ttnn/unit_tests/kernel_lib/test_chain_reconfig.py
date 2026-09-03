@@ -14,23 +14,19 @@ without claiming to observe compile-time elision.
 import torch
 import pytest
 import ttnn
-from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 KERNEL_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/reconfig"
 KERNEL = f"{KERNEL_DIR}/scenarios.cpp"
 
 
-def _assert_each_tile(golden, actual, threshold, label):
-    """A multi-tile run covers first-use and steady state without allowing one bad tile to hide in PCC."""
+def _assert_each_tile(golden, actual, label, rtol=0.1, atol=0.05):
+    """A multi-tile run covers first-use and steady state with an absolute/relative accuracy bound."""
     assert golden.shape == actual.shape
     num_tiles = golden.shape[-1] // 32
     for tile in range(num_tiles):
         tile_slice = slice(32 * tile, 32 * (tile + 1))
-        ok, message = comp_pcc(golden[..., tile_slice], actual[..., tile_slice], threshold)
-        assert ok, f"{label}, tile={tile}: {message}"
-    logger.debug(f"{label} | all {num_tiles} tiles passed independently")
+        lib.assert_close(golden[..., tile_slice], actual[..., tile_slice], f"{label}, tile={tile}", rtol, atol)
 
 
 # =============================================================================
@@ -75,7 +71,6 @@ def test_4arg_with_dt(device):
     _assert_each_tile(
         golden,
         torch_out,
-        lib.pcc_threshold([dt_a, dt_b, dt_c, dt_d, dt_out]),
         f"4arg with-dt fp32_dest={fp32_dest_acc_en}",
     )
 
@@ -117,7 +112,6 @@ def test_2arg_combined(device):
     _assert_each_tile(
         golden,
         torch_out,
-        lib.pcc_threshold([dt_a, dt_b, dt_out]),
         f"2arg combined fp32_dest={fp32_dest_acc_en}",
     )
 
@@ -128,7 +122,7 @@ def test_2arg_combined(device):
 # Chain: CopyTile(CbA->D0) -> BinaryFpu(CbB,CbC->D1) -> AddBinary(D0+D1->D0) -> PackTile(CbOut).
 # At BinaryFpu: prev_a=CbA (from CopyTile), curr_a=CbB → srca _with_dt; prev_b=NO_PREV_CB, curr_b=CbC
 # → srcb single-arg first-emit. Every result feeds the output — net = CbA + (CbB + CbC) — so a
-# botched srca reconfig (CbA->CbB) drops PCC (CbA is load-bearing, not discarded).
+# botched srca reconfig (CbA->CbB) changes the numerical result (CbA is load-bearing, not discarded).
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_mixed_prev(device, fp32_dest_acc_en):
     num_tiles = 8
@@ -162,7 +156,6 @@ def test_mixed_prev(device, fp32_dest_acc_en):
     _assert_each_tile(
         golden,
         torch_out,
-        lib.pcc_threshold([dt_a, dt_b, dt_c, dt_out]),
         f"mixed-prev fp32_dest={fp32_dest_acc_en}",
     )
 
@@ -204,7 +197,6 @@ def test_singleside(device):
     _assert_each_tile(
         golden,
         torch_out,
-        lib.pcc_threshold([dt_a, dt_b, dt_out]),
         f"single-side fp32_dest={fp32_dest_acc_en}",
     )
 
@@ -252,13 +244,11 @@ def test_pack_to_bfp8(device):
     _assert_each_tile(
         golden,
         out1,
-        lib.pcc_threshold([dt_a, dt_out1]),
         f"heterogeneous pack bf16 fp32_dest={fp32_dest_acc_en}",
     )
     _assert_each_tile(
         golden,
         out2,
-        lib.pcc_threshold([dt_a, dt_out2]),
         f"heterogeneous pack bfp8 fp32_dest={fp32_dest_acc_en}",
     )
 
@@ -313,6 +303,5 @@ def test_repeated_same_cb_reads(device):
     _assert_each_tile(
         golden,
         torch_out,
-        lib.pcc_threshold([dt_a, dt_out]),
         f"repeated same-CB reads fp32_dest={fp32_dest_acc_en}",
     )

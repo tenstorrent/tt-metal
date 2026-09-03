@@ -26,13 +26,20 @@ KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/dst_slot.cpp"
 DST_OVERFLOW_MSG = "DEST slot exceeds"
 
 
-def _run_identity_copy(device, slot, num_tiles, fp32_dest_acc_en, dst_full_sync_en):
+def _run_identity_copy(device, slot, num_tiles, fp32_dest_acc_en, dst_full_sync_en, host_input=None):
     """Build + run the dst_slot identity-copy chain. Returns (golden, output) torch tensors."""
     shape = [1, 1, 32, 32 * num_tiles]
     dt = ttnn.bfloat16
     core_grid = lib.single_core_grid()
 
-    torch_in, tt_in = lib.make_input(shape, dt, device, seed=101)
+    if host_input is None:
+        torch_in, tt_in = lib.make_input(shape, dt, device, seed=101)
+    else:
+        assert tuple(host_input.shape) == tuple(shape)
+        torch_in = host_input.to(torch.bfloat16)
+        tt_in = ttnn.from_torch(
+            torch_in, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
     tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     cbs = [
         lib.cb_descriptor(0, dt, 2, core_grid),
@@ -59,6 +66,49 @@ def test_dst_slot3_legal_fp32(device):
     """D3 is the highest legal half-sync FP32 slot, providing the positive twin for FP32 overflow."""
     golden, out = _run_identity_copy(device, slot=3, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
     assert torch.equal(golden, out)
+
+
+def test_dst_slot7_legal_bf16(device):
+    """D7 is the highest legal half-sync BF16 slot (the positive twin for D8 rejection)."""
+    golden, out = _run_identity_copy(device, slot=7, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
+    assert torch.equal(golden, out)
+
+
+def test_zero_tiles_is_a_noop(device):
+    """A zero-tile chain must not touch the caller's input, output, or DFB lifecycle windows."""
+    dt = ttnn.bfloat16
+    physical_shape = [1, 1, 32, 32]
+    core_grid = lib.single_core_grid()
+    torch_in = torch.full(physical_shape, 1.0, dtype=torch.bfloat16)
+    sentinel = torch.full(physical_shape, -0.5, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(torch_in, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.from_torch(sentinel, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], 0, core_grid),
+            lib.build_writer_1out_kernel(tt_out, 0, core_grid),
+            lib.build_compute_kernel(KERNEL, [0, 0], core_grid),
+        ],
+        semaphores=[],
+        cbs=[lib.cb_descriptor(0, dt, 1, core_grid), lib.cb_descriptor(16, dt, 1, core_grid)],
+    )
+    out = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.bfloat16)
+    assert torch.equal(out, sentinel)
+
+
+def test_identity_chain_bf16_special_value_contract(device):
+    """BF16 copy/pack canonicalizes NaN to +inf and -0 to +0, while preserving signed infinities."""
+    values = torch.tensor([-0.0, 0.0, float("inf"), float("-inf"), float("nan"), -1.5, 2.0], dtype=torch.bfloat16)
+    host_input = values.repeat((32 * 32 + len(values) - 1) // len(values))[: 32 * 32].reshape(1, 1, 32, 32)
+    _, out = _run_identity_copy(
+        device, slot=0, num_tiles=1, fp32_dest_acc_en=False, dst_full_sync_en=False, host_input=host_input
+    )
+    expected = torch.where(
+        torch.isnan(host_input),
+        torch.full_like(host_input, float("inf")),
+        torch.where(host_input == 0, torch.zeros_like(host_input), host_input),
+    ).to(torch.float32)
+    assert torch.equal(out, expected)
 
 
 # =============================================================================

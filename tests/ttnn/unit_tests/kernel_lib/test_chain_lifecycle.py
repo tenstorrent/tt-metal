@@ -16,8 +16,6 @@ BOTH no-hang (--dev timeout trips triage) AND correct values (a miscount reads a
 import torch
 import pytest
 import ttnn
-from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 HELD_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/held_b.cpp"
@@ -57,9 +55,7 @@ def test_held_b_lifecycle(device, life, name):
 
     golden = torch_a.to(torch.float32) + torch_b.to(torch.float32).repeat(1, 1, 1, n)
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.debug(f"lifecycle={name} | no-hang + {msg}")
-    assert pcc_ok, f"lifecycle {name}: {msg}"
+    lib.assert_close(golden, out, f"lifecycle={name}")
 
 
 OUTPUT_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/out_lifecycle.cpp"
@@ -94,9 +90,7 @@ def test_output_lifecycle(device, life, name):
     )
     output = ttnn.generic_op([tt_in, tt_out], program)
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(torch_in.to(torch.float32), out, lib.pcc_threshold([dt]))
-    logger.debug(f"output lifecycle={name} | no-hang + {msg}")
-    assert pcc_ok, f"output lifecycle {name}: {msg}"
+    lib.assert_close(torch_in.to(torch.float32), out, f"output lifecycle={name}")
 
 
 INPLACE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/lifecycle/inplace_chain.cpp"
@@ -134,9 +128,7 @@ def test_inplace_chain_lifecycle(device, life, name):
     )
     output = ttnn.generic_op([tt_in, tt_out], program)
     out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(torch.exp(torch_in.to(torch.float32)), out, lib.pcc_threshold([dt]))
-    logger.debug(f"in-place lifecycle={name} | no-hang + {msg}")
-    assert pcc_ok, f"in-place lifecycle {name}: {msg}"
+    lib.assert_close(torch.exp(torch_in.to(torch.float32)), out, f"in-place lifecycle={name}")
 
 
 OUTER_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/outer_stream"
@@ -191,6 +183,4 @@ def test_outer_stream_broadcast(device, Ht, Wt, fp32_dest_acc_en):
     a_v = torch_a.to(torch.float32).view(1, 1, 32, Ht, Wt, 32)
     b_v = torch_b.to(torch.float32).view(1, 1, 32, Ht, 1, 32)
     golden = (a_v + b_v).reshape(1, 1, 32, 32 * Ht * Wt)
-    pcc_ok, msg = comp_pcc(golden, torch_out, 0.999)
-    logger.debug(f"StreamedCol | Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en} | {msg}")
-    assert pcc_ok, msg
+    lib.assert_close(golden, torch_out, f"StreamedCol Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en}")
