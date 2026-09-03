@@ -990,19 +990,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
-        // TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL
-        // Quasar only: routes the l1_client event counter to subport*8 + event (0..295).
-        // Default: -1 (l1_client event counter disabled)
-        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=40
+        // Quasar only: routes the l1_client event counter to subport*8 + event (0..295, -1 = off).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL:
             sscanf(value, "%d", &this->profiler_perf_counter_l1_sel);
             break;
 
-        // TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO
-        // Quasar only: each NEO's math TRISC uses L1_SEL + its NEO index, sampling 4 adjacent
-        // l1_client streams per run instead of the same one on all four NEOs.
-        // Default: false
-        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO=1
+        // Quasar only: each NEO uses L1_SEL + its NEO index, sampling 4 adjacent streams per run.
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO:
             if (is_env_enabled(value)) {
                 this->profiler_perf_counter_l1_sel_per_neo = true;
