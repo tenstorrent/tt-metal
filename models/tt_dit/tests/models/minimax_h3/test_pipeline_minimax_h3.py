@@ -20,7 +20,11 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline, _resolve_audio_t_shard
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    MiniMaxH3Pipeline,
+    _requested_audio_t_factor,
+    _resolve_audio_t_shard,
+)
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -95,6 +99,21 @@ SWEEP = [
 )
 def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
     assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
+
+
+def test_requested_audio_t_factor_precedence(monkeypatch):
+    # explicit kwarg wins over the env var
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "32")
+    assert _requested_audio_t_factor(4) == (4, False)
+    # env var fills the default when the kwarg is None
+    assert _requested_audio_t_factor(None) == (32, True)
+    # no kwarg, no env -> default 8
+    monkeypatch.delenv("MINIMAX_H3_AUDIO_T_FACTOR", raising=False)
+    assert _requested_audio_t_factor(None) == (8, False)
+    # a non-integer env value is a clear error, not a silent fallback
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
+    with pytest.raises(ValueError, match="MINIMAX_H3_AUDIO_T_FACTOR"):
+        _requested_audio_t_factor(None)
 
 
 @pytest.mark.timeout(7200)
