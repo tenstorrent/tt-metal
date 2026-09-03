@@ -178,7 +178,7 @@ deterministic windows; 5/10 s with the earlier approx-exp / timing-window kernel
 |---|---|---|---|---|---|
 | 5 s  | 15.8 / 17.5 ms | 19.0 / 20.3 ms | 7.4 ms  | 3.3 ms  | 6.2 ms  |
 | 10 s | 39.5 / 41.2 ms | 37.4 / 39.0 ms | 24.7 ms | 9.0 ms  | 11.7 ms |
-| 15 s | 73.4 / 75.4 ms | 58.6 / 59.2 ms | 51.4 ms | 19.6 ms | 15.3 ms |
+| 15 s | 73.4 / 75.4 ms | 58.1 / 58.6 ms | 51.4 ms | 19.6 ms | 14.8 ms |
 
 Component breakdown (ms, device 0):
 
@@ -189,7 +189,7 @@ Component breakdown (ms, device 0):
 | coarse pooling q/k/v | - | 0.33 | - | 0.59 | - | 1.96 (matmul 0.48 -> 0.34 with a full-grid program config; the 3 transposes, 0.9 ms, are DRAM-bound) |
 | pooled K/V gather + assembly | - | 0.40 | - | 1.03 | - | ~0.5 (was 1.63; now two aligned all-gathers) |
 | coarse scores + mask + softmax | - | 0.46 | - | 0.79 | - | 0.28 |
-| coarse output o_c (probs@V, tile->token) | - | 0.40 | - | 0.72 | - | 1.11 |
+| coarse output o_c (probs@V, tile->token) | - | 0.40 | - | 0.72 | - | 0.67 (probs@V 0.62 -> 0.13 with a batched program config) |
 | top-k selection + index assembly | - | 0.43 | - | 1.08 | - | 0.45 (was 2.92 with host-side assembly) |
 | gate branch (gate proj, heads, blend) | - | 1.16 | - | 2.03 | - | 2.93 |
 | shared ops (norms, projections, MLP, adaLN) | 8.34 | 9.52 | 14.78 | 16.74 | 22.00 | 23.75 |
@@ -246,6 +246,7 @@ and top-k run in the padded per-shard numbering and the kernel maps ids back
 
 With device-side assembly and padded pooling the 15 s block is 58.9 ms on device 0 / 59.6 ms on the
 slowest device (dense 73.4 / 75.4): VSA is 21% faster than dense at 15 s, up from 15% this morning.
+With the pooling and coarse-output matmul program configs: 58.1 / 58.6 ms (22% faster than dense).
 
 ## 5b. Planned kernel work (not started)
 

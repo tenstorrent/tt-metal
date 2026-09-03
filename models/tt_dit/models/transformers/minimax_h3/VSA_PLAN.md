@@ -322,6 +322,11 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
   assembly into the kernel (bit-identical; sparsity0/traced block pass). (3) padded pooled gathers
   behind MiniMaxH3VSAConfig.padded_pooling (stage oracle tests pass; block A/B pending). Build gotcha:
   C++ changes need `cmake --install build` -- `--target ttnn` alone leaves ttnn/ttnn/_ttnn.so stale.
+  Results at 15 s (slowest device, exact block period): 63.7 (morning) -> 60.5 (device-side index
+  assembly) -> 59.6 (padded pooled gathers, now default) -> 59.2 (full-grid pooling matmul config)
+  -> 58.6 ms (batched config for the coarse-output matmul) vs dense 75.4: VSA is 22% faster. Real-weights pipeline PASS with all defaults. Remaining VSA-only:
+  K/V gather 8.1 (link-bound), gate projection 2.9 (model), pooling 2.0 (0.9 of it transposes,
+  DRAM-bound), o_c 1.2, pooled gathers 0.5, scores/topk 0.6.
 - Run-to-run NONDETERMINISM (resolved above): untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:

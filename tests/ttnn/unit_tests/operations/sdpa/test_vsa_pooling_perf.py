@@ -74,3 +74,45 @@ def test_pooling_matmul_sweep(device):
     print(f"\nPOOLING shapes x_t=[{H*D},{S_LOCAL}] a_t=[{S_LOCAL},{SLOTS}] bf16")
     for name, ms in results:
         print(f"POOLING {name:60s} {ms if isinstance(ms, str) else f'{ms:7.3f} ms'}")
+
+
+@skip_for_wormhole_b0("Blackhole shapes")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 60_000_000, "l1_small_size": 65536}], indirect=True)
+def test_coarse_matmuls_sweep(device):
+    """The two batched coarse matmuls (scores = q_c @ k_c_t_g, o_c = probs @ v_c_g) at 15 s / 768p with
+    padded pooling: [1,H,256,128] @ [1,H,128,2048] and [1,H,256,2048] @ [1,H,2048,128]."""
+    n_cols = SLOTS * 8
+    q_c = ttnn.from_torch(torch.randn(1, H, SLOTS, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    k_t = ttnn.from_torch(torch.randn(1, H, D, n_cols), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    probs = ttnn.from_torch(torch.rand(1, H, SLOTS, n_cols), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v_g = ttnn.from_torch(torch.randn(1, H, n_cols, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grid = device.compute_with_storage_grid_size()
+    results = []
+    ms, _ = _bench(device, lambda: ttnn.matmul(q_c, k_t))
+    results.append(("scores default", ms))
+    ms, _ = _bench(device, lambda: ttnn.matmul(probs, v_g))
+    results.append(("o_c default", ms))
+    # batched reuse config: cores split the batch x M x N output tiles
+    for name, a, b, m_t, n_t, k_t_ in (("scores", q_c, k_t, SLOTS // 32, n_cols // 32, D // 32), ("o_c", probs, v_g, SLOTS // 32, D // 32, n_cols // 32)):
+        for in0_block_w in (1, 2, 4):
+            if k_t_ % in0_block_w:
+                continue
+            for per_core_m, per_core_n in ((1, n_t), (2, n_t), (m_t, 1), (1, 4), (2, 2)):
+                if per_core_n > n_t or per_core_m > m_t:
+                    continue
+                cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=(grid.x, grid.y),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=per_core_m,
+                    per_core_N=per_core_n,
+                )
+                try:
+                    ms, _ = _bench(device, lambda: ttnn.matmul(a, b, program_config=cfg))
+                    results.append((f"{name} reuse in0_block_w={in0_block_w} per_core M/N={per_core_m}/{per_core_n}", ms))
+                except Exception as e:  # noqa: BLE001
+                    results.append((f"{name} reuse in0_block_w={in0_block_w} per_core M/N={per_core_m}/{per_core_n}", str(e)[:60]))
+    print("\nCOARSE_MM shapes: scores [1,14,256,128]@[1,14,128,2048], o_c [1,14,256,2048]@[1,14,2048,128]")
+    for name, ms in results:
+        print(f"COARSE_MM {name:58s} {ms if isinstance(ms, str) else f'{ms:7.3f} ms'}")

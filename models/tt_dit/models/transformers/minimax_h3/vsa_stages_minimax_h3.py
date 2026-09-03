@@ -289,7 +289,19 @@ class MiniMaxH3VSACoarseStage:
             v_c = self.pool(v_bhnd, scaled=False)
             v_c_g = self._all_gather(v_c, dim=2)  # [1, H, n_tiles, d]
             probs = ttnn.softmax(scores, dim=-1)
-            o_c_tiles = ttnn.matmul(probs, v_c_g)  # [1, H, tiles_local, d]
+            # batched [H, slots, cols] @ [H, cols, d]: the default config ran on 32 cores (0.62 ms at
+            # 15 s); splitting batch x M over the grid with 2 M-tiles per core measured 0.13 ms
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            m_tiles, n_tiles, k_tiles = probs.shape[2] // 32, v_c_g.shape[3] // 32, probs.shape[3] // 32
+            o_c_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=next((w for w in (4, 2, 1) if k_tiles % w == 0), 1),
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2 if m_tiles % 2 == 0 else 1,
+                per_core_N=n_tiles,
+            )
+            o_c_tiles = ttnn.matmul(probs, v_c_g, program_config=o_c_cfg)  # [1, H, slots, d]
             ttnn.deallocate(probs)
             # broadcast tile -> 64 tokens as a folded 0/1 matmul (see bcast_t): [H*d, T] @ [T, S_local]
             d = o_c_tiles.shape[-1]
