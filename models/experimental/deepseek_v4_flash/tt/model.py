@@ -244,9 +244,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ``tp_size`` groups adjacent chips into ``1 x tp_size`` pipeline stages and
         forwards it to attention and MoE. Their outputs are replicated, so every
         rank-to-rank pipeline socket carries the corresponding copy to the next stage.
-        TP is incompatible with packed L1 weights. The DRISC prefetcher stays on
-        under TP for every projection whose per-rank B-core count still matches
-        the shared decode GCB; see :class:`~.attention.DeepSeekV4Attention`.
+        TP4 uses two stages (8 chips) on both an 8-chip mesh and a larger Galaxy
+        mesh; remaining chips stay idle. TP is incompatible with packed L1 weights.
+        The DRISC prefetcher stays on under TP for every projection whose per-rank
+        B-core count still matches the shared decode GCB; see
+        :class:`~.attention.DeepSeekV4Attention`.
 
         ``system_config`` is the per-machine tuning profile (see
         :mod:`.system_config`); it defaults to the one matching ``full_device``'s device
@@ -269,6 +271,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.tp_size = tp_size
         if system_config is None:
             system_config = load_system_config(mesh_device=full_device).log()
+        # 8-chip and 32-chip TP4 share the same unfused, full-width q_a/kv replicas.
+        if tp_size == 4:
+            system_config = system_config.with_overrides(
+                attention={
+                    "qkv_tp_strategy": "replicated",
+                    "fuse_qa_kv_proj": False,
+                    "keep_qa_kv_weights_in_l1": False,
+                }
+            )
         self.system_config = system_config
         set_active_system_config(system_config)
 
@@ -298,11 +309,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.use_submeshes = use_submeshes
         self.mesh_devices = full_device.get_num_devices()
         pipeline_devices = system_config.pipeline.resolve_num_devices(self.mesh_devices)
-        # Galaxy32 TP4 only needs two 1x4 stages for this latency-oriented path.
-        # Keep the remaining chips out of the pipeline so they do not add socket
-        # hops or get represented by unused submeshes.
-        if use_submeshes and system_config.name == "galaxy32" and tp_size == 4:
-            pipeline_devices = 2 * tp_size
+        # TP4 latency path: two 1x4 stages (8 chips). Extra chips on a larger mesh
+        # (e.g. Galaxy32) stay idle so they do not add socket hops.
+        if use_submeshes and tp_size == 4:
+            pipeline_devices = min(pipeline_devices, 2 * tp_size)
         if pipeline_devices % tp_size:
             raise ValueError(f"pipeline uses {pipeline_devices} devices, which is not divisible by tp_size {tp_size}")
         self.pipeline_devices = pipeline_devices
