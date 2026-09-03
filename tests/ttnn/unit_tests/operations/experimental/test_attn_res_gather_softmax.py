@@ -46,14 +46,48 @@ PER_CHIP_TOKENS = 640
 TP_AXIS = 1
 SP_AXIS = 0
 
-FABRIC_2D = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+# Each arm names the whole box it runs on, so the one that does not match this machine has
+# to drop out rather than open a submesh and stall in the ethernet handshake.
+EXACT_BOX = {"require_exact_physical_num_devices": True}
 
-# Every test derives its shape from the fixture's mesh. 2x4 is what the model runs, and a
-# mesh narrower than the box it opens on is a submesh, which fabric does not come up on.
+FABRIC_2D = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, **EXACT_BOX}
+
+# Galaxy's production fabric wraps both axes, and a wrapped axis is the only place where
+# the direction a peer's route takes and the direction its rank suggests come apart: the
+# shorter way round to a higher rank runs the other way. The gather has to open its
+# connection on the route's direction, and this is the only arm that can tell whether it
+# did -- an unwrapped mesh agrees with rank order and passes either way.
+TORUS_XY = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    **EXACT_BOX,
+}
+
+# Wrapping only the TP axis is the smallest configuration that can expose a wrap-direction
+# bug, because that is the axis the collective runs on -- the SP axis stays a line and
+# contributes no wrap link the gather could take. Keeping it alongside the both-axes profile
+# is what pins that the SP wrap is not what carries the result: routing is dimension-ordered,
+# so a peer with no SP displacement takes its first hop along TP whatever the SP axis does,
+# and the invariant test below holds that by sweeping every same-row route for one that left.
+TORUS_X = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    **EXACT_BOX,
+}
+
+# Every test derives its shape from the fixture's mesh, and a mesh narrower than the box it
+# opens on is a submesh, which fabric does not come up on -- so each box contributes its
+# own full-width arm rather than a slice. Galaxy runs both fabrics: unwrapped 2D widens the
+# TP axis without wrapping it, which separates a width bug from a wrap bug.
 #
 # The fabric is chosen once per program run, before the mesh opens, so the op runs under
-# whichever one the enclosing transformer picked, and the transformer picks FABRIC_2D.
-MESH_ARMS = [pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4")]
+# whichever one the enclosing transformer picked.
+MESH_ARMS = [
+    pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
+    pytest.param((8, 4), FABRIC_2D, id="fabric2d-mesh-8x4"),
+    pytest.param((8, 4), TORUS_X, id="torusx-mesh-8x4"),
+    pytest.param((8, 4), TORUS_XY, id="torusxy-mesh-8x4"),
+]
 
 
 def _oracle(partial, running_sum, shift, mass, query):
@@ -375,3 +409,88 @@ def test_rejects_shapes_that_only_agree_once_padded(mesh_device, device_params, 
             inv_hidden_size=INV_HIDDEN_SIZE,
             eps=EPS,
         )
+
+
+# The op sends only on the TP axis, so these are the two fabrics that put a ring under it.
+TP_AXIS_WRAPPED = frozenset({ttnn.FabricConfig.FABRIC_2D_TORUS_X, ttnn.FabricConfig.FABRIC_2D_TORUS_XY})
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
+def test_the_route_to_a_peer_contradicts_its_rank_once_the_tp_axis_wraps(mesh_device, device_params):
+    """The direction a peer's packet leaves on is the routing tables' to choose, not rank order's.
+
+    The gather unicasts to each peer on the TP axis and has to open its outgoing fabric
+    connection on the direction that peer's route actually takes. Ordering peers by rank
+    happens to agree with that on a line, which is why an unwrapped fabric cannot tell the
+    two rules apart. Wrap the axis and they come apart at the ends: the far peer is one hop
+    the short way round and `cols - 1` hops the way its rank suggests. A connection opened
+    on the wrong direction never delivers, and the gather's arrival semaphore never fills.
+
+    The wrap is classified from one route on row 0 and then held against the request, so an
+    arm cannot pass on a fabric it did not ask for -- auto-discovery answers a torus request
+    it cannot cable by substituting a lesser one behind a log warning, and the mesh graph
+    descriptor that would name the substitute is absent on exactly that path. Every
+    remaining route is a separate claim: the line arm pins that rank order is genuinely
+    indistinguishable there, and the wrapped arms pin that it is genuinely wrong.
+
+    The sweep also pins that no same-row route leaves the TP axis. Routing is
+    dimension-ordered, so a destination with zero displacement on the SP axis takes its
+    first hop along TP whatever the SP axis's own topology is. That is what makes the
+    Line/Ring fabric a faithful stand-in for Ring/Ring here: it hands the collective the
+    same ring, and the wrap it leaves out is one this op never traverses.
+    """
+    rows, cols = tuple(mesh_device.shape)
+    assert cols > 2, "a wrap is only distinguishable from rank order when the far peer is not adjacent"
+
+    shapes = ttnn.get_physical_mesh_shapes()
+    assert len(shapes) == 1, f"expected a single local mesh, got {shapes}"
+    mesh_id = ttnn.MeshId(next(iter(shapes)))
+
+    def node(row, col):
+        return ttnn.FabricNodeId(mesh_id, row * cols + col)
+
+    def route(row, src, dst):
+        direction = ttnn.get_eth_forwarding_direction(node(row, src), node(row, dst))
+        assert direction is not None, f"no route on row {row} from column {src} to {dst}"
+        return direction
+
+    far = cols - 1
+    forward, backward = route(0, 0, 1), route(0, 1, 0)
+    assert forward != backward, "row 0 routes both ways along TP over one direction"
+
+    wrapped = route(0, 0, far) == backward
+    assert wrapped == (ttnn.get_fabric_config() in TP_AXIS_WRAPPED), (
+        f"{ttnn.get_fabric_config()} was requested but the TP axis came up "
+        f"{'wrapped' if wrapped else 'unwrapped'}; an arm running on a fabric it did not ask "
+        f"for proves nothing about the one it did -- check the wrap cabling"
+    )
+
+    off_axis = []
+    contradictions = []
+
+    for row in range(rows):
+        assert (route(row, 0, 1), route(row, 1, 0)) == (
+            forward,
+            backward,
+        ), f"row {row} names the TP axis differently from row 0"
+        assert (route(row, 0, far) == backward) == wrapped, f"row {row} disagrees with row 0 about the wrap"
+
+        for src in range(cols):
+            for dst in range(cols):
+                if src == dst:
+                    continue
+                direction = route(row, src, dst)
+                if direction not in (forward, backward):
+                    off_axis.append((row, src, dst, direction))
+                if direction != (forward if dst > src else backward):
+                    contradictions.append((row, src, dst, direction))
+
+    assert not off_axis, f"a same-row route left the TP axis, so SP topology can perturb it: {off_axis[:4]}"
+
+    total = rows * cols * (cols - 1)
+    if wrapped:
+        assert contradictions, "a wrapped TP axis that never contradicts rank order cannot gate this"
+        logger.info(f"TP axis wrapped: rank order mispredicts {len(contradictions)} of {total} routes")
+    else:
+        assert not contradictions, f"rank order should be indistinguishable on an unwrapped axis: {contradictions[:4]}"
+        logger.info(f"TP axis unwrapped: rank order matches all {total} routes")
