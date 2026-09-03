@@ -176,6 +176,55 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
 
+  # Built once, not inside build-test-publish's per-platform matrix: tt-metal-models is
+  # py3-none-any, so a per-platform build would produce identical wheels under one
+  # artifact name and collide on upload. Built from the release tag so it carries the
+  # same version as the ttnn wheel and its `ttnn==<version>` pin resolves.
+  build-models-wheel:
+    needs: create-tag
+    uses: ./.github/workflows/models-wheel.yaml
+    with:
+      # On a dry run the tag is calculated but never created, so checking it out would
+      # fail; build from the triggering ref instead. The version string differs from a
+      # real release in that case, which is correct -- a dry run is not a release.
+      ref: ${{ inputs.dry-run && github.ref || format('refs/tags/{0}', needs.create-tag.outputs.version) }}
+
+  publish-models-to-internal-pypi:
+    name: "Publish tt-metal-models to internal PyPI"
+    needs: [build-models-wheel, create-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for AWS OIDC
+    if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PYPI_ROLE }}
+          aws-region: ${{ secrets.PYPI_REGION }}
+
+      - name: Install s3pypi
+        run: pip install s3pypi
+
+      - name: Download tt-metal-models artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build-models-wheel.outputs.artifact-name }}
+          path: ./wheels
+
+      - name: Publish wheel to internal PyPI
+        run: |
+          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+          for wheel in $found_wheel_files; do
+            echo "Publishing wheel: $wheel"
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+          done
+
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
@@ -208,9 +257,46 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
+  # A separate job, not another file in the job above's dist/, because PyPI trusted
+  # publishing issues a token scoped to a single project: the `pypi` environment's
+  # identity is bound to `ttnn` and would reject a `tt-metal-models` upload. This needs
+  # its own environment with its own trusted publisher registered on PyPI for the
+  # `tt-metal-models` project, pointing at this workflow and this environment name.
+  #
+  # For the same reason the artifact is named `tt-metal-models-dist-*` rather than
+  # `ttnn-dist-*`: the job above globs that pattern and would otherwise sweep this wheel
+  # into the ttnn upload.
+  publish-models-to-pypi:
+    needs: [build-models-wheel, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    environment:
+      name: pypi-models
+      url: https://pypi.org/project/tt-metal-models/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download tt-metal-models artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tt-metal-models-dist-*
+          path: artifacts
+          merge-multiple: true
 
+      # Only the wheel goes to PyPI. The .deb/.rpm in the same artifact reach users via
+      # the GitHub release assets instead.
+      - name: Flatten into dist/
+        run: |
+          mkdir -p dist
+          find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
+          ls -l dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
   create-changelog:
     needs: [create-tag, release-precheck]
@@ -437,13 +523,16 @@ jobs:
 
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [check-existing-release, create-tag]
+    # build-models-wheel is a dependency because its artifact is downloaded below and
+    # listed in the release assets, which are uploaded with fail_on_unmatched_files.
+    needs: [check-existing-release, create-tag, build-models-wheel]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
     if: ${{ !cancelled() &&
             needs.check-existing-release.result == 'success' &&
             needs.check-existing-release.outputs.should-skip-release != 'true' &&
+            needs.build-models-wheel.result == 'success' &&
             github.run_attempt == '1'
         }}
     steps:
@@ -471,6 +560,15 @@ jobs:
         with:
           pattern: packages-*
           path: debian-packages
+          merge-multiple: true
+      # python3-tt-metal-models is pure Python and is built outside the CMake/CPack
+      # pipeline, so it arrives in its own artifact rather than under `packages-*`. Only
+      # the native packages go to the release; the wheel goes to PyPI.
+      - name: Download python3-tt-metal-models packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tt-metal-models-dist-*
+          path: models-packages
           merge-multiple: true
       - name: Verify files for release (dry-run)
         if: ${{ inputs.dry-run }}
@@ -503,8 +601,15 @@ jobs:
             echo "✗ debian-packages directory not found"
           fi
           echo ""
+          echo "Checking for python3-tt-metal-models packages:"
+          if [ -d "models-packages" ]; then
+            find models-packages -name "*.deb" -exec bash -c 'for f in "$@"; do size=$(du -h "$f" | cut -f1); echo "  ✓ $f ($size)"; done' _ {} +
+          else
+            echo "✗ models-packages directory not found"
+          fi
+          echo ""
           echo "=== All files that would be uploaded to release ==="
-          ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
+          ls -lh "${required_files[@]}" debian-packages/*.deb models-packages/*.deb 2>/dev/null || echo "Some files are missing!"
       - name: Create draft release with assets (skipped for dry run)
         if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
@@ -522,6 +627,7 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
             debian-packages/*.deb
+            models-packages/*.deb
           fail_on_unmatched_files: true
 
   convert-draft-to-prerelease:

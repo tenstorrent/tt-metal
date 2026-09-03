@@ -497,6 +497,11 @@ jobs:
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
 
+  # NOTE: tt-metal-models is deliberately NOT built here. This workflow runs as a
+  # per-platform matrix, and that artifact is py3-none-any -- building it per platform
+  # would produce identical wheels under one artifact name and collide on upload. It is
+  # built once in package-and-release.yaml instead.
+
   publish-wheels:
     name: "Publish wheels to internal PyPI"
     needs: build-artifact

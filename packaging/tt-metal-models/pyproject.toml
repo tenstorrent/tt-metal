@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Build configuration for the `tt-metal-models` distribution: the tt-metal `models/`
+# Python tree, packaged so it can be installed rather than cloned.
+#
+# This file is NOT built in place. `build_wheel.py` stages a build root (this file plus
+# a pruned copy of the repo's `models/` tree) and builds from there, because `models/`
+# lives at the repo root and a PEP 517 build cannot reach outside its own project
+# directory. See README.md.
+#
+# The version and the `ttnn` pin are injected at build time by `build_wheel.py` via
+# `setup.py`, so that this artifact is always built from the same commit, and carries the
+# same version string, as the `ttnn` wheel.
+
+[build-system]
+# >=77 for PEP 639 (SPDX license expression + license-files); the expression below is
+# rejected by older setuptools rather than silently mis-declared.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-metal-models"
+description = "Tenstorrent tt-metal model implementations (the `models.*` Python tree)"
+readme = "README.md"
+requires-python = ">=3.10"
+# Tenstorrent's own code is Apache-2.0, but the tree vendors third-party reference
+# implementations under their upstream terms, and the wheel redistributes them:
+#   MIT            -- DeepSeek-V3 reference (models/demos/deepseek_v3/reference/deepseek),
+#                     Z Lab dflash (models/demos/deepseek_v3_d_p/reference/dflash_prefill),
+#                     Motif (models/tt_dit/reference/motif), nanoGPT
+#                     (models/experimental/nanogpt/reference)
+#   LGPL-3.0-only  -- EfficientDet reference (models/experimental/efficientdetd0/reference)
+#   LicenseRef-Kimi-K3 -- MIT plus Model-as-a-Service and attribution conditions
+#                     (models/demos/deepseek_v3_d_p/reference/kimi_k3/attn_res)
+# Each subtree carries its governing text (license-files below); MANIFEST.in also ships
+# them inside the package next to the code they cover.
+license = "Apache-2.0 AND MIT AND LGPL-3.0-only AND LicenseRef-Kimi-K3"
+license-files = ["LICENSE", "models/**/LICENSE*"]
+authors = [{ name = "Tenstorrent" }, { email = "info@tenstorrent.com" }]
+keywords = ["tenstorrent", "tt-metal", "ttnn", "models", "machine learning", "vllm"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# `version` and `dependencies` are supplied by setup.py at build time:
+#   - version      -> must match the ttnn wheel built from the same commit
+#   - dependencies -> the static list below, plus `ttnn==<that same version>`
+dynamic = ["version", "dependencies"]
+
+[project.optional-dependencies]
+# The demo entry points (`models/demos/**/demo/*.py`) use pytest as a CLI
+# parametrization harness and import it at module scope. Serving does not need this;
+# see README.md "pytest is not a serving dependency".
+demos = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/tenstorrent/tt-metal"
+Documentation = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
+Repository = "https://github.com/tenstorrent/tt-metal"
+Issues = "https://github.com/tenstorrent/tt-metal/issues"
+
+[tool.setuptools]
+# REQUIRED. Much of the runtime payload (per-model params, kernel sources) lives in
+# directories that contain no .py file at all, and some of those directory names are not
+# valid Python identifiers (`Llama-3.1-70B-Instruct`, `Qwen3.6-27B`). Those directories
+# are therefore not packages and cannot be reached by package-data globs. With
+# `include-package-data`, setuptools instead takes the file list from MANIFEST.in and
+# attaches each file to the deepest *discovered* package above it, preserving the
+# relative path. MANIFEST.in is the source of truth for data files -- do not "simplify"
+# it into [tool.setuptools.package-data].
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["models*"]
+# REQUIRED. `models/` is a PEP 420 implicit namespace package: none of its 1174
+# directories at any top level has an `__init__.py` (only ~138 deep leaves do).
+# Plain find_packages() discovers nothing here.
+namespaces = true

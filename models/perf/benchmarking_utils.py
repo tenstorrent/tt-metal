@@ -11,12 +11,12 @@ from typing import List
 import pytz
 from loguru import logger
 
-# Decouple dependency of model tests on infra folder unless running in CI
+# The CI benchmark-data models live in the repository's infra/ tree, which exists in a
+# checkout but not in an installed models package. They are therefore imported inside the
+# IS_CI_ENV-guarded methods that use them, not here: a module-scope import would make any
+# environment with CI=true -- including CI jobs testing the installed package -- unable to
+# import every model that transitively pulls in this module.
 IS_CI_ENV = os.getenv("CI") == "true"
-if IS_CI_ENV:
-    from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
-else:
-    logger.warning("Skipping import of pydantic_models for benchmarking since not running in CI environment")
 
 # Map tt-metal device names to unified names used in benchmark database
 UNIFIED_DEVICE_NAME_MAP = {
@@ -103,7 +103,7 @@ class BenchmarkProfiler:
 class BenchmarkData:
     def __init__(self):
         if IS_CI_ENV:
-            self.measure_data: List[BenchmarkMeasurement] = []
+            self.measure_data: List["BenchmarkMeasurement"] = []  # noqa: F821
             self.output_folder = "generated/benchmark_data/"
 
     def add_measurement(
@@ -123,6 +123,8 @@ class BenchmarkData:
             Measurement data contains records and attributes for each measurement performed at each iteration and each step of the benchmark run.
             The triad of fields (iteration, step_name, name) must be unique.
             """
+            from infra.data_collection.pydantic_models import BenchmarkMeasurement
+
             assert None not in [profiler, iteration, step_name, name, value], "Missing required fields"
             assert profiler.contains_step(
                 step_name, iteration
@@ -163,6 +165,8 @@ class BenchmarkData:
         training: bool = None,
     ):
         if IS_CI_ENV:  # no-op if not running in CI environment
+            from infra.data_collection.pydantic_models import PartialBenchmarkRun
+
             assert None not in [profiler, run_type, ml_model_name], "Missing required fields"
             assert profiler.contains_step("run"), "Run step not found in profiler"
 

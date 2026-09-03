@@ -83,21 +83,46 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
   pip install ttnn
   ```
 
-#### Step 2. (For models users only) Set Up Environment for Models:
+#### Step 2. (For models users only) Install the Models:
 
-To try our pre-built models in [`tt-metal/models/`](https://github.com/tenstorrent/tt-metal/tree/main/models), you must:
+The `ttnn` wheel contains the runtime, but not the model implementations. Those live in
+[`tt-metal/models/`](https://github.com/tenstorrent/tt-metal/tree/main/models) and ship as a
+separate distribution, `tt-metal-models`, which provides the `models.*` Python namespace that
+the Tenstorrent vLLM plugin loads architectures from.
 
-  - Install their required dependencies
-  - Set appropriate environment variables
-  - Set the CPU performance governor to ensure high performance on the host
+- Install it at the **same version** as your `ttnn` — the two are built from one commit and
+  the coupling is exact, so `tt-metal-models` pins `ttnn` and a mismatch is an install error
+  rather than a failure deep inside model construction:
 
-- This is done by executing the following:
   ```sh
-  export PYTHONPATH=$(pwd)
-  pip install -r tt_metal/python_env/requirements-dev.txt
+  pip install tt-metal-models==$(python -c "import importlib.metadata as m; print(m.version('ttnn'))")
+  ```
+
+- For system Python and containers, the same tree is packaged as `python3-tt-metal-models`
+  (`.deb` and `.rpm` on the [release page](https://github.com/tenstorrent/tt-metal/releases)).
+  Note that it installs into the system Python and so is **not** visible inside a virtual
+  environment created without `--system-site-packages`; use the wheel there. `ttnn` itself must
+  still come from pip in either case — the `tt-nn` system package is the C++ library, and the
+  Python bindings ship only in the `ttnn` wheel.
+
+- Set the CPU performance governor for high performance on the host:
+
+  ```sh
   sudo apt-get install cpufrequtils
   sudo cpupower frequency-set -g performance
   ```
+
+> Working from a git checkout instead? Put the repository on `PYTHONPATH` (`export PYTHONPATH=$(pwd)`)
+> and install the development dependencies with `pip install -r tt_metal/python_env/requirements-dev.txt`.
+> This remains the path for model code that is not yet in a release. If you do this while
+> `tt-metal-models` is also installed, unset `TT_METAL_HOME` and `TT_METAL_RUNTIME_ROOT` first —
+> they take precedence when resolving bundled model parameters, so a stale value silently loads
+> configs from the wrong tree.
+
+See [`packaging/tt-metal-models/README.md`](https://github.com/tenstorrent/tt-metal/blob/main/packaging/tt-metal-models/README.md)
+for what the package contains, its known limitations, and how it is built. (Absolute URL:
+this file is copied into the Sphinx docs tree, where a repository-relative link has no target
+and fails the docs build.)
 
 ---
 
