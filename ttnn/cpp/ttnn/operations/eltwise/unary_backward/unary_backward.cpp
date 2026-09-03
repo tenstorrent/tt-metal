@@ -969,10 +969,14 @@ std::vector<Tensor> atanh_bw(
 
     Tensor grad_a =
         ttnn::multiply(grad, unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_a = where(ttnn::eqz(grad, output_mem_config), t_nan, grad_a, output_mem_config);
+    Tensor at_pole = ttnn::logical_or(
+        ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_a = where(
-        ttnn::logical_and(ttnn::eqz(grad, output_mem_config), ttnn::eqz(input, output_mem_config)),
-        0.f,
+        ttnn::logical_and(at_pole, ttnn::eqz(grad, output_mem_config)),
+        t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
