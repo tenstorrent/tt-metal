@@ -88,7 +88,9 @@ void kernel_main() {
     constexpr uint32_t COUNTS_BCAST_RT = 30;
     // DOWN_SPLIT go/done sems sit between COUNTS_BCAST and the M-row NoC table.
     constexpr uint32_t DOWN_SEM_RT = COUNTS_BCAST_RT + 7;
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = DOWN_SEM_RT + 2;
+    // IN1_WRITER_MCAST go/done sems follow the DOWN_SPLIT pair.
+    constexpr uint32_t MCAST_SEM_RT = DOWN_SEM_RT + 2;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = MCAST_SEM_RT + 2;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -161,7 +163,10 @@ void kernel_main() {
     // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the split is off.
     constexpr uint32_t down_split_k = get_compile_time_arg_val(30);
     constexpr bool split_down = down_split_k < in0_block_w_d;
-    constexpr uint32_t x_accessor_offset = 31;
+    // IN1_WRITER_MCAST: 1 => the WRITER runs the gate/up multicast on its own NoC 1
+    // and this RISC only reads gate from DRAM, so the read overlaps the multicast.
+    constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(31) != 0;
+    constexpr uint32_t x_accessor_offset = 32;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -375,6 +380,11 @@ void kernel_main() {
     uint32_t down_seq = 0;
     Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
     Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
+    // IN1_WRITER_MCAST handshake: gate/up blocks only, so it needs its own counter
+    // for the same cross-chunk reason down_seq does.
+    Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(MCAST_SEM_RT));
+    Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(MCAST_SEM_RT + 1));
+    uint32_t mc_seq = 0;
 
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
@@ -676,8 +686,21 @@ void kernel_main() {
             }
 
             if (is_in1_sender) {
-                in1_ready_sem.wait(in1_num_receivers);
-                in1_ready_sem.set(0);
+                if constexpr (writer_mcasts_in1) {
+                    // The writer multicasts, so it owns the receivers' ready handshake. This
+                    // RISC only needs its own slot back: cb_in1_* is double-buffered, so the
+                    // block numbered mc_seq reuses the slot mc_seq-2 used, and THAT block's
+                    // multicast must have drained. Waiting on mc_seq-2 rather than mc_seq is
+                    // what lets this DRAM read overlap the writer's multicast of the previous
+                    // block, which is the whole point.
+                    ++mc_seq;
+                    if (mc_seq >= 3) {
+                        mcast_done_sem.wait_min(mc_seq - 2);
+                    }
+                } else {
+                    in1_ready_sem.wait(in1_num_receivers);
+                    in1_ready_sem.set(0);
+                }
 
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
@@ -729,13 +752,21 @@ void kernel_main() {
                 }
                 noc_read.async_read_barrier();
 
+                // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
+                // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
+                // the up_done wait below so the writer starts as early as possible.
+                if constexpr (writer_mcasts_in1) {
+                    mcast_go_sem.set(mc_seq);
+                }
+
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
                     up_done_sem.wait_min(up_seq);
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
-                if (in1_num_receivers > 0) {
+                // IN1_WRITER_MCAST moves this whole multicast to the writer's NoC 1.
+                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                     // The LAST in1 data multicast before the in1_valid sem must
                     // be linked=true so the (posted) valid-sem multicast travels
@@ -783,7 +814,7 @@ void kernel_main() {
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
-                if (in1_num_receivers > 0) {
+                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
                     noc.async_writes_flushed();
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
@@ -807,6 +838,18 @@ void kernel_main() {
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
+            }
+        }
+
+        // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+        // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+        // receivers up() it in both. Once the phase-3 multicast runs on the writer it can
+        // lag into the window where receivers are already acking for phase 4, and the writer
+        // then consumes acks meant for the down multicast -- after which the reader's
+        // phase-4 mcast waits forever for acks that were eaten.
+        if constexpr (writer_mcasts_in1) {
+            if (is_in1_sender) {
+                mcast_done_sem.wait_min(mc_seq);
             }
         }
 

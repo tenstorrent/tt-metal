@@ -506,6 +506,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // from the reader to the writer, and measured 1.03x against 1.13x for the split.
     //
     // A split needs >= 2 K-rows to divide; in0_block_w_d is per_core_N_gu.
+    // IN1_WRITER_MCAST: hand the gate/up weight multicast to the WRITER, which owns NoC 1,
+    // so it overlaps the reader's NoC-0 weight reads. The reader cannot multicast on NoC 1
+    // itself -- in DM_DEDICATED_NOC both RISCs use the same command-buffer indices and only
+    // avoid collision by each owning one NoC -- so the other RISC must be SIGNALLED to do it.
+    //
+    // !! FABRIC HAZARD, KNOWINGLY ACCEPTED !!
+    // This puts a WORKER MULTICAST on NoC 1, which is what retired the earlier
+    // UP_WRITER_MCAST scheme: the NoC-1 worker multicast + posted atomics collide with
+    // fabric CCL ops on NoC 1 and hang the run. UP_SPLIT's fabric-safety argument is
+    // specifically that it keeps NoC 1 READ-ONLY, and enabling this voids that argument.
+    // Single-device perf/functional tests CANNOT detect it -- the failure is a collision
+    // with CCL traffic that is absent there, so a green sweep here is NOT evidence of
+    // fabric safety. Validate against a fabric-enabled run with concurrent CCL before
+    // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
+    // NoC-0 multicast.
+    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
+    const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+
     const bool kEnableSplitDown = in0_block_w_d >= 2;
     // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
     const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
@@ -720,6 +739,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
         // rest on NoC 1. Equals in0_block_w_d when the split is off.
         down_split_k,
+        // IN1_WRITER_MCAST: 1 => the writer runs the gate/up multicast on NoC 1.
+        static_cast<uint32_t>(kWriterMcastsIn1),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -796,6 +817,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_num_blocks,           // 23
         d_in1_block_num_tiles,  // 24
         down_split_k,           // 25 rows the READER keeps
+        // IN1_WRITER_MCAST: cb_in1_gate so the writer can multicast it, plus the flag.
+        CB_IN1_GATE,                              // 26
+        static_cast<uint32_t>(kWriterMcastsIn1),  // 27 writer_mcasts_in1
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -1076,6 +1100,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // DOWN_SPLIT go/done sems (dedicated; see down_go_sem_id).
         reader_args.push_back(down_go_sem_id);
         reader_args.push_back(down_done_sem_id);
+        // IN1_WRITER_MCAST go/done sems.
+        reader_args.push_back(mcast_go_sem_id);
+        reader_args.push_back(mcast_done_sem_id);
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
@@ -1143,6 +1170,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         writer_args.push_back(down_go_sem_id);
         writer_args.push_back(down_done_sem_id);
+        // IN1_WRITER_MCAST (9): the NoC-0 rectangle (the writer swaps the corners for
+        // NoC 1), receiver count, the shared in1 ready/valid sems, and its go/done pair.
+        writer_args.push_back(in1_mcast_nx_start);
+        writer_args.push_back(in1_mcast_ny_start);
+        writer_args.push_back(in1_mcast_nx_end);
+        writer_args.push_back(in1_mcast_ny_end);
+        writer_args.push_back(in1_num_receivers);
+        writer_args.push_back(in1_ready_sem_id);
+        writer_args.push_back(in1_valid_sem_id);
+        writer_args.push_back(mcast_go_sem_id);
+        writer_args.push_back(mcast_done_sem_id);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
 
         // Compute: how many of this core's N subblocks hold REAL output columns.

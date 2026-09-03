@@ -121,7 +121,11 @@ void kernel_main() {
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
     // unconditionally; up_acc is used only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 26;
+    // IN1_WRITER_MCAST: this RISC owns NoC 1, so it runs the gate/up weight multicast
+    // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
+    constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
+    constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    constexpr uint32_t out_accessor_offset = 28;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -141,6 +145,8 @@ void kernel_main() {
     constexpr uint32_t DOWN_RT = UP_RT + experts_per_chip;
     // DOWN_SPLIT go/done sem ids follow the per-expert down addresses.
     constexpr uint32_t DOWN_SEM_RT = DOWN_RT + experts_per_chip;
+    // IN1_WRITER_MCAST runtime args (9) follow the DOWN_SPLIT sem pair.
+    constexpr uint32_t IN1_WM_RT = DOWN_SEM_RT + 2;
 
     const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
@@ -184,6 +190,21 @@ void kernel_main() {
     uint32_t down_seq = 0;
     Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
     Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
+    // IN1_WRITER_MCAST state. NoC 1 multicasts bottom-left -> top-right, so the rectangle
+    // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
+    // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
+    // deadlocks with no assert.
+    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
+    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
+    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
+    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
+    Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
+    Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
+    Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
+    Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
+    // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
+    uint32_t mc_seq = 0;
 
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
@@ -229,7 +250,8 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
-                        uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        uint32_t l1_w_up = l1_w_up_block_start;
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                                 const uint32_t row = kb * in0_block_w_gu + k;
@@ -251,6 +273,61 @@ void kernel_main() {
                         }
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
+
+                        // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
+                        // for the receivers to free their slots (in1_ready), multicast
+                        // gate+up on NoC 1, and signal mcast_done so the reader may
+                        // eventually REUSE this slot. The reader does not block on
+                        // mcast_done until it needs the slot again, so its next block's DRAM
+                        // read overlaps this multicast -- which is the whole point.
+                        if constexpr (writer_mcasts_in1) {
+                            ++mc_seq;
+                            mcast_go_sem.wait_min(mc_seq);
+                            in1_ready_sem.wait(in1_num_receivers);
+                            in1_ready_sem.set(0);
+                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                            const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+                            const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+                            const uint32_t gate_block_start =
+                                cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
+                            // linked=true on both data multicasts and the sem, so the posted
+                            // valid-sem write cannot overtake the data (same rationale as the
+                            // reader's NoC-0 version this replaces).
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(gate_block_start),
+                                MulticastEndpoint{},
+                                gate_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .addr = gate_block_start},
+                                /*linked=*/true);
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
+                                MulticastEndpoint{},
+                                up_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .addr = l1_w_up_block_start},
+                                /*linked=*/true);
+                            noc_up.async_writes_flushed();
+                            in1_valid_sem.set(1);
+                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                                noc_up,
+                                in1_mc_nx_start,
+                                in1_mc_ny_start,
+                                in1_mc_nx_end,
+                                in1_mc_ny_end,
+                                in1_num_receivers);
+                            mcast_done_sem.set(mc_seq);
+                        }
                     }
                 }
             }
