@@ -539,7 +539,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
 
         // Kernel-local layout: noc_xy / config / data sit above the arena's GCB zone,
         // i.e. at the same offset as arena.kernel_working_region_base().
-        uint32_t cursor = align_up(drisc_l1_unreserved + DriscL1Arena::kGcbZoneSize);
+        uint32_t cursor = align_up(drisc_l1_unreserved + DriscL1Arena::kSenderStateZoneSize);
         const uint32_t noc_xy_addr = cursor;
         cursor += 2 * sizeof(uint32_t) * kNumReceivers;
         cursor = align_up(cursor);
