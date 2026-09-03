@@ -50,7 +50,7 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
-def default_ccl_topology(mesh_device=None):
+def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     """Default CCL topology for Gemma4 TP collectives.
 
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
@@ -58,10 +58,14 @@ def default_ccl_topology(mesh_device=None):
     Policy (when env unset):
       * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
+      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense 31B**
+        (decode all-reduce, ``HF_MODEL`` containing "31b" and ``is_moe=False``).
+        ``num_links=2`` is still unusable on WH (event-order hang); Ring on 1
+        link is the remaining TP=8 CCL lever. MoE stays Linear — Ring on WH
         drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
-        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
-        drops 12B full-model PCC (~0.97 → ~0.90).
+        (~0.7505 vs ~0.77/0.94 with Linear / main).
+      * **Linear** everywhere else. Ring on 4-device BH also drops 12B
+        full-model PCC (~0.97 → ~0.90).
 
     Async RS+AG is correct but slower than sync on P150x8 — keep
     ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
@@ -77,6 +81,9 @@ def default_ccl_topology(mesh_device=None):
     # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
     if n:
         if n >= 8 and is_blackhole():
+            return ttnn.Topology.Ring
+        model = os.environ.get("HF_MODEL", "").lower()
+        if n >= 8 and (not is_moe) and "31b" in model:
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
