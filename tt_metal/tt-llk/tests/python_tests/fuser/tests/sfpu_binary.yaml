@@ -14,12 +14,14 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 128]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         unpack_to_dest: true
       - type: "BinarySfpu"
+        block_size: [32, 128]
         operation: "SfpuElwadd"
         approximation_mode: false
         iterations: 32
@@ -28,5 +30,5 @@ operations:
         dst_dest_tile_index: 2
     pack:
       - output: "datacopy_out"
+        block_size: [32, 128]
         packer: "Packer"
-    block_size: [32, 128]

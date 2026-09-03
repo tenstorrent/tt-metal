@@ -10,11 +10,12 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
-from helpers.llk_params import L1Accumulation, PackerReluType
+from helpers.llk_params import L1Accumulation, PackerReluType, PerfRunType
 
 from .arch_common import pack_common
 from .base_packer import Packer
 from .block_data import BlockData
+from .indexing import KernelInvocation
 from .operand import Operand
 
 
@@ -34,9 +35,11 @@ class PackNode:
         pack_relu: PackerReluType = PackerReluType.NoRelu,
         relu_threshold: float = 0.0,
         pack_l1_accumulation: L1Accumulation = L1Accumulation.No,
+        loop_spec=None,
     ):
         self.packer = packer
         self.output = output
+        self.loop_spec = loop_spec
         self.pack_relu = pack_relu
         self.relu_threshold = relu_threshold
         self.pack_l1_accumulation = pack_l1_accumulation
@@ -52,13 +55,21 @@ class PackNode:
         code += pack_common.l1_accumulation_config(config, operation, self)
         return code
 
-    def pack_loop(
+    def pack_call(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
+        call: KernelInvocation,
     ) -> str:
-        return self.packer.loop.pack_loop(operation, config, self, block)
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return ""
+        block.tile_id_block = call.dest
+        block.tile_id_global = call.out
+        return self.packer.pack(self, operation, config, block)
 
     def uninit(
         self,

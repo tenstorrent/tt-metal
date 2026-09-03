@@ -14,11 +14,13 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 from .base_sfpu import Sfpu
 from .block_data import BlockData
+from .indexing import KernelInvocation
 
 
 class SfpuNode:
-    def __init__(self, sfpu: Sfpu):
+    def __init__(self, sfpu: Sfpu, loop_spec=None):
         self.sfpu = sfpu
+        self.loop_spec = loop_spec
 
     def sfpu_init(
         self,
@@ -30,14 +32,18 @@ class SfpuNode:
             return ""
         return self.sfpu.init(operation, config, self, block)
 
-    def sfpu_run(
+    def sfpu_call(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
-    ):
+        call: KernelInvocation,
+    ) -> str:
         if config.skip_math_init:
             return ""
+        block.tile_id_src_a = call.src0
+        block.tile_id_src_b = call.src1
+        block.tile_id_block = call.dest
         return self.sfpu.calculate(operation, config, self, block)
 
     def sfpu_uninit(

@@ -17,6 +17,8 @@ from helpers.llk_params import (
 
 
 class BinarySfpu(Sfpu):
+    input_count = 2
+
     def __init__(
         self,
         operation: MathOperation,
@@ -95,9 +97,9 @@ class BinarySfpu(Sfpu):
         approx_mode = self.approx_mode.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
-        src1 = self.dst_index_in0
-        src2 = self.dst_index_in1
-        dst = self.dst_index_out
+        src1 = block.tile_id_src_a
+        src2 = block.tile_id_src_b
+        dst = block.tile_id_block
         format = self._format_arg(config)
 
         return (

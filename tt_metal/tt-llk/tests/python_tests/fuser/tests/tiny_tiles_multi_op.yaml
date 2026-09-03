@@ -78,31 +78,35 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [48, 32]
         in0: "datacopy_in_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
+        block_size: [48, 32]
         operation: "Exp"
         approximation_mode: false
         iterations: 16
-    block_size: [48, 32]
     pack:
       - output: "datacopy_out"
+        block_size: [48, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [16, 48]
         in0: "elwadd_in_A"
         in1: "elwadd_in_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [16, 48]
     pack:
       - output: "elwadd_out"
+        block_size: [16, 48]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [48, 32]
         in0: "reduce_in_A"
         in1: "reduce_in_B"
         operation: "Reduce"
@@ -110,35 +114,38 @@ operations:
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [48, 32]
     pack:
       - output: "reduce_out"
+        block_size: [48, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [12, 32]
         in0: "elwmul_in_A"
         in1: "elwmul_in_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [12, 32]
     pack:
       - output: "elwmul_out"
+        block_size: [12, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [48, 64]
         in0: "matmul_in_A"
         in1: "matmul_in_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
       - type: "Fpu"
+        block_size: [48, 64]
         in0: "elwadd_fused_in_A"
         in1: "elwadd_fused_in_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [48, 64]
     pack:
       - output: "matmul_elwadd_out"
+        block_size: [48, 64]
         packer: "Packer"

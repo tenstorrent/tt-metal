@@ -15,7 +15,7 @@ construction. The dicts are:
     UNARY/BINARY_SFPU_OPS  set of supported MathOperation, set via _sfpu_ops class attr
 """
 
-from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
+from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
 from fuser.compute_pipeline import ComputePipeline
 from fuser.fpu_node import FpuNode
@@ -65,6 +65,56 @@ SFPU_TILE_SIZES = {
     (32, 16),
     (32, 32),
 }
+
+LOOP_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1"})
+
+
+class LoopSlotSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base: int = 0
+    multipliers: Dict[str, int] = {}
+
+
+class LoopSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: Optional[str] = None
+    in0: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    in1: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    dest: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    out: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    src0: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    src1: Optional[Union[List[int], int, LoopSlotSpec]] = None
+
+    @model_validator(mode="after")
+    def validate_lists(self) -> "LoopSchema":
+        template = {
+            s: len(getattr(self, s))
+            for s in ("dest", "src0", "src1")
+            if isinstance(getattr(self, s), list)
+        }
+        walked = {
+            s: len(getattr(self, s))
+            for s in ("in0", "in1", "out")
+            if isinstance(getattr(self, s), list)
+        }
+        if len(set(template.values())) > 1:
+            raise ValueError(
+                f"dest/src block lists must have the same length, got {template}"
+            )
+        if len(set(walked.values())) > 1:
+            raise ValueError(
+                f"in0/in1/out block lists must have the same length, got {walked}"
+            )
+        return self
+
+    def slot_overrides(self) -> Dict[str, Union[List[int], int, LoopSlotSpec]]:
+        return {
+            slot: getattr(self, slot)
+            for slot in LOOP_SLOT_NAMES
+            if getattr(self, slot) is not None
+        }
 
 
 def reject(condition, message):
@@ -299,6 +349,8 @@ class UnarySfpuMathSchema(BaseModel):
     iterations: Annotated[int, Field(ge=1)] = 8
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
+    loop: Optional[Union[str, LoopSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
@@ -328,7 +380,7 @@ class UnarySfpuMathSchema(BaseModel):
             self.dst_dest_tile_index,
             self.fill_const_value,
         )
-        return SfpuNode(sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu, loop_spec=self.loop)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -353,6 +405,8 @@ class BinarySfpuMathSchema(BaseModel):
     src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
+    loop: Optional[Union[str, LoopSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
@@ -383,7 +437,7 @@ class BinarySfpuMathSchema(BaseModel):
             self.src2_dest_tile_index,
             self.dst_dest_tile_index,
         )
-        return SfpuNode(sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu, loop_spec=self.loop)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -420,6 +474,8 @@ class FpuMathSchemaBase(BaseModel):
     reduce_to_tile: bool = False
     in0: Optional[str] = None
     in1: Optional[str] = None
+    loop: Optional[Union[str, LoopSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @property
     def has_transpose(self) -> bool:
@@ -517,7 +573,7 @@ class FpuMathSchemaBase(BaseModel):
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
             kwargs["unpacker"] = unpacker_factory(self)
 
-        return FpuNode(fpu=fpu, src_a=src_a, src_b=src_b, **kwargs)
+        return FpuNode(fpu=fpu, src_a=src_a, src_b=src_b, loop_spec=self.loop, **kwargs)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         fn = type(self)._output_dims.get(self.operation)
@@ -539,6 +595,8 @@ class PackSchema(BaseModel):
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
+    loop: Optional[Union[str, LoopSchema]] = None
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("packer", mode="after")
     @classmethod
@@ -565,6 +623,7 @@ class PackSchema(BaseModel):
             pack_relu=self.pack_relu,
             relu_threshold=self.relu_threshold,
             pack_l1_accumulation=self.pack_l1_accumulation,
+            loop_spec=self.loop,
         )
 
 
@@ -581,7 +640,6 @@ class OperationSchemaBase(BaseModel):
     dest_consuming_operations: ClassVar[frozenset] = frozenset()
 
     dest_sync: DestSync = DestSync.Half
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     pack: List[PackSchema] = Field(..., min_length=1)
 
     @model_validator(mode="after")
@@ -676,32 +734,44 @@ class OperationSchemaBase(BaseModel):
 
         tile_r = tile_shape.total_row_dim()
         tile_c = tile_shape.total_col_dim()
-        block_r, block_c = self.block_size
 
-        if block_r % tile_r != 0 or block_c % tile_c != 0:
-            raise ValueError(
-                f"Block size ({self.block_size}) must be a multiple of tile dimensions "
-                f"({tile_r}, {tile_c})"
-            )
-
-        block_tiles = (block_r // tile_r) * (block_c // tile_c)
         dest_faces = 32 if self.dest_sync == DestSync.Half else 64
         if dest_acc:
             dest_faces //= 2
         dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
 
-        if block_tiles > dest_tile_capacity:
+        def node_block_tiles(schema):
+            block_r, block_c = schema.block_size
+            if block_r % tile_r != 0 or block_c % tile_c != 0:
+                raise ValueError(
+                    f"block_size ({schema.block_size}) must be a multiple of tile "
+                    f"dimensions ({tile_r}, {tile_c})"
+                )
+            tiles = (block_r // tile_r) * (block_c // tile_c)
+            if tiles > dest_tile_capacity:
+                raise ValueError(
+                    f"block_size {schema.block_size} requires {tiles} tiles "
+                    f"({tiles * tile_shape.total_num_faces()} faces) but dest can hold "
+                    f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
+                    f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+                )
+            return tiles
+
+        # The dest bank is shared by the whole operation (math writes it, pack
+        # reads it), so every node must declare the same block_size. Divergent
+        # per-node batches are a future extension.
+        all_schemas = list(self.math) + list(self.pack)
+        for schema in all_schemas:
+            node_block_tiles(schema)
+        bank_block_size = self.pack_schemas[0].block_size
+        if any(s.block_size != bank_block_size for s in all_schemas):
             raise ValueError(
-                f"Block size {self.block_size} requires {block_tiles} tiles "
-                f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
-                f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
-                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+                "all math and pack nodes in an operation must share the same "
+                f"block_size (the shared dest bank); got "
+                f"{sorted({tuple(s.block_size) for s in all_schemas})}"
             )
 
-        for p in self.pack:
-            p._block_size = self.block_size
         for m in self.math:
-            m._block_size = self.block_size
             if isinstance(m, FpuMathSchemaBase):
                 m._dest_tile_shape = tile_shape
 
@@ -739,7 +809,7 @@ class OperationSchemaBase(BaseModel):
                 break
 
         kwargs = {
-            "block_size": self.block_size,
+            "block_size": bank_block_size,
             "tile_shape": tile_shape,
             "dest_sync": self.dest_sync,
             "reduce_dim": reduce_dim,

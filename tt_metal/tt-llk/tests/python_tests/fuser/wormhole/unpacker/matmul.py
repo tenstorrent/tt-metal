@@ -9,12 +9,12 @@ from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlock, TileLoop
 
 
 class MatmulUnpacker(Unpacker):
-    loop: TileLoop = LoopBlock()
+    granularity = InvocationGranularity.BLOCK
     per_block_init = True
 
     def get_headers(self) -> List[str]:

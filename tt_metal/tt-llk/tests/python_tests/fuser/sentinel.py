@@ -86,16 +86,40 @@ class FuserSentinel:
                 return node
         return None
 
+    def _dest_source_format(
+        self,
+        config: "GlobalConfig",
+        operation: "L1Operation",
+        compute_node: "FpuNode",
+        output_format: DataFormat,
+    ) -> Optional[DataFormat]:
+        from .fpu_node import FpuNode
+
+        previous = None
+        for node in operation.math.math_nodes:
+            if node is compute_node:
+                break
+            if isinstance(node, FpuNode) and node.src_a is not None:
+                previous = node
+        if previous is None:
+            return None
+        return self._infer_node_formats(config, previous, output_format, operation)[1]
+
     def _get_src_formats(
         self,
         config: "GlobalConfig",
         compute_node: "FpuNode",
         output_format: DataFormat,
+        operation: "L1Operation",
     ) -> Tuple[DataFormat, Optional[DataFormat]]:
         """Extract src_a and src_b data formats, handling DEST_TO_SRCA routing."""
         src_a_fmt = compute_node.src_a.data_format
         if compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE:
-            dest_fmt = self._unpack_A_dst
+            dest_fmt = self._dest_source_format(
+                config, operation, compute_node, output_format
+            )
+            if dest_fmt is None:
+                dest_fmt = src_a_fmt
             if config.dest_acc.value:
                 dest_fmt = (
                     DataFormat.Int32 if dest_fmt.is_integer() else DataFormat.Float32
@@ -113,6 +137,7 @@ class FuserSentinel:
         config: "GlobalConfig",
         compute_node: "FpuNode",
         output_format: DataFormat,
+        operation: "L1Operation",
     ) -> Tuple[DataFormat, DataFormat, DataFormat, DataFormat, DataFormat, DataFormat]:
         """Infer all pipeline formats from a compute node's operands.
 
@@ -120,7 +145,7 @@ class FuserSentinel:
             (unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, math_fmt, pack_src)
         """
         src_a_fmt, src_b_fmt = self._get_src_formats(
-            config, compute_node, output_format
+            config, compute_node, output_format, operation
         )
         unpack_to_dest = compute_node.unpack_to_dest.value
         dest_acc = config.dest_acc
@@ -206,7 +231,7 @@ class FuserSentinel:
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
             _, _, _, _, _, pack_src = self._infer_node_formats(
-                config, compute_node, output_format
+                config, compute_node, output_format, operation
             )
         else:
             _, _, _, _, _, pack_src = self._infer_output_formats(config, output_format)
@@ -262,7 +287,7 @@ class FuserSentinel:
 
         output_format = operation.math._get_pack_nodes()[0].output.data_format
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
-            self._infer_node_formats(config, compute_node, output_format)
+            self._infer_node_formats(config, compute_node, output_format, operation)
         )
 
         self._unpack_A_src = unpack_A_src
@@ -307,7 +332,7 @@ class FuserSentinel:
 
         output_format = operation.math._get_pack_nodes()[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
-            config, compute_node, output_format
+            config, compute_node, output_format, operation
         )
 
         new_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
@@ -383,7 +408,7 @@ class FuserSentinel:
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
             _, _, _, _, math_fmt, _ = self._infer_node_formats(
-                config, compute_node, output_format
+                config, compute_node, output_format, operation
             )
         else:
             _, _, _, _, math_fmt, _ = self._infer_output_formats(config, output_format)
@@ -407,7 +432,7 @@ class FuserSentinel:
 
         output_format = operation.math._get_pack_nodes()[0].output.data_format
         _, _, _, _, new_math, _ = self._infer_node_formats(
-            config, compute_node, output_format
+            config, compute_node, output_format, operation
         )
 
         if self._math_format == new_math:
@@ -499,7 +524,7 @@ class FuserSentinel:
             fmt_node = self._find_format_node(operation)
             if fmt_node is not None:
                 _, _, _, _, math_fmt, pack_src = self._infer_node_formats(
-                    config, fmt_node, output_format
+                    config, fmt_node, output_format, operation
                 )
             else:
                 _, _, _, _, math_fmt, pack_src = self._infer_output_formats(
@@ -513,7 +538,7 @@ class FuserSentinel:
             return
 
         _, _, _, _, math_fmt, pack_src = self._infer_node_formats(
-            config, compute_node, output_format
+            config, compute_node, output_format, operation
         )
         self.golden_math_format = math_fmt
         self.golden_pack_src = pack_src

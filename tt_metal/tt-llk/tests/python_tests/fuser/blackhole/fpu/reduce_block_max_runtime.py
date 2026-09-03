@@ -7,14 +7,14 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 from .reduce_block_max import ReduceBlockMaxFpu
 
 
 class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
 
     def get_headers(self) -> List[str]:
         return [

@@ -9,16 +9,19 @@ from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.quasar.unpacker.unpack_a import (
     _uses_upk_to_dest_semaphores,
     upk_to_dest_math_ack,
 )
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class DatacopyFpu(Fpu):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
+
+    per_call_golden = True
+
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -56,11 +59,12 @@ class DatacopyFpu(Fpu):
         face_r_dim = operation.tile_shape.face_r_dim
         num_rows_per_matrix = face_r_dim * num_faces
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        num_matrices = block.block_tiles_x
 
         return (
             f"// Operation {stage}: Datacopy FPU\n"
             f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {en_32bit_dest}>"
-            f"({num_rows_per_matrix}, {block.block_tiles_x});\n"
+            f"({num_rows_per_matrix}, {num_matrices});\n"
         )
 
     def calculate(

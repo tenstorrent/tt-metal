@@ -18,6 +18,8 @@ from helpers.llk_params import (
 
 
 class BinarySfpu(Sfpu):
+    input_count = 2
+
     def __init__(
         self,
         operation: MathOperation,
@@ -91,9 +93,9 @@ class BinarySfpu(Sfpu):
         en_32bit_dest = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         quasar_iterations = self.iterations // 4
-        src1 = self.dst_index_in0
-        src2 = self.dst_index_in1
-        dst = self.dst_index_out
+        src1 = block.tile_id_src_a
+        src2 = block.tile_id_src_b
+        dst = block.tile_id_block
         data_format = config.sentinel._math_format.cpp_enum_value
         dst_rounding_mode = self.dst_rounding_mode.cpp_enum_value
 

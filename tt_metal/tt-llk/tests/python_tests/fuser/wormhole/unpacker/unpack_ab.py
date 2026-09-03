@@ -9,13 +9,42 @@ from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.llk_params import BroadcastType
+from helpers.llk_params import (
+    BroadcastType,
+    UnpackToDest,
+)
 
 
 class UnpackerAB(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+
+    per_call_golden = True
+
+    def supports_per_call(self, node) -> bool:
+        return super().supports_per_call(node) and (
+            node.unpack_to_dest == UnpackToDest.No
+        )
+
+    def golden_call(
+        self,
+        call,
+        inputs,
+        srcs,
+        compute_unit: FpuNode,
+        operation: L1Operation,
+        config: GlobalConfig,
+    ) -> None:
+        tile_b = inputs.tile_b(call.in1)
+        if tile_b is not None:
+            tile_b = self.broadcast_tile_golden(
+                tile_b, operation, compute_unit, compute_unit.src_b
+            )
+        tile_a = inputs.tile_a(call.in0)
+        if tile_a is not None:
+            tile_a = self.transpose_tile_golden(tile_a, config, operation, compute_unit)
+        srcs.push(tile_a, tile_b)
 
     def get_headers(self) -> List[str]:
         return [

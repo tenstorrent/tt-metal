@@ -9,13 +9,13 @@ from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, L1AccessMode, bfd_current
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnpackReduceTilize(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
