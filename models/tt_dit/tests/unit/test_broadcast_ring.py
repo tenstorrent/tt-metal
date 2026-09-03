@@ -50,16 +50,18 @@ OWNER = 5  # sender index along the ring (cluster) axis
 # comparison (overhead-bound at 1 tile). chunk_size 0 = auto (one fabric packet); the 1024-tile rows sweep
 # the chunk size to find the pipeline-overlap vs per-chunk-overhead sweet spot.
 @pytest.mark.parametrize(
-    # (tiles_per_shard, chunk_size_tiles, bcast_offset_tiles, bcast_num_tiles): last two 0/0 = whole shard;
-    # a nonzero pair broadcasts only that sub-range (pre-slice) — correctness must hold within it.
-    ("tiles_per_shard", "chunk_size_tiles", "bcast_offset_tiles", "bcast_num_tiles"),
+    # (tiles_per_shard, chunk_size_tiles, bcast_offset_tiles, bcast_num_tiles, use_l1_relay): offset/num 0/0 =
+    # whole shard, a nonzero pair broadcasts only that sub-range (pre-slice). use_l1_relay picks the L1 relay
+    # (no per-hop DRAM read); the matched chunk128 rows give a DRAM-vs-L1 steady-state comparison in one CSV.
+    ("tiles_per_shard", "chunk_size_tiles", "bcast_offset_tiles", "bcast_num_tiles", "use_l1_relay"),
     [
-        pytest.param(1, 0, 0, 0, id="1tile"),
-        pytest.param(1024, 0, 0, 0, id="1024tiles_chunkauto"),
-        pytest.param(1024, 8, 0, 0, id="1024tiles_chunk8"),
-        pytest.param(1024, 32, 0, 0, id="1024tiles_chunk32"),
-        pytest.param(1024, 128, 0, 0, id="1024tiles_chunk128"),
-        pytest.param(1024, 0, 300, 400, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
+        pytest.param(1, 0, 0, 0, False, id="1tile"),
+        pytest.param(1024, 0, 0, 0, False, id="1024tiles_chunkauto"),
+        pytest.param(1024, 8, 0, 0, False, id="1024tiles_chunk8"),
+        pytest.param(1024, 32, 0, 0, False, id="1024tiles_chunk32"),
+        pytest.param(1024, 128, 0, 0, False, id="1024tiles_chunk128"),
+        pytest.param(1024, 0, 300, 400, False, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
+        pytest.param(1024, 128, 0, 0, True, id="1024tiles_chunk128_l1"),
     ],
 )
 def test_broadcast_ring(
@@ -72,6 +74,7 @@ def test_broadcast_ring(
     chunk_size_tiles,
     bcast_offset_tiles,
     bcast_num_tiles,
+    use_l1_relay,
 ):
     rows, cols = tuple(mesh_device.shape)
     tp_factor, sp_factor = rows, cols
@@ -131,6 +134,7 @@ def test_broadcast_ring(
             chunk_size_tiles=chunk_size_tiles,
             broadcast_offset_tiles=bcast_offset_tiles,
             broadcast_num_tiles=bcast_num_tiles,
+            use_l1_relay=use_l1_relay,
         )
 
     def run_ag():
