@@ -555,3 +555,31 @@ token is read from. `apply_prefill_state` does pass `replicate_seeds=True`
 (which broadcasts the device seed across lanes) so the mechanism is not yet
 established; it needs its own investigation. Not a VS-008 regression: the
 defect predates it and VS-008 is a net improvement (17 -> 13 failures).
+
+### Correction to VS-007: the suspected force_argmax trace thrash does not exist
+
+An earlier note hypothesised that a greedy request's prefill would make all 32
+lanes satisfy `_is_force_argmax_sampling`, flipping `force_argmax`, calling
+`reset_trace()` and forcing a sampling-trace recapture on every admission.
+
+**Disproven, on hardware.** `_is_force_argmax_sampling` is gated on
+`_allow_force_argmax_sampling` (`models/common/sampling/tt_sampling.py:137`),
+which is set only from `args.model_config["SAMPLING_AG_CONFIG"]` (`:255`) and is
+otherwise `False` (`:261`). This model's `_SamplingArgs` defines no
+`model_config`, so the gate is permanently off. Verified with the model's own
+args on device (`probe/force_argmax_check.py` pattern):
+
+```
+_SamplingArgs has model_config attr : False
+_allow_force_argmax_sampling        : False
+  after all-greedy (32 lanes)    force_argmax_sampling = False
+  after sampled  (32 lanes)      force_argmax_sampling = False
+  after GREEDY const broadcast   force_argmax_sampling = False
+```
+
+This is consistent with the model's stated design (module docstring: greedy is
+*semantically greedy split sampling*, not force-argmax, chosen deliberately so a
+mixed greedy/sampled workload does not recapture on each mode change). No code
+change. The two `reset_trace()` sites in `tt/generator.py` are the expected
+ones: the post-compile recapture in `_maybe_recapture_after_compile` (counted by
+`counters["trace_recaptures"]`) and the request-boundary reset.
