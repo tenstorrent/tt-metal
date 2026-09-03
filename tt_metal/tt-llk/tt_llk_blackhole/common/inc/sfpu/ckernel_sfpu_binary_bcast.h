@@ -643,6 +643,8 @@ inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr)
     // The unused statistic-tile lanes can contain infinities after rsqrt.
     // Predicated assignment is required here: multiplying those lanes by a
     // zero mask would produce NaNs rather than zeros.
+    // As in _build_lane_mask_col0_, shifting 2*lane_id left by 28 leaves zero
+    // only in SFPU column 0.
     TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
     TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
     TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
