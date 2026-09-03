@@ -98,3 +98,12 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 `program_descriptor_with_inline_kernels.py` — the `fast` kernel (shared accumulate + per-dim SFPU finalize),
 the `helper` kernel (standard reduce), and the AVG scaler dataflow kernel; `dispatch` routes between them
 per (dim, width).
+
+### Reduce-helper interface note
+
+This performance example intentionally uses the retained low-level explicit `reduce<...>(shape, ...)` overload
+so that it can hold a particular datapath and policy fixed for comparison. Its hand-written scaler setup is
+benchmark scaffolding, not the planner-backed interface recommended for a new operation. See
+[`../reduce_block/README.md`](../reduce_block/README.md#planner-backed-reduce-helper-flow) for the complete flow:
+append `[call_count][calls...]` to the compute arguments, append one aggregate auxiliary descriptor to the
+dataflow arguments, invoke `reduce<Call>()` at kernel-controlled points, and prepare the shared auxiliary CB once.

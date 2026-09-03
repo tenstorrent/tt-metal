@@ -16,6 +16,31 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
+/**
+ * @file reduce_host.hpp
+ * @brief Host-side planning and serialization for tiled reductions.
+ *
+ * One call to make_reduce_sequence_plan() produces one independent planning
+ * unit: an ordered list of self-contained compute calls and one aggregate
+ * auxiliary-tile recipe shared by those calls. Append the two parts to their
+ * respective kernel compile-time-argument lists after any kernel-owned prefix:
+ *
+ * @code{.cpp}
+ * auto unit = make_reduce_sequence_plan(reductions, cb_ids, hardware);
+ * unit.append_to(compute_compile_time_args);
+ * // compute suffix: [call_count][call_0]...[call_(call_count - 1)]
+ *
+ * unit.append_auxiliary_to(dataflow_compile_time_args);
+ * // dataflow suffix: [one aggregate auxiliary descriptor]
+ * @endcode
+ *
+ * Append multiple units to both lists in planner-invocation order. The device
+ * kernels receive only these flat suffixes, not a ReduceSequencePlan object.
+ * The compute kernel decides when to issue each call and may run arbitrary work
+ * between them. In particular, multiple input descriptions may use the same CB
+ * when the kernel refills or reuses it between calls.
+ */
+
 namespace ttnn::kernel_lib::host {
 
 using ReducePath = ttnn::kernel_lib::ReducePath;
@@ -71,7 +96,8 @@ struct ReduceAuxiliaryTileSpec {
     std::uint32_t num_valid_elements = 0;
 };
 
-// One shared auxiliary CB recipe for a complete planning unit. Calls refer to
+// The one shared auxiliary CB recipe for a complete planning unit. It carries
+// the CB ID as well as the physical tiles to materialize. Calls refer to
 // contiguous slices of `tiles`; equal call recipes share the same slice.
 struct ReduceAuxiliaryPlan {
     std::uint32_t cb_id = 0;
@@ -160,10 +186,11 @@ struct ReduceCallCbIds {
     std::uint32_t output_cb_id;
 };
 
-// One complete kernel reduce() invocation. Accumulation behavior and index are
-// explicit call properties; a kernel never derives them from this call's
-// position in a list. `plan` is the complete existing single-CB plan for this
-// input.
+// One complete kernel reduce() invocation. All planner-selected behavior,
+// including accumulation and partial-tile handling, is an explicit call
+// property; a kernel never derives it from this call's position in a list or
+// from the auxiliary recipe. `plan` is the complete existing single-CB plan for
+// this input.
 struct ReduceCallPlan {
     std::uint32_t input_cb_id;
     std::uint32_t auxiliary_cb_id;
@@ -181,11 +208,12 @@ struct ReduceSequencePlan {
 
     // Append the compute-kernel suffix: call count followed by every call in
     // execution order. Existing caller-owned arguments remain at the front.
+    // The count describes this unit only; it carries no call semantics.
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_compile_time_args() const;
 
     // Append the independent dataflow-kernel suffix: one shared auxiliary CB
-    // description for this complete planning unit.
+    // description for this complete planning unit, regardless of call count.
     void append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_auxiliary_compile_time_args() const;
 };
@@ -231,8 +259,10 @@ ReducePlan make_reduce_plan(
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes = std::nullopt);
 
-// Plan a kernel-ordered sequence of reductions whose results are accumulated together. The returned vector has
-// exactly the same order and length as `reductions`; callers decide when to instantiate each reduce() call.
+// Plan a kernel-ordered sequence of reductions whose results are accumulated
+// together. The returned call vector has exactly the same order and length as
+// `reductions`; callers decide when to issue each reduce() call. Input CB IDs
+// need not be unique.
 ReduceSequencePlan make_reduce_sequence_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
