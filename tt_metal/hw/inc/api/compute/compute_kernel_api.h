@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #ifndef ARCH_QUASAR
@@ -47,7 +48,6 @@
 #include "ckernel_sfpu_exp2.h"
 #include "ckernel_sfpu_heaviside.h"
 #include "ckernel_sfpu_expm1.h"
-#include "ckernel_sfpu_topk.h"
 #include "ckernel_sfpu_unary_max_min.h"
 #include "ckernel_sfpu_reduce.h"
 #include "ckernel_sfpu_alt_complex_rotate90.h"
@@ -61,7 +61,6 @@
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
-#include "ckernel_sfpu_topk.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -166,7 +165,12 @@ ALWI void silu_tile(uint32_t idst) {
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_silu,
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 #endif
 }
 
@@ -598,14 +602,21 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_exp2, (true /* APPROXIMATE */, is_fp32_dest_acc_en), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_exp2,
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en))); }
+ALWI void exp2_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+}
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -669,175 +680,16 @@ ALWI void expm1_tile_init() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_silu,
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 
-#endif  // !ARCH_QUASAR — TopK below is all-arch
-
-// topK local sort
-// clang-format off
-/**
- * Performs local sort stage of TopK algorithm on the two data tiles and two
- * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
- * and is only available on the compute engine.
- *
- * The algorithm used to implement TopK is found here:
- * https://anilshanbhag.in/static/papers/gputopk_sigmod18.pdf
- *
- * The local sort stage sorts the data into length-K subsequences of
- * alternating directions, in place. If i_start_phase != i_end_phase, all
- * phases in the range i_start_phase to i_end_phase (inclusive) are computed.
- * If i_start_phase == i_end_phase, only that phase is computed, with
- * i_start_step and i_end_step defining how many steps are computed. This can
- * be used to extend the OP support for cases when K > 64.
- *
- * Note that the two data tiles need to be loaded into the DST register
- * before the invocation of this call. The corresponding index tiles should
- * also be loaded in with the data tiles, at a DST offset of 2 tiles.
- *
- * Note that local sort is done across columns on 64 values spanning across
- * 2 tiles.
- *
- * Note: idist should be set to 0
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32    | 0 to 1                                                | True     |
- * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     |
- * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
- * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
- * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- */
-// clang-format on
-template <bool stable_sort = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void topk_local_sort(
-    uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_phases_steps,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort),
-        idst,
-        VectorMode::RC_custom,
-        idir,
-        i_end_phase,
-        i_start_phase,
-        i_end_step,
-        i_start_step));
-}
-
-// topK merge
-// clang-format off
-/**
- * Performs merge stage of TopK algorithm on the two data tiles and two
- * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
- * and is only available on the compute engine.
- *
- * The merge stage combines length-K subsequences that are 2^m_iter apart,
- * such that the first subsequence receives the top K values, and the
- * second subsequence receives the bottom K values.
- *
- * Note that the two data tiles need to be loaded into the DST register
- * before the invocation of this call. The corresponding index tiles should
- * also be loaded in with the data tiles, at a DST offset of 2 tiles.
- *
- * Note that merge is done across columns on values spanning across 2
- * tiles.
- *
- * Note: idist should be set to 0
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
- * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- */
-// clang-format on
-template <bool idir = false, bool stable_sort = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, idir, stable_sort),
-        idst,
-        VectorMode::RC_custom,
-        m_iter,
-        k));
-}
-
-// topK rebuild
-// clang-format off
-/**
- * Performs rebuild stage of TopK algorithm on the two data tiles and two
- * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
- * and is only available on the compute engine.
- *
- * The rebuild stage sorts the length-K subsequences that are 2^(m_iter+1)
- * apart, such that they alternate directions.
- *
- * Note that the two data tiles need to be loaded into the DST register
- * before the invocation of this call. The corresponding index tiles should
- * also be loaded in with the data tiles, at a DST offset of 2 tiles.
- *
- * Note that rebuild is done across columns on values spanning across 2
- * tiles.
- *
- * Note: idist should be set to 0
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1                                                | True     |
- * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
- * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
- * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
- * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
- * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
- */
-// clang-format on
-template <bool stable_sort = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_bitonic_topk_rebuild,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort),
-        idst,
-        VectorMode::RC_custom,
-        idir,
-        m_iter,
-        k,
-        logk,
-        skip_second));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
-
-/**
- * UInt16 values in 32-bit DEST: move cleaned values into the packer-visible high half (SFPSTORE mode 9).
- * No-op unless the compute kernel was built with TOPK_UINT16_FP32_DEST. Must run on MATH while DEST is
- * still acquired (before tile_regs_commit / pack_tile). See #50215.
- */
-ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
-    MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
-}
+#endif  // !ARCH_QUASAR
 
 #ifndef ARCH_QUASAR  // BH/WH-only ops below
 
@@ -863,7 +715,8 @@ template <
     int num_rows = 9,
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate = false,
-    int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((SFPU_BINARY_CALL(
@@ -909,7 +762,11 @@ ALWI void max_reduce_with_indices_init() {
  * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
  */
 // clang-format on
-template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType pool_type,
+    DataFormat format,
+    ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
@@ -956,7 +813,8 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(
+        reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
 // clang-format off

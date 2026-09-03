@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -152,6 +153,11 @@ void process_and_sort_tiles(
     CircularBuffer cb_sorted_group_scores(cb_sorted_group_scores_id);
     CircularBuffer cb_sorted_expert_indices_temp(cb_sorted_expert_indices_temp_id);
     topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity is a property of the GLOBAL sort order; MoE grouped top-k always
+        // selects largest-first (descending). Set once, never per-call from the bitonic direction.
+        ckernel::topk_set_stable_descending_mode(true);
+    }
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_expert_index_template.wait_front(Wt);
     cb_biased_scores.wait_front(Wt);
@@ -240,6 +246,10 @@ void topk_group_scores(
     CircularBuffer cb_group_index_template(cb_group_index_template_id);
     CircularBuffer cb_sorted_group_order(cb_sorted_group_order_id);
     topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity follows the GLOBAL (largest-first / descending) order; see above.
+        ckernel::topk_set_stable_descending_mode(true);
+    }
     cb_sorted_group_order.reserve_back(1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -309,6 +319,10 @@ void topk(
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
     topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity follows the GLOBAL (largest-first / descending) order; see above.
+        ckernel::topk_set_stable_descending_mode(true);
+    }
     tile_regs_acquire();
     cb_winning_group_scores.wait_front(tiles);
     cb_winning_group_indices.wait_front(tiles);

@@ -429,8 +429,9 @@ struct p_sfpswap
     constexpr static std::uint32_t ROWS_03_MAX     = 4;
     constexpr static std::uint32_t ROW_0_MAX       = 5;
     constexpr static std::uint32_t ROW_1_MAX       = 6;
-    constexpr static std::uint32_t ROW_2_MAX       = 5;
-    constexpr static std::uint32_t ROW_3_MAX       = 6;
+    // ROW_2_MAX/ROW_3_MAX were wrongly aliased to ROW_0/ROW_1 (5/6); the ISA (and the Quasar copy) define them as 7/8.
+    constexpr static std::uint32_t ROW_2_MAX = 7;
+    constexpr static std::uint32_t ROW_3_MAX = 8;
 };
 
 struct p_exp

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
@@ -224,6 +225,11 @@ void top_k() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
+    if constexpr (stable_sort) {
+        // Tie-break polarity is a property of the GLOBAL sort order; sampling always sorts
+        // largest-first (descending). Set once, never per-call from the bitonic direction.
+        ckernel::topk_set_stable_descending_mode(true);
+    }
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);

@@ -155,12 +155,12 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
-        # ttnn.topk rejects stable=True outright on any architecture whose LLK lacks the stable bitonic
-        # network -- only Wormhole B0 and Blackhole implement it -- so ask for it just where it exists
-        # instead of taking a TT_FATAL everywhere else. Requesting it is best effort regardless
-        # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what guarantees the greedy pick,
-        # so falling back to the default network costs correctness nothing.
-        self._topk_stable = ttnn.device.is_wormhole_b0(mesh_device) or ttnn.device.is_blackhole(mesh_device)
+        # Use the fast unstable top-k; _adjust_values_for_tiebreak guarantees the correctness
+        # host-side. stable=True (lowest-index tie-break) is only cheap where the
+        # multi-core factory can pack [bf16 value | u16 index] fused keys: otherwise a multi-step
+        # path costs ~2.5-3x more, and additionally the BH topk_large_indices route currently
+        # has no stable mode at all.
+        self._topk_stable = False
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -670,24 +670,19 @@ class TTSampling(LightweightModule):
         sub-device. Random users (k>1) get boost==0 => their values are bit-identical => their
         sampling is byte-for-byte unchanged. All ops honor self.sub_core_grids.
 
-        WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k is unreliable). Remove this method,
-        `_greedy_col` and `_greedy_col_dims` once that issue is fixed and validated on device.
-
-        With a working stable top-k this pass is redundant, because candidate position and global
-        token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as one
-        contiguous block per device, and `_create_indices_tensors` derives each global id as
-        `local_topk_index + device_id * padded_per_device` from that same layout. Across blocks the
-        two orders therefore agree unconditionally. WITHIN a block they agree only if the per-device
-        top-k emitted its tied maxima in ascending local-index order -- i.e. only if `stable=True`
-        actually works. It currently may not (#33492: `ttnn.sort` rejects `stable=True` outright, the
-        LLK top-k test skips every stable case, and this tree still carries the double-SFPSWAP
-        scheme rather than the index-aware comparator from tt-llk#1340), which is why this exists.
+        Stable top-k (`stable=True`) on EVERY local top-k call would make this pass redundant, but
+        stable is not uniformly cheap: multicore-eligible bf16 calls take the fused-key engine
+        (packed [bf16 value | u16 index] words on the plain unstable network, where otherwise costs
+        ~2.5-3x on the SFPU sort stage and the BH topk_large_indices route has no stable mode at
+        all. Sampling keeps the host-side pass as the stable-sort guarantee instead. Removing this
+        method, `_greedy_col` and `_greedy_col_dims` in favour of `stable=True` becomes a pure win
+        once the remaining routes implement a performant stable mode.
 
         KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
-        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k drops
-        all but 32 of them by the same unreliable network, so the true lowest-id token may never
-        reach the gathered set and this pass cannot recover it. Fixing #33492 is the real fix; this
-        only narrows the window.
+        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k
+        breaks the tie by array position and drops all but 32 of them, so the true lowest-id token
+        may never reach the gathered set and this pass cannot recover it. Enabling `stable=True`
+        on every route (at the costs above) would close that window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
             lowest_index_among_maxima = min(global_index + not_max * SENTINEL)          # == idx at maxima, huge else
@@ -936,8 +931,10 @@ class TTSampling(LightweightModule):
             # Drop stable=True ONLY when the authoritative C++ route query says
             # ttnn.topk will take the Blackhole topk_large_indices composite for
             # these halves once the custom arguments are absent.
-            # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
-            # _adjust_values_for_tiebreak is what actually guarantees the greedy
+            # Sampling opts out of stable topk for decode perf (_topk_stable is
+            # False): these chunks route to the single-core factory,
+            # where stable pays ~2-3x on the SFPU sort stage.
+            # _adjust_values_for_tiebreak is what guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
             # call the model constrained to a sub-grid is never relaxed.
@@ -954,12 +951,10 @@ class TTSampling(LightweightModule):
                     k=self.max_top_k,
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
-                    # Break exact-value ties by lowest index instead of array position, so which
-                    # of a set of tied candidates enters the top-k does not depend on placement.
-                    # Best effort only, and only where the LLK has the network at all (see
-                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                    # guarantees the greedy pick.
+                    # _topk_stable is False: the fast unstable network is used and
+                    # _adjust_values_for_tiebreak guarantees the greedy pick. The routed-topk
+                    # relax (unstable where the call would take the BH topk_large_indices
+                    # composite) is kept so re-enabling stable stays a one-line change.
                     stable=False if use_routed_topk else self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
@@ -988,9 +983,12 @@ class TTSampling(LightweightModule):
                 )
             # Perform local top-k on each device. Drop stable=True ONLY when the
             # authoritative C++ route query says the relaxed call will take the
-            # Blackhole topk_large_indices composite -- stable is
-            # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
-            # guarantees the greedy pick. Sub-grid-constrained calls never relax.
+            # Blackhole topk_large_indices composite -- sampling keeps every call
+            # unstable (_topk_stable is False): this multicore-eligible call would
+            # usually get the ~free fused-key stable engine, but the greedy
+            # guarantee must hold on ALL routes (see _topk_stable), and
+            # _adjust_values_for_tiebreak already provides it host-side.
+            # Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
                 x_bf16, self.max_top_k
             )
@@ -999,12 +997,10 @@ class TTSampling(LightweightModule):
                 k=self.max_top_k,
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
-                # Break exact-value ties by lowest index instead of array position, so which
-                # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only, and only where the LLK has the network at all (see
-                # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                # guarantees the greedy pick.
+                # _topk_stable is False: the fast unstable network is used and
+                # _adjust_values_for_tiebreak guarantees the greedy pick. The routed-topk
+                # relax (unstable where the call would take the BH topk_large_indices
+                # composite) is kept so re-enabling stable stays a one-line change.
                 stable=False if use_routed_topk else self._topk_stable,
             )
 
@@ -1091,7 +1087,7 @@ class TTSampling(LightweightModule):
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
         # Perform the actual sampling with top-k, top-p, and temperature.
-        # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
+        # Host-side tie-break (in lieu of stable=True on every top-k route; see _topk_stable):
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
         # sampling INPUT so ttnn.sampling's argmax picks it regardless of how the top-k network
         # ordered the tied candidates. Random users are byte-for-byte unchanged. Correcting the INPUT

@@ -30,15 +30,12 @@ void bind_sort_operation(nb::module_& mod) {
         Keyword Arguments:
             dim (int, optional): The dimension along which to sort. Defaults to `-1` (last dimension).
             descending (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
-            stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
+            stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`. With `stable=False` the returned indices are a valid permutation (no duplicates inside tie groups, no out-of-range indices), but which of several equal elements comes first is unspecified. Known exception: on the MultiCore DRAM factory, wide `float32` descending sorts can still emit padding indices past the logical row (issue #53326). On the multi-core cross-core path, `float32` inputs have `-0.0` canonicalized to `+0.0` in the returned values for both stabilities.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
 
         Returns:
             List of ttnn.Tensor: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
-
-        Additional info:
-            * For now the `stable` argument is not supported.
 
         Note:
 
@@ -65,6 +62,10 @@ void bind_sort_operation(nb::module_& mod) {
                   - Layouts
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
+
+            NaN input is unsupported (undefined ordering) for BFLOAT16: the bfloat16 datapath
+            canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
+            from torch.sort's NaN-last ordering. Mask or replace NaNs before sorting.
 
         Memory Support:
             - Interleaved: DRAM and L1

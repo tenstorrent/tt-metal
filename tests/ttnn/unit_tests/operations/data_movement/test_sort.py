@@ -1,12 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import os
 import threading
 
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 TILE_HEIGHT = 32
@@ -214,11 +217,15 @@ def test_sort_fp32_wide_values(descending, device):
     [
         False,
         # Descending order pads the row with -inf, which ties with real -inf
-        # entries and can emit padding indices (>= n) into the output.
+        # entries and can emit padding indices (>= n) into the output on the
+        # MultiCore DRAM factory. Non-strict: on grids where this padded width
+        # lands on the CrossCore factory instead (e.g. an unharvested 8x8 WH
+        # grid), the index-aware comparator keeps padding entries in place and
+        # the test passes.
         pytest.param(
             True,
             marks=pytest.mark.xfail(
-                strict=True,
+                strict=False,
                 reason="https://github.com/tenstorrent/tt-metal/issues/53326: padding indices leak",
             ),
         ),
@@ -994,3 +1001,636 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
     ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
     assert_equal(torch_values, ttnn_gathered)
+
+
+# ---------------------------------------------------------------------------
+# stable=True
+#
+# The stable contract is torch.sort(..., stable=True): equal values keep their
+# original (ascending-index) order in the output, in BOTH sort directions.
+# Assertions are EXACT (assert_equal on indices against the torch-stable
+# reference), never PCC: a stable sort that is "almost right" is wrong.
+#
+# Device-side value canonicalization folds -0.0 into +0.0 (torch compares
+# -0.0 == +0.0, so the tie CLASSES and therefore the index reference are
+# unaffected); value comparisons below normalize zero signs on both sides.
+# ---------------------------------------------------------------------------
+
+
+def _fold_zero_sign(t):
+    return torch.where(t == 0, torch.zeros_like(t), t)
+
+
+def _run_stable_sort_case(device, input_tensor, dim, descending, ttnn_dtype, layout=ttnn.Layout.TILE):
+    torch_values, torch_indices = torch.sort(input_tensor, dim=dim, descending=descending, stable=True)
+
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn_dtype, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=True)
+
+    assert list(ttnn_values.shape) == list(input_tensor.shape)
+    assert list(ttnn_indices.shape) == list(input_tensor.shape)
+
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    dev_values = ttnn.to_torch(ttnn_values)
+
+    # Indices must exactly match the torch-stable reference (this subsumes the
+    # permutation property and the tie ordering in one check).
+    assert_equal(torch_indices, dev_indices)
+    # Values must match bit-exactly up to the -0.0 -> +0.0 fold.
+    if dev_values.dtype.is_floating_point:
+        assert_equal(_fold_zero_sign(torch_values), _fold_zero_sign(dev_values))
+    else:
+        assert_equal(torch_values, dev_values)
+
+
+def _tie_heavy_tensor(shape, levels, seed, dtype=torch.bfloat16):
+    """Random draw from a small set of exactly-representable levels: guarantees
+    massive tie groups spanning tile / 64-column / per-core partition boundaries."""
+    g = torch.Generator().manual_seed(seed)
+    choice = torch.randint(0, len(levels), shape, generator=g)
+    return torch.tensor(levels, dtype=dtype)[choice]
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending, stable",
+    [
+        ([32, 64], -1, False, True),
+        ([32, 64], -1, True, True),
+    ],
+)
+def test_sort_stable_index_parity(shape, dim, descending, device, stable):
+    """Exact torch.sort(stable=True) value and index parity on the basic shape."""
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    input = torch.randn(shape, dtype=torch_dtype)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending, stable=stable)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=stable)
+
+    assert torch_sort_values.shape == ttnn_sort_values.shape
+    assert torch_sort_indices.shape == ttnn_sort_indices.shape
+
+    assert list(ttnn_sort_values.shape) == shape
+    assert list(ttnn_sort_indices.shape) == shape
+
+    assert_allclose(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    if stable:
+        assert_allclose(
+            torch_sort_indices.to(torch.int64),
+            ttnn.to_torch(ttnn_sort_indices).to(torch.int64),
+        )
+
+
+# Widths route to all three program factories (BH p150a 13x10 grid = 130 cores;
+# CrossCore capacity = cores * min(128, max(Wt//cores, 2)) tiles):
+#   W=64    -> Wt=2    SingleRowSingleCore
+#   W=2048  -> Wt=64   SingleRowSingleCore (threshold boundary)
+#   W=4096  -> Wt=128  CrossCoreDataExchange
+#   W=8192  -> Wt=256  CrossCoreDataExchange (capacity boundary)
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 2048, 4096, 8192])
+@pytest.mark.parametrize(
+    "levels",
+    [
+        # Negative ties: the sign-magnitude SFPSWAP asymmetry killer.
+        [-3.5, -1.25, -1.25, 2.0],
+        # Mixed +-0: one tie class, folded on device, ordered by index.
+        [-1.0, -0.0, 0.0, 1.5],
+        # +-Inf ties (also collide with the composite's +-inf padding sentinels).
+        [float("-inf"), -2.0, 2.0, float("inf")],
+    ],
+    ids=["neg_ties", "signed_zero", "inf_ties"],
+)
+def test_sort_stable_tie_heavy(width, descending, levels, device):
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=width + int(descending))
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096])
+def test_sort_stable_all_equal(width, descending, device):
+    """Every element ties: output indices must be the identity permutation."""
+    input_tensor = torch.full([32, width], 1.25, dtype=torch.bfloat16)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_padded_width(descending, device):
+    """W=96 pads to 128 with +-inf sentinels; tie levels include +-inf so real
+    infs tie with the padding and must still come out in index order."""
+    levels = [float("-inf"), -1.5, -1.5, 0.0, 1.5, float("inf")]
+    input_tensor = _tie_heavy_tensor([32, 96], levels, seed=7)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_non_last_dim(descending, device):
+    """Composite transpose path: stable along dim=-2."""
+    levels = [-2.5, -0.5, -0.5, 0.5, 2.5]
+    input_tensor = _tie_heavy_tensor([1, 1, 64, 64], levels, seed=11)
+    _run_stable_sort_case(device, input_tensor, -2, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_row_major(descending, device):
+    levels = [-4.0, -1.0, -1.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([1, 1, 32, 128], levels, seed=13)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_wide_u32_index(descending, device):
+    """W=65536 >= the u16 index ceiling: UINT32 indices, 32-bit DEST, and (on a
+    grid whose core count does not divide Wt=2048) the SingleRowMultiCore DRAM
+    factory. Tie groups straddle every per-core partition boundary."""
+    levels = [-2.0, -1.0, -1.0, 0.0, 1.0, 3.0]
+    input_tensor = _tie_heavy_tensor([32, 65536], levels, seed=17)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096], ids=["single_core", "multi_core"])
+def test_sort_stable_float32(width, descending, device):
+    """FLOAT32 values (32-bit DEST + UINT32 indices), tie-heavy including a
+    mixed +-0.0 class."""
+    levels = [-3.25, -1.0, -0.0, 0.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=19, dtype=torch.float32)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.float32)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096], ids=["single_core", "multi_core"])
+def test_sort_stable_uint16(width, descending, device):
+    """UINT16 values (uint16-in-32-bit-DEST path; Wt>threshold routes to the
+    SingleRowMultiCore factory). Values deliberately include the padding
+    sentinels (0 and 65535): with stable sort the real elements' lower indices
+    order them ahead of the padding, so the sentinel collision is benign."""
+    g = torch.Generator().manual_seed(width + int(descending))
+    tie_levels = torch.tensor([0, 1, 1, 7, 300, 65535], dtype=torch.int32)
+    choice = torch.randint(0, len(tie_levels), [32, width], generator=g)
+    input_tensor = tie_levels[choice]
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values).to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [32, 64],  # SingleRowSingleCore
+        [32, 4096],  # CrossCoreDataExchange
+    ],
+    ids=["single_core", "cross_core"],
+)
+def test_sort_stable_program_cache(shape, device):
+    """stable must enter the program hash: alternate stable/unstable on the
+    same shape and re-run the stable program from cache on fresh data. A hash
+    that ignores `stable` returns the unstable program on run 3."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+
+    entries = []
+    for iteration, stable in enumerate([True, False, True, False]):
+        input_tensor = _tie_heavy_tensor(shape, levels, seed=100 + iteration)
+        torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=True, stable=True)
+
+        ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        with device.cache_entries_counter.measure():
+            ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=True, stable=stable)
+
+        dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+        if stable:
+            assert_equal(torch_indices, dev_indices)
+            assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+        else:
+            # Unstable run: values still exact, indices a valid permutation of a correct sort.
+            assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+            gathered = torch.gather(input_tensor, -1, dev_indices)
+            assert_equal(torch_values, gathered)
+        ttnn.synchronize_device(device)
+        entries.append(device.cache_entries_counter.total)
+
+    device.disable_and_clear_program_cache()
+    # Two distinct programs total (stable and unstable), each compiled exactly once.
+    assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
+
+
+@pytest.mark.parametrize("shape", [(0, 4096), (1, 1, 0, 128)])
+@pytest.mark.parametrize("stable", [True, False])
+def test_sort_zero_size_dim(shape, stable, device):
+    """torch.sort on a zero-size tensor returns empty values/indices of the input
+    shape; ttnn.sort must do the same via a composite early-exit instead of
+    reaching the prim's non-empty-tensor TT_FATAL (the prim guard stays as the
+    backstop for direct prim callers). Index
+    dtype follows the early-exit contract, which matches the on-device rule for
+    bf16 at these widths: UINT16 for both stabilities."""
+    input_tensor = torch.randn(shape).to(torch.bfloat16)
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, stable=stable)
+    assert torch_values.shape == input_tensor.shape  # torch contract: empty in, empty out
+
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=stable)
+
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+    assert ttnn_values.dtype == ttnn.bfloat16
+    assert ttnn_indices.dtype == ttnn.uint16
+
+
+def test_sort_zero_size_dim_memory_config(device):
+    """The zero-size early exit honors an explicit memory_config for both outputs."""
+    shape = (0, 4096)
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert ttnn_values.memory_config().buffer_type == ttnn.BufferType.L1
+    assert ttnn_indices.memory_config().buffer_type == ttnn.BufferType.L1
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+
+
+def test_sort_zero_size_dim_preallocated_outputs(device):
+    """The zero-size early exit returns the caller's preallocated tensors."""
+    shape = (0, 4096)
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    values = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+    assert ttnn_indices.dtype == ttnn.uint16
+
+
+def test_sort_zero_size_dim_mismatched_out_raise(device, expect_error):
+    """A preallocated tuple of the wrong shape raises instead of being silently ignored."""
+    ttnn_input = ttnn.from_torch(
+        torch.randn((0, 4096)).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    wrong_shape = (32, 64)
+    values = ttnn.from_torch(
+        torch.zeros(wrong_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(wrong_shape, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    with expect_error(RuntimeError, "must match the input shape"):
+        ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+
+# ---------------------------------------------------------------------------
+# Composite early-exit contract (scalar / zero-volume / dim-size-1).
+#
+# The out= dtype rules live in the device op, which the early exits never reach.
+# They are enforced up front in ttnn::sort so all three exits honour the same
+# contract as the dispatched path: a mismatched out= raises instead of being
+# silently discarded, the caller's buffers are written in place, the values
+# output is a copy rather than an alias of the input, and memory_config is
+# applied.
+# ---------------------------------------------------------------------------
+
+# (id, shape, dim) covering each early exit. Scalars are exercised at both
+# rank 0 and shape [1]; dim-size-1 uses a sort dim of extent 1.
+EARLY_EXIT_CASES = [
+    pytest.param((), -1, id="scalar_rank0"),
+    pytest.param((1,), -1, id="scalar_shape1"),
+    pytest.param((0, 4096), -1, id="zero_volume"),
+    pytest.param((32, 1), -1, id="dim_size_1"),
+]
+
+
+def _early_exit_input(shape, device, dtype=ttnn.bfloat16, torch_dtype=torch.bfloat16):
+    return ttnn.from_torch(torch.randn(shape).to(torch_dtype), dtype, layout=ttnn.Layout.TILE, device=device)
+
+
+def _early_exit_out_pair(shape, device, values_dtype=ttnn.bfloat16, indices_dtype=ttnn.uint16):
+    torch_values_dtype = torch.float32 if values_dtype == ttnn.float32 else torch.bfloat16
+    torch_indices_dtype = torch.int32 if indices_dtype == ttnn.uint32 else torch.uint16
+    values = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch_values_dtype), values_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch_indices_dtype), indices_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+    return values, indices
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_values_dtype_raises(shape, dim, device, expect_error):
+    """out= values dtype must match the input dtype on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device, values_dtype=ttnn.float32)
+
+    with expect_error(RuntimeError, "values tensor dtype must match the input dtype"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_indices_dtype_raises(shape, dim, device, expect_error):
+    """out= indices must be UINT16 or UINT32 on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, _ = _early_exit_out_pair(shape, device)
+    bad_indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    with expect_error(RuntimeError, "indices tensor dtype must be UINT16 or UINT32"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, bad_indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_fp32_input_uint16_indices_raises(shape, dim, device, expect_error):
+    """FLOAT32 input forces UINT32 indices; the early exits enforce it like the device op."""
+    ttnn_input = _early_exit_input(shape, device, dtype=ttnn.float32, torch_dtype=torch.float32)
+    values, indices = _early_exit_out_pair(shape, device, values_dtype=ttnn.float32, indices_dtype=ttnn.uint16)
+
+    with expect_error(RuntimeError, "must be UINT32 when input dtype is FLOAT32"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_shape_raises(shape, dim, device, expect_error):
+    """A wrong-shape out= raises rather than being silently replaced by fresh tensors."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair((32, 64), device)
+
+    with expect_error(RuntimeError, "must match the input shape"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_uint32_indices_accepted(shape, dim, device):
+    """Positive control: bf16 input with UINT32 indices is legal (the device op allows it),
+    so the up-front check must not demand equality with the default index dtype."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device, indices_dtype=ttnn.uint32)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+    assert list(out_values.shape) == list(shape)
+    assert out_indices.dtype == ttnn.uint32
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_written_in_place(shape, dim, device):
+    """The caller's preallocated buffers are written, not swapped for new tensors."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device)
+    values_addr, indices_addr = values.buffer_address(), indices.buffer_address()
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+    assert out_values.buffer_address() == values_addr
+    assert out_indices.buffer_address() == indices_addr
+    if math.prod(shape) > 0:
+        assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
+        assert_equal(torch.zeros(shape, dtype=torch.int64), ttnn.to_torch(out_indices).to(torch.int64))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_values_do_not_alias_input(shape, dim, device):
+    """The values output is a copy; it must not hand back the input's buffer."""
+    ttnn_input = _early_exit_input(shape, device)
+
+    out_values, _ = ttnn.sort(ttnn_input, dim=dim)
+
+    if math.prod(shape) == 0:
+        pytest.skip("zero-volume tensors have no buffer, so addresses are not comparable")
+    assert out_values.buffer_address() != ttnn_input.buffer_address()
+    assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_memory_config_honored(shape, dim, device):
+    """An explicit memory_config applies to both outputs on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert out_values.memory_config().buffer_type == ttnn.BufferType.L1
+    assert out_indices.memory_config().buffer_type == ttnn.BufferType.L1
+
+
+def test_sort_scalar_out_of_range_dim_raises(device, expect_error):
+    """Scalar inputs are dim-range checked like every other rank, matching torch."""
+    ttnn_input = _early_exit_input((), device)
+
+    with expect_error(RuntimeError, "out of range"):
+        ttnn.sort(ttnn_input, dim=5)
+
+
+def test_sort_dim_size_1_row_major_out(device):
+    """ROW_MAJOR out= against a TILE input still works on the dim-size-1 exit."""
+    shape = (32, 1)
+    ttnn_input = _early_exit_input(shape, device)
+    values = ttnn.zeros(shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    indices = ttnn.zeros(shape, dtype=ttnn.uint16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+    assert list(out_values.shape) == list(shape)
+    assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
+
+
+# ---------------------------------------------------------------------------
+# Unstable index contract: unstable CrossCore sorts must return valid index
+# permutations on ties. The CrossCore factory pins the index-aware comparator
+# for BOTH stabilities, so its unstable output is exactly the torch-stable
+# permutation. Widths here are chosen to land on the CrossCore factory (padded
+# W=4096/8192 on the CI grids); the DRAM factory's separate tie defect is
+# issue #53326 and is not covered by these cells.
+# ---------------------------------------------------------------------------
+
+
+def _crosscore_serves(device, padded_w):
+    """Mirror of select_program_factory's CrossCore capacity arm (USE_AS_MANY_CORES,
+    interleaved bf16/fp32): Wt <= cores * min(128, max(Wt // cores, 2)). Approximate —
+    keep in sync with SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core.
+    Widths past the capacity route to the MultiCore DRAM factory, whose separate tie
+    defect is issue #53326 and out of scope for these cells."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    wt = padded_w // 32
+    return wt <= cores * min(128, max(wt // cores, 2))
+
+
+def _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=False):
+    """The unstable contract: values sorted exactly, indices a valid per-row
+    permutation, and gathering by the indices reproduces the values. With
+    exact_stable, additionally pin the engine: the comparator emits the
+    torch-stable permutation."""
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    dev_values = ttnn.to_torch(ttnn_values)
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    if dev_values.dtype.is_floating_point:
+        assert_equal(_fold_zero_sign(torch_values), _fold_zero_sign(dev_values))
+        gathered = torch.gather(input_tensor, -1, dev_indices)
+        assert_equal(_fold_zero_sign(gathered), _fold_zero_sign(dev_values))
+    else:
+        assert_equal(torch_values, dev_values)
+        assert_equal(torch.gather(input_tensor, -1, dev_indices), dev_values)
+
+    width = input_tensor.shape[-1]
+    flat = dev_indices.reshape(-1, width)
+    expected = torch.arange(width, dtype=torch.int64).expand(flat.shape[0], -1)
+    assert torch.equal(torch.sort(flat, dim=-1).values, expected), "unstable sort indices are not a permutation per row"
+
+    if exact_stable:
+        assert_equal(torch_indices, dev_indices)
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")) and is_blackhole(),
+    reason="#54590: CrossCore sort semaphore handshake deadlocks under the Blackhole simulator",
+)
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize(
+    "width, layout",
+    [(4096, ttnn.Layout.TILE), (8192, ttnn.Layout.TILE), (4096, ttnn.Layout.ROW_MAJOR)],
+    ids=["w4096_tile", "w8192_tile", "w4096_rm"],
+)
+def test_sort_unstable_all_ones_permutation(width, layout, descending, device):
+    """An all-ones row is one giant tie group, so every compare crosses a tie:
+    the harshest input for the unstable index-permutation contract."""
+    if not _crosscore_serves(device, width):
+        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+    input_tensor = torch.ones((32, width), dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=True)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [3000, 5000])
+def test_sort_unstable_nonpow2_index_range(width, descending, device):
+    """Non-pow2 logical widths pad with +/-inf sentinels. Entries tied with a
+    sentinel must not leak pad positions: idx.max() has to stay below the
+    logical width, else downstream gather/scatter reads out of bounds."""
+    padded = 1 << (width - 1).bit_length()
+    if not _crosscore_serves(device, padded):
+        pytest.skip(f"padded W={padded} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+    input_tensor = torch.full((32, width), -2.0, dtype=torch.bfloat16)
+    input_tensor[:, 0] = float("inf")
+    input_tensor[:, width - 1] = float("-inf")
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert (
+        dev_indices.min() >= 0 and dev_indices.max() < width
+    ), f"indices out of range [0, {width}): min={int(dev_indices.min())}, max={int(dev_indices.max())}"
+    _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize(
+    "width, layout",
+    [(4096, ttnn.Layout.TILE), (8192, ttnn.Layout.TILE), (4096, ttnn.Layout.ROW_MAJOR)],
+    ids=["w4096_tile", "w8192_tile", "w4096_rm"],
+)
+def test_sort_unstable_fp32_ties(width, layout, descending, device):
+    """fp32 tie groups (including the +/-0.0 tie class and +/-inf) on the
+    CrossCore path. These cells stay on CrossCore at every stack position, so
+    they are the durable regression pin for the comparator flip."""
+    if not _crosscore_serves(device, width):
+        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+    input_tensor = _tie_heavy_tensor(
+        (32, width),
+        [float("-inf"), -1.5, -0.0, 0.0, 0.5, 1.5, float("inf")],
+        seed=7,
+        dtype=torch.float32,
+    )
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.float32, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=True)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize(
+    "shape, layout",
+    [((320, 4096), ttnn.Layout.TILE), ((33, 4096), ttnn.Layout.TILE)],
+    ids=["h320_tile", "h33_tile"],
+)
+def test_sort_unstable_tall_tie_heavy(shape, layout, descending, device):
+    """Multi-row coverage: spanning tile pairs recur across the Ht loop, and a
+    non-multiple-of-32 height exercises the H-pad rows. ROW_MAJOR heights past
+    32 are pinned separately below — the CrossCore RM path corrupts the values
+    of every tile-row block after the first (pre-existing, all stabilities)."""
+    input_tensor = _tie_heavy_tensor(shape, [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5], seed=11)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=True)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_unstable_preallocated_indices_permutation(descending, device):
+    """Preallocated u16 index output on the unstable CrossCore path: the
+    comparator's index transport must keep the permutation property through the
+    caller-supplied tensors too."""
+    input_tensor = _tie_heavy_tensor((32, 4096), [-1.5, 0.0, 0.0, 1.5], seed=13)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, out=(out_values, out_indices))
+    _assert_unstable_sort_invariants(input_tensor, out_values, out_indices, descending, exact_stable=True)
+
+
+def test_sort_unstable_stable_cache_alternation(device):
+    """stable=True and stable=False now compile the same CrossCore kernel but
+    remain distinct program-cache entries (stable stays in the op hash — it
+    drives routing and index dtype elsewhere). Alternating must not cross wires:
+    both runs stay correct and exactly two entries are created."""
+    input_tensor = _tie_heavy_tensor((32, 4096), [-1.5, 0.0, 0.0, 1.5], seed=17)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    entries = []
+    for stable in [False, True, False, True]:
+        with device.cache_entries_counter.measure():
+            ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=stable)
+        _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, False, exact_stable=True)
+        ttnn.synchronize_device(device)
+        entries.append(device.cache_entries_counter.total)
+
+    device.disable_and_clear_program_cache()
+    assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="https://github.com/tenstorrent/tt-metal/issues/54309: pre-existing — CrossCore "
+    "ROW_MAJOR inputs with more than 32 rows return wrong VALUES for every tile-row block "
+    "after the first (indices stay a valid permutation; TILE layout unaffected; reproduces "
+    "with stable=True and stable=False alike, so it is unrelated to the CrossCore "
+    "comparator pin). Non-strict: the cell passes on grids that route W=4096 away from CrossCore.",
+)
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_unstable_row_major_multi_tile_row_values(descending, device):
+    input_tensor = _tie_heavy_tensor((64, 4096), [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5], seed=11)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, descending, exact_stable=True)

@@ -228,7 +228,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             ITERATIONS,
                             FAST_MODE,
                             STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
                 }
             }
@@ -263,7 +266,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             ITERATIONS,
                             FAST_MODE,
                             STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

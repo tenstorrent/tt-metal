@@ -4,6 +4,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -60,6 +61,12 @@ void kernel_main() {
     constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
+    // Fused-key stable mode: the local cores sent packed [bf16|u16] key tiles; the merge tree runs
+    // the unstable network on them and the defuse splits them back into value + index outputs at
+    // the very end.
+    constexpr bool fused_keys = get_compile_time_arg_val(15) == 1;
+    constexpr bool network_stable = stable_sort && !fused_keys;
+
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
     constexpr std::uint32_t input_dest_start = 0;
@@ -74,7 +81,12 @@ void kernel_main() {
     // init pack, compute and unpack
     compute_kernel_hw_startup(input_dfb_index, values_dfb_index);
     copy_init(input_dfb_index);
-    ckernel::topk_tile_init();
+    ckernel::topk_tile_init<fused_keys>();
+    if constexpr (stable_sort && !fused_keys) {
+        // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest); set once,
+        // never per-call from the local bitonic direction.
+        ckernel::topk_set_stable_descending_mode(largest != 0);
+    }
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);
@@ -83,21 +95,21 @@ void kernel_main() {
 
     // Aggregate results from all local cores for each height row
     for (std::uint32_t ht = 0; ht < Ht; ++ht) {
-        input_dfb.wait_front(Wt);  // Wait for all local TopK results (values)
-        index_dfb.wait_front(Wt);  // Wait for all local TopK results (indices)
+        input_dfb.wait_front(Wt);  // Wait for all local TopK results (values, or packed keys when fused)
+        if constexpr (!fused_keys) {
+            index_dfb.wait_front(Wt);  // Wait for all local TopK results (indices)
+        }
 
         // Use separate buffers to avoid racing conditions with reader kernel.
         // The reader kernel manages input_cb_index/index_cb_index, while compute
         // operations require separate staging buffers for in-place bitonic operations.
 
         // Re-establish datacopy unpack state for the values gather. At ht==0
-        // init_sfpu covers this, but at ht>=1 the state left by the previous
+        // the kernel prologue's copy_init covers this, but at ht>=1 the state left by the previous
         // iteration's transpose_and_pack(index_transposed...) is TRANSPOSE
         // mode with the INDEX (UInt16/UInt32) SRCA format; the bare copy_tile
         // below would unpack the bf16 gathered values as garbage (silicon:
         // fabricated ~1e38 values in every ht>=1 row).
-        // The reconfig above already forces SRCA to input_dfb_index's format (what the deprecated
-        // copy_tile_to_dst_init_short_with_dt's guarded reconfig would do), so only copy_init remains.
         reconfig_data_format_srca(input_dfb_index);
         copy_init(input_dfb_index);
         pack_reconfig_data_format(input_transposed_dfb_index);
@@ -117,25 +129,28 @@ void kernel_main() {
         input_transposed_dfb.wait_front(Wt);
         input_dfb.pop_front(Wt);  // Release input buffer space
 
-        // Copy all received index tiles from local cores to transposed staging buffer
-        reconfig_data_format_srca(input_dfb_index, index_dfb_index);
-        copy_init(index_dfb_index);
-        pack_reconfig_data_format(index_transposed_dfb_index);
-        for (std::uint32_t wt = 0; wt < Wt; wt++) {
-            tile_regs_acquire();
-            copy_tile(index_dfb_index, wt, 0);  // Copy index tile from local core wt
-            tile_regs_commit();
+        if constexpr (!fused_keys) {
+            // Copy all received index tiles from local cores to transposed staging buffer.
+            // (Fused mode: the indices ride inside the packed value tiles — no index stream.)
+            reconfig_data_format_srca(input_dfb_index, index_dfb_index);
+            copy_init(index_dfb_index);
+            pack_reconfig_data_format(index_transposed_dfb_index);
+            for (std::uint32_t wt = 0; wt < Wt; wt++) {
+                tile_regs_acquire();
+                copy_tile(index_dfb_index, wt, 0);  // Copy index tile from local core wt
+                tile_regs_commit();
 
-            index_transposed_dfb.reserve_back(1);
+                index_transposed_dfb.reserve_back(1);
 
-            tile_regs_wait();
-            pack_tile(0, index_transposed_dfb_index);  // Pack to staging buffer
-            tile_regs_release();
+                tile_regs_wait();
+                pack_tile(0, index_transposed_dfb_index);  // Pack to staging buffer
+                tile_regs_release();
 
-            index_transposed_dfb.push_back(1);
-        }  // wt loop
-        index_transposed_dfb.wait_front(Wt);
-        index_dfb.pop_front(Wt);  // Release input buffer space
+                index_transposed_dfb.push_back(1);
+            }  // wt loop
+            index_transposed_dfb.wait_front(Wt);
+            index_dfb.pop_front(Wt);  // Release input buffer space
+        }
 
         std::uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
 
@@ -149,7 +164,7 @@ void kernel_main() {
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<stable_sort>(
+            process_iteration<network_stable, fused_keys>(
                 m_iter,                      // Current merge iteration
                 K,                           // TopK value
                 Wt,                          // Total width tiles (from all cores)
@@ -170,11 +185,24 @@ void kernel_main() {
 
         // Extract the globally optimal TopK values and indices and prepare
         // for final output. Transpose back to WH format as required.
+        if constexpr (fused_keys) {
+            // Split each packed key tile into staged 16-bit value/index tiles, then transpose
+            // those back to row layout and emit (the only defuse of the whole pipeline). In fused
+            // mode the c_5/c_7 CT-arg slots carry the two small final-core staging CBs.
+            defuse_and_pack_outputs<largest != 0>(
+                input_transposed_dfb_index,  // packed keys after the merge tree (c_6)
+                index_dfb_index,             // staging: defused bf16 values, column layout (c_5)
+                index_transposed_dfb_index,  // staging: defused u16 indices, column layout (c_7)
+                values_dfb_index,
+                output_ind_dfb_index,
+                Kt,
+                Wt);
+        } else {
+            // Extract and output final TopK values (first Kt tiles contain global optimum)
+            transpose_and_pack(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
 
-        // Extract and output final TopK values (first Kt tiles contain global optimum)
-        transpose_and_pack(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
-
-        // Extract and output final TopK indices (corresponding to global optimum values)
-        transpose_and_pack(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
+            // Extract and output final TopK indices (corresponding to global optimum values)
+            transpose_and_pack(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
+        }
     }  // ht loop
 }

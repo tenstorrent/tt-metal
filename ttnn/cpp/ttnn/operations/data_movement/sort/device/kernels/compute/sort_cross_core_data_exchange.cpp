@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
@@ -28,6 +29,14 @@ void kernel_main() {
     constexpr uint32_t number_of_tiles_per_core = get_arg(args::number_of_tiles_per_core);
     constexpr uint32_t number_of_cores_used = get_arg(args::number_of_cores_used);
     constexpr bool ascending = get_arg(args::ascending) == 1;
+    // Comparator-stable network (issue #33492): on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order, matching
+    // torch.sort(stable=True) in both directions.
+    // The factory pins this arg to 1 for BOTH stabilities (#54043): the raw-SFPSWAP tie
+    // decision is not consistent between the two peers of a spanning tile pair, so the
+    // unstable network could duplicate indices inside tie groups. This kernel therefore
+    // always compiles the comparator arms; a stable ordering is a valid unstable ordering.
+    constexpr bool stable = get_arg(args::stable) == 1;
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
@@ -79,6 +88,13 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 
+    if constexpr (stable) {
+        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
+        // once: it must never follow the per-core bitonic build direction (dir below, which
+        // alternates with core_id) nor the per-block merge direction.
+        ckernel::topk_set_stable_descending_mode(!ascending);
+    }
+
     for (uint32_t h = 0; h < Ht; h++) {
 #ifdef IS_ROW_MAJOR
         {
@@ -96,7 +112,7 @@ void kernel_main() {
         bool dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -160,9 +176,9 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::topk_merge</*idir=*/false, stable>(/*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
@@ -257,7 +273,7 @@ void kernel_main() {
 
                         value_tensor_peer_dfb.pop_front(one_tile);
 
-                        ckernel::topk_merge(0, m_iter, 32);
+                        ckernel::topk_merge</*idir=*/false, stable>(0, m_iter, 32);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]
