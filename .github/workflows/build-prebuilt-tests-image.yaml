@@ -165,6 +165,13 @@ jobs:
             echo "::error::source-ref must be a full 40-character commit sha, got '$SOURCE_REF'"
             exit 1
           fi
+          # Taking the artifact from another run says nothing about which commit
+          # built it, so defaulting the source to this workflow's sha would pair
+          # this commit's source with someone else's binaries under a valid tag.
+          if [ "$CHECKOUT_SOURCE" = "true" ] && [ -n "$ARTIFACT_RUN_ID" ] && [ -z "$SOURCE_REF" ]; then
+            echo "::error::source-ref is required when checkout-source is on and the artifact comes from another run, or src/ and artifact/ are from different commits"
+            exit 1
+          fi
           # Names end in <ref><sep><runid>, but packages joins with '-' and the
           # tarball with '_', so strip by shape rather than by position.
           CONFIG=$(printf '%s' "$ARTIFACT_NAME" | sed -E 's/[-_][0-9a-f]{7,40}[-_][0-9]+$//')
