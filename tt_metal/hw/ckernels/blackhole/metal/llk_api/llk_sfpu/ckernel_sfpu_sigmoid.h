@@ -46,7 +46,7 @@ inline void calculate_sigmoid() {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en, /*EXP_COEFFS_IN_PRGM_REGS*/ true>(val);
+            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en, !is_fp32_dest_acc_en>(val);
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             }
@@ -59,16 +59,17 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// The program registers seeded here must survive untouched until the last
+// calculate_sigmoid/calculate_silu call that follows this init.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         sfpu_reciprocal_init<false>();
-        // Preload the exp_21f polynomial tail coefficients for the
-        // EXP_COEFFS_IN_PRGM_REGS fast path in calculate_sigmoid/calculate_silu
-        // (Prgm0 is owned by sfpu_reciprocal's 2.0f).
-        sfpi::vConstFloatPrgm1 = 7.839635491371155e-08f;
-        sfpi::vConstFloatPrgm2 = 4.791750143340323e-15f;
+        if constexpr (!is_fp32_dest_acc_en) {
+            sfpi::vConstFloatPrgm1 = EXP_21F_C1;
+            sfpi::vConstFloatPrgm2 = EXP_21F_C2;
+        }
     } else {
         sigmoid_appx_init();
     }

@@ -17,7 +17,7 @@ inline void calculate_silu() {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // silu(x) = x * sigmoid(x)
-        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en, /*EXP_COEFFS_IN_PRGM_REGS*/ true>(x);
+        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en, !is_fp32_dest_acc_en>(x);
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
@@ -29,11 +29,11 @@ inline void calculate_silu() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void silu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must use non-approx sigmoid_init
-    sigmoid_init<false>();
+    sigmoid_init<false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu
