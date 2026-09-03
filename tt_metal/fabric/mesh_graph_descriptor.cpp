@@ -224,6 +224,19 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     return out;
 }
 
+std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance_name() const {
+    std::unordered_map<MeshId, std::string> mesh_id_to_name;
+    for (const auto global_id : all_meshes()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    for (const auto global_id : all_switches()) {
+        const auto& instance = get_instance(global_id);
+        mesh_id_to_name.emplace(MeshId{instance.local_id}, instance.name);
+    }
+    return mesh_id_to_name;
+}
+
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
     const auto& instance = get_instance(mesh_instance_id);
     return get_chip_count(instance);

@@ -891,12 +891,186 @@ std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint
     return pin_set_variants;
 }
 
-std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> enumerate_distinct_placements_for_grouping(
+using tt::tt_metal::AsicID;
+using tt::tt_metal::ASICLocation;
+using tt::tt_metal::TrayID;
+
+// Host boundaries come only from the PSD (get_host_name_for_asic). Global groups are one set per host (variable
+// size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise preferred ASICs on a
+// greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
+void configure_pgd_psd_host_alignment_constraints(
     const GroupingInfo& grouping_info,
-    const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<LogicalChipId, AsicID>& constraints) {
+    // Collect hostname map for all asics in physical graph
+    std::map<std::string, std::set<AsicID>> host_to_asics;
+    for (const AsicID& asic_id : physical_graph.get_nodes()) {
+        host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
+    }
+
+    // Collect all targets from PGD grouping info. These are LogicalChipIds: mesh-local nodes of
+    // grouping_info.adjacency_graph, the same ids MappingConstraints<LogicalChipId, AsicID> constrains.
+    std::set<LogicalChipId> all_targets;
+    for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        all_targets.insert(node_id);
+    }
+
+    if (all_targets.empty()) {
+        return;
+    }
+    if (host_to_asics.size() <= 1) {
+        return;
+    }
+
+    std::vector<std::set<AsicID>> global_groups;
+    global_groups.reserve(host_to_asics.size());
+    for (auto& [_, asics] : host_to_asics) {
+        if (!asics.empty()) {
+            global_groups.push_back(std::move(asics));
+        }
+    }
+
+    const auto [single_group_fits, preferred_globals] =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
+    // Same-host is a PREFERENCE, not a hard requirement. We prefer keeping the whole mesh on one host when it
+    // fits, but must allow cross-host placement when that is the only valid embedding of the requested topology
+    // -- e.g. a 4x4 RING/RING torus that physically spans two galaxies through inter-host links. A required
+    // same-rank constraint here wrongly forbids such legitimate cross-host meshes (it pins all nodes to one
+    // host purely because the node count fits), so a torus that only closes across hosts can never be placed.
+    // Using a preferred constraint keeps single-host meshes on one host while letting cross-host meshes embed.
+    if (!preferred_globals.empty()) {
+        if (!single_group_fits) {
+            log_debug(
+                tt::LogFabric,
+                "PGD host alignment: target count {} exceeds largest single partition; preferring minimal host cover "
+                "({} preferred globals)",
+                all_targets.size(),
+                preferred_globals.size());
+        }
+        for (const LogicalChipId& target : all_targets) {
+            constraints.add_preferred_constraint(target, preferred_globals);
+        }
+    }
+}
+
+// Add the PGD→PSD embedding constraints (trait + host alignment) to `constraints`, in place and on top
+// of whatever the caller already put there. That is how a caller anchors the embedding: seed the object
+// with forbidden chips and an adjacency cardinality constraint, hand it here, and the grouping's own
+// constraints are layered on without disturbing them.
+// Returns false if a required trait constraint cannot be satisfied (e.g. slot count mismatch);
+// `error_out` is set when that happens.
+bool add_pgd_to_psd_constraints(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<LogicalChipId, AsicID>& constraints,
+    std::string* error_out = nullptr) {
+    // Set quiet mode to suppress verbose constraint validation messages during PGD solving
+    constraints.set_quiet_mode(true);
+
+    // Build trait maps: graph nodes are LogicalChipIds, items[i] is the item for node i
+    std::map<LogicalChipId, TrayID> target_tray_traits;
+    std::map<LogicalChipId, ASICLocation> target_location_traits;
+
+    for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (*item.tray_id > 0) {
+            target_tray_traits[node_id] = item.tray_id;
+        }
+        // Skip ASIC_LOCATION_UNSPECIFIED (256) - it means "any ASIC ID" (no constraint)
+        // Only add constraint for specified ASIC locations (0-8)
+        if (*item.asic_location <= 8) {
+            target_location_traits[node_id] = item.asic_location;
+        }
+    }
+    // Build trait maps for global nodes (from physical graph)
+    std::map<AsicID, TrayID> global_tray_traits;
+    std::map<AsicID, ASICLocation> global_location_traits;
+
+    for (const auto& asic_id : physical_graph.get_nodes()) {
+        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
+        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+        global_tray_traits[asic_id] = tray_id;
+        global_location_traits[asic_id] = asic_location;
+    }
+
+    // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
+    // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
+    // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
+    const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
+    const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
+    if (relax_pgd_slot_traits) {
+        log_warning(
+            tt::LogFabric,
+            "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
+            "PGD→PSD embedding");
+    }
+
+    // Add trait constraints for tray_id and asic_location
+    if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
+        if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for tray_id";
+            }
+            return false;
+        }
+    }
+    if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
+        if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for asic_location";
+            }
+            return false;
+        }
+    }
+
+    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
+    configure_pgd_psd_host_alignment_constraints(
+        grouping_info, physical_graph, physical_system_descriptor, constraints);
+
+    return true;
+}
+
+// Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
+// Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
+// `constraints` is the caller's own object: it is used as-is and the grouping's trait and host-alignment
+// constraints are added to it in place. Callers with nothing to anchor pass a default-constructed one, so
+// that the object's lifetime and reuse across solves is always the caller's decision rather than a hidden
+// temporary here.
+// Returns the (possibly empty) list of successful MappingResults.
+std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_for_grouping(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     size_t max_solutions,
-    MappingConstraints<LogicalChipId, tt::tt_metal::AsicID>& constraints);
+    MappingConstraints<LogicalChipId, AsicID>& constraints) {
+    if (!add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
+        return {};
+    }
+    return solve_topology_mapping_n<uint32_t, AsicID>(
+        grouping_info.adjacency_graph,
+        physical_graph,
+        constraints,
+        max_solutions,
+        ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Auto,
+        /*unique_shapes=*/true);
+}
 
 }  // namespace
 
@@ -1135,7 +1309,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
                 // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
                 // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
-                // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
+                // that cover the same physical ASIC set (find_all_in_psd), so
                 // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
                 // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
                 auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
@@ -1310,7 +1484,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
     // groupings (and the downstream physical mesh nodes) collapse together. Single-MGD keeps names unprefixed so the
     // common path is unchanged. The "mgd{i}_" key encodes the originating descriptor index for downstream lookup
     // (see build_physical_multi_mesh_adjacency_graph).
-    const bool multi_mgd = mesh_graph_descriptors.size() > 1;
     for (size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
         // Pins for MGD i are in this descriptor's own local mesh-id space; forward them so the PGD<->MGD match
         // honours the pinned ASIC positions (same as the single-MGD get_valid_groupings_for_mgd(mgd, psd, pins)).
@@ -1321,8 +1494,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
         auto one = get_valid_groupings_for_mgd(mesh_graph_descriptors[i], physical_system_descriptor, pins);
         for (const auto& [type, by_name] : one) {
             for (const auto& [name, gvec] : by_name) {
-                const std::string key = multi_mgd ? fmt::format("mgd{}_{}", i, name) : name;
-                auto& dest = out[type][key];
+                auto& dest = out[type][merged_instance_key(i, mesh_graph_descriptors.size(), name)];
                 dest.insert(dest.end(), gvec.begin(), gvec.end());
             }
         }
@@ -1340,72 +1512,6 @@ using tt::tt_metal::TrayID;
 using tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd;
 using tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
 
-// Host boundaries come only from the PSD (get_host_name_for_asic). Global groups are one set per host (variable
-// size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise preferred ASICs on a
-// greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
-void configure_pgd_psd_host_alignment_constraints(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<LogicalChipId, AsicID>& constraints) {
-    // Collect hostname map for all asics in physical graph
-    std::map<std::string, std::set<AsicID>> host_to_asics;
-    for (const AsicID& asic_id : physical_graph.get_nodes()) {
-        host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
-    }
-
-    // Collect all targets from PGD grouping info. These are LogicalChipIds: mesh-local nodes of
-    // grouping_info.adjacency_graph, the same ids MappingConstraints<LogicalChipId, AsicID> constrains.
-    std::set<LogicalChipId> all_targets;
-    for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
-        if (node_id >= grouping_info.items.size()) {
-            continue;
-        }
-        const GroupingItemInfo& item = grouping_info.items[node_id];
-        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-            continue;
-        }
-        all_targets.insert(node_id);
-    }
-
-    if (all_targets.empty()) {
-        return;
-    }
-    if (host_to_asics.size() <= 1) {
-        return;
-    }
-
-    std::vector<std::set<AsicID>> global_groups;
-    global_groups.reserve(host_to_asics.size());
-    for (auto& [_, asics] : host_to_asics) {
-        if (!asics.empty()) {
-            global_groups.push_back(std::move(asics));
-        }
-    }
-
-    const auto [single_group_fits, preferred_globals] =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
-    // Same-host is a PREFERENCE, not a hard requirement. We prefer keeping the whole mesh on one host when it
-    // fits, but must allow cross-host placement when that is the only valid embedding of the requested topology
-    // -- e.g. a 4x4 RING/RING torus that physically spans two galaxies through inter-host links. A required
-    // same-rank constraint here wrongly forbids such legitimate cross-host meshes (it pins all nodes to one
-    // host purely because the node count fits), so a torus that only closes across hosts can never be placed.
-    // Using a preferred constraint keeps single-host meshes on one host while letting cross-host meshes embed.
-    if (!preferred_globals.empty()) {
-        if (!single_group_fits) {
-            log_debug(
-                tt::LogFabric,
-                "PGD host alignment: target count {} exceeds largest single partition; preferring minimal host cover "
-                "({} preferred globals)",
-                all_targets.size(),
-                preferred_globals.size());
-        }
-        for (const LogicalChipId& target : all_targets) {
-            constraints.add_preferred_constraint(target, preferred_globals);
-        }
-    }
-}
-
 // Message for "this grouping has no embedding on this PSD". It reports the variants tried and their size
 // rather than a partial mapping, because the enumerating solve yields successes only: when nothing places
 // there is no partial result to describe.
@@ -1419,118 +1525,7 @@ std::string build_pgd_mapping_failure_message(
         node_count);
 }
 
-// Add the PGD→PSD embedding constraints (trait + host alignment) to `constraints`, in place and on top
-// of whatever the caller already put there. That is how a caller anchors the embedding: seed the object
-// with forbidden chips and an adjacency cardinality constraint, hand it here, and the grouping's own
-// constraints are layered on without disturbing them.
-// Returns false if a required trait constraint cannot be satisfied (e.g. slot count mismatch);
-// `error_out` is set when that happens.
-bool add_pgd_to_psd_constraints(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<LogicalChipId, AsicID>& constraints,
-    std::string* error_out = nullptr) {
-    // Set quiet mode to suppress verbose constraint validation messages during PGD solving
-    constraints.set_quiet_mode(true);
-
-    // Build trait maps: graph nodes are LogicalChipIds, items[i] is the item for node i
-    std::map<LogicalChipId, TrayID> target_tray_traits;
-    std::map<LogicalChipId, ASICLocation> target_location_traits;
-
-    for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
-        if (node_id >= grouping_info.items.size()) {
-            continue;
-        }
-        const GroupingItemInfo& item = grouping_info.items[node_id];
-        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-            continue;
-        }
-        if (*item.tray_id > 0) {
-            target_tray_traits[node_id] = item.tray_id;
-        }
-        // Skip ASIC_LOCATION_UNSPECIFIED (256) - it means "any ASIC ID" (no constraint)
-        // Only add constraint for specified ASIC locations (0-8)
-        if (*item.asic_location <= 8) {
-            target_location_traits[node_id] = item.asic_location;
-        }
-    }
-    // Build trait maps for global nodes (from physical graph)
-    std::map<AsicID, TrayID> global_tray_traits;
-    std::map<AsicID, ASICLocation> global_location_traits;
-
-    for (const auto& asic_id : physical_graph.get_nodes()) {
-        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
-        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
-        global_tray_traits[asic_id] = tray_id;
-        global_location_traits[asic_id] = asic_location;
-    }
-
-    // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
-    // positions. Use only when slot counts already match but the labeled graph has no embedding (e.g. host / tray
-    // order differs from PGD row-major). Host-alignment constraints below still apply. Bring-up only.
-    const char* relax_env = std::getenv("TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS");
-    const bool relax_pgd_slot_traits = (relax_env != nullptr && relax_env[0] == '1');
-    if (relax_pgd_slot_traits) {
-        log_warning(
-            tt::LogFabric,
-            "TT_METAL_RELAX_PGD_SLOT_CONSTRAINTS=1: skipping PGD tray / ASIC-location trait constraints for "
-            "PGD→PSD embedding");
-    }
-
-    // Add trait constraints for tray_id and asic_location
-    if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
-        if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
-            if (error_out) {
-                *error_out = "Failed to add required trait constraint for tray_id";
-            }
-            return false;
-        }
-    }
-    if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
-        if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
-            if (error_out) {
-                *error_out = "Failed to add required trait constraint for asic_location";
-            }
-            return false;
-        }
-    }
-
-    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
-    configure_pgd_psd_host_alignment_constraints(
-        grouping_info, physical_graph, physical_system_descriptor, constraints);
-
-    return true;
-}
-
-// Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
-// Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
-// `constraints` is the caller's own object: it is used as-is and the grouping's trait and host-alignment
-// constraints are added to it in place. Callers with nothing to anchor pass a default-constructed one, so
-// that the object's lifetime and reuse across solves is always the caller's decision rather than a hidden
-// temporary here.
-// Returns the (possibly empty) list of successful MappingResults.
-std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_for_grouping(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    size_t max_solutions,
-    MappingConstraints<LogicalChipId, AsicID>& constraints) {
-    if (!add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
-        return {};
-    }
-    return solve_topology_mapping_n<uint32_t, AsicID>(
-        grouping_info.adjacency_graph,
-        physical_graph,
-        constraints,
-        max_solutions,
-        ConnectionValidationMode::STRICT,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
-        /*unique_shapes=*/true);
-}
-
-// A single candidate placement considered by the set-packing solver.
+// TODO(plan 3 §8(a)): delete with solve_set_packing / find_all_in_psd. DFS uses PlacementCandidate instead.
 struct PackingCandidate {
     size_t grouping_idx;             // index into the input groupings vector
     std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
@@ -1539,6 +1534,7 @@ struct PackingCandidate {
     size_t host_count = 1;  // distinct hosts spanned by this placement
 };
 
+// TODO(plan 3 §8(a)): delete with solve_set_packing / find_all_in_psd.
 struct PackingResult {
     std::vector<PackingCandidate> selected;
     uint64_t total_weight = 0;
@@ -1655,64 +1651,10 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
-// Maximum placements to find before stopping (safeguard against infinite loops).
+// TODO(plan 3 §8(a)): these three caps exist only for find_all_in_psd's packer. Delete with it.
 constexpr size_t kMaxPlacementsPerRun = 10000;
-// Maximum distinct image-set placements enumerated per grouping during heterogeneous packing.
-// Set high enough that practical heterogeneous packings (trait-constrained meshes on ~1000 ASICs) are exhausted,
-// while still capping worst-case enumeration cost. A warning is logged if the cap is hit.
 constexpr size_t kMaxPlacementsPerGrouping = 1024;
-// Wall-clock budget for the set-packing branch-and-bound pass. On expiry the best feasible packing found so far
-// is returned (may be empty or sub-optimal if the solver has not yet found any solution).
 constexpr std::chrono::milliseconds kSetPackingBudget{5000};
-
-// TODO(plan 3 §8(a)): unreachable. Declared in no header and called from nowhere, in production or in tests --
-// it is the homogeneous ancestor of solve_for_many_groupings_to_psd_heterogeneous, which replaced it. It sits at
-// namespace scope rather than in the anonymous namespace above, so it has external linkage and no unused-function
-// warning fires. Deletable now, independently of the DFS work.
-std::vector<MappingResult<LogicalChipId, AsicID>> solve_for_many_groupings_to_psd(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    const AdjacencyGraph<uint32_t>& flat_mesh = grouping_info.adjacency_graph;
-
-    // Check if mesh is empty
-    size_t flat_mesh_size = flat_mesh.get_nodes().size();
-    if (flat_mesh_size == 0) {
-        return {};
-    }
-
-    // Iteratively solve for copies until no more can be found
-    std::vector<MappingResult<LogicalChipId, AsicID>> results;
-    MappingConstraints<LogicalChipId, AsicID> current_constraints;
-    std::set<std::set<AsicID>> seen_asic_sets;  // Guard against infinite loop
-
-    while (results.size() < kMaxPlacementsPerRun) {
-        // Copy per iteration: current_constraints accumulates only the forbidden constraints from previous
-        // placements, and the solve adds the grouping's trait constraints on top of whatever it is handed.
-        // Passing it directly would stack a fresh copy of those trait constraints on every pass.
-        MappingConstraints<LogicalChipId, AsicID> solve_constraints = current_constraints;
-        auto found = enumerate_distinct_placements_for_grouping(
-            grouping_info, physical_graph, physical_system_descriptor, /*max_solutions=*/1, solve_constraints);
-        if (found.empty()) {
-            break;
-        }
-        MappingResult<LogicalChipId, AsicID> result = std::move(found.front());
-
-        std::set<AsicID> used_asic_ids;
-        for (const auto& [_, asic_id] : result.target_to_global) {
-            used_asic_ids.insert(asic_id);
-        }
-
-        results.push_back(std::move(result));
-
-        std::set<LogicalChipId> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
-        TT_FATAL(
-            current_constraints.add_forbidden_constraint(all_target_nodes, used_asic_ids),
-            "Homogeneous solver: failed to add forbidden constraints to all groupings");
-    }
-
-    return results;
-}
 
 // Heterogeneous version: pack multiple different grouping types onto the physical graph.
 // Each grouping can have a different topology. ASICs are shared globally - no overlap between any mappings.
@@ -1849,6 +1791,11 @@ solve_for_many_groupings_to_psd_heterogeneous(
 // Adjacency-guided placement search
 // ---------------------------------------------------------------------------
 namespace {
+
+struct PlacementCandidate {
+    std::size_t grouping_index = 0;
+    MappingResult<LogicalChipId, AsicID> result;
+};
 
 constexpr std::size_t kUnassigned = std::numeric_limits<std::size_t>::max();
 constexpr std::uint32_t kNoMesh = std::numeric_limits<std::uint32_t>::max();
@@ -2162,26 +2109,24 @@ bool run_dfs(PlacementSearch& search, std::size_t placed_count) {
     return false;
 }
 
-}  // namespace
-
-AdjacencyPlacementResult solve_adjacency_guided_placement(
+std::vector<PsdPlacement> run_adjacency_guided_placement(
     const std::vector<GroupingInfo>& groupings,
     const std::vector<PlacementCandidate>& pool,
     const std::vector<std::vector<std::size_t>>& mesh_grouping_options,
     const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
     const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
     std::size_t node_budget) {
-    AdjacencyPlacementResult result;
     const std::size_t mesh_count = mesh_grouping_options.size();
     if (mesh_count == 0) {
-        result.success = true;
-        return result;
+        return {};
     }
 
     PlacementIndex index;
-    result.error_message = build_placement_index(groupings, pool, mesh_grouping_options, physical_graph, index);
-    if (!result.error_message.empty()) {
-        return result;
+    const std::string index_error =
+        build_placement_index(groupings, pool, mesh_grouping_options, physical_graph, index);
+    if (!index_error.empty()) {
+        log_debug(tt::LogFabric, "Adjacency-guided placement: {}", index_error);
+        return {};
     }
 
     // Undirected view of the logical mesh graph, deduplicated: this search only asks whether a link
@@ -2189,17 +2134,23 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
     std::vector<std::vector<std::uint32_t>> mesh_neighbors(mesh_count);
     for (const auto& [node, neighbors] : logical_mesh_graph.get_adjacency_map()) {
         if (node >= mesh_count) {
-            result.error_message = fmt::format(
-                "logical mesh graph references mesh {} but only {} logical mesh(es) were given", node, mesh_count);
-            return result;
+            log_debug(
+                tt::LogFabric,
+                "Adjacency-guided placement: logical mesh graph references mesh {} but only {} logical mesh(es) were "
+                "given",
+                node,
+                mesh_count);
+            return {};
         }
         for (const std::uint32_t neighbor : neighbors) {
             if (neighbor >= mesh_count) {
-                result.error_message = fmt::format(
-                    "logical mesh graph references mesh {} but only {} logical mesh(es) were given",
+                log_debug(
+                    tt::LogFabric,
+                    "Adjacency-guided placement: logical mesh graph references mesh {} but only {} logical mesh(es) "
+                    "were given",
                     neighbor,
                     mesh_count);
-                return result;
+                return {};
             }
             if (neighbor == node) {
                 continue;
@@ -2213,8 +2164,6 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
         neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
     }
 
-    // Reported up front because "the pool cannot host this shape at all" is a different problem from
-    // "the shapes cannot be arranged", and the search would otherwise report the latter.
     for (std::size_t mesh = 0; mesh < mesh_count; ++mesh) {
         if (index.candidate_lists[index.mesh_candidate_list[mesh]].empty()) {
             std::vector<std::string> names;
@@ -2222,12 +2171,14 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
             for (const std::size_t grouping : mesh_grouping_options[mesh]) {
                 names.push_back(groupings[grouping].name);
             }
-            result.error_message = fmt::format(
-                "the pool of {} placement(s) contains nothing from any grouping acceptable to logical mesh {} ({})",
+            log_debug(
+                tt::LogFabric,
+                "Adjacency-guided placement: the pool of {} placement(s) contains nothing from any grouping "
+                "acceptable to logical mesh {} ({})",
                 pool.size(),
                 mesh,
                 fmt::join(names, ", "));
-            return result;
+            return {};
         }
     }
 
@@ -2239,53 +2190,49 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
     search.occupied.assign(index.chip_word_count, 0);
 
     const bool solved = run_dfs(search, 0);
-    result.nodes_expanded = search.nodes_expanded;
-    result.deepest_depth = search.deepest_depth;
-    result.budget_exhausted = search.budget_exhausted;
-    if (solved) {
-        result.success = true;
-        result.assignment = std::move(search.assignment);
-        // Same derivation find_all_in_psd uses, so callers see the placements they already expect.
-        // The pinning map is copied from the grouping rather than composed with the placement, which
-        // is what find_all_in_psd does today.
-        result.placements.reserve(mesh_count);
-        for (const std::size_t candidate : result.assignment) {
-            PsdPlacement placement;
-            placement.mesh_node_to_asic_position = groupings[pool[candidate].grouping_index].mesh_node_to_asic_position;
-            for (const auto& [grouping_node, asic] : pool[candidate].result.target_to_global) {
-                placement.asics.insert(asic);
+    if (!solved) {
+        std::string stuck = "none recorded";
+        if (search.stuck_mesh != kNoMesh) {
+            std::vector<std::string> names;
+            for (const std::size_t grouping : mesh_grouping_options[search.stuck_mesh]) {
+                names.push_back(groupings[grouping].name);
             }
-            result.placements.push_back(std::move(placement));
+            stuck = fmt::format("mesh {} (accepts {})", search.stuck_mesh, fmt::join(names, ", "));
         }
         log_debug(
             tt::LogFabric,
-            "Adjacency-guided placement: placed {} meshes from a pool of {} in {} nodes",
+            "Adjacency-guided placement failed: could not place all {} logical meshes on chip-disjoint, mutually "
+            "adjacent regions from a pool of {}{}. Deepest simultaneous placement was {} mesh(es) after {} search "
+            "nodes; last dead end at {}.",
             mesh_count,
             pool.size(),
-            result.nodes_expanded);
-        return result;
+            search.budget_exhausted ? fmt::format(" within the {} node budget", node_budget) : std::string(),
+            search.deepest_depth,
+            search.nodes_expanded,
+            stuck);
+        return {};
     }
 
-    std::string stuck = "none recorded";
-    if (search.stuck_mesh != kNoMesh) {
-        std::vector<std::string> names;
-        for (const std::size_t grouping : mesh_grouping_options[search.stuck_mesh]) {
-            names.push_back(groupings[grouping].name);
+    std::vector<PsdPlacement> placements;
+    placements.reserve(mesh_count);
+    for (const std::size_t candidate : search.assignment) {
+        PsdPlacement placement;
+        placement.mesh_node_to_asic_position = groupings[pool[candidate].grouping_index].mesh_node_to_asic_position;
+        for (const auto& [grouping_node, asic] : pool[candidate].result.target_to_global) {
+            placement.asics.insert(asic);
         }
-        stuck = fmt::format("mesh {} (accepts {})", search.stuck_mesh, fmt::join(names, ", "));
+        placements.push_back(std::move(placement));
     }
-    result.error_message = fmt::format(
-        "adjacency-guided placement failed: could not place all {} logical meshes on chip-disjoint, mutually "
-        "adjacent regions from a pool of {}{}. Deepest simultaneous placement was {} mesh(es) after {} search "
-        "nodes; last dead end at {}.",
+    log_debug(
+        tt::LogFabric,
+        "Adjacency-guided placement: placed {} meshes from a pool of {} in {} nodes",
         mesh_count,
         pool.size(),
-        search.budget_exhausted ? fmt::format(" within the {} node budget", node_budget) : std::string(),
-        result.deepest_depth,
-        result.nodes_expanded,
-        stuck);
-    return result;
+        search.nodes_expanded);
+    return placements;
 }
+
+}  // namespace
 
 }  // namespace tt::tt_fabric
 
@@ -2411,71 +2358,199 @@ std::vector<MappingResult<LogicalChipId, AsicID>> PhysicalGroupingDescriptor::fi
     return results;
 }
 
-AdjacencyPlacementResult PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
-    const GroupingsByMeshName& groupings_by_mesh_name,
-    const std::vector<InstanceName>& logical_mesh_names,
-    const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
-    const AdjacencyGraph<AsicID>& physical_graph,
+namespace tt::tt_fabric {
+
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const ValidGroupingsMap& valid_groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::size_t node_budget) const {
-    AdjacencyPlacementResult result;
+    return solve_adjacency_guided_placement(
+        {&mesh_graph_descriptor}, valid_groupings, physical_system_descriptor, node_budget);
+}
 
-    // Enumerate once per distinct mesh name. Meshes that name the same MGD definition share its
-    // groupings, so they also share the solver work that turns those into placements. Each grouping
-    // must still be hierarchical: find_any_in_psd flattens it.
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
+    const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
+    const ValidGroupingsMap& valid_groupings,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    std::size_t node_budget) const {
+    using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
+    using tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph;
+    using tt::tt_metal::experimental::tt_fabric::merge_logical_multi_mesh_adjacency_graphs;
+
+    if (mesh_graph_descriptors.empty()) {
+        return {};
+    }
+    // NOTE: For now, only MESH groupings are supported, we will need to include support for hierarchical groupings in
+    // the future.
+    const auto mesh_it = valid_groupings.find("MESH");
+    if (mesh_it == valid_groupings.end() || mesh_it->second.empty()) {
+        return {};
+    }
+
+    // Build Logical Mesh level adjacency graph and merging multiple MGDs together
+    std::vector<LogicalMultiMeshGraph> parts;
+    parts.reserve(mesh_graph_descriptors.size());
+    for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
+        parts.push_back(build_logical_multi_mesh_adjacency_graph(*descriptor));
+    }
+    std::vector<std::map<MeshId, MeshId>> local_to_global_mesh_ids;
+    const LogicalMultiMeshGraph merged = merge_logical_multi_mesh_adjacency_graphs(parts, &local_to_global_mesh_ids);
+
+    // Create a physical adjacency graph from the PSD
+    AdjacencyGraph<AsicID> physical_graph(
+        tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(physical_system_descriptor));
+
+    // mesh_adjacency_graphs_ holds an entry per mesh whether or not that mesh has any inter-mesh link,
+    // so it is the authoritative instance list; mesh_level_graph_ carries only the edges. It is a
+    // std::map, so iterating it gives the ascending-MeshId order the returned placements are in.
+    std::vector<MeshId> mesh_order;
+    mesh_order.reserve(merged.mesh_adjacency_graphs_.size());
+    for (const auto& [mesh_id, _] : merged.mesh_adjacency_graphs_) {
+        mesh_order.push_back(mesh_id);
+    }
+    if (mesh_order.empty()) {
+        return {};
+    }
+    std::map<MeshId, std::uint32_t> mesh_to_dense;
+    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
+        mesh_to_dense.emplace(mesh_order[dense], dense);
+    }
+
     std::vector<GroupingInfo> groupings;
     std::vector<PlacementCandidate> pool;
-    std::unordered_map<InstanceName, std::vector<std::size_t>> options_by_name;
-    for (const auto& mesh_name : logical_mesh_names) {
-        if (options_by_name.contains(mesh_name)) {
-            continue;
-        }
-        const auto named = groupings_by_mesh_name.find(mesh_name);
-        if (named == groupings_by_mesh_name.end() || named->second.empty()) {
-            result.error_message = fmt::format("no PGD groupings were matched to MGD mesh '{}'", mesh_name);
-            return result;
-        }
+    std::vector<std::vector<std::size_t>> mesh_grouping_options(mesh_order.size());
 
-        std::vector<std::size_t>& options = options_by_name[mesh_name];
-        for (const auto& grouping : named->second) {
-            // max_solutions of 0 means every distinct placement, bounded only by the solver's own
-            // hard cap. The search needs a complete pool: a placement dropped here is a solution
-            // it can never reach, and unlike the coverage packer it cannot tell it was truncated.
-            auto placements =
-                find_any_in_psd(grouping, physical_system_descriptor, physical_graph, /*max_solutions=*/0);
+    // Enumerating a grouping's placements depends only on the hierarchical PGD grouping and the PSD,
+    // not on which mesh asked, so each PGD grouping name is solved once and the result shared. Without
+    // this, a descriptor whose meshes all accept the same grouping repeats the same solve per
+    // definition name.
+    std::unordered_map<std::string, std::vector<MappingResult<LogicalChipId, AsicID>>> placements_by_grouping_name;
+
+    // Merged global MeshId -> ValidGroupingsMap MESH key. Uses MeshGraphDescriptor::mesh_id_to_instance_name
+    // and the same merged_instance_key spelling as get_valid_groupings_for_mgds.
+    std::unordered_map<MeshId, InstanceName> global_mesh_id_to_instance_key;
+    global_mesh_id_to_instance_key.reserve(merged.mesh_adjacency_graphs_.size());
+    const std::size_t mgd_count = mesh_graph_descriptors.size();
+    for (std::size_t mgd_index = 0; mgd_index < mgd_count; ++mgd_index) {
+        const auto mesh_id_to_name = mesh_graph_descriptors[mgd_index]->mesh_id_to_instance_name();
+        for (const auto& [mesh_id, instance_name] : mesh_id_to_name) {
+            const auto global_it = local_to_global_mesh_ids[mgd_index].find(mesh_id);
+            if (global_it == local_to_global_mesh_ids[mgd_index].end()) {
+                continue;
+            }
+            global_mesh_id_to_instance_key.emplace(
+                global_it->second, merged_instance_key(mgd_index, mgd_count, instance_name));
+        }
+    }
+
+    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
+        const MeshId global_mesh_id = mesh_order[dense];
+        const auto instance_key_it = global_mesh_id_to_instance_key.find(global_mesh_id);
+        if (instance_key_it == global_mesh_id_to_instance_key.end()) {
             log_debug(
                 tt::LogFabric,
-                "Adjacency-guided placement: MGD mesh '{}' grouping '{}' enumerated {} placements",
-                mesh_name,
-                grouping.name,
-                placements.size());
+                "Adjacency-guided placement: merged mesh id {} has no MGD instance name",
+                *global_mesh_id);
+            return {};
+        }
+        const auto groupings_it = mesh_it->second.find(instance_key_it->second);
+        if (groupings_it == mesh_it->second.end()) {
+            log_debug(
+                tt::LogFabric,
+                "Adjacency-guided placement: mesh instance '{}' has no entry in the valid groupings map",
+                instance_key_it->second);
+            return {};
+        }
+        const auto& named_groupings = groupings_it->second;
 
+        std::vector<std::size_t> options;
+        std::unordered_set<std::string> enumerated_names;
+        for (const auto& grouping : named_groupings) {
+            if (!enumerated_names.insert(grouping.name).second) {
+                continue;
+            }
+
+            auto cached = placements_by_grouping_name.find(grouping.name);
+            if (cached == placements_by_grouping_name.end()) {
+                // find_any_in_psd flattens a hierarchical PGD grouping. Committed ValidGroupingsMap
+                // entries are already flat, so resolve the PGD source by name and flatten here.
+                const std::vector<GroupingInfo> hierarchical =
+                    is_flattened(grouping) ? get_groupings_by_name(grouping.name) : std::vector<GroupingInfo>{grouping};
+                std::vector<MappingResult<LogicalChipId, AsicID>> enumerated;
+                for (const auto& source : hierarchical) {
+                    auto found =
+                        find_any_in_psd(source, physical_system_descriptor, physical_graph, /*max_solutions=*/0);
+                    for (auto& placement : found) {
+                        if (placement.success) {
+                            enumerated.push_back(std::move(placement));
+                        }
+                    }
+                }
+                log_debug(
+                    tt::LogFabric,
+                    "Adjacency-guided placement: grouping '{}' ({} hierarchical source(s)) enumerated {} "
+                    "placements",
+                    grouping.name,
+                    hierarchical.size(),
+                    enumerated.size());
+                cached = placements_by_grouping_name.emplace(grouping.name, std::move(enumerated)).first;
+            }
+            if (cached->second.empty()) {
+                continue;
+            }
+
+            // The committed grouping carries this mesh definition's own pinning map, so two
+            // definitions accepting the same PGD grouping still need separate entries here even
+            // though they share the enumeration above.
             const std::size_t grouping_index = groupings.size();
             options.push_back(grouping_index);
             groupings.push_back(grouping);
-            for (auto& placement : placements) {
-                if (!placement.success) {
-                    continue;
-                }
+            for (const auto& placement : cached->second) {
                 PlacementCandidate candidate;
                 candidate.grouping_index = grouping_index;
-                candidate.result = std::move(placement);
+                candidate.result = placement;
                 pool.push_back(std::move(candidate));
             }
         }
+
+        if (options.empty()) {
+            log_debug(
+                tt::LogFabric,
+                "Adjacency-guided placement: mesh instance '{}' has no grouping that places on this PSD",
+                instance_key_it->second);
+            return {};
+        }
+        mesh_grouping_options[dense] = std::move(options);
     }
 
-    std::vector<std::vector<std::size_t>> mesh_grouping_options;
-    mesh_grouping_options.reserve(logical_mesh_names.size());
-    for (const auto& mesh_name : logical_mesh_names) {
-        mesh_grouping_options.push_back(options_by_name.at(mesh_name));
+    // The mesh-level graph in the search's dense index space. run_adjacency_guided_placement
+    // symmetrises and deduplicates, so emitting each stored direction as-is is enough.
+    AdjacencyGraph<std::uint32_t>::AdjacencyMap logical_adjacency;
+    for (std::uint32_t dense = 0; dense < mesh_order.size(); ++dense) {
+        logical_adjacency[dense];
     }
+    for (const auto& [mesh_id, neighbors] : merged.mesh_level_graph_.get_adjacency_map()) {
+        const auto from = mesh_to_dense.find(mesh_id);
+        if (from == mesh_to_dense.end()) {
+            continue;
+        }
+        for (const MeshId neighbor : neighbors) {
+            const auto to = mesh_to_dense.find(neighbor);
+            if (to != mesh_to_dense.end()) {
+                logical_adjacency[from->second].push_back(to->second);
+            }
+        }
+    }
+    const AdjacencyGraph<std::uint32_t> logical_mesh_graph(logical_adjacency);
 
-    // Qualified: the member declaration above would otherwise hide the free function.
-    return tt::tt_fabric::solve_adjacency_guided_placement(
+    return run_adjacency_guided_placement(
         groupings, pool, mesh_grouping_options, logical_mesh_graph, physical_graph, node_budget);
 }
 
+}  // namespace tt::tt_fabric
+
+// TODO(plan 3 §8(a)): delete both overloads once solve_adjacency_guided_placement is the only producer.
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
@@ -2485,6 +2560,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
 }
 
 // NOTE this only works on flattenable meshes right now
+// TODO(plan 3 §8(a)): delete with the overload above.
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
