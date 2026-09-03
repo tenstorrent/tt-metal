@@ -568,6 +568,8 @@ struct Metal2BindingsSnapshot {
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
+    std::map<std::string, bool> dfb_accessor_is_relay;
+    std::map<std::string, uint8_t> dfb_accessor_prefetcher_pipe_id;
     std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
@@ -579,6 +581,12 @@ struct Metal2BindingsSnapshot {
         std::string s;
         for (const auto& [name, id] : dfb_accessors) {
             s += ":dfb:" + name + "=" + std::to_string(id);
+            if (dfb_accessor_is_relay.contains(name) && dfb_accessor_is_relay.at(name)) {
+                s += ":relay";
+                if (dfb_accessor_prefetcher_pipe_id.contains(name) && dfb_accessor_prefetcher_pipe_id.at(name) != 0xFF) {
+                    s += ":prefetcher_pipe" + std::to_string(dfb_accessor_prefetcher_pipe_id.at(name));
+                }
+            }
         }
         for (const auto& [name, h] : sem_accessors) {
             s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
@@ -797,7 +805,11 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     s.runtime_arg_names = kernel.get_runtime_arg_names();
     s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
     kernel.process_dataflow_buffer_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
+        [&s](const std::string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
+            s.dfb_accessors[name] = id;
+            s.dfb_accessor_is_relay[name] = is_relay;
+            s.dfb_accessor_prefetcher_pipe_id[name] = prefetcher_pipe_id;
+        });
     kernel.process_semaphore_binding_handles(
         [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
             s.sem_accessors[name] = {id, scope, total_binder_harts};
@@ -894,7 +906,18 @@ static void emit_metal2_namespaces(
     if (!s.dfb_accessors.empty()) {
         f << "namespace dfb {\n";
         for (const auto& [name, id] : s.dfb_accessors) {
-            f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            const bool is_relay = s.dfb_accessor_is_relay.contains(name) && s.dfb_accessor_is_relay.at(name);
+            if (is_relay) {
+                const uint8_t prefetcher_pipe_id =
+                    s.dfb_accessor_prefetcher_pipe_id.contains(name) ? s.dfb_accessor_prefetcher_pipe_id.at(name) : 0xFF;
+                f << "constexpr RelayDFBBindingToken " << name << "{" << id;
+                if (prefetcher_pipe_id != 0xFF) {
+                    f << ", " << static_cast<uint32_t>(prefetcher_pipe_id);
+                }
+                f << "};\n";
+            } else {
+                f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            }
         }
         f << "}  // namespace dfb\n";
     }

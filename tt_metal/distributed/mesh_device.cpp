@@ -1046,6 +1046,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
+        disable_and_clear_program_cache();
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
