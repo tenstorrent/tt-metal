@@ -711,6 +711,38 @@ class _DeviceSampler:
         self._full_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid.x - 1, _grid.y - 1))]
         )
+        # topk's grid. Defaults to the full grid: narrowing it MEASURED WORSE in situ.
+        #
+        # ttnn.topk splits the reduced dim over local cores and merges them on ONE final
+        # core, picking the split by minimising 7*Wt_local + 2*Wt_final -- constants its
+        # own source says were "fitted on p150a silicon", i.e. Blackhole. This is
+        # Wormhole, so the split looked worth questioning, and sub_core_grids is the only
+        # call-site lever (`sorted` is passed to the kernels and never branched on, so
+        # sorted=False buys nothing).
+        #
+        # A standalone sweep at the sampler's exact shape ([1,1,32,2048] bf16 DRAM, k=64)
+        # said a narrower grid was monotonically faster:
+        #     8x8 792.7 us | 6x8 672.2 | 4x8 583.6 | 2x8 456.6 | auto 700.5
+        # It was wrong. Those are HOST timings around a single dispatched call, ~400 us of
+        # which is dispatch overhead against a 219 us kernel, so what they actually ranked
+        # was program setup cost, not kernel time. In the traced CP frame, where dispatch
+        # is amortised away, 2x8 measured 29.51 ms/frame against 27.34 ms on the full grid
+        # -- 2.17 ms WORSE.
+        #
+        # Lesson for the next person: rank kernels with the traced per-op profile
+        # (tests/test_qwen3_tts_perf_report.py), never with a host-side loop around one op.
+        # The knob is kept for A/B: QWEN3_TTS_SAMPLING_TOPK_GRID=XxY, 0x0 = full grid.
+        _tg = os.environ.get("QWEN3_TTS_SAMPLING_TOPK_GRID", "0x0")
+        try:
+            _tx, _ty = (int(v) for v in _tg.lower().split("x"))
+        except ValueError:
+            _tx = _ty = 0
+        if _tx > 0 and _ty > 0 and _tx <= _grid.x and _ty <= _grid.y:
+            self._topk_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_tx - 1, _ty - 1))]
+            )
+        else:
+            self._topk_grid = self._full_grid
         # ttnn.sampling runs one core per user; we have a single user (batch=1).
         self._sampling_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             ttnn.CoreCoord(0, 0), 1, self._full_grid, row_wise=True
@@ -838,7 +870,7 @@ class _DeviceSampler:
             dim=-1,
             largest=True,
             sorted=True,
-            sub_core_grids=self._full_grid,
+            sub_core_grids=self._topk_grid,
         )
         if padded is not logits_tt:
             ttnn.deallocate(padded)
