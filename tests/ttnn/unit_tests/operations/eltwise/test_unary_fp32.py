@@ -294,3 +294,28 @@ def test_atanh(device, h, w):
     # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
     # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.sign])
+def test_sign_signed_zero_fp32(device, ttnn_function):
+    # sign(-0.0) is 0, not -1. On the SFPU (v == 0.0f) is false for -0.0 while
+    # (v < 0.0f) is true, so the zero test has to mask the sign bit.
+    x_torch = torch.tensor([[-0.0, 0.0, -1.0, 1.0, -5.5, 5.5, -1e-30, 1e-30]], dtype=torch.float32)
+    y_torch = torch.sign(x_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn_function(x_tt))
+
+    assert torch.equal(tt_out, y_torch), f"got {tt_out.tolist()}, want {y_torch.tolist()}"
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.sign])
+def test_sign_signed_zero_bfloat16(device, ttnn_function):
+    # Same defect on the bfloat16 path; the branch is shared.
+    x_torch = torch.tensor([[-0.0, 0.0, -1.0, 1.0, -5.5, 5.5]], dtype=torch.float32)
+    y_torch = torch.sign(x_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn_function(x_tt)).float()
+
+    assert torch.equal(tt_out, y_torch), f"got {tt_out.tolist()}, want {y_torch.tolist()}"
