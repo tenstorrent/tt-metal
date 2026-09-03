@@ -39,6 +39,8 @@ Env:
   QWEN36_SPEC_REF_PATH        "decode" (default, model.decode_step_paged) or "verify"
                               (model.verify_forward one token at a time)
   QWEN36_SPEC_LOSSLESS_STOCK_GDN=1  leave plain decode on the stock composite GDN kernel
+  QWEN36_LOSSLESS_PROMPT_LEN  prompt length (default 130; see above for why that value)
+  QWEN36_LOSSLESS_NUM_BLOCKS  KV blocks / max_seq_len budget (default 64); raise it with PROMPT_LEN
 """
 
 import os
@@ -52,9 +54,10 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BLOCK_SIZE, DEVICE_PARAMS, _get_prompt
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-PROMPT_LEN = 130  # deliberately not a multiple of BLOCK_SIZE (64) nor of the 32-row tile
+# Default deliberately not a multiple of BLOCK_SIZE (64) nor of the 32-row tile (see docstring).
+PROMPT_LEN = int(os.environ.get("QWEN36_LOSSLESS_PROMPT_LEN", 130))
 MAX_NEW = 48
-NUM_BLOCKS = 64
+NUM_BLOCKS = int(os.environ.get("QWEN36_LOSSLESS_NUM_BLOCKS", 64))
 DEFAULT_NEAR_TIE_GAP = 2.0
 
 

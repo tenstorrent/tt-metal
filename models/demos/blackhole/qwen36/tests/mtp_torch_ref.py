@@ -7,7 +7,13 @@ Shared by the device PCC test (tests/test_mtp_tp.py) and the off-device acceptan
 
     h'  = fc( concat[ enorm(embed(token)), hnorm(hidden) ] )
     h'' = DecoderLayer(h')                  # one gated full-attention layer + SwiGLU MLP
-    logits = LMHead( mtp.norm(h'') )        # h'' is also the next chained hidden
+    logits = LMHead( mtp.norm(h'') )
+    chain  = mtp.norm(h'')  (default)  |  h''  (chain_postnorm=False)    # the next step's hidden
+
+``chain_postnorm`` mirrors the device head's feed contract (Qwen36MTP.forward_decode under
+QWEN36_SPEC_POSTNORM=1, "V3", the default): the next chained step is fused from mtp.norm's output
+instead of the raw block output. Default True is the V3 contract; False restores V0.
+``logits`` always consumes the raw block.
 
 Two forms with identical math (pinned by tests/test_mtp_torch_ref.py, CPU-only):
 
@@ -83,11 +89,12 @@ class MTPTorchHead:
     parameters (partial rope width + theta) have to be supplied, since weight shapes do not
     encode them."""
 
-    def __init__(self, sd, rope_dim, rope_theta, eps=EPS):
+    def __init__(self, sd, rope_dim, rope_theta, eps=EPS, chain_postnorm=True):
         self.sd = sd
         self.eps = eps
         self.rope_dim = rope_dim
         self.rope_theta = rope_theta
+        self.chain_postnorm = chain_postnorm
         fc = sd["mtp.fc.weight"]
         self.dim = fc.shape[0]
         assert fc.shape[1] == 2 * self.dim, f"unexpected mtp.fc shape {tuple(fc.shape)}"
@@ -145,7 +152,8 @@ class MTPTorchHead:
         return gated.reshape(Sq, self.n_heads * self.head_dim) @ self.w(LAYER + "self_attn.o_proj.weight").T
 
     def _block_tail(self, fused, attn_out):
-        """Attention residual + SwiGLU MLP residual -> the block output (the next chained hidden)."""
+        """Attention residual + SwiGLU MLP residual -> the raw block output (what ``logits`` norms,
+        and — through ``chain`` — the next chained hidden)."""
         h1 = fused + attn_out
         ff = rms(h1, self.sd[LAYER + "post_attention_layernorm.weight"], self.eps)
         mlp = (
@@ -154,27 +162,40 @@ class MTPTorchHead:
         return h1 + mlp
 
     def logits(self, block_out):
-        """Block output -> [S, vocab] through mtp.norm + the shared LM head."""
+        """Raw block output -> [S, vocab] through mtp.norm + the shared LM head."""
         return rms(block_out, self.sd["mtp.norm.weight"], self.eps) @ self.w("output.weight").T
+
+    def chain(self, block_out):
+        """Raw block output -> the hidden the NEXT chained step is fused from.
+
+        V3 (default, chain_postnorm=True): mtp.norm's output — the very tensor the LM head
+        consumes — as Qwen36MTP.forward_decode chains under QWEN36_SPEC_POSTNORM=1 (the default).
+        V0 (chain_postnorm=False): the block output itself, before mtp.norm.
+        """
+        if self.chain_postnorm:
+            return rms(block_out, self.sd["mtp.norm.weight"], self.eps)
+        return block_out
 
     def forward_sequence(self, hidden, tokens, positions=None, want_logits=True):
         """All S slots in one causal pass.
 
-        Returns (logits [S,vocab] or None, block_out [S,dim], k [S,NKV,HD], v [S,NKV,HD]).
-        The k/v are the cache a later ``forward_step`` chain reads as its prefix.
+        Returns (logits [S,vocab] or None, chain [S,dim], k [S,NKV,HD], v [S,NKV,HD]). ``chain`` is
+        the per-slot next-step hidden under the configured contract (see ``chain``). The k/v are the
+        cache a later ``forward_step`` chain reads as its prefix.
         """
         S = hidden.shape[0]
         positions = torch.arange(S) if positions is None else positions
         fused = self.fuse(hidden, tokens)
         q, gate, k, v = self._qkv(fused, positions)
         block_out = self._block_tail(fused, self._attend(q, gate, k, v, 0))
-        return (self.logits(block_out) if want_logits else None), block_out, k, v
+        return (self.logits(block_out) if want_logits else None), self.chain(block_out), k, v
 
     def forward_step(self, hidden_row, token, position, past_k=None, past_v=None):
         """One slot against a K/V cache.
 
-        Returns (logits [vocab], block_out [dim], k_all, v_all) where k_all/v_all include this
-        slot, ready to be passed straight back in as the next step's cache.
+        Returns (logits [vocab], chain [dim], k_all, v_all) where ``chain`` is this slot's next-step
+        hidden under the configured contract and k_all/v_all include this slot, ready to be passed
+        straight back in as the next step's cache.
         """
         fused = self.fuse(hidden_row.reshape(1, -1), torch.as_tensor([int(token)]))
         q, gate, k, v = self._qkv(fused, torch.as_tensor([int(position)]))
@@ -182,7 +203,7 @@ class MTPTorchHead:
         v_all = v if past_v is None else torch.cat([past_v, v], 0)
         offset = 0 if past_k is None else past_k.shape[0]
         block_out = self._block_tail(fused, self._attend(q, gate, k_all, v_all, offset))
-        return self.logits(block_out)[0], block_out[0], k_all, v_all
+        return self.logits(block_out)[0], self.chain(block_out)[0], k_all, v_all
 
 
 def mtp_reference(hidden, tokens, sd, args):

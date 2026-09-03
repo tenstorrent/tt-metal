@@ -111,11 +111,32 @@ class Qwen36Model:
                 else {}
             ),
         )
+        # Speculative-decode feed contract (see spec_feed_rows). Post-norm (V3) is the default: the
+        # MTP drafter is fed the OUTPUT of this final norm instead of the residual stream before it.
+        # spec_norm is that norm with the trailing all-gather off, so its output keeps the fractured
+        # [1,1,*,dim/tp] shape/dtype the drafter already consumes. QWEN36_SPEC_POSTNORM=0 restores
+        # the pre-norm (V0) contract, under which spec_norm is never called.
+        self.spec_postnorm = os.environ.get("QWEN36_SPEC_POSTNORM", "1") == "1"
+        self.spec_norm = None
         if self.num_devices > 1:
             # TP: DistributedNorm all-gathers fractured hidden for LM head.
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
+            # Same RMSNorm object (no weight duplication), all-gather disabled. Only valid when the
+            # PREFILL norm is the distributed (stats-gathered) form, whose inner output is already
+            # fractured to dim/tp; a gather-then-norm PREFILL would hand back the full width instead.
+            if args.is_distributed_norm(Mode.PREFILL):
+                self.spec_norm = DistributedNorm(
+                    self.norm.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy, enable_all_gather=False
+                )
+        else:
+            # Single device: the plain RMSNorm's full-dim output IS the fractured form.
+            self.spec_norm = self.norm
+        assert not self.spec_postnorm or self.spec_norm is not None, (
+            "QWEN36_SPEC_POSTNORM=1 needs the fractured-output distributed final norm "
+            "(args.is_distributed_norm(Mode.PREFILL) is False on this mesh/dim)"
+        )
 
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
@@ -1118,8 +1139,9 @@ class Qwen36Model:
         """One MTP draft step at absolute ``position`` (B=1). Builds the partial-RoPE cos/sin for
         the MTP position (base + rope_delta), then runs the drafter head.
 
-        hidden_states : fractured [1,1,1,dim/tp] — base last-hidden (pre final norm) or the previous
-                        MTP step's next_hidden (chaining).
+        hidden_states : fractured [1,1,1,dim/tp] — the base's drafter feed (spec_feed_rows: pre-final-
+                        norm under V0, fractured final-norm output under V3) or the previous MTP
+                        step's next_hidden (chaining).
         token_id      : int — the token at ``position`` (the one the base/MTP step just produced).
         page_table    : device int32 page table for the MTP layer's own KV cache.
         Returns (logits, next_hidden).
@@ -1161,6 +1183,28 @@ class Qwen36Model:
             need_logits=need_logits,
         )
 
+    def spec_feed_rows(self, rows):
+        """Map base per-position hidden rows to what the MTP drafter is fed (the spec "feed contract").
+
+        ``rows`` is [1,1,*,dim/tp] fractured bf16: the residual stream leaving the last decoder layer,
+        BEFORE the final norm. Every site that hands base hidden to the drafter (prompt warm, seed,
+        verify rows -> reseed / anchor) goes through here.
+
+        V0 (QWEN36_SPEC_POSTNORM=0): returns ``rows`` itself. The drafter's hnorm sees the raw
+        residual stream, and chained draft steps feed back the MTP block output before mtp.norm
+        (Qwen36MTP.forward_decode).
+        V3 (default, QWEN36_SPEC_POSTNORM unset or 1): returns a NEW tensor — the OUTPUT of the base final norm, kept
+        fractured to dim/tp by ``spec_norm`` (same weights, no trailing all-gather) — so shape and
+        dtype are unchanged and no consumer has to know. The matching chain-side change is in
+        Qwen36MTP.forward_decode, which then feeds back mtp.norm's output.
+
+        The caller owns both tensors: when the result ``is not rows`` it frees ``rows`` itself once it
+        no longer needs them. Trace-safe (a fixed-shape norm over fixed inputs).
+        """
+        if not self.spec_postnorm:
+            return rows
+        return self.spec_norm(rows, mode=Mode.PREFILL)
+
     def verify_forward(self, draft_tokens, chunk_start, page_table, bucket=None, gdn_recurrent=False):
         """Speculative multi-token verify (TP). Runs the base model over the K candidate tokens at
         absolute positions [chunk_start, chunk_start+K) as ONE masked-bucket chunk: GDN advances in
@@ -1171,8 +1215,9 @@ class Qwen36Model:
         draft_tokens : sequence of K token ids (candidates at chunk_start..chunk_start+K-1).
         page_table   : torch [1, num_blocks] identity page table (same as decode).
         Returns (logits [K, vocab] host float, hidden [1,1,K,dim/tp] fractured device) — hidden is the
-        pre-final-norm rows (used to reseed the MTP drafter). ADVANCES GDN + KV; the caller must
-        snapshot/roll back for rejected drafts.
+        drafter feed for those rows (spec_feed_rows: the pre-final-norm rows under V0, the fractured
+        final-norm output under V3), used to reseed the MTP drafter. ADVANCES GDN + KV; the caller
+        must snapshot/roll back for rejected drafts.
         """
         assert self.num_devices > 1, "verify_forward is TP-only for now"
         assert self._paged_kv_caches is not None, "verify_forward needs allocate_kv_caches first"
@@ -1235,13 +1280,17 @@ class Qwen36Model:
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,K,dim]
         logits = self._lm_head(normed)  # [1,1,K,vocab] replicated per device
         ttnn.deallocate(normed)
+        # Drafter feed for these rows (V0: rows itself; V3: a new fractured post-norm tensor).
+        feed = self.spec_feed_rows(rows)
+        if feed is not rows:
+            ttnn.deallocate(rows)
         # _lm_head all-gathers, so the logits are REPLICATED across the TP mesh: read ONE replica
         # rather than concatenating every rank and throwing all but the first away (the same idiom
         # process_output_decode uses; ~num_devices x less device->host traffic).
         lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
         ttnn.deallocate(logits)
         lt = lt.reshape(-1, self.vocab_size)[:K].float()
-        return lt, rows
+        return lt, feed
 
     # ------------------------------------------------------------------------------------------
     # Traced speculative verify (the eager-loop fix). The verify forward is a fixed-shape forward over
@@ -1278,7 +1327,10 @@ class Qwen36Model:
 
         Full-attention layers run the DECODE flash kernel with the T candidates as T pseudo-users
         (see capture_verify_trace). GDN layers stay on the seq-dim recurrent verify — the batch dim
-        is not a valid axis for a recurrence."""
+        is not a valid axis for a recurrence.
+
+        Returns (logits, rows, ids): ``rows`` is the drafter feed for the T positions (spec_feed_rows;
+        pre-final-norm under V0, fractured post-norm under V3), [1,1,T,dim/tp] bf16 either way."""
         T = self._vfy_T
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
@@ -1325,6 +1377,13 @@ class Qwen36Model:
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,K,dim]
         logits = self._lm_head(normed)  # [1,1,K,vocab] replicated per device
         ttnn.deallocate(normed)
+        # Drafter feed (V0: rows itself; V3: a new fractured post-norm tensor). Inside the trace, so
+        # under V3 the persistent _vfy_rows_out IS the post-norm tensor; its programs are the inner
+        # norm's, already compiled by the self.norm call above (only the trailing gather is skipped).
+        feed = self.spec_feed_rows(rows)
+        if feed is not rows:
+            ttnn.deallocate(rows)
+        rows = feed
         # Greedy acceptance compares TOKEN IDS, so argmax the T verify rows here, inside the trace,
         # and let the caller read back T uint32 instead of T x 151936 floats (~3 MB + a host .float()
         # cast per iteration). ttnn.argmax needs ROW_MAJOR input (a TILE tensor takes a single-core

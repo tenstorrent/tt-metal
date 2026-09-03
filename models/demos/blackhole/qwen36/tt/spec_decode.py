@@ -82,6 +82,16 @@ class SpeculativeDecoder:
         self._tn = 0  # iterations folded into _tsum
         self.stop_tokens = set(stop_tokens or [])
         self.mtp = model.mtp
+        # Feed contract (Qwen36Model.spec_feed_rows; env QWEN36_SPEC_POSTNORM). V3 (default) feeds
+        # the drafter the final-norm output and chains mtp.norm's output; V0 (QWEN36_SPEC_POSTNORM=0)
+        # feeds the pre-final-norm residual and chains the raw MTP block output. Both halves are
+        # decided by the model at build time;
+        # the drafter must agree or it would fuse mixed-scale hiddens across a chain.
+        self.spec_postnorm = bool(getattr(model, "spec_postnorm", False))
+        assert self.spec_postnorm == bool(getattr(model.mtp, "spec_postnorm", False)), (
+            f"spec feed contract mismatch: model spec_postnorm={self.spec_postnorm} but "
+            f"mtp spec_postnorm={getattr(model.mtp, 'spec_postnorm', False)}"
+        )
         # The MTP layer keeps its own paged KV cache with its own (identity) page table.
         self.mtp_pt = ttnn.from_torch(
             page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh
@@ -175,6 +185,27 @@ class SpeculativeDecoder:
         for t in owned_tok:
             ttnn.deallocate(t)
         return drafts
+
+    def _draft_warmup(self, pending, Hp, p):
+        """Run ONE full (need_logits=True) draft step eagerly, BEFORE any trace is captured.
+
+        The first real ``_draft`` happens after capture_verify_trace, and the logits-producing drafter
+        path has programs nothing earlier in generate() has run at B=1: head_norm in DECODE mode
+        (gather-then-norm), the fp32 LM head and its vocab all-gather, the multicore untilize and the
+        argmax — and, under V3, the mesh_partition that re-fractures mtp.norm's output. A program that
+        first compiles while a trace is parked lands its kernel binaries in memory the replayed trace
+        writes over (see capture_verify_trace), so they have to compile here. Runs under BOTH feed
+        contracts.
+
+        Side effect: writes the drafter's KV at slot ``p`` from (H_p, pending) — exactly the write
+        draft step 0 repeats, from the same inputs, on the first real iteration — so it is inert. The
+        drafted id is discarded.
+        """
+        logits, h = self.model.ttnn_mtp_decode_forward(Hp, int(pending), p, self.mtp_pt)
+        idx = self._argmax_last(logits)
+        for t in (logits, idx, h):
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(self.mesh)
 
     def _argmax_last(self, logits):
         """argmax over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
@@ -571,7 +602,7 @@ class SpeculativeDecoder:
         self._batched_reseed = not eager_reseed
         logger.info(
             f"[spec] gen={self._gen_id} T={T} K={self.K} reseed={'eager' if eager_reseed else 'batched'} "
-            f"max_new={max_new_tokens}"
+            f"feed={'V3' if self.spec_postnorm else 'V0'} max_new={max_new_tokens}"
         )
 
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
@@ -581,12 +612,18 @@ class SpeculativeDecoder:
         last_hidden = [None]  # the base hidden at slot T-1, kept for _warm_mtp_last
 
         def _on_chunk(hidden, chunk_start, valid_len):
-            self._warm_mtp_chunk(hidden, chunk_start, valid_len, prompt_ids)
+            # Drafter feed for the chunk (V0: `hidden` itself; V3: a new fractured post-norm tensor).
+            # Both the warm and the slot-T-1 row must come from the SAME tensor, so the drafter is
+            # never handed a mix of contracts. The caller still frees `hidden`.
+            feed = self.model.spec_feed_rows(hidden)
+            self._warm_mtp_chunk(feed, chunk_start, valid_len, prompt_ids)
             if chunk_start + valid_len >= T:  # the chunk holding slot T-1
                 i = T - 1 - chunk_start
-                row = ttnn.slice(hidden, (0, 0, i, 0), (1, 1, i + 1, hidden.shape[-1]))
+                row = ttnn.slice(feed, (0, 0, i, 0), (1, 1, i + 1, feed.shape[-1]))
                 last_hidden[0] = ttnn.clone(row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(row)
+            if feed is not hidden:
+                ttnn.deallocate(feed)
 
         logits_dev = model.prefill_for_spec(prompt, self.page_table, T, _on_chunk)
         lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
@@ -626,6 +663,16 @@ class SpeculativeDecoder:
             )
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 
+        p = T
+        # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
+        # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
+        pending = int(Lp.argmax())
+        # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax
+        # — plus V3's mesh_partition) has not run yet, and its first real run is AFTER the capture
+        # below. Compile it now; its one KV write (slot p from (H_p, pending)) is what draft step 0
+        # repeats.
+        self._draft_warmup(pending, Hp, p)
+
         # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
         # seed so every program those paths need is already compiled: a compile that happens once the
         # trace is parked clobbers it. Its two throwaway passes write junk KV at [T+1, T+1+K] — past
@@ -643,10 +690,6 @@ class SpeculativeDecoder:
         # nothing compiles here with the verify trace parked.
         self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
         logger.info(f"[spec] commit={'traced' if self._commit_traced else 'eager'}")
-        p = T
-        # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
-        # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
-        pending = int(Lp.argmax())
         ttnn.synchronize_device(self.mesh)
         self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
         _t_decode = time.perf_counter()

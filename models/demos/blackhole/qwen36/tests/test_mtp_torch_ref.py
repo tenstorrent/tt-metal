@@ -11,6 +11,7 @@ Random weights at toy dims: no checkpoint, no device, runs in well under a secon
 
     pytest models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py -v
 """
+import pytest
 import torch
 
 from models.demos.blackhole.qwen36.tests.mtp_torch_ref import LAYER, MTPTorchHead
@@ -52,8 +53,8 @@ def _random_sd(seed=0):
     }
 
 
-def _head():
-    return MTPTorchHead(_random_sd(), rope_dim=ROPE_DIM, rope_theta=ROPE_THETA)
+def _head(chain_postnorm=False):
+    return MTPTorchHead(_random_sd(), rope_dim=ROPE_DIM, rope_theta=ROPE_THETA, chain_postnorm=chain_postnorm)
 
 
 @torch.no_grad()
@@ -66,9 +67,12 @@ def test_dims_derived_from_state_dict():
 
 
 @torch.no_grad()
-def test_incremental_matches_sequence():
-    """Stepping slot-by-slot with a growing K/V cache == one causal pass over all slots."""
-    head = _head()
+@pytest.mark.parametrize("chain_postnorm", (False, True))
+def test_incremental_matches_sequence(chain_postnorm):
+    """Stepping slot-by-slot with a growing K/V cache == one causal pass over all slots.
+
+    Under both chain contracts (V0 raw block output, V3 mtp.norm output)."""
+    head = _head(chain_postnorm)
     S = 7
     g = torch.Generator().manual_seed(1)
     hidden = torch.randn(S, DIM, generator=g)
@@ -86,13 +90,15 @@ def test_incremental_matches_sequence():
 
 
 @torch.no_grad()
-def test_step_from_warm_prefix_matches_sequence():
+@pytest.mark.parametrize("chain_postnorm", (False, True))
+def test_step_from_warm_prefix_matches_sequence(chain_postnorm):
     """The oracle's chain pattern: take a warmed prefix cache from forward_sequence, then step.
 
     Stepping slot P from the prefix cache [0..P-1] must equal row P of a full sequence pass, which
-    is what makes 'warm the drafter over the prompt, then draft' a faithful simulation.
+    is what makes 'warm the drafter over the prompt, then draft' a faithful simulation. Under both
+    chain contracts (V0 raw block output, V3 mtp.norm output).
     """
-    head = _head()
+    head = _head(chain_postnorm)
     S, P = 9, 6
     g = torch.Generator().manual_seed(2)
     hidden = torch.randn(S, DIM, generator=g)

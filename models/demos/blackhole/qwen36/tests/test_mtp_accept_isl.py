@@ -18,7 +18,9 @@ A CLIFF between 2048 (one chunk) and 2176/2304 (two chunks) => multi-chunk warm 
 A smooth decline with no boundary feature => genuine length/content effect.
 
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_mtp_accept_isl.py -v -s
-Override the sweep with QWEN36_ISL_SWEEP="rep128:512,rep128:2048,long4k:3968".
+Override the sweep with QWEN36_ISL_SWEEP="rep128:512,rep128:2048,long4k:3968". An entry may carry a
+per-case draft length as a third field, "src:plen:K" (e.g. "frank:3968:6"); without it the decoder's
+default K applies. QWEN36_ISL_NUM_BLOCKS overrides NUM_BLOCKS (the KV / max_seq_len budget).
 """
 
 import os
@@ -35,8 +37,8 @@ from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 MAX_NEW = 128
 # 96 blocks x 64 = 6144 tokens: covers the 4096-row prefill bucket a 3968-token prompt uses (the
 # MTP warm writes the whole tail bucket) plus MAX_NEW of decode. Matches the multiple-of-32 the
-# demo's spec path rounds to.
-NUM_BLOCKS = 96
+# demo's spec path rounds to. QWEN36_ISL_NUM_BLOCKS raises it for longer sweep entries.
+NUM_BLOCKS = int(os.environ.get("QWEN36_ISL_NUM_BLOCKS", 96))
 
 # long4k is the demo's OWN "ISL 4k" prompt file, which is only 2642 tokens — so the demo's 2.16/3
 # "at 4k" was measured at 2642 tokens, i.e. exactly two warm chunks. Sweep it up to its own length
@@ -49,13 +51,15 @@ _DEFAULT_SWEEP = (
 
 
 def _sweep():
+    """-> [(src, plen, draft_len_or_None)]. QWEN36_ISL_SWEEP entries are "src:plen" or "src:plen:K"."""
     spec = os.environ.get("QWEN36_ISL_SWEEP")
     if not spec:
-        return _DEFAULT_SWEEP
+        return [(src, n, None) for src, n in _DEFAULT_SWEEP]
     out = []
     for item in spec.split(","):
-        src, _, n = item.partition(":")
-        out.append((src.strip(), int(n)))
+        parts = [s.strip() for s in item.split(":")]
+        assert 2 <= len(parts) <= 3, f"bad QWEN36_ISL_SWEEP entry {item!r}: want src:plen or src:plen:K"
+        out.append((parts[0], int(parts[1]), int(parts[2]) if len(parts) == 3 else None))
     return out
 
 
@@ -144,12 +148,12 @@ def test_mtp_accept_vs_isl(mesh_device):
     pt = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
 
     rows = []
-    for src, plen in _sweep():
+    for src, plen, k in _sweep():
         assert plen + MAX_NEW < max_seq_len, f"{plen}+{MAX_NEW} exceeds max_seq_len {max_seq_len}"
         prompt_ids = _build(src, plen)[0].tolist()
         model.free_kv_caches()
         model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
-        dec = SpeculativeDecoder(model, pt)
+        dec = SpeculativeDecoder(model, pt, draft_len=k)  # k=None -> the decoder's default K
         gen = dec.generate(prompt_ids, MAX_NEW)
         s = dec.stats()
         text = tokenizer.decode(gen, skip_special_tokens=True)
