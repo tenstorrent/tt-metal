@@ -627,6 +627,14 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     ttnn.deallocate(merged)
 
 
+def _packed_decode_qkv_enabled():
+    """Use decode QKV program config on packed M=P rows (already a tile).
+
+    Default on; ``GEMMA4_PACKED_DECODE_QKV=0`` restores the packed prefill QKV matmul.
+    """
+    return os.environ.get("GEMMA4_PACKED_DECODE_QKV", "1").lower() not in ("0", "false", "no", "off")
+
+
 def _packed_seq_kv_enabled():
     """Write P new KV rows with serialized ``paged_update_cache`` instead of
     embedding-merge + ``paged_fill_cache`` of the whole hot block. Default on;
@@ -802,7 +810,9 @@ def packed_decode_forward(
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1)
+    qkv_rows = int(hidden_states.shape[2])
+    use_decode_qkv = _packed_decode_qkv_enabled() and qkv_rows <= ttnn.TILE_SIZE
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1, decode=use_decode_qkv)
     qkv_dim = xqkv.shape[-1]
 
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
