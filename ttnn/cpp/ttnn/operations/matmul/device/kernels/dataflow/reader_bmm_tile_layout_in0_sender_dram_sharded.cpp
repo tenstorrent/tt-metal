@@ -12,54 +12,55 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
     // in0 block args
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(3);
+    constexpr auto in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
+    constexpr auto in0_block_size_bytes = get_arg(args::in0_block_size_bytes);
+    constexpr auto in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr auto in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(6);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(7);
+    constexpr auto in0_mcast_num_dests = get_arg(args::in0_mcast_num_dests);
+    constexpr auto in0_mcast_num_cores = get_arg(args::in0_mcast_num_cores);
     // block args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
+    constexpr auto num_blocks = get_arg(args::num_blocks);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_dest_noc_start_x = get_compile_time_arg_val(9);
-    constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
-    constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(15);
+    constexpr auto in0_mcast_dest_noc_start_x = get_arg(args::in0_mcast_dest_noc_start_x);
+    constexpr auto in0_mcast_dest_noc_start_y = get_arg(args::in0_mcast_dest_noc_start_y);
+    constexpr auto in0_mcast_dest_noc_end_x = get_arg(args::in0_mcast_dest_noc_end_x);
+    constexpr auto in0_mcast_dest_noc_end_y = get_arg(args::in0_mcast_dest_noc_end_y);
+    constexpr auto num_blocks_per_shard = get_arg(args::num_blocks_per_shard);
+    constexpr auto in0_block_w = get_arg(args::in0_block_w);
     constexpr uint32_t in0_block_h = in0_block_num_tiles / in0_block_w;
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
     // RUNTIME ARGS
-    const uint32_t worker_core_type = get_arg_val<uint32_t>(0);
+    const uint32_t worker_core_type = get_arg(args::worker_core_type);
     // if not worker core, skip
     if (worker_core_type == 0) {
         return;
     }
-    const uint32_t sender_id = get_arg_val<uint32_t>(1);
-    const bool is_last_ktile_padded = static_cast<bool>(get_arg_val<uint32_t>(2));
+    const uint32_t sender_id = get_arg(args::sender_id);
+    const bool is_last_ktile_padded = static_cast<bool>(get_arg(args::is_last_ktile_padded));
 
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_storage_cores));
+    // The mcast senders' noc coordinates arrive as a runtime vararg block: the noc-x value for
+    // each storage core, then the noc-y value for each. A receiver picks the pair belonging to the
+    // block it is waiting on, so the index is data-derived and the block stays positional.
+    constexpr uint32_t sender_noc_x_base = 0;
+    constexpr uint32_t sender_noc_y_base = num_storage_cores;
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
-
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb::in0);
+    constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in2(dfb_id_in2);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in2(dfb::in0_sharded);  // Sharded in0
+    Semaphore sender_sem(sem::in0_mcast_sender);
+    Semaphore receiver_sem(sem::in0_mcast_receiver);
 
     uint32_t l1_write_addr_in0;
 
@@ -87,7 +88,7 @@ void kernel_main() {
             sender_sem.wait(in0_mcast_num_dests);
             sender_sem.set(0);
 
-            // Now we have the block in the CB address, we can mcast to dests!
+            // Now we have the block in the buffer address, we can mcast to dests!
 
             // Zero out padded regions for tiles in the last K-column/row
             if constexpr (in0_last_ktile_w > 0) {
@@ -207,7 +208,8 @@ void kernel_main() {
 
             } else {
                 // Atomic increment source core counter
-                sender_sem.up(noc, in0_mcast_sender_noc_x[block_id], in0_mcast_sender_noc_y[block_id], 1);
+                sender_sem.up(
+                    noc, get_vararg(sender_noc_x_base + block_id), get_vararg(sender_noc_y_base + block_id), 1);
             }
 
             receiver_sem.wait(VALID);
@@ -226,7 +228,7 @@ void kernel_main() {
             // Set in0 semaphore value to INVALID
             receiver_sem.set(INVALID);
             // Atomic increment source core counter
-            sender_sem.up(noc, in0_mcast_sender_noc_x[block_id], in0_mcast_sender_noc_y[block_id], 1);
+            sender_sem.up(noc, get_vararg(sender_noc_x_base + block_id), get_vararg(sender_noc_y_base + block_id), 1);
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
             receiver_sem.wait(VALID);
 
