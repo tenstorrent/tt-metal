@@ -1706,12 +1706,18 @@ class WanDecoder(Module):
         logical_h: int,
         t_chunk_size: int | None = 1,
         logical_w: int = 0,
+        clamp_output: bool = True,
     ) -> tuple[ttnn.Tensor, int, int]:
         """
         t_chunk_size controls how the T dimension is processed:
             None  – full-T single pass, no caching (fastest, most memory)
             1     – one frame at a time with caching (slowest, least memory)
             N > 1 – N frames at a time with caching between chunks
+
+        clamp_output: clamp the decoded pixels to [-1, 1] before returning. Default True.
+            Pass False when the caller already clamps to [-1, 1] downstream (e.g. a
+            uint8 conversion step) — it saves a full-tensor RM->TILE->clamp->RM
+            round-trip on the largest output tensor for a bit-identical result.
         """
         assert t_chunk_size is None or t_chunk_size >= 1, f"t_chunk_size must be None or >= 1, got {t_chunk_size}"
         B, T, H, W, C = z_BTHWC.shape
@@ -1764,11 +1770,14 @@ class WanDecoder(Module):
                 for t in chunk_outputs:
                     ttnn.deallocate(t)
 
-        output_tile_BCTHW = _to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
-        clamped_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
-        if clamped_BCTHW is not output_tile_BCTHW:
-            ttnn.deallocate(output_tile_BCTHW)
-        output_BCTHW = _to_layout(clamped_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
+        if clamp_output:
+            # ttnn.clamp needs TILE; the decode output is ROW_MAJOR, so this pays two
+            # full-tensor layout conversions. Skippable when the caller re-clamps (see docstring).
+            output_tile_BCTHW = _to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
+            clamped_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
+            if clamped_BCTHW is not output_tile_BCTHW:
+                ttnn.deallocate(output_tile_BCTHW)
+            output_BCTHW = _to_layout(clamped_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         return (output_BCTHW, new_logical_h, new_logical_w)
 
 
