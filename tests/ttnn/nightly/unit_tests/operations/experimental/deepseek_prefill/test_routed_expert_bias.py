@@ -405,3 +405,50 @@ def test_gptoss_bias_torch_reference_smoke():
         out_nobias = _torch_swigluoai_expert_with_bias(x, w, zero_b)
     assert out_bias.shape == (n, emb)
     assert not torch.allclose(out_bias, out_nobias), "bias must change the expert output"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="off Blackhole the non-SiLU activation check fires first")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_clamped_silu_glu_biases_rejected(mesh_device, device_params, expect_error):
+    """Biased experts are refused for ClampedSiluGlu.
+
+    The kernel's bias branch is outside every activation variant #if, so it would serve
+    DeepSeek-V4 as-is; the refusal is because V4's experts carry no biases. The assertion is on
+    the Python guard because TtRoutedExpert is the only caller of unified_routed_expert_moe and
+    rejects the combination before the device op's matching TT_FATAL can run.
+    """
+    # Rejected before any weight is converted, so the shapes only have to be tile-aligned.
+    emb = hidden = 32
+    weights = {
+        "gate_proj": torch.zeros(hidden, emb, dtype=torch.float32),
+        "up_proj": torch.zeros(hidden, emb, dtype=torch.float32),
+        "down_proj": torch.zeros(emb, hidden, dtype=torch.float32),
+    }
+    biases = {
+        "gate_proj_bias": torch.zeros(hidden, dtype=torch.float32),
+        "up_proj_bias": torch.zeros(hidden, dtype=torch.float32),
+        "down_proj_bias": torch.zeros(emb, dtype=torch.float32),
+    }
+    idx = ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+
+    with expect_error(ValueError, "expert biases require a fused binary activation"):
+        TtRoutedExpert(
+            mesh_device=mesh_device,
+            experts_per_chip=1,
+            global_expert_idx_table=idx,
+            emb_dim=emb,
+            hidden_dim=hidden,
+            max_tokens=32,
+            torch_weights=[weights],
+            torch_biases=[biases],
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat4_b,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )
