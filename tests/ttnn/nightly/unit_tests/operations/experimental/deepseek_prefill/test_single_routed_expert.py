@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -239,10 +240,9 @@ SINGLE_EXPERT_MODELS = [
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
     ("kimi_k26", KimiK26Config, True),
+    ("kimi_k3", KimiK3Config, True),
+    ("minimax_m3", MiniMaxM3Config, True),
 ]
-# Kimi K3 is deliberately absent: _isl_params below takes config.EMB_SIZE as the routed-expert K
-# axis, which holds only for models with no pre-projection. K3's LatentMoE projects 7168 -> 3584
-# first, so adding it here would silently run it at 2x its real K. Its sweeps are below instead.
 
 
 # Registry of currently-failing single-routed-expert cases -> xfail reason (with tracking issue), so
@@ -279,8 +279,24 @@ _ISL_ALLOCATED_TOKENS = 5120
 _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
 # Exhaustive sweep: the full range from empty to fully-packed
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
+_ISL_EXHAUSTIVE_SWEEP = [0, 64, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_MODELS = (
+    "kimi_k26",
+    "glm_51",
+    "gptoss_120b",
+    "minimax_m3",
+    "kimi_k3",
+    "dsv4_pro",
+    "dsv4_flash",
+)
+
+
+def _routed_expert_k(config):
+    """The routed-expert FFN's K axis for `config`.
+
+    A LatentMoE model pre-projects the embedding down before the routed experts, so its
+    experts run at ROUTED_EXPERT_HIDDEN_SIZE, not EMB_SIZE."""
+    return getattr(config, "ROUTED_EXPERT_HIDDEN_SIZE", config.EMB_SIZE)
 
 
 def _isl_params(active_sweep, only_models=None):
@@ -298,7 +314,7 @@ def _isl_params(active_sweep, only_models=None):
                 pytest.param(
                     _ISL_ALLOCATED_TOKENS,
                     active,
-                    config.EMB_SIZE,
+                    _routed_expert_k(config),
                     config.MOE_INTERMEDIATE_SIZE,
                     marks=marks,
                     id=f"{name}-isl-{active}",
