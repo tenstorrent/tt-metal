@@ -87,7 +87,10 @@ inline void llk_unpack_tilize_block(
     // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
     // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
     // structural pattern as BH/WH llk_unpack_tilize_block
-    const std::uint32_t l1_base_idx = rd_entry_idx * l1_index_per_entry;
+    const std::uint32_t block = input_tile_index / block_c_tiles;
+    const std::uint32_t offset = input_tile_index % block_c_tiles;
+    const std::uint32_t l1_base_idx =
+        rd_entry_idx * l1_index_per_entry + block * (block_c_tiles * tensor_shape.total_row_dim());
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
         _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
@@ -95,9 +98,9 @@ inline void llk_unpack_tilize_block(
 
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
         if (tensor_shape.total_num_faces() == NUM_FACES) {
-            _llk_unpack_tilize_<p_unpacr::UNP_A>(t + input_tile_index);
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(t + offset);
         } else {
-            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t + input_tile_index);
+            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t + offset);
         }
     }
 }
