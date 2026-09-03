@@ -25,7 +25,11 @@ import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import (
+    DEFAULT_VSA_PLACEMENT,
+    MiniMaxH3VSACoarseStage,
+    MiniMaxH3VSAConfig,
+)
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
@@ -75,7 +79,7 @@ def test_minimax_h3_vsa_block_perf(
     prefix_segments = (sizes["num_text"], 0, sizes["num_audio"])
     # VSA_PLACEMENT=striped spreads the exempt (dense-list) tiles over the SP shards; under the
     # default identity placement the SP-rank-0 devices carry them all and gate the block.
-    placement = os.environ.get("VSA_PLACEMENT", "identity")
+    placement = os.environ.get("VSA_PLACEMENT", DEFAULT_VSA_PLACEMENT)
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp_factor, placement=placement)
     logger.info(
         f"{duration_s:g}s @ 768P: seq_len={geometry.seq_len} -> {geometry.padded_len} tiled "

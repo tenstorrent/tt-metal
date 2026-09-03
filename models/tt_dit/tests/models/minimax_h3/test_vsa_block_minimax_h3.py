@@ -21,7 +21,11 @@ import ttnn
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage, MiniMaxH3VSAConfig
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import (
+    DEFAULT_VSA_PLACEMENT,
+    MiniMaxH3VSACoarseStage,
+    MiniMaxH3VSAConfig,
+)
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
@@ -72,7 +76,7 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
     num_video = t * gh * gw
     seq_len = num_text + num_audio + num_video
 
-    placement = os.environ.get("VSA_PLACEMENT", "identity")  # see test_vsa_performance_minimax_h3
+    placement = os.environ.get("VSA_PLACEMENT", DEFAULT_VSA_PLACEMENT)  # see test_vsa_performance_minimax_h3
     geometry = build_vsa_geometry((num_text, 0, num_audio), grid, sp_factor=sp_factor, placement=placement)
     logger.info(
         f"15s/768p: seq_len={seq_len}, tiles={geometry.n_tiles} ({geometry.n_pad_tiles} pad), "

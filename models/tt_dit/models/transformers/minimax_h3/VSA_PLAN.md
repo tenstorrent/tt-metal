@@ -1,6 +1,15 @@
 # VSA v0 implementation plan
 
-## Status (2026-08-31, end of first session)
+## Status (2026-09-03)
+
+Fine-stage kernel: streaming leader/worker `vsa_sdpa` (v17) shipped as the model default
+(`MiniMaxH3VSAConfig.streaming`); design and ceiling in `VSA_STREAM_DESIGN.md`. Block-level at
+15 s / 768p the VSA block is 13% faster than dense (66.8 vs 76.7 ms); 10 s 4% faster (41.0 vs 42.8);
+5 s slower (22.5 vs 19.0: fixed VSA-only costs, chiefly the K/V all-gather). All gates green with the streaming kernel:
+sparsity-0 == dense (PCC 99.9998%), striped/interleaved == identity, real-weights 15 s pipeline,
+traced block, cache-hit/trace regression suite. Table below is the 2026-08-31 v0 status.
+
+### v0 status (2026-08-31, end of first session)
 
 | Item | State | Evidence |
 |---|---|---|
@@ -127,6 +136,10 @@ github.com/hao-ai-lab/FastVideo @ main, 2026-08-31).
    identity.
 
 ## Device perf, one transformer block, 768p, 4x8 (tracy, warm iteration, sum of device kernel time)
+
+Current numbers (streaming kernel, coarse fixes, placement): see `VSA_STREAM_DESIGN.md` section 5
+and the model-integration journal below. The table that follows is the v0 (per-row gather) baseline.
+
 
 | duration | dense block | VSA block (s=0.9, m=2) | VSA/dense | dense ring SDPA | vsa_sdpa |
 |---|---|---|---|---|---|
@@ -293,6 +306,11 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
   striped 18.6/19.0/21.4); block max 67.3 ms (identity 71.1, striped 68.6); dense 76.7 -> VSA 13%
   faster at 15 s. Coarse-stage oracle tests (5) and the traced block PASS with interleaved; it is now
   MiniMaxH3VSAConfig's default. Residual spread (17.0-20.2) is the +-1 exempt tile per shard.
+  Final table with interleaved at every duration (per block forward, device 0 / max over devices):
+    5s : dense 19.0 | VSA 22.5 ms (vsa_sdpa 3.1/3.2/3.3 ms min/med/max; identity was 2.4 med / 5.8 max)
+    10s: dense 42.8 | VSA 41.0 ms (vsa_sdpa 8.9/9.1/9.4; identity 7.6 / 13.5)
+    15s: dense 76.7 | VSA 66.8 ms (vsa_sdpa 17.0/17.5/20.2; identity 15.9 / 24.3)
+  The block/perf tests now default VSA_PLACEMENT to the config default (DEFAULT_VSA_PLACEMENT).
 - Run-to-run NONDETERMINISM: untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:
