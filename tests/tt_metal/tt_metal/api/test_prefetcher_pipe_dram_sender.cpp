@@ -12,12 +12,15 @@
 //   * credits crossing L1 address spaces in both directions (sender credit -> worker L1,
 //     receiver ack -> DRISC L1),
 //   * the sender deriving each receiver's write cursor from that receiver's durable counter, so
-//     the cursor survives across programs.
+//     the cursor survives across programs,
+//   * per-sender DRISC L1 placement: a pipe reserves its config page on its own sender core, so a
+//     whole set of pipes costs the small DRISC zone one offset.
 
 #include <gtest/gtest.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -33,7 +36,6 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
-#include "impl/buffers/prefetcher_pipe_dram_sender_state.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig
@@ -70,6 +72,30 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/da
 
 constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackhole)
 constexpr uint32_t kRingDepth = 4;
+
+// A Tensor-prefetcher delivery target: the pipes of every DRAM sender the mapping placed, in
+// mapping order. The same list-plus-geometry shape ttnn's TensorPrefetcherPipes wraps.
+struct PipeSet {
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    std::vector<std::shared_ptr<experimental::PrefetcherPipe>> pipes;
+};
+
+PipeSet make_pipe_set(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool dual_senders_per_bank,
+    uint32_t entry_size = kEntrySize,
+    uint32_t num_entries = kRingDepth) {
+    PipeSet set;
+    set.mapping =
+        experimental::BuildTensorPrefetcherSenderMapping(mesh_device, bank_to_receivers, dual_senders_per_bank);
+    set.pipes.reserve(set.mapping.size());
+    for (const auto& [sender, receivers] : set.mapping) {
+        set.pipes.push_back(experimental::CreatePrefetcherPipeForTensorPrefetcher(
+            mesh_device, sender, receivers, entry_size, num_entries));
+    }
+    return set;
+}
 
 // Distinct bytes per (receiver, entry, word) so a mis-addressed write shows up as the wrong
 // receiver's or wrong slot's data rather than as a hang.
@@ -150,32 +176,31 @@ void preload_pattern(
 //
 // num_entries must fit the ring so a sender can publish its whole batch even if its receivers
 // start late.
-void run_push_and_pop(
-    distributed::MeshDevice& mesh_device, experimental::TensorPrefetcherPipes& pipes, uint32_t num_entries) {
+void run_push_and_pop(distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries) {
     Program program = CreateProgram();
 
-    const uint32_t config_page_addr =
-        static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipes)) + prefetcher_pipe_config_page_offset();
     const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
 
-    const std::vector<uint8_t> pipe_ids = experimental::AttachTensorPrefetcherPipes(program, pipes);
-    const auto& mapping = pipes.sender_receiver_core_mapping();
-    for (size_t s = 0; s < mapping.size(); ++s) {
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        experimental::PrefetcherPipe& pipe = *set.pipes[s];
+        const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe));
+        const uint8_t pipe_id = experimental::AttachPrefetcherPipe(
+            program, pipe, set.mapping[s].second, experimental::prefetcher_pipe_fixed_entry_size(pipe));
         CreateKernel(
             program,
             kSenderKernel,
-            mapping[s].first,
+            set.mapping[s].first,
             DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base}});
         // One kernel per pipe rather than one for all receivers: the pipe id is a compile-time arg
         // of the shared receiver kernel, and each pipe's receivers hold a different id.
         CreateKernel(
             program,
             kReceiverKernel,
-            mapping[s].second,
+            set.mapping[s].second,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = {pipe_ids[s], pipes.entry_size(), num_entries, 0u}});
+                .compile_args = {pipe_id, experimental::prefetcher_pipe_fixed_entry_size(pipe), num_entries, 0u}});
     }
 
     distributed::MeshWorkload workload;
@@ -220,21 +245,17 @@ void expect_ring_slot(
 // Every receiver acked everything its sender published, read back from that sender's DRISC-L1
 // counters. Pairs are strided by 2 * L1_ALIGNMENT with entries_sent first, entries_acked next.
 void expect_credits_drained(
-    distributed::MeshDevice& mesh_device,
-    experimental::TensorPrefetcherPipes& pipes,
-    uint32_t expected_units_per_receiver) {
+    distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t expected_units_per_receiver) {
     const uint32_t l1_alignment =
         MetalContext::instance(context_id_of(mesh_device)).hal().get_alignment(HalMemType::L1);
     const uint32_t stride_words = 2 * l1_alignment / sizeof(uint32_t);
     const uint32_t acked_word = l1_alignment / sizeof(uint32_t);
-    const DeviceAddr block_base =
-        experimental::sender_state_drisc_l1_base(pipes) + prefetcher_pipe_config_page_offset();
 
-    const auto& mapping = pipes.sender_receiver_core_mapping();
-    for (size_t s = 0; s < mapping.size(); ++s) {
-        const auto& [sender_logical, receivers] = mapping[s];
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        const auto& [sender_logical, receivers] = set.mapping[s];
         const uint32_t num_receivers = receivers.num_cores();
-        const DeviceAddr counters_base = block_base + pipes.pipe(s).credit_reset_offset();
+        const DeviceAddr counters_base =
+            experimental::sender_state_drisc_l1_base(*set.pipes[s]) + set.pipes[s]->credit_reset_offset();
         const auto counters = read_drisc_l1(mesh_device, sender_logical, counters_base, num_receivers * stride_words);
         for (uint32_t r = 0; r < num_receivers; ++r) {
             const uint32_t sent = counters[r * stride_words];
@@ -265,30 +286,25 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
     constexpr uint32_t kNumReceivers = 4;
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
 
-    // support_multi_receiver_shards=true forces a single sender for the bank, so all four
-    // receivers hang off one DRISC core and the set collapses to one pipe.
-    auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device_,
-        {{/*bank_id=*/0, receiver_cores}},
-        kEntrySize,
-        kRingDepth,
-        BufferType::L1,
-        /*support_multi_receiver_shards=*/true);
-    ASSERT_EQ(pipes->num_pipes(), 1u);
-    ASSERT_EQ(pipes->pipe(0).sender_core_type(), experimental::SenderCoreType::Dram);
+    // dual_senders_per_bank=false forces a single sender for the bank, so all four receivers hang
+    // off one DRISC core and the set collapses to one pipe.
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(set.pipes.size(), 1u);
+    ASSERT_EQ(experimental::prefetcher_pipe_sender_core_type(*set.pipes[0]), experimental::SenderCoreType::Dram);
 
-    const CoreCoord sender_logical = pipes->sender_receiver_core_mapping().at(0).first;
+    const CoreCoord sender_logical = set.mapping.at(0).first;
     preload_pattern(*mesh_device_, sender_logical, kRingDepth, kNumReceivers, /*entry_label=*/0);
-    run_push_and_pop(*mesh_device_, *pipes, kRingDepth);
+    run_push_and_pop(*mesh_device_, set, kRingDepth);
 
     const auto receivers = receivers_in_slab_order(receiver_cores);
     for (uint32_t r = 0; r < receivers.size(); ++r) {
         for (uint32_t i = 0; i < kRingDepth; ++i) {
             expect_ring_slot(
-                *mesh_device_, pipes->pipe(0), receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
+                *mesh_device_, *set.pipes[0], receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
         }
     }
-    expect_credits_drained(*mesh_device_, *pipes, credit_units(*mesh_device_, kRingDepth));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
@@ -299,30 +315,25 @@ TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
     constexpr uint32_t kBatch = 2;
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
 
-    auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device_,
-        {{/*bank_id=*/0, receiver_cores}},
-        kEntrySize,
-        kRingDepth,
-        BufferType::L1,
-        /*support_multi_receiver_shards=*/true);
-    const CoreCoord sender_logical = pipes->sender_receiver_core_mapping().at(0).first;
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
+    const CoreCoord sender_logical = set.mapping.at(0).first;
 
     preload_pattern(*mesh_device_, sender_logical, kBatch, kNumReceivers, /*entry_label=*/0);
-    run_push_and_pop(*mesh_device_, *pipes, kBatch);
+    run_push_and_pop(*mesh_device_, set, kBatch);
 
     // Second batch carries different bytes so landing on slots 0-1 again would be visible.
     preload_pattern(*mesh_device_, sender_logical, kBatch, kNumReceivers, /*entry_label=*/kBatch);
-    run_push_and_pop(*mesh_device_, *pipes, kBatch);
+    run_push_and_pop(*mesh_device_, set, kBatch);
 
     const auto receivers = receivers_in_slab_order(receiver_cores);
     for (uint32_t r = 0; r < receivers.size(); ++r) {
         for (uint32_t i = 0; i < 2 * kBatch; ++i) {
             expect_ring_slot(
-                *mesh_device_, pipes->pipe(0), receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
+                *mesh_device_, *set.pipes[0], receivers[r], /*slot=*/i, /*receiver_label=*/r, /*entry_label=*/i);
         }
     }
-    expect_credits_drained(*mesh_device_, *pipes, credit_units(*mesh_device_, 2 * kBatch));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, 2 * kBatch));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
@@ -331,33 +342,25 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
     constexpr uint32_t kNumReceivers = 4;
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
 
-    auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device_,
-        {{/*bank_id=*/0, receiver_cores}},
-        kEntrySize,
-        kRingDepth,
-        BufferType::L1,
-        /*support_multi_receiver_shards=*/false);
-    const auto& mapping = pipes->sender_receiver_core_mapping();
-    ASSERT_EQ(mapping.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
-    ASSERT_EQ(pipes->num_pipes(), 2u);
-    ASSERT_EQ(mapping.at(0).second.num_cores(), 2u);
-    ASSERT_EQ(mapping.at(1).second.num_cores(), 2u);
+    const PipeSet set = make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/true);
+    ASSERT_EQ(set.mapping.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
+    ASSERT_EQ(set.mapping.at(0).second.num_cores(), 2u);
+    ASSERT_EQ(set.mapping.at(1).second.num_cores(), 2u);
 
     // Each sender addresses its own receivers as local indices 0..n-1, so the pattern is preloaded
     // per sender with labels restarting at 0.
-    for (const auto& [sender_logical, receivers] : mapping) {
+    for (const auto& [sender_logical, receivers] : set.mapping) {
         preload_pattern(*mesh_device_, sender_logical, kRingDepth, receivers.num_cores(), /*entry_label=*/0);
     }
-    run_push_and_pop(*mesh_device_, *pipes, kRingDepth);
+    run_push_and_pop(*mesh_device_, set, kRingDepth);
 
-    for (size_t s = 0; s < mapping.size(); ++s) {
-        const auto local_receivers = receivers_in_slab_order(mapping[s].second);
+    for (size_t s = 0; s < set.mapping.size(); ++s) {
+        const auto local_receivers = receivers_in_slab_order(set.mapping[s].second);
         for (uint32_t r = 0; r < local_receivers.size(); ++r) {
             for (uint32_t i = 0; i < kRingDepth; ++i) {
                 expect_ring_slot(
                     *mesh_device_,
-                    pipes->pipe(s),
+                    *set.pipes[s],
                     local_receivers[r],
                     /*slot=*/i,
                     /*receiver_label=*/r,
@@ -365,34 +368,59 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
             }
         }
     }
-    expect_credits_drained(*mesh_device_, *pipes, credit_units(*mesh_device_, kRingDepth));
+    expect_credits_drained(*mesh_device_, set, credit_units(*mesh_device_, kRingDepth));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffset) {
+    // A pipe reserves its config page on its own sender core, so a whole set of one-sender pipes
+    // costs the small DRISC zone one page rather than one page per pipe. Anything a given sender
+    // core would also see -- a second range on that core, or a uniform GCB-style range every bank
+    // sees -- still has to go somewhere else.
+    const PipeSet split_bank = make_pipe_set(
+        *mesh_device_,
+        {{/*bank_id=*/0, CoreRangeSet(CoreRange({0, 0}, {1, 0}))}},
+        /*dual_senders_per_bank=*/true);
+    ASSERT_EQ(split_bank.pipes.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
+    const PipeSet other_bank = make_pipe_set(
+        *mesh_device_,
+        {{/*bank_id=*/1, CoreRangeSet(CoreRange({2, 0}, {3, 0}))}},
+        /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(other_bank.pipes.size(), 1u);
+
+    const DeviceAddr shared_base = experimental::sender_state_drisc_l1_base(*split_bank.pipes[0]);
+    EXPECT_EQ(experimental::sender_state_drisc_l1_base(*split_bank.pipes[1]), shared_base)
+        << "a bank's two senders are distinct DRISC cores and may hold the same offset";
+    EXPECT_EQ(experimental::sender_state_drisc_l1_base(*other_bank.pipes[0]), shared_base);
+
+    auto& arena = mesh_device_->impl().drisc_l1_arena();
+    const uint32_t l1_alignment =
+        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_alignment(HalMemType::L1);
+    const uint32_t page_size = split_bank.pipes[0]->config_page_size();
+    EXPECT_NE(arena.allocate_on(split_bank.mapping[0].first, page_size, l1_alignment)->addr(), shared_base)
+        << "a second range on a live sender's own core must not overlap its config page";
+    EXPECT_NE(arena.allocate(page_size, l1_alignment)->addr(), shared_base)
+        << "a uniform range is reserved on every bank, so it must clear every per-core page";
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
     const CoreRangeSet first(CoreRange({0, 0}, {0, 0}));
     const CoreRangeSet second(CoreRange({1, 0}, {1, 0}));
-    EXPECT_ANY_THROW(experimental::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device_, {{0, first}, {0, second}}, kEntrySize, kRingDepth));
+    EXPECT_ANY_THROW(experimental::BuildTensorPrefetcherSenderMapping(
+        *mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, AttachRejectsMismatchedEntrySize) {
     // A DRAM sender never Attaches, so it cannot answer the resize a differing entry size starts.
     // Without this rejection the receivers would spin on pad credits nobody publishes.
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {1, 0}));
-    auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device_,
-        {{/*bank_id=*/0, receiver_cores}},
-        kEntrySize,
-        kRingDepth,
-        BufferType::L1,
-        /*support_multi_receiver_shards=*/true);
+    const PipeSet set =
+        make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
 
     Program program = CreateProgram();
     // Half the pipe's entry size: still L1-aligned and within the ring, so only the DRAM-sender
     // guard can reject it.
-    EXPECT_ANY_THROW(
-        experimental::AttachPrefetcherPipe(program, pipes->pipe(0), pipes->receiver_cores(), kEntrySize / 2));
-    EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, pipes->pipe(0), pipes->receiver_cores(), kEntrySize));
+    EXPECT_ANY_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
+    EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize));
 }
 
 }  // namespace tt::tt_metal

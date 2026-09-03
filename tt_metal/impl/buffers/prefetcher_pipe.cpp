@@ -10,8 +10,7 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
-#include "impl/buffers/prefetcher_pipe_dram_sender_state.hpp"
-#include "impl/buffers/prefetcher_pipe_internal.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
@@ -65,6 +64,25 @@ void validate_ring_geometry(IDevice* device, uint32_t ring_size, BufferType buff
     TT_FATAL(
         ring_size % l1_alignment == 0, "ring_size {} must be a multiple of L1_ALIGNMENT {}", ring_size, l1_alignment);
     TT_FATAL(buffer_type == BufferType::L1, "PrefetcherPipe persistent-arena allocations require BufferType::L1");
+}
+
+struct PrefetcherPipeConfigPageLayout {
+    uint32_t noc_xy_offset;
+    uint32_t counters_offset;
+    uint32_t page_size;
+};
+
+// A config page is the 9-word remote-DFB header, then a 2-word NOC XY entry per receiver, then an
+// L1-aligned entries_sent/entries_acked pair per receiver (the pairs are NOC-atomic targets, hence
+// the alignment).
+PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
+    uint32_t num_receivers, uint32_t l1_alignment) {
+    const uint32_t noc_xy_offset = prefetcher_pipe_noc_xy_byte_offset();
+    const uint32_t counters_offset =
+        tt::align(noc_xy_offset + 2 * num_receivers * static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
+    const uint32_t page_size = counters_offset + 2 * num_receivers * l1_alignment;
+    return PrefetcherPipeConfigPageLayout{
+        .noc_xy_offset = noc_xy_offset, .counters_offset = counters_offset, .page_size = page_size};
 }
 
 // Fields every config page of one pipe repeats. Bundled so the shared receiver-page builder
@@ -129,14 +147,14 @@ PrefetcherPipe::PrefetcherPipe(
 
 PrefetcherPipe::PrefetcherPipe(
     distributed::MeshDevice* mesh_device,
+    CoreCoord dram_sender_logical,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
     uint32_t fixed_entry_size,
-    const prefetcher_pipe_dram_sender::DramSenderPlacement& placement,
     BufferType buffer_type,
     DramSenderTag) :
     device_(mesh_device),
-    sender_core_(placement.sender_logical),
+    sender_core_(dram_sender_logical),
     receiver_cores_(receiver_cores),
     // A DRAM sender is never Attached, so it contributes no core to any Program: leaving
     // sender_cores_ empty is what makes the Attach role-completeness check pass on the receiver
@@ -144,10 +162,7 @@ PrefetcherPipe::PrefetcherPipe(
     all_cores_(receiver_cores),
     ring_size_(ring_size),
     sender_core_type_value_(static_cast<uint8_t>(SenderCoreType::Dram)),
-    fixed_entry_size_(fixed_entry_size),
-    sender_state_drisc_l1_base_(placement.drisc_block_addr),
-    recv_index_base_(placement.recv_index_base),
-    max_num_receivers_(placement.max_num_receivers) {
+    fixed_entry_size_(fixed_entry_size) {
     TT_FATAL(mesh_device != nullptr, "DRAM-sender PrefetcherPipe requires a non-null MeshDevice");
     const auto& hal = MetalContext::instance(mesh_device->impl().get_context_id()).hal();
     TT_FATAL(
@@ -168,18 +183,6 @@ PrefetcherPipe::PrefetcherPipe(
         "would leave the sender's derived write cursor and the receiver's read cursor on different wrap points",
         ring_size,
         fixed_entry_size);
-    TT_FATAL(
-        placement.max_num_receivers >= receiver_cores.num_cores(),
-        "DRAM-sender PrefetcherPipe was given max_num_receivers {}, below its own receiver count {}; the DRISC block "
-        "is sized from that maximum",
-        placement.max_num_receivers,
-        receiver_cores.num_cores());
-    TT_FATAL(
-        kPrefetcherPipeSenderPrefixBytes % l1_alignment == 0,
-        "The DRISC sender-state prefix ({} B) must be a multiple of the L1 alignment ({} B) so the config page that "
-        "follows it stays L1-aligned for NOC atomics",
-        kPrefetcherPipeSenderPrefixBytes,
-        l1_alignment);
     try {
         setup_buffers(buffer_type);
     } catch (...) {
@@ -264,8 +267,8 @@ void PrefetcherPipe::build_dram_sender_receiver_config_pages(IDevice* target_dev
     };
 
     // Base of the sender's counter pairs, inside its config page in DRISC L1.
-    const uint32_t drisc_counters_base = static_cast<uint32_t>(sender_state_drisc_l1_base_) +
-                                         prefetcher_pipe_config_page_offset() + layout.counters_offset;
+    const uint32_t drisc_counters_base =
+        static_cast<uint32_t>(drisc_config_page_alloc_->addr()) + layout.counters_offset;
     // The receiver's ack NOC-inc lands on the DRAM core, so it needs that core's virtual coord on
     // this device rather than a worker coord.
     const auto sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
@@ -281,7 +284,7 @@ void PrefetcherPipe::build_dram_sender_receiver_config_pages(IDevice* target_dev
     }
 }
 
-void PrefetcherPipe::initialize_dram_sender_state() {
+void PrefetcherPipe::initialize_dram_sender_config_page() {
     auto& metal_ctx = MetalContext::instance(device_->impl().get_context_id());
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     const auto receiver_vec = corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
@@ -291,8 +294,12 @@ void PrefetcherPipe::initialize_dram_sender_state() {
     credit_reset_offset_ = layout.counters_offset;
     credit_reset_size_ = config_page_size_ - credit_reset_offset_;
 
-    const uint32_t config_page_addr =
-        static_cast<uint32_t>(sender_state_drisc_l1_base_) + prefetcher_pipe_config_page_offset();
+    // Reserved on this sender's core alone: a pipe on another bank can hold the same offset, so a
+    // set of one-sender pipes costs the small DRISC zone one page rather than one page per pipe.
+    // The page's own counters are NOC-atomic targets, hence the L1 alignment.
+    drisc_config_page_alloc_ =
+        device_->impl().drisc_l1_arena().allocate_on(sender_core_, layout.page_size, l1_alignment);
+    const auto config_page_addr = static_cast<uint32_t>(drisc_config_page_alloc_->addr());
 
     // word[8] on a sender page is the base of the *receivers'* counter pairs. All of this pipe's
     // receiver pages share one L1 address, so a single base plus 2*r*L1_ALIGNMENT reaches receiver
@@ -306,12 +313,8 @@ void PrefetcherPipe::initialize_dram_sender_state() {
         receiver_counters_base,
         dev_msgs::REMOTE_CB_PACKED_ADDR_MASK);
 
-    std::vector<uint8_t> block_bytes(kPrefetcherPipeSenderPrefixBytes + layout.page_size, 0);
-    auto* prefix = reinterpret_cast<PrefetcherPipeDramSenderState*>(block_bytes.data());
-    prefix->recv_index_base = recv_index_base_;
-    prefix->max_num_receivers = max_num_receivers_;
-
-    auto* page = reinterpret_cast<uint32_t*>(block_bytes.data() + prefetcher_pipe_config_page_offset());
+    std::vector<uint8_t> page_bytes(layout.page_size, 0);
+    auto* page = reinterpret_cast<uint32_t*>(page_bytes.data());
     uint32_t i = 0;
     page[i++] = 1;  // word[0]: is_sender
     page[i++] = num_recv;
@@ -322,13 +325,12 @@ void PrefetcherPipe::initialize_dram_sender_state() {
     page[i++] = layout.noc_xy_offset;
     page[i++] = layout.counters_offset;                     // word[7]: local counter pairs, in DRISC L1
     page[i++] = receiver_counters_base - config_page_addr;  // word[8]: remote (receiver) base
-    // The counters themselves stay zero from the block's zero-fill: a fresh pipe has no credits
+    // The counters themselves stay zero from the page's zero-fill: a fresh pipe has no credits
     // outstanding, and every receiver's derived write cursor starts at the ring base.
 
-    auto* noc_xy_words =
-        reinterpret_cast<uint32_t*>(block_bytes.data() + prefetcher_pipe_config_page_offset() + layout.noc_xy_offset);
-    const uint64_t write_addr = metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) +
-                                static_cast<uint64_t>(sender_state_drisc_l1_base_);
+    auto* noc_xy_words = reinterpret_cast<uint32_t*>(page_bytes.data() + layout.noc_xy_offset);
+    const uint64_t write_addr =
+        metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(config_page_addr);
     auto& cluster = metal_ctx.get_cluster();
     for (IDevice* dev : device_->get_devices()) {
         // Both the receivers' worker coords and the sender's DRAM coord are resolved per device:
@@ -342,7 +344,7 @@ void PrefetcherPipe::initialize_dram_sender_state() {
         cluster.write_core(
             dev->id(),
             tt_cxy_pair(dev->id(), virtual_core),
-            std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
+            std::span<const uint8_t>(page_bytes.data(), page_bytes.size()),
             write_addr);
     }
 }
@@ -407,9 +409,9 @@ void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
             core.str());
     }
     if (sender_core_type() == SenderCoreType::Dram) {
-        // Receiver pages aim their ack at a slot inside the sender's DRISC L1 block, so that block
-        // has to be placed and stamped before write_config_to_device builds them.
-        initialize_dram_sender_state();
+        // Receiver pages aim their ack at a slot inside the sender's DRISC L1 config page, so that
+        // page has to be placed and stamped before write_config_to_device builds them.
+        initialize_dram_sender_config_page();
     } else {
         build_config_pages();
     }
@@ -528,25 +530,25 @@ namespace prefetcher_pipe_dram_sender {
 
 std::shared_ptr<PrefetcherPipe> PrefetcherPipeDramSenderInternals::make_dram_sender(
     distributed::MeshDevice* mesh_device,
+    CoreCoord dram_sender_logical,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
     uint32_t fixed_entry_size,
-    const DramSenderPlacement& placement,
     BufferType buffer_type) {
-    // shared_ptr rather than a value: PrefetcherPipe is neither copyable nor movable, and the
-    // aggregate that owns it hands out references.
+    // shared_ptr rather than a value: PrefetcherPipe is neither copyable nor movable, and callers
+    // hold a list of them.
     return std::shared_ptr<PrefetcherPipe>(new PrefetcherPipe(
         mesh_device,
+        dram_sender_logical,
         receiver_cores,
         ring_size,
         fixed_entry_size,
-        placement,
         buffer_type,
         PrefetcherPipe::DramSenderTag{}));
 }
 
 DeviceAddr PrefetcherPipeDramSenderInternals::sender_state_drisc_l1_base(const PrefetcherPipe& pipe) {
-    return pipe.sender_state_drisc_l1_base_;
+    return pipe.drisc_config_page_alloc_ == nullptr ? 0 : pipe.drisc_config_page_alloc_->addr();
 }
 
 }  // namespace prefetcher_pipe_dram_sender

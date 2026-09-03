@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <optional>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -477,26 +480,90 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     const experimental::GlobalCircularBuffer& gcb) const {
     RequestTarget target;
-    target.mapping = &gcb.sender_receiver_core_mapping();
-    target.state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
+    target.mapping = gcb.sender_receiver_core_mapping();
+    // One GCB block per sender, all at the same DRISC L1 offset.
+    target.state_addr_per_sender.assign(
+        target.mapping.size(), static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb)));
     target.transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
     target.per_recv_capacity_bytes = gcb.size();
     return target;
 }
 
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
-    const experimental::TensorPrefetcherPipes& prefetcher_pipes) const {
+    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const {
+    TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one PrefetcherPipe");
+
     RequestTarget target;
-    target.mapping = &prefetcher_pipes.sender_receiver_core_mapping();
-    target.state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(prefetcher_pipes));
     target.transport = TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-    target.per_recv_capacity_bytes = prefetcher_pipes.ring_size();
-    target.fixed_entry_size = prefetcher_pipes.entry_size();
+    target.mapping.reserve(prefetcher_pipes.size());
+    target.state_addr_per_sender.reserve(prefetcher_pipes.size());
+
+    // Which bank a sender drives is its DRAM-logical x, and recv_index_bases_per_sender resets the
+    // slab base on every bank change -- so a bank whose senders are not adjacent would restart its
+    // second sender's slabs at 0 and deliver both halves the same shard.
+    std::unordered_set<uint32_t> closed_banks;
+    std::optional<uint32_t> open_bank;
+    CoreRangeSet all_receivers;
+    uint32_t total_receivers = 0;
+
+    for (size_t s = 0; s < prefetcher_pipes.size(); ++s) {
+        TT_FATAL(
+            prefetcher_pipes[s] != nullptr, "QueueTensorPrefetcherRequest was given a null PrefetcherPipe at {}", s);
+        const experimental::PrefetcherPipe& pipe = *prefetcher_pipes[s];
+        TT_FATAL(
+            experimental::prefetcher_pipe_sender_core_type(pipe) == experimental::SenderCoreType::Dram,
+            "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but pipe {} has a worker sender. Build "
+            "them with CreatePrefetcherPipeForTensorPrefetcher.",
+            s);
+        const uint32_t entry_size = experimental::prefetcher_pipe_fixed_entry_size(pipe);
+        const uint32_t ring_size = experimental::prefetcher_pipe_ring_size(pipe);
+        if (s == 0) {
+            target.fixed_entry_size = entry_size;
+            target.per_recv_capacity_bytes = ring_size;
+        }
+        TT_FATAL(
+            entry_size == target.fixed_entry_size && ring_size == target.per_recv_capacity_bytes,
+            "QueueTensorPrefetcherRequest requires one geometry across the pipe list: pipe {} has entry size {} B and "
+            "ring size {} B, but pipe 0 has {} B and {} B. One request stamps one layout for every sender.",
+            s,
+            entry_size,
+            ring_size,
+            target.fixed_entry_size,
+            target.per_recv_capacity_bytes);
+
+        const CoreCoord sender = experimental::prefetcher_pipe_sender_core(pipe);
+        const CoreRangeSet& receivers = experimental::prefetcher_pipe_receiver_cores(pipe);
+        const auto bank = static_cast<uint32_t>(sender.x);
+        if (!open_bank.has_value() || *open_bank != bank) {
+            if (open_bank.has_value()) {
+                closed_banks.insert(*open_bank);
+            }
+            TT_FATAL(
+                closed_banks.find(bank) == closed_banks.end(),
+                "QueueTensorPrefetcherRequest requires a bank's PrefetcherPipes to be adjacent in the list, but bank "
+                "{} reappears at pipe {} after another bank. Keep them in BuildTensorPrefetcherSenderMapping order: it "
+                "is what assigns each sender its bank-local slab base.",
+                bank,
+                s);
+            open_bank = bank;
+        }
+
+        all_receivers = all_receivers.merge(receivers);
+        total_receivers += receivers.num_cores();
+        target.mapping.emplace_back(sender, receivers);
+        target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+    }
+    TT_FATAL(
+        all_receivers.num_cores() == total_receivers,
+        "QueueTensorPrefetcherRequest requires disjoint receiver sets across the pipe list: {} receivers were listed "
+        "but only {} are distinct.",
+        total_receivers,
+        all_receivers.num_cores());
     return target;
 }
 
 std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_target(const RequestTarget& target) const {
-    const auto& mapping = *target.mapping;
+    const auto& mapping = target.mapping;
     TT_FATAL(!mapping.empty(), "Tensor prefetcher: target sender mapping must not be empty");
 
     std::vector<uint32_t> sender_indices;
@@ -694,7 +761,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     // Derive the receiver counts from the target itself so each Queue call can target an object
     // with a different receiver count. total_receivers (== ring_size) and receivers_per_bank are
     // independent of how many DRISC senders drive a bank.
-    const auto& mapping = *target.mapping;
+    const auto& mapping = target.mapping;
     uint32_t total_receivers = 0;
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
@@ -729,13 +796,32 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     constexpr uint32_t kLayoutBytes = sizeof(TensorPrefetcherTensorLayout);
 
     // max_receivers sizes the uniform rotation slot so every sender's page packs identically
-    // (dedup/fit decisions below are sender-independent); the kernel recovers it from the target's
-    // max_num_receivers. It is just the largest receiver count over the target's senders.
+    // (dedup/fit decisions below are sender-independent); the kernel reads it back out of the page
+    // header. It is just the largest receiver count over the target's senders.
     uint32_t max_receivers = 0;
     for (const auto& [_sender, receivers] : mapping) {
         max_receivers = std::max(max_receivers, receivers.num_cores());
     }
+    TT_FATAL(
+        max_receivers <= std::numeric_limits<uint8_t>::max(),
+        "Tensor prefetcher: a target sender drives {} receivers, above the {} the request header's "
+        "max_num_receivers field can carry.",
+        max_receivers,
+        std::numeric_limits<uint8_t>::max());
     const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
+
+    // Bank-local slab base per sender: local receiver r of sender s reads slab
+    // recv_index_bases[s] + r. Stamped into each sender's own page header.
+    const std::vector<uint32_t> recv_index_bases = recv_index_bases_per_sender(mapping);
+    for (size_t s = 0; s < recv_index_bases.size(); ++s) {
+        TT_FATAL(
+            recv_index_bases[s] <= std::numeric_limits<uint8_t>::max(),
+            "Tensor prefetcher: sender {} starts at bank-local slab {}, above the {} the request header's "
+            "recv_index_base field can carry.",
+            s,
+            recv_index_bases[s],
+            std::numeric_limits<uint8_t>::max());
+    }
 
     // Per-sender bank-local slab index map, needed only when a tensor streams -- so it is built
     // inside the guard below rather than for every request. It comes from the shared
@@ -917,10 +1003,9 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     }
 
     // ---- Materialize each logical page into one byte buffer per sender ----
-    // Header/entry/geometry bytes are identical across senders; only each slot's rotation region
-    // differs (this sender's slice of the caller's global rotation). A page whose every slot is
-    // batched (no rotation) is byte-identical for all mapped GCB senders, so it is emitted once
-    // rather than making identical copies.
+    // Entry and geometry bytes are identical across senders. The header is not -- it names this
+    // sender's target state and bank-local slab base -- and neither is a slot's rotation region
+    // (this sender's slice of the caller's global rotation).
     std::vector<std::vector<std::vector<uint8_t>>> pages;
     pages.reserve(plans.size());
     for (const auto& plan : plans) {
@@ -931,16 +1016,22 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                 break;
             }
         }
-        // Build the sender-independent template once (header + entries + each slot's geometry,
-        // rotation regions left zero); each sender's page is a copy with only its rotation slices
-        // overwritten. Avoids re-stamping the identical header/entry/geometry bytes per sender.
+        // Build the sender-independent template once (entries + each slot's geometry, header's
+        // shared fields, rotation regions left zero); each sender's page is a copy with only its
+        // own header fields and rotation slices overwritten.
         std::vector<uint8_t> templ(aligned_page_bytes, 0);
         auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(templ.data());
         header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
         header->prefetch.transport = target.transport;
+        TT_FATAL(
+            plan.slots.size() <= std::numeric_limits<uint16_t>::max(),
+            "Tensor prefetcher: a request page holds {} layout slots, above the {} the header's num_layouts field can "
+            "carry.",
+            plan.slots.size(),
+            std::numeric_limits<uint16_t>::max());
         header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
-        header->prefetch.num_layouts = static_cast<uint32_t>(plan.slots.size());
-        header->prefetch.target_state_addr = target.state_addr;
+        header->prefetch.num_layouts = static_cast<uint16_t>(plan.slots.size());
+        header->prefetch.max_num_receivers = static_cast<uint8_t>(max_receivers);
         for (uint32_t k = 0; k < plan.entries.size(); ++k) {
             TensorPrefetcherEntry entry;
             entry.bank_local_base = plan.entries[k].bank_local_base;
@@ -952,10 +1043,12 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             std::memcpy(templ.data() + slot_start, &plan.slots[i].geom, kLayoutBytes);
         }
 
-        const uint32_t num_variants = page_has_rotation ? static_cast<uint32_t>(mapping.size()) : 1u;
-        std::vector<std::vector<uint8_t>> per_sender(num_variants);
-        for (uint32_t s = 0; s < num_variants; ++s) {
+        std::vector<std::vector<uint8_t>> per_sender(mapping.size());
+        for (uint32_t s = 0; s < mapping.size(); ++s) {
             std::vector<uint8_t> page = templ;
+            auto* sender_header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
+            sender_header->prefetch.target_state_addr = target.state_addr_per_sender[s];
+            sender_header->prefetch.recv_index_base = static_cast<uint8_t>(recv_index_bases[s]);
             if (page_has_rotation) {
                 const auto& slab = slab_idx_by_sender[s];
                 const uint32_t bank = static_cast<uint32_t>(mapping[s].first.x);
@@ -998,12 +1091,12 @@ void TensorPrefetcherManager::queue(
 }
 
 void TensorPrefetcherManager::queue(
-    const experimental::TensorPrefetcherPipes& prefetcher_pipes,
+    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
-    // No sender-domain check here: TensorPrefetcherPipes can only be built by
-    // CreatePrefetcherPipesForTensorPrefetcher, so its senders are DRAM cores by construction.
+    // target_for validates the list: DRAM senders, one shared geometry, disjoint receivers, and
+    // the bank-adjacency the slab bases depend on.
     queue_to_target(target_for(prefetcher_pipes), device_subset, tensors, trace_capture_cq);
 }
 
@@ -1028,12 +1121,12 @@ void TensorPrefetcherManager::queue_to_target(
 
     // A Queue call may span more tensors than fit in one socket page; serialize into one
     // or more pages, each an independent request. The per-target write cursor persists across
-    // requests, so the split is invisible to the receiver. A streaming logical page is materialized
-    // per mapped sender because each carries a different rotation slice.
+    // requests, so the split is invisible to the receiver. Each logical page is materialized once
+    // per mapped sender, since its header names that sender's target state and slab base.
     std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(target, tensors);
 
     // Target devices: subset if given, else full mesh. Caller is responsible
-    // for keeping tensors and the GCB alive until stop() — see the public API doc.
+    // for keeping tensors and the target alive until stop() — see the public API doc.
     std::vector<MeshCoordinate> target_devices;
     MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
     for (const auto& range : effective_subset.ranges()) {
@@ -1369,7 +1462,7 @@ void QueueTensorPrefetcherRequest(
 
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const TensorPrefetcherPipes& prefetcher_pipes,
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq) {

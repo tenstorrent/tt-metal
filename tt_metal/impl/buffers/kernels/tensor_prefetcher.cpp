@@ -4,12 +4,13 @@
 //
 // Queueable DRISC prefetcher kernel — successor to tensor_prefetcher.cpp.
 // Sits in a request loop on a per-(device, sender-core) H2D socket; each request
-// payload identifies the target GlobalCircularBuffer (by its DRISC L1
-// sender-state-block base, written by the GCB ctor) and carries the per-tensor
-// geometry. The kernel loads the sender state block's RemoteSenderCBInterface
-// region into cb_interface[], runs the chunk-loop logic, writes the mutable
-// fifo_wr_ptr back to L1 so the next request to the same GCB resumes from the right
-// ring offset, and acks the socket page.
+// payload names its delivery target by the DRISC L1 address of this sender's state
+// for it — a DramSenderStateBlock for a GlobalCircularBuffer, a sender config page
+// for a PrefetcherPipe, selected by the header's transport — and carries the
+// per-tensor geometry. The kernel builds a RemoteSenderCBInterface from that state,
+// runs the chunk-loop logic, and acks the socket page. A GCB's mutable fifo_wr_ptr
+// is written back so the next request to it resumes at the right ring offset; a
+// pipe's cursor is derived from its durable counters and needs no write-back.
 //
 // Request page wire format (one socket page): a TensorPrefetcherRequestHeader
 // (one-byte command id + per-command union). The STOP command (all-zero page) exits
@@ -21,7 +22,8 @@
 // tt_metal/impl/buffers/tensor_prefetcher_request.hpp.
 //
 // Per-GCB sender state block layout: see
-// tt_metal/impl/buffers/dram_sender_state_block.hpp.
+// tt_metal/impl/buffers/dram_sender_state_block.hpp. PrefetcherPipe sender config
+// page layout: see tt_metal/hw/inc/hostdev/remote_dfb_config_layout.h.
 
 #include <stdint.h>
 
@@ -32,14 +34,11 @@
 #include "experimental/gddr_dma.h"
 #include "hostdev/remote_dfb_config_layout.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
-#include "tt_metal/impl/buffers/prefetcher_pipe_dram_sender_state.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
 using tt::tt_metal::DramSenderStateBlock;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
-using tt::tt_metal::prefetcher_pipe_config_page_offset;
-using tt::tt_metal::PrefetcherPipeDramSenderState;
 using tt::tt_metal::TensorPrefetcherEntry;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
@@ -364,15 +363,12 @@ void kernel_main() {
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
         const uint32_t req_num_entries = req->prefetch.num_entries;
+        // Per-sender state for this request's target: a DramSenderStateBlock for a
+        // GlobalCircularBuffer, this pipe's own sender config page for a PrefetcherPipe. Which one
+        // it is follows the transport below.
         const uint32_t target_state_addr = req->prefetch.target_state_addr;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(target_state_addr);
-        // A PrefetcherPipe target lays out its DRISC block as a small prefix followed by the sender
-        // config page (see prefetcher_pipe_dram_sender_state.hpp) rather than as a
-        // DramSenderStateBlock. Both are resolved below once the transport is known.
-        volatile tt_l1_ptr PrefetcherPipeDramSenderState* pipe_state =
-            reinterpret_cast<volatile tt_l1_ptr PrefetcherPipeDramSenderState*>(target_state_addr);
-        const uint32_t pipe_config_page_addr = target_state_addr + prefetcher_pipe_config_page_offset();
 
         PROF_DECL_ACC(prof_rounds);
         PROF_DECL_ACC(prof_chunks);
@@ -385,9 +381,7 @@ void kernel_main() {
         PROF_DECL_ACC(prof_defer_flush);
         PROF_DECL_ACC(prof_finalize);
 
-        // Which kind of target the state address above points at. Must come from the header: the
-        // layout table can only be indexed once layout_stride is known, and that depends on the
-        // target's max_num_receivers, which lives in the transport-specific state layout.
+        // Which kind of target the state address above points at.
         const bool is_pipe = req->prefetch.transport == tt::tt_metal::TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
 
         if (!is_pipe) {
@@ -398,18 +392,17 @@ void kernel_main() {
         // num_receivers lives inside the target's per-sender state. Reading it per request lets a
         // single prefetcher serve targets with different receiver counts.
         const uint32_t num_receivers =
-            is_pipe
-                ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pipe_config_page_addr)[REMOTE_DFB_CFG_NUM_RECEIVERS]
-                : state->num_receivers;
+            is_pipe ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_state_addr)[REMOTE_DFB_CFG_NUM_RECEIVERS]
+                    : state->num_receivers;
         // Bank-local slab index of this sender's first receiver. When two DRISC cores
         // split a bank's receivers, the second core's local receiver r maps to bank-local
         // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
-        const uint32_t recv_index_base = is_pipe ? pipe_state->recv_index_base : state->recv_index_base;
+        const uint32_t recv_index_base = req->prefetch.recv_index_base;
         // Each layout slot in the page is the geometry struct immediately followed by this target's
         // per-sender streaming rotation table, sized for the largest sender (max_num_receivers) so
         // the slot stride is uniform across senders. Recover that stride to index the slot table.
-        const uint32_t max_num_receivers = is_pipe ? pipe_state->max_num_receivers : state->max_num_receivers;
-        const uint32_t layout_stride = sizeof(TensorPrefetcherTensorLayout) + max_num_receivers * sizeof(uint32_t);
+        const uint32_t layout_stride =
+            sizeof(TensorPrefetcherTensorLayout) + req->prefetch.max_num_receivers * sizeof(uint32_t);
 
         // Entries follow the header (grow forward); the deduplicated layout table grows
         // backward from the end of the payload, so layout slot i lives at read_ptr +
@@ -452,7 +445,7 @@ void kernel_main() {
                 // already checked equals t_page_bytes_per_recv, so no padding credit is possible.
                 // The write cursor comes from the durable per-receiver counters, which is what makes
                 // it resume correctly across requests and across programs.
-                load_pipe_sender_state(pipe_config_page_addr, t_page_bytes_per_recv, iface);
+                load_pipe_sender_state(target_state_addr, t_page_bytes_per_recv, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips
                 // padding to reach the next aligned page (e.g. a larger page after a smaller one in
