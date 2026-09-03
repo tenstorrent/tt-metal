@@ -84,11 +84,11 @@ The safetensors golden trace is the MiniMax-style format consumed via `PREFILL_T
 | `--prompt-json` / `--prompt` | Input prompt |
 | `--max-tokens N` | Truncate to N tokens |
 | `--chat-template` | Apply chat template (off by default) |
-| `--dtype` | Stored dtype (default: bfloat16) |
+| `--dtype` | Stored dtype only (default: bfloat16); compute is always bfloat16 |
 | `--num-layers N` | Capture first N layers only |
 | `--zero-sinks` | Zero attention sinks (diagnostic) |
 | `--disable-sliding-window` | Force full attention everywhere (diagnostic) |
-| `--model-path` | HF dir, or `$HF_MODEL` / `$DEEPSEEK_V3_HF_MODEL` |
+| `--model-path` | HF dir, or `$HF_MODEL` |
 | `REF_ATTN_Q_CHUNK` | Query-row tile size (default 256); lower if still OOM |
 | `REF_FFN_TOKEN_CHUNK` | MoE token tile size (default 4096) |
 

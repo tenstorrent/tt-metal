@@ -107,6 +107,8 @@ class GoldenPrefillModel:
 
         model_path = Path(model_path)
         hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        if num_layers is not None and not 1 <= num_layers <= hf_config.num_hidden_layers:
+            raise ValueError(f"num_layers must be between 1 and {hf_config.num_hidden_layers}, got {num_layers}")
         self.cfg = GoldenModelConfig(
             num_hidden_layers=num_layers or hf_config.num_hidden_layers,
             num_key_value_heads=hf_config.num_key_value_heads,

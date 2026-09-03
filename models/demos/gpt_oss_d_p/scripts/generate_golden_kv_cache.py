@@ -97,7 +97,7 @@ def parse_args():
         "--model-path",
         type=str,
         default=None,
-        help="HF model directory (default: $HF_MODEL or $DEEPSEEK_V3_HF_MODEL)",
+        help="HF model directory (default: $HF_MODEL)",
     )
     ap.add_argument("--max-tokens", type=int, default=None, help="Truncate prompt to this many tokens")
     ap.add_argument(
@@ -109,7 +109,8 @@ def parse_args():
         "--dtype",
         choices=["bfloat16", "float32", "float16"],
         default="bfloat16",
-        help="Stored KV cache dtype (default: bfloat16)",
+        help="Stored KV cache dtype (default: bfloat16). The reference always computes in "
+        "bfloat16; K/V are cast to this dtype on save (bf16 matches the device cache).",
     )
     ap.add_argument(
         "--num-layers",
@@ -163,9 +164,12 @@ def tokenize_prompt(tokenizer, prompt: str, max_tokens: int | None, use_chat_tem
     else:
         ids = tokenizer(prompt)["input_ids"]
 
-    if max_tokens and len(ids) > max_tokens:
-        print(f"[tokenize] truncating {len(ids)} tokens -> {max_tokens}")
-        ids = ids[:max_tokens]
+    if max_tokens is not None:
+        if max_tokens <= 0:
+            raise ValueError(f"max_tokens must be positive, got {max_tokens}")
+        if len(ids) > max_tokens:
+            print(f"[tokenize] truncating {len(ids)} tokens -> {max_tokens}")
+            ids = ids[:max_tokens]
 
     return ids, len(ids)
 
@@ -176,9 +180,9 @@ def main():
 
     use_tiled_ops = args.attn_mode == "tiled"
 
-    model_path = args.model_path or os.environ.get("HF_MODEL") or os.environ.get("DEEPSEEK_V3_HF_MODEL")
+    model_path = args.model_path or os.environ.get("HF_MODEL")
     if not model_path:
-        print("ERROR: Must provide --model-path or set $HF_MODEL / $DEEPSEEK_V3_HF_MODEL", file=sys.stderr)
+        print("ERROR: Must provide --model-path or set $HF_MODEL", file=sys.stderr)
         return 1
 
     dtype_map = {
@@ -187,6 +191,7 @@ def main():
         "float16": torch.float16,
     }
     dtype = dtype_map[args.dtype]
+    compute_dtype = torch.bfloat16
 
     out_dir = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -205,7 +210,11 @@ def main():
 
     print(f"\n{'=' * 70}", flush=True)
     print(f"[load] Building golden reference from {model_path}", flush=True)
-    print(f"[load] compute dtype={dtype}; weights mmap'd (low_cpu_mem_usage)", flush=True)
+    print(
+        f"[load] compute dtype=bfloat16 (matches device cache); "
+        f"store dtype={args.dtype}; weights mmap'd (low_cpu_mem_usage)",
+        flush=True,
+    )
     if use_tiled_ops:
         print("[load] one-shot prefill with tiled attn/MoE (--attn-mode tiled)", flush=True)
     else:
@@ -222,7 +231,7 @@ def main():
     model = load_golden_model(
         model_path,
         num_layers=args.num_layers,
-        compute_dtype=dtype,
+        compute_dtype=compute_dtype,
         zero_sinks=args.zero_sinks,
         disable_sliding_window=args.disable_sliding_window,
         use_tiled_ops=use_tiled_ops,
@@ -268,9 +277,9 @@ def main():
         value_cache = value_cache.to(dtype)
         expected_shape = (1, num_kv_heads, seq_len, head_dim)
         if tuple(key_cache.shape) != expected_shape or tuple(value_cache.shape) != expected_shape:
-            tqdm.write(
-                f"[save] WARNING: layer {layer_idx} KV shape mismatch! "
-                f"K: {tuple(key_cache.shape)}, V: {tuple(value_cache.shape)}, expected: {expected_shape}"
+            raise ValueError(
+                f"layer {layer_idx} KV shape mismatch: "
+                f"K={tuple(key_cache.shape)}, V={tuple(value_cache.shape)}, expected={expected_shape}"
             )
         tensors = {
             f"key_cache_layer_{layer_idx}": key_cache.contiguous(),

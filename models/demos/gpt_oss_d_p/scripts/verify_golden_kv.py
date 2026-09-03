@@ -59,7 +59,18 @@ def verify_trace(trace_dir: Path) -> bool:
     expected_key_shape = tuple(metadata["key_cache_shape"])
     expected_val_shape = tuple(metadata["value_cache_shape"])
 
-    print(f"  metadata OK: {n_tokens} tokens, {num_layers} layers")
+    dtype_name = metadata.get("dtype", "bfloat16")
+    dtype_map = {
+        "bfloat16": (torch.bfloat16, 2),
+        "float16": (torch.float16, 2),
+        "float32": (torch.float32, 4),
+    }
+    if dtype_name not in dtype_map:
+        print(f"  metadata dtype {dtype_name!r} not supported (expected one of {sorted(dtype_map)})")
+        return False
+    expected_dtype, element_size = dtype_map[dtype_name]
+
+    print(f"  metadata OK: {n_tokens} tokens, {num_layers} layers, dtype={dtype_name}")
     print(f"    K shape: {expected_key_shape}, V shape: {expected_val_shape}")
 
     kv_cache_dir = trace_dir / "kv_cache"
@@ -98,8 +109,12 @@ def verify_trace(trace_dir: Path) -> bool:
                     continue
 
                 for name, tensor in (("K", key_tensor), ("V", val_tensor)):
-                    if tensor.dtype != torch.bfloat16:
-                        print(f"  layer {layer_idx}: {name} dtype {tensor.dtype} (expected bfloat16)")
+                    if tensor.dtype != expected_dtype:
+                        print(
+                            f"  layer {layer_idx}: {name} dtype {tensor.dtype} "
+                            f"(expected {expected_dtype}, metadata dtype={dtype_name})"
+                        )
+                        success = False
                     sample = tensor.flatten()[:1000]
                     if not torch.isfinite(sample).all():
                         print(f"  layer {layer_idx}: {name} contains NaN or Inf values")
@@ -118,8 +133,12 @@ def verify_trace(trace_dir: Path) -> bool:
         print("  some layer files had errors")
 
     print("[verify] checking file sizes...")
-    k_size = expected_key_shape[0] * expected_key_shape[1] * expected_key_shape[2] * expected_key_shape[3] * 2
-    v_size = expected_val_shape[0] * expected_val_shape[1] * expected_val_shape[2] * expected_val_shape[3] * 2
+    k_size = (
+        expected_key_shape[0] * expected_key_shape[1] * expected_key_shape[2] * expected_key_shape[3] * element_size
+    )
+    v_size = (
+        expected_val_shape[0] * expected_val_shape[1] * expected_val_shape[2] * expected_val_shape[3] * element_size
+    )
     expected_size_per_layer_mb = (k_size + v_size) / (1024 * 1024)
 
     total_size_mb = 0.0
@@ -142,6 +161,7 @@ def verify_trace(trace_dir: Path) -> bool:
         print(f"   Trace: {trace_dir}")
         print(f"   Tokens: {n_tokens}")
         print(f"   Layers: {num_layers}")
+        print(f"   Dtype: {dtype_name}")
         print(f"   K shape: {expected_key_shape}")
         print(f"   V shape: {expected_val_shape}")
         print(f"   Size: {total_size_mb / 1024:.2f} GB")
