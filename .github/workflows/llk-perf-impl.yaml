@@ -221,15 +221,9 @@ jobs:
   upload-perf-data:
     name: "Upload perf data to the warehouse"
     needs: [llk-perf-exec]
-    # always(): a shard that failed still produced Parquets worth keeping.
-    # The job is not shielded: a refused login fails it, and fails the run. That
-    # is the behaviour the scheduled nightly will have when the default flips.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     steps:
-      # The upload action is a local action, so the repo has to be on disk
-      # before it can be resolved. Checkout also clears the workspace, so it
-      # must come before the artifacts are downloaded into it.
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -260,25 +254,7 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
-      # LLK perf has its own SFTP writer and its own ingest bucket
-      # (data_iac#655: user llk-perf-run, home data-pipeline-llk-perf-run-ingest).
-      # Only that bucket has the llk_perf_run wrangler behind it
-      # (data_airflow dags/pipelines/llk_perf_run), which loads the file into
-      # LLK_PERF.{RUNS,TEST_EXECUTIONS,MEASUREMENTS}. Another producer's writer
-      # would put the file in a bucket where nothing reads it.
-      # Host and user are literals on purpose: neither is a credential, and the
-      # warehouse owner has to be able to read what we connect as. Only the key
-      # is a secret.
-      #
-      # The user is "llk-perf-run-writer", not "llk-perf-run". data_iac's
-      # aws_transfer_user sets user_name = "${block.name}-${block.permission}"
-      # (resources/aws_sftp/main.tf L127-134, comment: `user_name ex: cicd + "-"
-      # + reader`), so "llk-perf-run" is only the project tag. Verified: this
-      # user and host uploaded the first 30 files on 2026-09-02.
-      #
-      # SFTP_LLK_PERF_WRITER_KEY must hold a key made only for CI, added to
-      # llk-perf-run's authorized_clients in data_iac. Never a personal key: a
-      # repo secret is readable by any workflow anyone can push to this repo.
+
       - name: Upload perf data
         uses: ./.github/actions/upload-data-via-sftp
         with:
