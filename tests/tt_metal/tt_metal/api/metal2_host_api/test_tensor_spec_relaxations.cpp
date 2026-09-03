@@ -16,10 +16,9 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>  // TensorSpec / TensorLayout / PageConfig / ...
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
-namespace tt::tt_metal::experimental {
 // Named rather than anonymous: these tests are part of a unity build, where two anonymous namespaces
 // merge into one and same-named helpers collide.
-namespace tensor_spec_relaxation_tests {
+namespace tt::tt_metal::experimental::tensor_spec_relaxation_tests {
 
 // Build a TensorSpec with a controllable shape, layout, and dtype. Interleaved/DRAM throughout;
 // the axes that matter here are logical_shape, padded_shape (derived), and tensor_layout.
@@ -429,5 +428,4 @@ TEST(TensorSpecRelaxations, CPU_HashConsistentWithMatch) {
     }
 }
 
-}  // namespace tensor_spec_relaxation_tests
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::experimental::tensor_spec_relaxation_tests
