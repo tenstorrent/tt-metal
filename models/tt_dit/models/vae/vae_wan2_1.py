@@ -2018,6 +2018,10 @@ class WanDecoder(Module):
                 )
                 chunk_outputs.append(ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3)))
                 ttnn.deallocate(out_BTHWC)
+                # Tracy runs: drain the on-device profiler marker buffer (~12k/core) per chunk so a
+                # multi-chunk decode does not overflow it.
+                if os.environ.get("WAN_VAE_PROFILER_DRAIN") == "1":
+                    ttnn.ReadDeviceProfiler(self.mesh_device)
             ttnn.deallocate(x_BTHWC)
             self.clear_cache()
             output_BCTHW = chunk_outputs[0] if len(chunk_outputs) == 1 else ttnn.concat(chunk_outputs, dim=2)
