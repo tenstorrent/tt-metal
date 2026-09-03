@@ -81,14 +81,6 @@ public:
     //   - sizing the VC0 downstream fan  -> get_vc0_downstream_edm_count(is_2D, express_routing_enabled)
     //   - intermesh / express edge role  -> classify_fabric_edge() and ZPortRole, per edge
 
-    // Kernel defines that configure destination-major 2D action-map encoding for a worker kernel
-    // running on mesh_id, or empty outside 2D routing mode. EVERY builder that compiles a kernel which
-    // produces 2D routes must apply these: the format is chosen per kernel compile, so a kernel missing
-    // them writes hop programs while its chip's L1 holds a 2D route table, with no diagnostic. The
-    // shape is the GLOBAL physical shape used to pack the L1 route table, matching the ControlPlane
-    // embed and the router's named args.
-    std::map<std::string, std::string> get_2d_kernel_defines(const ControlPlane& control_plane, MeshId mesh_id) const;
-
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
     // Queried from MetalContext at init time
@@ -109,7 +101,9 @@ public:
         return routing_2d_buffer_size_;
     }
 
-    // Returns empty map if routing mode is undefined
+    // Configuration-wide kernel defines. Exact 2D mesh shape is runtime routing metadata; express
+    // capacity is enabled for all local kernels when any locally bound mesh uses express routing.
+    // Returns empty map if routing mode is undefined.
     std::map<std::string, std::string> get_fabric_kernel_defines(const ControlPlane& control_plane) const;
 
     // ============ Builder Context Access ============

@@ -2059,12 +2059,27 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
-    // Same accessor and scope the 2D route-table packer, the router named args, and the worker shape defines
+    // Same accessor and scope the 2D route-table packer, the router named args, and worker runtime metadata
     // use. A Galaxy presents as either 8x4 or 4x8, so a shape from a second source risks transposed
     // coordinates that index valid-looking but wrong table slots.
     const auto mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
+    const bool is_2d_routing_enabled = this->get_fabric_context().is_2D_routing_enabled();
+    if (is_2d_routing_enabled) {
+        TT_FATAL(
+            mesh_shape[0] > 0 && mesh_shape[1] > 0 && mesh_shape[0] <= Routing2DCodec::MAX_AXIS_SIZE &&
+                mesh_shape[1] <= Routing2DCodec::MAX_AXIS_SIZE,
+            "Mesh {} shape {}x{} cannot be represented in the 2D routing metadata; both axes must be in [1, {}].",
+            *mesh_id,
+            mesh_shape[0],
+            mesh_shape[1],
+            Routing2DCodec::MAX_AXIS_SIZE);
+    }
     routing_info.my_mesh_coord_y = chip_id / mesh_shape[1];
     routing_info.my_mesh_coord_x = chip_id % mesh_shape[1];
+    if (is_2d_routing_enabled) {
+        routing_info.mesh_y_size = static_cast<std::uint8_t>(mesh_shape[0]);
+        routing_info.mesh_x_size = static_cast<std::uint8_t>(mesh_shape[1]);
+    }
 
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();

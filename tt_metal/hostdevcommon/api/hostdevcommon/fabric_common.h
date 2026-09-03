@@ -989,11 +989,12 @@ struct routing_l1_info_t {
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
-    // This chip's (y, x) coordinates within its mesh, row-major with my_device_id
-    // (y = id / x_size, x = id % x_size). Populated host-side with the rest of the table.
+    // This chip's (y, x) coordinates and the global (Y, X) shape of its mesh. Device IDs are row-major:
+    // y = id / mesh_x_size, x = id % mesh_x_size. Populated host-side with the rest of the table.
     std::uint8_t my_mesh_coord_y = 0;
     std::uint8_t my_mesh_coord_x = 0;
-    uint8_t padding[2] = {};  // pad to 16-byte alignment
+    std::uint8_t mesh_y_size = 0;
+    std::uint8_t mesh_x_size = 0;
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
 static_assert(
@@ -1005,6 +1006,9 @@ static_assert(
 static_assert(
     offsetof(routing_l1_info_t, my_mesh_coord_y) == 516 + Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES + MAX_NUM_MESHES,
     "my_mesh_coord_y must immediately follow exit_node_table");
+static_assert(offsetof(routing_l1_info_t, mesh_y_size) == 2702, "mesh_y_size must occupy routing-table tail byte 2");
+static_assert(offsetof(routing_l1_info_t, mesh_x_size) == 2703, "mesh_x_size must occupy routing-table tail byte 3");
+static_assert(Routing2DCodec::MAX_AXIS_SIZE <= 0xFFu, "2D mesh dimensions must fit in routing_l1_info_t shape fields");
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
@@ -1018,7 +1022,7 @@ static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed ro
 // Verify total struct size
 static_assert(
     sizeof(routing_l1_info_t) == 2704,
-    "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + pad(2)");
+    "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};

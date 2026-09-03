@@ -357,12 +357,8 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 // Template: ProgramDescriptor appends to .defines vector; Program calls add_defines().
 template <typename ProgramOrDescriptor>
 void inject_fabric_kernel_defines(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
-    ProgramOrDescriptor& worker_program_or_desc,
-    tt::tt_metal::KernelHandle& kernel_id,
-    FabricApiType api_type) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    ProgramOrDescriptor& worker_program_or_desc, tt::tt_metal::KernelHandle& kernel_id, FabricApiType api_type) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
 
     auto add_kernel_defines = [&, kernel_ref = [&]() {
         if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
@@ -387,13 +383,6 @@ void inject_fabric_kernel_defines(
     }
     if (fabric_context.is_2D_routing_enabled()) {
         add_kernel_defines({{"FABRIC_2D", "1"}});
-        // Workers in every 2D mesh produce 2D action maps instead of hop programs. FABRIC_2D selects
-        // that encoding, while the per-mesh defines provide the global shape used by control-plane
-        // route-table packing and router decode, keeping packet encoding, L1 layout, and decode aligned.
-        for (const auto& [name, value] :
-             fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
-            add_kernel_defines({{name, value}});
-        }
     }
 }
 
@@ -500,7 +489,7 @@ void append_routing_plane_connection_manager_rt_args(
         worker_core,
         worker_args,
         core_type);
-    inject_fabric_kernel_defines(src_fabric_node_id, worker_program_or_desc, kernel_id, api_type);
+    inject_fabric_kernel_defines(worker_program_or_desc, kernel_id, api_type);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -701,34 +690,9 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     if (fabric_context.is_2D_routing_enabled()) {
         // `api_type` selects the API *surface* -- Linear (1D) versus Mesh (2D). It is not an ABI
         // choice: there is one 2D codec, so express is a flavour of mesh routing rather than a third
-        // api_type. This overload therefore needs no FabricNodeId.
-        //
-        // Kernels that actually encode 2D routes get the mesh shape elsewhere: from the node-aware
-        // overload below, or, for the dispatch relays, from their own lookup (dispatch.cpp,
-        // prefetch.cpp). A compile with no single mesh shape falls back to zero in tt_fabric_api.h and
-        // trips that header's runtime shape assert if it ever tries to encode.
+        // api_type. Exact mesh shape is read from routing_l1_info_t by route-producing workers, while
+        // configuration-wide header sizing and express capacity are injected by CreateKernel.
         defines.push_back({"FABRIC_2D", "1"});
-    }
-    return defines;
-}
-
-std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id, tt::tt_fabric::FabricApiType api_type) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    std::vector<std::pair<std::string, std::string>> defines;
-    switch (api_type) {
-        case tt::tt_fabric::FabricApiType::Linear: defines.push_back({"API_TYPE_Linear", "1"}); break;
-        case tt::tt_fabric::FabricApiType::Mesh: defines.push_back({"API_TYPE_Mesh", "1"}); break;
-        default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
-    }
-    if (fabric_context.is_2D_routing_enabled()) {
-        defines.push_back({"FABRIC_2D", "1"});
-        for (const auto& [name, value] :
-             fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
-            defines.push_back({name, value});
-        }
     }
     return defines;
 }

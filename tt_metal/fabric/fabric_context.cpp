@@ -68,8 +68,8 @@ uint32_t FabricContext::get_max_2d_action_map_bytes_from_topology(const ControlP
 
     uint32_t max_bytes = 0;
     for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-        // Must match the shape get_2d_kernel_defines emits as FABRIC_2D_MESH_*_SIZE, GLOBAL
-        // scope included, since that is what the kernel widens against.
+        // Must match the GLOBAL shape embedded in routing_l1_info_t, since that is what worker
+        // kernels widen against and routers use for their named compile-time shape.
         const auto shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
         max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
     }
@@ -330,29 +330,6 @@ bool FabricContext::need_deadlock_avoidance_support(
     return false;
 }
 
-std::map<std::string, std::string> FabricContext::get_2d_kernel_defines(
-    const ControlPlane& control_plane, MeshId mesh_id) const {
-    if (!is_2D_routing_enabled_) {
-        return {};
-    }
-    // GLOBAL scope is required: the L1 2D route table is packed against the global shape and indexed
-    // by global chip ids, so a local-scope shape would desync the encode from the table.
-    const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
-
-    // Every 2D worker needs the global shape to encode destination-major action maps.
-    std::map<std::string, std::string> defines{
-        {"FABRIC_2D_MESH_Y_SIZE", std::to_string(mesh_shape[0])},
-        {"FABRIC_2D_MESH_X_SIZE", std::to_string(mesh_shape[1])},
-    };
-
-    // Express enablement no longer selects the codec. It widens worker-side Z-port capacity and
-    // rejects express with UDM; keeping it conditional avoids growing non-express connection managers.
-    if (control_plane.express_routing_enabled(mesh_id)) {
-        defines.emplace("FABRIC_EXPRESS_ENABLED", "1");
-    }
-    return defines;
-}
-
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {
     std::map<std::string, std::string> defines;
 
@@ -374,6 +351,16 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
     if (is_2D_routing_enabled_) {
         // 2D routing: inject route buffer size
         defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
+
+        // Worker connection-manager capacity is a compile-time upper bound. Compile every local kernel
+        // for the express-capable superset when any locally bound mesh uses express routing; exact mesh
+        // shape remains per-device runtime metadata in routing_l1_info_t.
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            if (control_plane.express_routing_enabled(mesh_id)) {
+                defines["FABRIC_EXPRESS_ENABLED"] = "1";
+                break;
+            }
+        }
     } else {
         // 1D routing: inject extension words
         defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(routing_1d_extension_words_);

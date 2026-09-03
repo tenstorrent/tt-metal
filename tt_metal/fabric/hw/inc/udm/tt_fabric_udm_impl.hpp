@@ -115,9 +115,9 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     // hardcoding the Tensix one happens to work there and silently reads the wrong region on a
     // dispatch-engine or idle-erisc compile.
     auto* routing_info = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    constexpr uint32_t y_size = FABRIC_2D_MESH_Y_SIZE;
-    constexpr uint32_t x_size = FABRIC_2D_MESH_X_SIZE;
-    ASSERT(y_size > 0 && x_size > 0);  // the host emits the shape defines to express worker kernels
+    const uint32_t y_size = routing_info->mesh_y_size;
+    const uint32_t x_size = routing_info->mesh_x_size;
+    ASSERT(y_size > 0 && x_size > 0);
     ASSERT(dst_chip_id < y_size * x_size);
     const uint32_t dst_y = dst_chip_id / x_size;
     const uint32_t dst_x = dst_chip_id % x_size;

@@ -21,21 +21,8 @@ using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
-#if !defined(FABRIC_2D_MESH_Y_SIZE)
-// All translation units parse the non-template 2D helpers below, including kernels that never call
-// them. Provide zero defaults when the builder does not emit shape defines; do not gate this on FABRIC_2D.
-#define FABRIC_2D_MESH_Y_SIZE 0
-#define FABRIC_2D_MESH_X_SIZE 0
-#endif
-
-#if defined(FABRIC_2D) && (FABRIC_2D_MESH_Y_SIZE > 0)
+#if defined(FABRIC_2D)
 static_assert(ROUTING_TABLE_BASE % alignof(std::uint32_t) == 0, "2D routing-table base must be word aligned");
-// The Y and X maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count the buffer tiers
-// were sized from. Checked here because the equivalent runtime ASSERT compiles out of release
-// kernels, where an oversized shape would instead write past the end of the header.
-static_assert(
-    FABRIC_2D_MESH_Y_SIZE + FABRIC_2D_MESH_X_SIZE <= sizeof(HybridMeshPacketHeader::route_buffer),
-    "Express mesh shape requires a larger 2D route buffer than the packet header provides.");
 #endif
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
@@ -54,9 +41,7 @@ inline void fabric_set_2d_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size);
+    uint16_t dst_mesh_id);
 
 // Contract: the destination is the final destination, is in this mesh, and is exactly one physical
 // fabric hop away. Do not use this helper for inter-mesh traffic -- it has no valid coordinates for a
@@ -66,8 +51,7 @@ void fabric_set_single_hop_unicast_route_from_direction(
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id) {
-    fabric_set_2d_single_hop_unicast_route_from_direction(
-        packet_header, next_hop_direction, dst_dev_id, dst_mesh_id, FABRIC_2D_MESH_Y_SIZE, FABRIC_2D_MESH_X_SIZE);
+    fabric_set_2d_single_hop_unicast_route_from_direction(packet_header, next_hop_direction, dst_dev_id, dst_mesh_id);
 }
 
 void fabric_set_single_hop_unicast_route(
@@ -84,11 +68,7 @@ bool fabric_set_unicast_route(
 
 // Defined in the 2D action-map section below; the public worker path delegates to it.
 inline bool fabric_set_2d_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size);
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id);
 
 // Defined in the 2D action-map section below; the public worker path delegates to it.
 inline std::uint8_t fabric_set_2d_mcast_route(
@@ -98,9 +78,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,
-    uint16_t s_num_hops,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size);
+    uint16_t s_num_hops);
 
 // Multicast producer. Extents are measured from the anchor; a same-mesh send encodes through this
 // chip's reverse trees, a foreign final mesh takes a unicast-style carrier leg toward the exit.
@@ -119,15 +97,7 @@ void fabric_set_mcast_route(
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
     const std::uint8_t root_action = fabric_set_2d_mcast_route(
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        e_num_hops,
-        w_num_hops,
-        n_num_hops,
-        s_num_hops,
-        FABRIC_2D_MESH_Y_SIZE,
-        FABRIC_2D_MESH_X_SIZE);
+        packet_header, dst_dev_id, dst_mesh_id, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
     const std::uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
     ASSERT((root_outputs & (root_outputs - 1)) == 0);
 }
@@ -150,8 +120,7 @@ template <bool called_from_router, eth_chan_directions my_direction>
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     static_assert(!called_from_router, "router-side re-encode is fabric_set_2d_intermesh_landing_route()");
-    return fabric_set_2d_unicast_route(
-        packet_header, dst_dev_id, dst_mesh_id, FABRIC_2D_MESH_Y_SIZE, FABRIC_2D_MESH_X_SIZE);
+    return fabric_set_2d_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
 }
 
 // ============================================================================
@@ -164,12 +133,12 @@ bool fabric_set_unicast_route(
 // table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
 // chip instead; the destination-mesh landing later rebuilds the final map.
 inline bool fabric_set_2d_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size) {
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
+    ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
     // Final destination is retained up front and never overwritten by the exit swap below.
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->mcast_params_64 = 0;
@@ -201,10 +170,11 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,
-    uint16_t s_num_hops,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size) {
+    uint16_t s_num_hops) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
     ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
 
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
@@ -328,15 +298,17 @@ inline void fabric_set_2d_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint8_t mesh_y_size,
-    uint8_t mesh_x_size) {
+    uint16_t dst_mesh_id) {
+    const auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint8_t mesh_y_size = routing_table->mesh_y_size;
+    const uint8_t mesh_x_size = routing_table->mesh_x_size;
     ASSERT(next_hop_direction < eth_chan_directions::COUNT);
+    ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
     // Same-mesh only, per this helper's contract. An inter-mesh destination numbers its chip in the
     // *other* mesh's space, so dst_y/dst_x below would index this mesh's maps with a foreign id.
     // Asserted explicitly rather than left to the bounds check, because the bounds check passes
     // whenever the foreign id happens to be in range and then pokes the wrong slot.
-    ASSERT(dst_mesh_id == reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE)->my_mesh_id);
+    ASSERT(dst_mesh_id == routing_table->my_mesh_id);
     ASSERT(dst_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
     ASSERT((uint32_t)mesh_y_size + mesh_x_size <= sizeof(packet_header->route_buffer));
 

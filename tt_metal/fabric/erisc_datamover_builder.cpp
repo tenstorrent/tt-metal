@@ -1245,9 +1245,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // No longer keyed on express_routing_enabled: every 2D mesh runs the action-map decode, so every 2D
     // router needs its coordinate bounds and its landing-intercept flags.
     if (fabric_context.is_2D_routing_enabled()) {
-        // Same accessor and scope the route-table packer and the worker defines use. These are the
-        // router's coordinate bounds, so a disagreement with the packed L1 2D route table reads the
-        // wrong row.
+        // Same accessor and scope the route-table packer and worker runtime metadata use. These are
+        // the router's coordinate bounds, so a disagreement with the packed L1 2D route table reads
+        // the wrong row.
         const auto mesh_shape =
             control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
