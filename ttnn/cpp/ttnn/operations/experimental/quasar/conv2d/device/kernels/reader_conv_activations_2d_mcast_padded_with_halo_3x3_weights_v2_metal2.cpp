@@ -27,6 +27,11 @@
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
 #include "noc/noc_parameters.h"
+// [#55076] Watcher ring buffer: unlike WAYPOINT (one overwritable slot per RISC) this keeps a HISTORY,
+// dumped in watcher.log. Needed here because the library's own NMLW/NSW markers overwrite ours the
+// instant we enter noc_async_write_multicast / noc_semaphore_wait, so a single slot cannot show which
+// burst or which iteration we died on.
+#include "api/debug/ring_buffer.h"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
@@ -201,6 +206,22 @@ void kernel_main() {
     const bool is_receiver_core = get_arg(args::is_receiver_core) > 0;
     const bool is_sender_core = get_arg(args::is_sender_core) > 0;
     uint32_t dram_config_reader_index = get_arg(args::dram_config_reader_index);
+
+    // [#55076] MCAST CONFIG DUMP. The sender spins forever in
+    //   act_mcast_sender_sem.wait(act_mcast_num_dests + (is_receiver_core ? 0 : 1))
+    // if that target exceeds the number of cores that will ever bump it. Push the operands so the
+    // arithmetic can be checked against the real grid from watcher.log.
+    //   0xAC00_0000 | num_dests<<16 | num_cores<<8 | sender_id<<2 | snd<<1 | rcv
+    WATCHER_RING_BUFFER_PUSH(
+        0xAC000000u | ((act_mcast_num_dests & 0xFFu) << 16) | ((act_mcast_num_cores & 0xFFu) << 8) |
+        ((act_mcast_sender_id & 0x3Fu) << 2) | ((is_sender_core ? 1u : 0u) << 1) | (is_receiver_core ? 1u : 0u));
+    //   0xAD00_0000 | rect start_x<<18 | start_y<<12 | end_x<<6 | end_y   (mcast rectangle)
+    WATCHER_RING_BUFFER_PUSH(
+        0xAD000000u | ((act_mcast_rect.noc_x_start & 0x3Fu) << 18) | ((act_mcast_rect.noc_y_start & 0x3Fu) << 12) |
+        ((act_mcast_rect.noc_x_end & 0x3Fu) << 6) | (act_mcast_rect.noc_y_end & 0x3Fu));
+    //   0xAE00_0000 | act_w_num_outer<<16 | act_num_blocks_h<<8 | window_outer
+    WATCHER_RING_BUFFER_PUSH(
+        0xAE000000u | ((act_w_num_outer & 0xFFu) << 16) | ((act_num_blocks_h & 0xFFu) << 8) | (window_outer & 0xFFu));
     // DEBUG: act-mcast entry config -> ring buffer. 0xA0_SSFF  SS=sender_id, F=snd, F=rcv.
 
     // The act-mcast sender NoC-coord lookup table for the mcast dimension is supplied as positional
@@ -252,6 +273,13 @@ void kernel_main() {
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
+    // [#55076] DM2 progress markers. These live OUTSIDE #ifndef SKIP_MCAST (line 283) on purpose --
+    // SKIP_MCAST is defined for the block-sharded + skip_activation_mcast config, which compiles out
+    // the whole mcast section, so markers placed in there never execute. In that configuration this
+    // loop IS the entire reader: reserve_back (emits RBW/RBD) -> read_activation_data (emits
+    // NATW/NATD) -> push_back (emits nothing). That missing push_back marker is why a reader that has
+    // FINISHED is indistinguishable from one stuck mid-read: both leave NATD/RBD behind.
+    WAYPOINT("RDST");
     for (uint32_t nbh = 0; nbh < act_num_blocks_h; nbh++) {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -279,30 +307,63 @@ void kernel_main() {
                     stride_h_bytes);
             }
             cb_act_rm_obj.push_back(act_block_num_tiles_read);
+            // RPSH: one (nbh, outer) iteration fully pushed. Frozen here across dumps == stuck in the
+            // NEXT iteration's reserve_back/read; advancing == DM2 is making progress.
+            WAYPOINT("RPSH");
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+                // [#55076] DM2 progress marker. reserve_back below already emits RBW/RBD, so this only
+                // needs to distinguish "in the mcast loop" from the mcast stages below.
+                WAYPOINT("ALUP");
+                // 0xA1_nn_oo_rr : nbh, act_w_outer_i, role (2=sender-for-this-iter, 1=receiver, 0=neither)
+                WATCHER_RING_BUFFER_PUSH(
+                    0xA1000000u | ((nbh & 0xFFu) << 16) | ((act_w_outer_i & 0xFFu) << 8) |
+                    ((act_w_outer_i == act_mcast_sender_id) ? 2u : (is_receiver_core ? 1u : 0u)));
                 cb_act_obj.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
+                    // [#55076] MSNW: sender blocked here == receivers have not all signalled ready.
+                    // Receivers only bump this AFTER their cb_act_obj.reserve_back succeeds, which needs
+                    // compute to consume act tiles -- so a frozen MSNW is DOWNSTREAM of the compute wedge,
+                    // not an independent DM hang. This is the generic NSW seen in earlier dumps.
+                    WAYPOINT("MSNW");
+                    // 0xA2_00_00_tt : entering the sender wait, tt = target count it is waiting FOR.
+                    WATCHER_RING_BUFFER_PUSH(
+                        0xA2000000u | ((act_mcast_num_dests + (is_receiver_core ? 0u : 1u)) & 0xFFu));
                     act_mcast_sender_sem.wait(act_mcast_num_dests + (is_receiver_core ? 0 : 1));
+                    WATCHER_RING_BUFFER_PUSH(0xA3000000u);  // sender wait SATISFIED
+                    WAYPOINT("MSND");
                     act_mcast_sender_sem.set(0);
 
                     act_mcast_receiver_sem.set(INVALID);
 
                     // [#47797] Sender got all bumps; about to mcast cb_tilized_in0. If this is the LAST
                     // reader line on a sender core, the compute never produced this nbh's tilized act.
+                    WAYPOINT("MSMW");
+                    // 0xA4_00_ss_ff : entering the mcast burst loop. ss = nonposted writes SENT,
+                    // ff = FLUSHED. If we hang inside noc_async_write_multicast these tell whether
+                    // prior writes ever drained (ff=0 => the NOC never acked, cmd buf never frees).
+                    WATCHER_RING_BUFFER_PUSH(
+                        0xA4000000u | ((ncrisc_noc_nonposted_writes_sent(noc.get_noc_id()) ? 1u : 0u) << 8) |
+                        (ncrisc_noc_nonposted_writes_flushed(noc.get_noc_id()) ? 1u : 0u));
                     mcast_block_chunked<
                         act_mcast_num_cores,
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
                         act_mcast_tile_size_bytes>(
                         noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
+                    WATCHER_RING_BUFFER_PUSH(0xA5000000u);  // mcast burst loop COMPLETED
+                    // [#55076] MSMD: the mcast burst loop completed. If DM2's last marker is MSMW the
+                    // sender is stuck inside mcast_block_chunked -- either on src_cb_obj.wait_front for
+                    // tilized act (compute never produced it) or on a NOC cmd buffer that never frees.
+                    // That is the generic NMLW/NWBW seen in earlier dumps.
+                    WAYPOINT("MSMD");
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -344,8 +405,13 @@ void kernel_main() {
                         act_mcast_sender_sem.up(noc, get_vararg(act_w_outer_i), act_mcast_sender_noc_x, 1);
                     }
 
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    // [#55076] MRCW: receiver has bumped the sender and is waiting for VALID. Frozen here
+                    // == the sender never multicast, i.e. look at the sender core's marker.
+                    WATCHER_RING_BUFFER_PUSH(0xA6000000u);  // receiver BUMPED the sender
+                    WAYPOINT("MRCW");
                     act_mcast_receiver_sem.wait(VALID);
+                    WATCHER_RING_BUFFER_PUSH(0xA7000000u);  // receiver got VALID
+                    WAYPOINT("MRCD");
                 }
                 cb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer
@@ -363,5 +429,12 @@ void kernel_main() {
         }
     }
 
+    // RDON: every activation block read and pushed. If DM2's last marker is RDON then the reader ran to
+    // completion and DM is definitively NOT the stall -- which is what tc_id:3 tiles_to_consume:294
+    // already implies, and this confirms directly instead of by inference. NWBW after this is the
+    // final barrier, also a legitimate terminal state.
+    WATCHER_RING_BUFFER_PUSH(0xAF000000u);  // reader finished every block
+    WAYPOINT("RDON");
     noc.async_write_barrier();
+    WAYPOINT("RDBR");
 }
