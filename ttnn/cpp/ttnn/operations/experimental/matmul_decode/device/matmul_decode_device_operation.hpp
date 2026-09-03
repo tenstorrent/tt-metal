@@ -18,8 +18,18 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
 
 namespace ttnn::operations::experimental::matmul_decode {
+
+// ROW_MAJOR activations are consumed as 1x32 faces (one row). TILE A uses its native tile.
+inline tt::tt_metal::Tile in0_tile_for_compute(const Tensor& input_tensor_a) {
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH}, false);
+    }
+    return input_tensor_a.tensor_spec().tile();
+}
 
 // Wire contract with reader_*_width_sharded.cpp kernels.
 enum class HubRole : uint32_t {
@@ -64,6 +74,10 @@ struct MatmulDecodeDeviceOperation {
         // matmul. Output storage is still allocated on the complete mesh so a
         // later point-to-point broadcast can populate the inactive ranks.
         std::optional<std::vector<ttnn::MeshCoordinate>> mesh_coords = std::nullopt;
+        // Full-width hub path only: A is ROW_MAJOR HEIGHT_SHARDED on B's grid, with the
+        // full [M, K] replica on every core. M is A's shard height; compute treats A as
+        // 1x32 tiles. Mutually exclusive with ring_gather, partial, and batched.
+        bool in0_row_major_height_sharded = false;
     };
 
     struct tensor_args_t {
