@@ -21,6 +21,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -31,6 +32,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -570,6 +572,26 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+
+    // Output sticks owned by each core (mirrors the legacy per-core loop). Used twice: here for the
+    // thread-count policy (the count must divide every core's sticks) and below for the per-core RTAs.
+    const uint32_t total_out_nhw = in_n * out_h * out_w;
+    const auto out_nhw_for_core = [&](uint32_t core_i) -> uint32_t {
+        uint32_t total_out_nhw_processed = 0;
+        if (is_block_sharded) {
+            total_out_nhw_processed = (core_i / rectangular_x) * max_out_nhw_per_core;
+        } else if (!is_width_sharded) {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+        }
+        const uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        return std::min(max_out_nhw_per_core, remaining_out_nhw);
+    };
+    uint32_t out_nhw_per_core_gcd = 0;
+    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+        out_nhw_per_core_gcd = std::gcd(out_nhw_per_core_gcd, out_nhw_for_core(core_i));
+    }
+
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
         input.dtype(),
@@ -584,7 +606,17 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_layout,
         // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
         // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
-        /*single_reader_stream=*/!return_indices);
+        /*single_reader_stream=*/!return_indices,
+        out_nhw_per_core_gcd);
+    // Host-side record of the lane count actually programmed (TT_LOGGER_LEVEL=Debug). A silently
+    // degraded thread count looks like a valid run, so make it observable without a kernel probe.
+    log_debug(
+        tt::LogOp,
+        "quasar pool2d: num_threads_per_cluster={} (per-core out_nhw gcd={}, max_out_nhw_per_core={}, ncores={})",
+        params.num_threads_per_cluster,
+        out_nhw_per_core_gcd,
+        max_out_nhw_per_core,
+        ncores);
 
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
@@ -1480,27 +1512,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelRunArgs reader1_run{.kernel = READER1_KERNEL};
     KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
 
-    const uint32_t total_out_nhw = in_n * out_h * out_w;
     for (uint32_t core_i = 0; core_i < ncores; core_i++) {
         const uint32_t core_x_i = core_i % rectangular_x;
         const uint32_t core_y_i = core_i / rectangular_x;
         const NodeCoord node{core_x_i, core_y_i};
 
-        uint32_t total_out_nhw_processed;
-        uint32_t core_nhw_index;
-        if (is_block_sharded) {
-            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
-            core_nhw_index = core_y_i;
-        } else if (is_width_sharded) {
-            total_out_nhw_processed = 0;
-            core_nhw_index = 0;
-        } else {
-            total_out_nhw_processed = core_i * max_out_nhw_per_core;
-            core_nhw_index = core_i;
-        }
-        uint32_t remaining_out_nhw =
-            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
+        const uint32_t core_nhw_index = is_block_sharded ? core_y_i : is_width_sharded ? 0 : core_i;
+        const uint32_t out_nhw_this_core = out_nhw_for_core(core_i);
         // Sticks are dealt whole to (reader thread, NEO) lanes; validate at the division site.
         TT_FATAL(
             out_nhw_this_core % params.num_threads_per_cluster == 0,
