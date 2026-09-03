@@ -285,6 +285,57 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # Local-only: the one DENSE (non-chunked) ring-MLA shape small enough to test. mla_100k is the
+    # only other dense MLA config and it is is_balanced=True, which both trips the rotation's
+    # !is_balanced term AND makes its active mask full -- so nothing in the tree exercised dense
+    # causal's PARTIAL mask, the case the rotation's ordinal indexing exists for. is_balanced=False
+    # keeps the causal drop (ring_iter_does_work skips device_index < ring_id), giving a genuinely
+    # partial mask that the HOST knows (unlike kv-pad, where it is device-derived).
+    # Sized for the CPU reference, which is what makes mla_100k time out: 8 heads and 1280 local seq
+    # instead of 29 and 3200.
+    if os.environ.get("RING_MLA_K_SWEEP"):
+        configs.append(
+            ModelConfig(
+                name="mla_dense_small",
+                nhq=8,
+                nhk=1,
+                nhv=8,
+                d_q=576,
+                d_k=576,
+                d_v=128,
+                is_causal=True,
+                is_balanced=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat8_b,
+                q_chunk_sizes=[160],
+                k_chunk_sizes=[320],
+                seq_len=1280,
+            )
+        )
+
+    # Local-only companion to mla_dense_small: same shape, zigzag balancing ON. Exists to TEST the
+    # rotation's !is_balanced term rather than take it on reasoning -- mla_100k is balanced too but
+    # times out, so the term had no counterexample.
+    if os.environ.get("RING_MLA_K_SWEEP"):
+        configs.append(
+            ModelConfig(
+                name="mla_dense_small_balanced",
+                nhq=8,
+                nhk=1,
+                nhv=8,
+                d_q=576,
+                d_k=576,
+                d_v=128,
+                is_causal=True,
+                is_balanced=True,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat8_b,
+                q_chunk_sizes=[160],
+                k_chunk_sizes=[320],
+                seq_len=1280,
+            )
+        )
+
     configs.append(
         ModelConfig(
             name="mla_128k",
@@ -402,6 +453,7 @@ from tests.nightly.sdpa_perf_utils import compute_math_utilization as compute_ri
 from tests.nightly.sdpa_perf_utils import (
     compute_sdpa_flops,
     create_balanced_chunk_order,
+    parse_grid_spec,
     post_process_ops_log,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
@@ -582,6 +634,28 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
+def _sdpa_compute_grid_for(mesh_config):
+    """SDPA compute grid, honoring the RING_MLA_SDPA_GRID_OVERRIDE debug escape hatch.
+
+    Shrinking the grid changes num_cores, which is what sets the rotated-Q-split work division
+    (rot_base_chunks = total_q_chunks // num_cores, rot_float_chunks = the remainder, and the number
+    of grid rows that host floats). It is therefore the only knob that sweeps this feature's actual
+    schedule without new hardware, so accuracy runs honor it too, not just the perf check.
+    """
+    grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+    override = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE")
+    if not override:
+        return grid
+    cols, rows = parse_grid_spec(override, "RING_MLA_SDPA_GRID_OVERRIDE")
+    # Only shrinking is meaningful: a grid wider than the chip has builds a program on cores that do
+    # not exist, which hangs rather than raising.
+    assert cols <= mesh_config.sdpa_cols and rows <= mesh_config.grid_rows, (
+        f"RING_MLA_SDPA_GRID_OVERRIDE={override} must fit within " f"{mesh_config.sdpa_cols}x{mesh_config.grid_rows}"
+    )
+    logger.info(f"RING_MLA_SDPA_GRID_OVERRIDE={override}: SDPA grid {grid} -> {(cols, rows)}")
+    return (cols, rows)
+
+
 def open_ring_joint_sdpa_runtime(
     mesh_config,
     *,
@@ -626,6 +700,17 @@ def open_ring_joint_sdpa_runtime(
         mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
+        # MeshConfig derives the SDPA/CCL split from the grid it detected before any device was
+        # opened; the device is the authority. A mismatch means the split (and every expected_util
+        # normalized to mesh_config.sdpa_cores) is wrong for this host, so say so loudly.
+        if (full_compute_grid.x, full_compute_grid.y) != (mesh_config.grid_cols, mesh_config.grid_rows):
+            logger.warning(
+                f"MeshConfig grid {mesh_config.grid_cols}x{mesh_config.grid_rows} disagrees with the device's "
+                f"{full_compute_grid.x}x{full_compute_grid.y} compute grid: SDPA runs on "
+                f"{mesh_config.sdpa_cols}x{mesh_config.grid_rows} and utilization is normalized to "
+                f"{mesh_config.sdpa_cores} cores. Set SDPA_PERF_PROGRAM_GRID="
+                f"{full_compute_grid.x}x{full_compute_grid.y} to correct it."
+            )
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
         )
@@ -641,7 +726,7 @@ def open_ring_joint_sdpa_runtime(
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             num_links=2,
-            sdpa_compute_grid=(mesh_config.sdpa_cols, mesh_config.grid_rows),
+            sdpa_compute_grid=_sdpa_compute_grid_for(mesh_config),
             ccl_column=mesh_config.ccl_column,
             worker_sub_device_id=worker_sub_device_id,
             ccl_semaphore_handles=create_global_semaphores(mesh_device, ccl_sub_device_crs, 0),
@@ -1623,8 +1708,10 @@ CHUNKED_PREFILL_PCC_THRESHOLD_FP32 = 0.994
 # head shard => heads-per-ring == heads-per-device. nhq/nhv below are PER RING; the
 # run multiplies by tp_size for the total head count (e.g. 16 per ring => 64 total on
 # galaxy 4x8), matching the per-ring convention used by the sweep configs.
-# Hardware-dependent to keep per-core work balanced: galaxy has 110 SDPA cores, the
-# non-galaxy single ring has 100 (10x10), so it carries fewer heads per ring.
+# Hardware-dependent to keep per-core work balanced: galaxy has 110 SDPA cores, a stock non-galaxy
+# single ring has 100 (10x10), so it carries fewer heads per ring. Deliberately NOT re-derived from
+# MESH_CONFIG.sdpa_cores: on a re-flashed 110-core box that would change the tested shape and
+# invalidate the committed ring-4 baselines.
 CHUNKED_PREFILL_HEADS_PER_RING = 16 if MESH_CONFIG.is_galaxy else 14
 CHUNKED_PREFILL_SEED = 1234
 # Set to a chunk index to run/profile only that chunk in isolation instead of the
@@ -2982,6 +3069,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     full_mesh=False,
+    runtime=None,
 ):
     sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
@@ -3025,7 +3113,11 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     q_full = fa_rand(b, nhq, total_seq, d_q)
     kv_full = fa_rand(b, nhk, total_seq, d_k)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
+    # A caller that already holds a runtime (the perf probe, which must profile inside the
+    # device's lifetime) passes it in and keeps ownership; otherwise open and close our own.
+    owns_runtime = runtime is None
+    if owns_runtime:
+        runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -3252,7 +3344,8 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         )
 
     finally:
-        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+        if owns_runtime:
+            close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 def run_ring_mla_sdpa_chunked_indexed_kv_cache(
@@ -3590,6 +3683,67 @@ def test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determini
     mesh_config = MESH_CONFIG
     run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         mesh_config,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RING_MLA_K_SWEEP"), reason="Local coverage for the rotated Q split on the kv-pad path"
+)
+def test_ring_mla_chunked_kv_actual_isl_rotated_q_split_accuracy():
+    """Same kv-pad (kv_actual_isl) path, sized so the rotated Q split can actually engage.
+
+    The default case is chunk_size_local=32 with q_chunk_size=32, i.e. ONE Q chunk per head and
+    total_q_chunks = 4 -- far below any real core count, so rot_base_chunks is 0 and the rotation
+    always declines. Widening the local chunk to 256 gives 8 chunks per head (total 32), which
+    reaches rot_base_chunks >= 1 under a shrunken grid (RING_MLA_SDPA_GRID_OVERRIDE=3x2 -> 6 cores
+    -> base 5, floats 2). Without this the kv-pad path has no configuration in which the rotation
+    is exercised at all, so its predicate term could not be validated either way.
+    """
+    run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+        MESH_CONFIG,
+        chunk_size_local=256,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RING_MLA_K_SWEEP"), reason="Report-only kv-pad perf probe for the rotated-Q-split A/B"
+)
+def test_ring_mla_chunked_kv_actual_isl_rotated_q_split_perf_report_only():
+    """Report device time on the kv-pad (kv_actual_isl) path so the rotated Q split can be A/B'd there.
+
+    The rotation only engages on kv-pad from this commit onward, and every other kv-pad test is
+    accuracy-only, so there was no way to tell whether enabling it there costs anything. Report-only
+    by design: the shape is the small accuracy config (4 heads, d_q=64, chunk_size_local=256), far too
+    small to carry a committed utilization baseline. Its value is the ON-vs-OFF DELTA on one fixed
+    shape, not the absolute number.
+
+    Needs RING_MLA_SDPA_GRID_OVERRIDE, since total_q_chunks is 32 here and the default 110-core grid
+    gives rot_base_chunks == 0 (rotation declines, and most rows have no work so the K mcast injector
+    cannot be picked either). 3x8 -> 24 cores -> base 1, floats 8, which exercises a real float
+    handoff. Pair with RING_MLA_DISABLE_ROTATED_Q_SPLIT=1 for the OFF arm.
+    """
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+            runtime.mesh_device,
+            lambda: run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+                MESH_CONFIG,
+                chunk_size_local=256,
+                runtime=runtime,
+            ),
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+    rotation = "OFF" if os.environ.get("RING_MLA_DISABLE_ROTATED_Q_SPLIT") else "ON"
+    grid = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE", "default")
+    # Report the SDPA span per chip, not the raw records: each record carries its kernel_sources
+    # tuple, so logging the list itself buries the numbers in several KB of paths.
+    sdpa_us = sorted(r["duration_ns"] / 1e3 for r in perf_records)
+    logger.info(
+        f"ring_mla kv_actual_isl rotated-Q-split perf probe: rotation={rotation} grid={grid} "
+        f"duration={duration_ns / 1e6:.3f} ms, chips={len(perf_records)}, "
+        f"per-chip us min={sdpa_us[0]:.1f} max={sdpa_us[-1]:.1f}"
     )
 
 
@@ -4521,24 +4675,32 @@ PERF_TEST_CONFIG_MODELS = list(RING_JOINT_PERF_MODEL_CONFIGS.keys())
 def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
     if mesh_config.sp_size < 2 or "mla_100k" not in model_configs:
         return [], []
-    model = model_configs["mla_100k"]
-    q_chunk_size = 160
-    k_chunk_size = 320
-    config = (
-        BATCH_SIZE,
-        model.seq_len * mesh_config.sp_size,
-        model.nhq * mesh_config.tp_size,
-        model.nhk,
-        model.d_q,
-        model.d_k,
-        model.d_v,
-        q_chunk_size,
-        k_chunk_size,
-        model.is_balanced,
-        model.q_dtype,
-        model.kv_dtype,
-    )
-    return [config], [f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}"]
+    configs, ids = [], []
+    # mla_dense_small (RING_MLA_K_SWEEP only) is the non-balanced dense shape; see its ModelConfig.
+    for name in ("mla_100k", "mla_dense_small", "mla_dense_small_balanced"):
+        if name not in model_configs:
+            continue
+        model = model_configs[name]
+        q_chunk_size = model.q_chunk_sizes[0]
+        k_chunk_size = model.k_chunk_sizes[-1]
+        configs.append(
+            (
+                BATCH_SIZE,
+                model.seq_len * mesh_config.sp_size,
+                model.nhq * mesh_config.tp_size,
+                model.nhk,
+                model.d_q,
+                model.d_k,
+                model.d_v,
+                q_chunk_size,
+                k_chunk_size,
+                model.is_balanced,
+                model.q_dtype,
+                model.kv_dtype,
+            )
+        )
+        ids.append(f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}")
+    return configs, ids
 
 
 RING_MLA_TEST_CONFIGS, RING_MLA_TEST_CONFIG_IDS = generate_ring_mla_test_configs(MESH_CONFIG, MODEL_CONFIGS)
@@ -5261,6 +5423,24 @@ def _generate_chunked_configs(model_configs):
 
 CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs(CHUNKED_PREFILL_MODEL_CONFIGS)
 RING_MLA_CHUNKED_CONFIGS, RING_MLA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(RING_MLA_CHUNKED_MODEL_CONFIGS)
+if os.environ.get("RING_MLA_K_SWEEP"):
+    # Local only. Extends the base list (not the derived *_TEST_CONFIGS, whose ids list is the same
+    # object) so accuracy/determinism/perf_impl all pick these up with matching lengths.
+    # Accuracy/determinism coverage for the shapes only q32 used to have. These are the shapes that
+    # exercise the small-rot_base_chunks paths: q64 -> 240 units/110 cores = base 2, q128 -> 120
+    # units = base 1 (both were unsupported or broken before; see the predicate in
+    # ring_joint_sdpa_program_factory.cpp). q128's k is capped by L1.
+    # q64 (Sq_chunk_t == 2) used to fail at k320 and k448 with PCC ~0.12 / RMSE ~100, independently
+    # of the rotated split -- a missing PACK->UNPACK barrier in compute_streaming.hpp Phase 2, fixed
+    # there. The k values are kept spread across Skt % 4 == 0 (k128/k256/k384, which always worked)
+    # and Skt % 4 == 2 (k320/k448, which did not) so a regression in that gate is caught.
+    RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, 448))
+    RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q64-k448")
+    RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 128, 256))
+    RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q128-k256")
+    for _k in (128, 256, 320, 384):
+        RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, _k))
+        RING_MLA_CHUNKED_CONFIG_IDS.append(f"kimi_k3-q64-k{_k}")
 MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
     MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
 )
@@ -6137,11 +6317,15 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-        # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
+        # 8-device ring (Galaxy, sp=8 tp=4, 110 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
-        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
-        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
-        ("kimi_k3", 32, 640, 8, 61.03),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Was 61.03 (measured 2026-08-05,
+        # bh_sc1_high_power, 9.680 ms) before the rotated Q split. PROJECTED 2026-08-18: the
+        # rotated per-ring-iteration split lifts the 480-unit/110-core occupancy ceiling from
+        # 8*ceil(480/110)=40 to 36 K-stream slots (61.03 * 40/36 * 0.989 stall factor measured on
+        # the QuietBox 9x10-grid emulation, which went 5.708 -> 5.290 ms). Replace with the first
+        # bh_sc1_high_power measurement.
+        ("kimi_k3", 32, 640, 8, 67.0),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
@@ -6152,6 +6336,64 @@ else:
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
+
+# An 8-chip non-galaxy Blackhole box runs a single 8-device ring with TP=1, so kimi_k3 keeps its
+# production 24 Q heads per device while the ring length matches galaxy's sp=8. Neither branch
+# above covers sp_size=8 off galaxy, so the ring-4 ids skip and the ring-8 ids do not exist there.
+#
+# Measured 2026-08-20 on bh-lb-33 (8x p150b re-flashed to tensix_col_disable_count=1: 12x10 program
+# grid -> 11x10 = 110 SDPA cores, the same split galaxy gets), kimi_k3 50k+5k final chunk, fresh KV.
+# Gated on that core count, not merely on sp_size=8: utilization is per-core but the work-split
+# quantization is not, so a stock 100-core p150 box lands close to yet outside the band (q32/k640
+# read 9.445 ms / 68.81% there against +/-1% around 68.05). The gate also keeps these ids off
+# wormhole 8-device hosts, where detection falls back to 100 cores. Re-measure to widen it.
+RING_MLA_RING8_BASELINE_SDPA_CORES = 110
+RING_MLA_RING8_BASELINES_APPLY = (
+    not MESH_CONFIG.is_galaxy
+    and MESH_CONFIG.sp_size == 8
+    and MESH_CONFIG.sdpa_cores == RING_MLA_RING8_BASELINE_SDPA_CORES
+)
+if RING_MLA_RING8_BASELINES_APPLY:
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS += [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # Shipped q32/k640 shape: 8.67 ms. Unaffected by the Sq_chunk_t == 2 barrier fix below
+        # (Sq_chunk_t is 1 here), and the fastest shape that is also numerically correct.
+        ("kimi_k3", 32, 640, 8, 68.05),
+        # q64/k448: 8.68 ms, measured over 3 runs (68.05-68.09%) with the PACK->UNPACK barrier in
+        # compute_streaming.hpp Phase 2 present and its two halves split around the unpack-side
+        # setup. The previous 71.28 / 8.288 ms was recorded while that barrier was absent, i.e. it
+        # timed a kernel that skipped a required synchronization and produced garbage (PCC ~0.12) --
+        # so it was never a real 4% win over q32/k640; the two shapes are within noise of each other.
+        # Every q64 figure in the sweep note below predates the fix and is optimistic for the same
+        # reason.
+        ("kimi_k3", 64, 448, 8, 68.07),
+    ]
+
+# Local k-chunk exploration, off by default so it costs no collected ids: RING_MLA_K_SWEEP=1.
+# expected_util is None for these, meaning "measure and report, gate nothing" -- the committed
+# baselines do not apply to shapes they were not measured on.
+#
+# Why these k values: q32 prefers the largest k that fits L1, because at Sq_chunk_t=1 the
+# kt_inplace_v path is data-movement bound and chunk count dominates. The sweep stops at 480 because
+# k512 and up overflow L1 at q64.
+# CAUTION: the q64 ranking this sweep originally produced (k448 > k320, attributed to Sk_chunk_t
+# factorization) was measured before the Sq_chunk_t == 2 barrier fix, and the shapes it favoured are
+# exactly the ones the missing barrier made fast and wrong -- Skt not divisible by 4 forces the QK
+# subblock to height 1, which is the case that skipped the barrier. Re-run before trusting any q64
+# ordering. No q128 entries: rot_base_chunks would be 1, which the rotated split must
+# refuse (it hangs -- see the diagnosis in the program factory), and L1 caps k there anyway.
+# The per-device K prefix at the final chunk is 7040 rows, so k in (128, 160, 320, 352, 640)
+# divides it exactly and the rest straddle.
+if os.environ.get("RING_MLA_K_SWEEP") and RING_MLA_RING8_BASELINES_APPLY:
+    # k448 (q64) and k640 (q32) are omitted: they are the committed entries above.
+    for _k in (128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 480):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, None))
+    for _k in (320, 448, 576, 608):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, None))
+    # q128 -> 24 heads x (640/128) = 120 work units over 110 cores, i.e. rot_base_chunks == 1: the
+    # worst static imbalance (2:1) and so the largest rotation win. k is capped by L1 here.
+    for _k in (224, 256):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 128, _k, 8, None))
 
 
 if MESH_CONFIG.is_galaxy:
@@ -6166,6 +6408,62 @@ else:
         # 4-device ring (QuietBox): same per-device Q rows and 16Q/1KV local GQA shape.
         ("minimax3_55k", 128, 512, 4, 47.0),
     ]
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.skipif(not os.environ.get("RING_MLA_K_SWEEP"), reason="Report-only separate-V chunked perf probe")
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640)], ids=["q32-k640"])
+# kimi50k is the separate-V chunked shape: CHUNKED_PREFILL_MODEL_CONFIGS holds just kimi50k and
+# minimax3_55k, and minimax3 is GQA (gqa_grouped_kv -> no batch chain -> no K mcast).
+@pytest.mark.parametrize("model_name", ["kimi50k"], ids=["kimi50k"])
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_ring_joint_attention_chunked_perf_check_report_only(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """SEPARATE-V chunked-prefill math utilization, measured and reported, gating nothing.
+
+    The separate-V chunked path had no perf harness at all: its only perf tests are the tracy
+    perf_table generators, which need a Tracy-enabled build and cannot run here. This uses the same
+    in-process profiler as the ring_mla perf check, so the path is at least measurable in a ~1 minute
+    run. No expected_util: this is a probe, not a committed baseline.
+
+    Note the rotated Q split does NOT engage here -- its predicate requires v_shares_k_buffer
+    (latent-V), and this is separate-V -- so RING_MLA_DISABLE_ROTATED_Q_SPLIT has no effect on this
+    number. Separate-V rotation was implemented and removed; see the predicate in
+    ring_joint_sdpa_program_factory.cpp for why.
+    """
+    model = CHUNKED_PREFILL_MODEL_CONFIGS[model_name]
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    perf_chunk = n_chunks - 1
+
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    use_ring_mla=False,
+                    do_check=False,
+                    reuse_kv_buffer=False,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+    )
+    logger.info(
+        f"separate-V chunked perf probe {config_id}: duration={duration_ns/1e6:.3f} ms, "
+        f"math_util={utilization:.2f}%, profiler_records={len(perf_records)}"
+    )
 
 
 @pytest.mark.timeout(600)
@@ -6200,6 +6498,23 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    # Debug aid: RING_MLA_SDPA_GRID_OVERRIDE="9x10" shrinks the SDPA compute grid to emulate a
+    # different core count's work-split quantization (e.g. Galaxy's 480 units / 110 cores ratio on a
+    # QuietBox). Utilization is then normalized to the overridden core count, and the band assert is
+    # skipped (the committed expectation only applies to the standard grid).
+    grid_override = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE")
+    sdpa_cores_for_util = MESH_CONFIG.sdpa_cores
+    if grid_override:
+        cols, rows = parse_grid_spec(grid_override, "RING_MLA_SDPA_GRID_OVERRIDE")
+        # Only shrinking is meaningful: a grid wider than the chip has builds a program on cores
+        # that do not exist, which hangs rather than raising. Rows must match exactly, because
+        # compute_chunked_prefill_perf_check_utilization still rounds by MESH_CONFIG.grid_rows.
+        assert cols <= MESH_CONFIG.sdpa_cols and rows == MESH_CONFIG.grid_rows, (
+            f"RING_MLA_SDPA_GRID_OVERRIDE={grid_override} must be at most {MESH_CONFIG.sdpa_cols} "
+            f"cols and exactly {MESH_CONFIG.grid_rows} rows"
+        )
+        runtime.sdpa_compute_grid = (cols, rows)
+        sdpa_cores_for_util = cols * rows
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
             duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
@@ -6220,18 +6535,33 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         close_ring_joint_sdpa_runtime(runtime)
 
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
-        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, sdpa_cores_for_util
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    # expected_util is None for the RING_MLA_K_SWEEP exploration shapes, which have no baseline.
+    if expected_util is None:
+        band = "no committed baseline, reporting only"
+    else:
+        lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+        upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+        band = f"expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]"
 
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
-        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
-        f"profiler_records={len(perf_records)}"
+        f"({band}), profiler_records={len(perf_records)}"
     )
+
+    if expected_util is None:
+        pytest.skip(f"{config_id}: measured {utilization:.2f}% ({band})")
+    # A shrunken grid changes the work-split quantization the baseline was measured under. Skip
+    # rather than return: a silent pass here would mean every id reports green if this variable
+    # ever leaked into a runner environment.
+    if grid_override:
+        pytest.skip(
+            f"RING_MLA_SDPA_GRID_OVERRIDE={grid_override}: measured {utilization:.2f}%, "
+            f"band assert does not apply to an overridden grid"
+        )
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "

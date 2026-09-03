@@ -49,6 +49,91 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
     return v_shares_k_buffer && (Sq_chunk_t == 1);
 }
 
+// ---------------------------------------------------------------------------
+// Rotated Q split: the host/device contract.
+//
+// The remainder ("float") Q chunks of an uneven work split change owner core between ring
+// iterations so no single grid row pays the +1 K-mcast slot on every iteration. Everything below
+// is derived identically by the program factory and all three kernels; nothing here may be
+// duplicated on one side only, or the runtime-arg layout drifts and the kernels misparse it.
+// ---------------------------------------------------------------------------
+
+// Handoff semaphore ring depth. A slot is live only within one ring iteration: the donor's
+// deferred accumulator save flushes and signals during the receiver's use iteration, and the
+// receiver waits in that same iteration. Per-iteration ids would therefore only guard against
+// CROSS-iteration aliasing -- a donor already in iteration t+1 bumping a slot a slower core is
+// still consuming for iteration t. Inter-core skew is bounded well below one iteration by two
+// per-iteration rendezvous (the K mcast chain's valid relay, which every receiver blocks on per K
+// chunk, and the fused all-gather that must land before compute consumes an iteration's KV), so a
+// small ring of slots indexed by (ring_iter - 1) % depth suffices. 3 tolerates a full iteration of
+// drift with margin, and unlike ring_size-1 it does not scale the scarce 16-semaphore program
+// budget with ring length.
+constexpr uint32_t kRotHandoffSemDepth = 3;
+
+// Sentinel pushed immediately BEFORE the rotated-Q-split compile-time arg, and static_asserted by
+// each kernel that reads it. The arg sits at the end of a per-kernel compile-time block whose
+// length the kernel cannot see, so an index off by even one silently yields a nonzero rot_max_slots
+// (some CB id), turns the rotation on when the host declined it, and hangs the device. This makes
+// that a BUILD failure instead -- it is how the writer's index being 15 rather than 24 was caught.
+constexpr uint32_t kRotCtArgSentinel = 0x52515350u;  // 'RQSP'
+
+// Ordinal of ring iteration `ring_iter` within the ACTIVE subsequence: how many active iterations
+// precede it. All three kernels index the rotation schedule by this instead of by absolute
+// ring_iter, and all three `continue` past inactive iterations on the same mask, so they stay in
+// lockstep.
+//
+// Why this is the fix and not a workaround: the float handoff is a donor signal in one iteration
+// paired with a receiver wait in the NEXT, so it is only well-formed between CONSECUTIVE EXECUTED
+// iterations. Indexed by absolute ring_iter, a skipped iteration t+1 means the donor never runs the
+// flush that carries its signal while the receiver at t+2 still waits -> hang. Indexed by ordinal,
+// consecutive ordinals ARE consecutive executed iterations, so the pair cannot straddle a skip.
+//
+// For a full mask ordinal == ring_iter identically, so this is a provable no-op for chunked prefill.
+// It is what lets the kv-pad path rotate at all: there the mask is DEVICE-derived from trace
+// metadata the host never sees, so the host cannot build a cycle matching it -- but it does not need
+// to, because every per-ordinal entry the host emits is already a valid partition of all Q chunks,
+// and the kernels merely choose which entries get used.
+//
+// Assumes the caller consults the mask at all: with sliding window every active check
+// short-circuits on has_sliding_window and the mask is bypassed, but rotation excludes that path.
+constexpr uint32_t rot_active_ordinal(uint32_t active_ring_iter_mask, uint32_t ring_iter) {
+    const uint32_t before = ring_iter >= 32 ? 0xFFFFFFFFu : ((1u << ring_iter) - 1u);
+    uint32_t bits = active_ring_iter_mask & before;
+    uint32_t count = 0;
+    while (bits) {
+        bits &= bits - 1u;  // clear lowest set bit
+        ++count;
+    }
+    return count;
+}
+
+// Number of handoff semaphores to allocate/read for a given ring size. Host and kernel derive it
+// from this one place so the runtime-arg count can't drift.
+constexpr uint32_t rot_handoff_sem_count(uint32_t ring_size) {
+    const uint32_t receiving_iters = ring_size > 0 ? ring_size - 1 : 0;
+    const uint32_t depth = receiving_iters < kRotHandoffSemDepth ? receiving_iters : kRotHandoffSemDepth;
+    // Never zero: a degenerate ring_size <= 1 has no iteration that can receive a float, but the
+    // kernel still declares rot_sem_ids[count] and takes (ring_iter - 1) % count, so 0 would mean a
+    // zero-length array and a modulo by zero. Clamping to 1 keeps those well-formed; the handoff
+    // sites are unreachable there anyway, since iteration 0 never receives.
+    return depth > 0 ? depth : 1;
+}
+
+// Per-ring-iteration runtime-arg block: each kernel's own header words, then exactly
+// (rot_base_chunks + 1) flat chunk ids -- the value of the rot_max_slots compile-time arg -- so every
+// iteration occupies a fixed stride. Kernels compute their stride from these; the factory pushes
+// in the same order.
+constexpr uint32_t kRotReaderIterHeaderWords = 2;   // [row_slot_count, my_count]
+constexpr uint32_t kRotWriterIterHeaderWords = 3;   // [my_count, float_migrated_in, float_dest]
+constexpr uint32_t kRotComputeIterHeaderWords = 1;  // [my_count]
+
+// The float's next owner, packed into one runtime arg by the factory and unpacked by the writer to
+// address the handoff semaphore increment, plus the "this float does not migrate" sentinel.
+constexpr uint32_t kRotNoDest = 0xFFFFFFFFu;
+constexpr uint32_t rot_pack_dest(uint32_t phys_x, uint32_t phys_y) { return (phys_x << 8) | phys_y; }
+constexpr uint32_t rot_dest_x(uint32_t packed_dest) { return packed_dest >> 8; }
+constexpr uint32_t rot_dest_y(uint32_t packed_dest) { return packed_dest & 0xFFu; }
+
 template <bool v_shares_k_buffer, bool kt_inplace_v = false>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
     // Reader pushes one K entry and one V entry per real chunk; compute pops the

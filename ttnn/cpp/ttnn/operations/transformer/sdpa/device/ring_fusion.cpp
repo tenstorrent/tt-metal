@@ -62,6 +62,7 @@ void RingSDPAFusedOpSignaler::init_fused_op(
 void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
     TT_ASSERT(
         this->initialized_all_gather && this->initialized_fused_op, "RingSDPAFusedOpSignaler not initialized fully.");
+    const size_t size_before = out_rt_args.size();
 
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_index));
@@ -84,5 +85,12 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
     out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
     out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));
+
+    TT_ASSERT(
+        out_rt_args.size() - size_before == kRtArgCount,
+        "RingSDPAFusedOpSignaler::kRtArgCount is {} but {} args were pushed; kernels that skip the "
+        "unconsumed tail rely on this count.",
+        kRtArgCount,
+        out_rt_args.size() - size_before);
 }
 }  // namespace ttnn::prim

@@ -16,6 +16,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -537,7 +538,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
@@ -1025,7 +1026,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
@@ -2196,6 +2197,606 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     };
 
+    uint32_t gqa_grouped_chains = 0;
+    uint32_t gqa_grouped_participant_cores = 0;
+    uint32_t gqa_local_fallback_cores = 0;
+    bool gqa_mcast_enabled = false;
+    std::string gqa_mcast_fallback_reason;
+    std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
+    if (gqa_grouped_kv && build_kv_chains) {
+        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
+
+        for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            if (core_work[ci].global_q_count == 0) {
+                continue;
+            }
+
+            bool has_single_group = false;
+            bool spans_multiple_groups = false;
+            uint32_t single_group_id = 0;
+            uint32_t q_chunk_count = 0;
+            for (const auto& hw : core_work[ci].head_work) {
+                const uint32_t kv_head = hw.head / q_heads_per_kv;
+                if (!has_single_group) {
+                    has_single_group = true;
+                    single_group_id = kv_head;
+                } else if (single_group_id != kv_head) {
+                    spans_multiple_groups = true;
+                    break;
+                }
+                q_chunk_count += hw.q_chunk_count;
+            }
+
+            if (has_single_group && !spans_multiple_groups) {
+                kv_group_segments[single_group_id].emplace_back(ci, q_chunk_count);
+                gqa_grouped_participant_cores++;
+            } else {
+                gqa_local_fallback_cores++;
+            }
+        }
+
+        for (uint32_t kv_head = 0; kv_head < static_cast<uint32_t>(kv_group_segments.size()); ++kv_head) {
+            const auto& chain_segs = kv_group_segments[kv_head];
+            if (chain_segs.size() < 2) {
+                continue;
+            }
+            if (build_linear_chain(chain_segs, kv_head, gqa_chain_configs, core_work, false)) {
+                gqa_grouped_chains++;
+            }
+        }
+
+        // Production Minimax3 GQA has one local K/V head per chip (B=1, NHK=NHV=1). In that case every
+        // active Q-head core consumes the same K and V chunks, so use row-wide multicast instead
+        // of the store-and-forward grouped chain. Idle cores in an active row participate in padded iterations.
+        if (NHK != 1) {
+            gqa_mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
+        } else if (num_cores < 2) {
+            gqa_mcast_fallback_reason = "num_cores < 2";
+        } else if (grid_size.x < 2) {
+            gqa_mcast_fallback_reason = "grid_size.x < 2 (singleton rows)";
+        } else {
+            std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
+            uint32_t gqa_mcast_rows = 0;
+
+            for (uint32_t row = 0; row < grid_size.y; ++row) {
+                const auto selection = select_row_wide_chain_mcast(row, recent_cols);
+                if (!selection.has_value()) {
+                    continue;
+                }
+                configure_row_wide_chain_mcast(*selection, 0, gqa_chain_configs, gqa_chain_max_q);
+                gqa_mcast_rows++;
+                log_debug(
+                    tt::LogOp,
+                    "GQA K/V mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    selection->row,
+                    selection->injector_idx,
+                    selection->injector_physical.x,
+                    selection->injector_physical.y,
+                    selection->max_q,
+                    selection->phys_start.x,
+                    selection->phys_start.y,
+                    selection->phys_end.x,
+                    selection->phys_end.y);
+            }
+
+            gqa_mcast_enabled = gqa_mcast_rows > 0;
+            if (!gqa_mcast_enabled) {
+                gqa_mcast_fallback_reason = "no active groups";
+            }
+        }
+    }
+
+    // Build the shared-K chain for separate-V/latent cases.
+    // K is shared across all heads, so all active cores form one chain.
+    // Sorted by physical position for a stable unicast ordering (overwritten by mcast pass if eligible).
+    if (k_uses_batch_chain && build_kv_chains) {
+        std::vector<uint32_t> core_indices;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_work[i].global_q_count == 0) {
+                continue;
+            }
+            core_indices.push_back(i);
+        }
+
+        std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
+            const auto& pa = core_work[a].physical_core;
+            const auto& pb = core_work[b].physical_core;
+            return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
+        });
+
+        std::vector<ChainSegment> chain_segs;
+        chain_segs.reserve(core_indices.size());
+        for (uint32_t ci : core_indices) {
+            chain_segs.emplace_back(ci, core_work[ci].global_q_count);
+        }
+        if (build_linear_chain(chain_segs, 0, batch_chain_configs, core_work)) {
+            log_debug(tt::LogOp, "K unicast chain: {} cores", chain_segs.size());
+        }
+    }
+
+    // K multicast pass: one mcast chain per logical row. Shared-K keeps the all-or-nothing policy:
+    // every row must contain work, otherwise the previously built linear chain remains active.
+    bool k_mcast_enabled = false;
+    std::string k_mcast_fallback_reason;
+    std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
+
+    if (!k_uses_batch_chain || !enable_kv_chains) {
+        // No non-GQA shared-K chain to multicast.
+    } else if (num_cores < 2) {
+        k_mcast_fallback_reason = "num_cores < 2";
+    } else if (grid_size.x < 2) {
+        // Each chain would be a singleton (1 core, no sinks) — mcast is degenerate.
+        k_mcast_fallback_reason = "grid_size.x < 2 (singleton chains)";
+    } else {
+        std::vector<RowWideChainMcastSelection> row_mcast_selections;
+        row_mcast_selections.reserve(grid_size.y);
+        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
+
+        bool all_chains_picked = true;
+        for (uint32_t row = 0; row < grid_size.y; ++row) {
+            const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
+            if (!selection.has_value()) {
+                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
+                all_chains_picked = false;
+                break;
+            }
+            row_mcast_selections.push_back(*selection);
+        }
+
+        if (all_chains_picked) {
+            k_mcast_enabled = true;
+
+            for (const auto& selection : row_mcast_selections) {
+                configure_row_wide_chain_mcast(selection, 0, batch_chain_configs, k_chain_max_q);
+
+                log_debug(
+                    tt::LogOp,
+                    "K mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    selection.row,
+                    selection.injector_idx,
+                    selection.injector_physical.x,
+                    selection.injector_physical.y,
+                    selection.max_q,
+                    selection.phys_start.x,
+                    selection.phys_start.y,
+                    selection.phys_end.x,
+                    selection.phys_end.y);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rotated per-ring-iteration Q distribution ("rotated q split").
+    //
+    // With row-wide K mcast, each grid row is an independent lockstep pipe that pays
+    // ring_size * max(chunks per core in the row) K-stream slots. The flat split pins the
+    // total_q_chunks % num_cores remainder ("float") chunks to fixed cores, so their rows pay the
+    // +1 slot on EVERY ring iteration: grid time = ring_size * ceil(U/C) slots vs the ideal
+    // U * ring_size / C (e.g. 40 vs 34.9 slots on a 110-core grid -> 87% occupancy ceiling).
+    // The (m, l, O) accumulators already round-trip through DRAM between ring iterations addressed
+    // by chunk identity, so a float chunk may change owner core between ring iterations: rotate the
+    // floats across rows so each row runs the +1-slot mode only ~ring_size*F/C of the time.
+    // Cross-core ordering (donor's accumulator save must land in DRAM before the receiver's restore
+    // read) uses a small ring of handoff semaphores indexed by (ring_iter - 1) % kRotHandoffSemDepth
+    // (derived in chunked_prefill_utils.hpp): the donor writer increments the receiver's semaphore
+    // after a write barrier on the save TRID; the receiver waits before issuing the float's restore
+    // reads. Floats sit LAST in every owner's per-iteration list, so the deferred save flushes at
+    // the start of iteration t+1 while the restore is needed near the end of iteration t+1 -- about
+    // one ring iteration of slack.
+    // ---------------------------------------------------------------------------
+    // The same numbers the flat split above already derived (the !args.is_balanced term below pins
+    // us to its non-zigzag branch); aliased rather than recomputed so the two cannot drift.
+    const uint32_t rot_base_chunks = base_chunks_per_core;
+    const uint32_t rot_float_chunks = cores_doing_extra_work;
+    // Grid rows hosting floats on any one iteration. Rotation only buys something while at least
+    // one row is float-free: at rot_rows_needed == grid_size.y the per-iteration row offset is
+    // always 0 mod grid_size.y, ownership never actually moves, and every row pays the +1 mcast slot
+    // every iteration exactly as the flat split does -- all of the cost, none of the win.
+    const uint32_t rot_rows_needed = grid_size.x ? tt::div_up(rot_float_chunks, grid_size.x) : 0;
+    const uint32_t full_ring_iter_mask = ring_size >= 32 ? 0xFFFFFFFFu : ((1u << ring_size) - 1);
+    // v_shares_k_buffer is required: separate-V modes stream V through the per-head
+    // store-and-forward chain, whose per-core forwarding counts are built from the flat split and
+    // would desync under rotated per-iteration ownership. Latent/shared-buffer V never touches the
+    // V chain (V is materialized from, or read in place of, the mcast K^T).
+    // Debug kill-switch for A/B measurements: RING_MLA_DISABLE_ROTATED_Q_SPLIT=1 forces the static
+    // flat split on an otherwise identical build. The value is parsed rather than merely tested for
+    // presence, so "=0" leaves the feature ON as the name implies. Latched once per process, so
+    // toggling the variable between dispatches (mock.patch.dict and friends) has no effect after the
+    // first ring-joint invocation -- A/B it across two separate runs.
+    static const bool rotated_q_split_disabled = []() {
+        const char* value = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT");
+        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    // Generality, measured 2026-08-30 on bh-lb-33 ring-8 by sweeping RING_MLA_SDPA_GRID_OVERRIDE
+    // (num_cores is what sets base/floats/rows_needed, so it is the only knob that moves this
+    // schedule without new hardware). PCC passed on every one of:
+    //   base 1 (q128, 70 cores, floats 50, rows_needed 8)   base 5 (q32, 90,  floats 30, rn 4)
+    //   base 2 (q64,  90 cores, floats 60, rn 7)            base 6 (q32, 70,  floats 60, rn 9)
+    //   base 3 (q64,  70 cores, floats 30, rn 5)            base 9 (q32, 50,  floats 30, rn 6)
+    //   base 4 (q32, 100 cores, floats 80, rn 8)
+    // Perf across that whole range, rotation ON vs OFF (same build, kill switch for OFF): base 1
+    // 15.587 -> 9.091 ms (1.71x), base 2 11.351 -> 8.678 (1.31x), base 4 9.687 -> 8.676 (1.12x),
+    // base 5 63.32 -> 68.36%, base 6 69.63 -> 69.62% (NEUTRAL), base 9 68.49 -> 71.18%. Never a
+    // regression anywhere it engages. The win tracks how many rows are FLOAT-FREE
+    // (grid_size.y - rot_rows_needed), not base -- base 6 above is break-even precisely because
+    // rows_needed is 9 of 10 rows, leaving almost nothing to rebalance.
+    // plus three DECLINE cases, all PCC-passing on the static fallback: floats == 0 (60 cores, q32
+    // and q64), and rows_needed == grid_size.y (11x2 grid, q64: base 10, floats 20, rows_needed 2
+    // of 2 rows). That covers rows_needed 1..9 and floats 10..80.
+    //
+    // GALAXY (sp=8, tp=4, 110 SDPA cores) is not reachable from this box, but needs no separate
+    // validation for kimi_k3 q32: 24 heads x 20 chunks over 110 cores is base 4 / floats 40 /
+    // rows_needed 4 -- bit-identical to the default local config exercised on every run here. tp=4
+    // is 4 independent rings and does not enter this schedule. Note galaxy kimi50k q32 DECLINES
+    // (16 heads -> 320 units, floats 100, rows_needed 10 == grid_size.y) and kimi50k q128 declines
+    // on base 0; both are correct, the first because rotation there cannot move ownership at all.
+    //
+    // RING_SIZE != 8 is not constructible on this hardware: RING_MLA_RING_SIZE_OVERRIDE opens the
+    // sub-mesh, but a 4- or 2-device sub-mesh of this 8-chip box dies in MeshDeviceImpl::create
+    // with a fabric router / ethernet handshake timeout, before any SDPA kernel runs. It is covered
+    // wherever these tests run on a natively 4-device host, since the accuracy test is not
+    // ring-gated (only the perf check is).
+    //
+    // Every term below is load-bearing, and for each the FIRST thing that breaks is known. Two are
+    // cost guards rather than correctness guards; that is called out. One caveat on minimality:
+    // k_mcast_enabled is *nearly* implied by the rest -- given the other terms its only residual
+    // content is grid_size.x >= 2 -- so it is kept for robustness and self-documentation, not
+    // because it is independent.
+    //
+    //   k_mcast_enabled        purpose: the lockstep unit is the ROW. Under mcast every row member
+    //                          loops the row max, so one float makes all grid_size.x cores of its
+    //                          row pay a +1 K slot EVERY iteration -- the imbalance this fixes is
+    //                          largely a row-mcast artifact. Removing it: at grid_size.x == 1 the
+    //                          chain is unicast with a single injector, so injector_col is unset for
+    //                          other rows and the TT_FATAL below fires.
+    //   build_kv_chains        carries B == 1. Removing it is a SILENT wrong answer, not a hang:
+    //                          k_mcast_enabled's own guard tests enable_kv_chains, so at B > 1 the
+    //                          row mcast is live and the injector multicasts K for ITS nb to peers
+    //                          whose rotated slot decodes a different nb.
+    //   v_shares_k_buffer      separate-V turns on the per-head V chain, whose per-(head, core)
+    //                          forwarding counts come from the STATIC split; a rotated float can
+    //                          belong to a head that core has no segment for -> V relay mismatch ->
+    //                          hang. Also subsumes !use_attention_sink, use_streaming_compute
+    //                          (!fp32_dest_acc_en) and !gqa_grouped_kv, which separate-V would have
+    //                          to state explicitly.
+    //   !args.is_balanced      two independent breaks. Zigzag sets extra_chunks_per_core = 2, so
+    //                          cores_doing_extra_work counts PAIRS while this schedule appends ONE
+    //                          float per owner -- chunk ids [base*C+F, base*C+2F) are then never
+    //                          scheduled. And balanced_skip_q's parity decision desyncs injector
+    //                          from receivers at the float slot.
+    //                          MEASURED, not reasoned: mla_dense_small_balanced (RING_MLA_K_SWEEP,
+    //                          grid 5x6 -> base 2, floats 2) with this term removed HANGS. The
+    //                          unscheduled ids do NOT show up as silent garbage, which is what this
+    //                          comment used to claim: an unscheduled float leaves a receiver waiting
+    //                          on a donor that never runs its handoff.
+    //                          The term stays !args.is_balanced rather than the narrower
+    //                          !enable_zigzag_balancing (= is_balanced && kernel_is_causal &&
+    //                          num_q_chunks % 2 == 0) even though only the ZIGZAG branch of the flat
+    //                          split has the pair-counting problem. Narrowing it would admit balanced
+    //                          CHUNKED prefill, where kernel_is_causal is false so zigzag never
+    //                          engages and the split is the plain non-zigzag one -- but no chunked
+    //                          model config in the tree is balanced (CHUNKED_PREFILL_MODEL_CONFIGS is
+    //                          kimi50k only, is_balanced=False), so that would be an UNEXERCISED
+    //                          relaxation of a contract whose failure mode is a hang, and the
+    //                          balanced_skip_q break above is independent of zigzag anyway.
+    //                          A zigzag-AWARE rotation was ATTEMPTED and is NOT sufficient. Making
+    //                          the float unit two chunks wide (rot_float_unit = 2 under zigzag, so
+    //                          rot_max_slots = base + 2 and each float migrates as a pair; base is
+    //                          always even there, (total_pairs/num_cores)*2, so pairs stay aligned)
+    //                          does fix the pair-counting break -- the rotation then engages on
+    //                          mla_dense_small_balanced at grid 5x6 (base 2, floats 2, ideal slots 17
+    //                          vs flat 32) instead of leaving ids unscheduled. But it STILL dies:
+    //                          TT_THROW in system_memory_manager.cpp:779. So the two breaks listed
+    //                          above really are independent, and balanced_skip_q is the harder one:
+    //                          its parity decision desyncs the injector from its receivers at the
+    //                          float slot regardless of how wide the float is. Reverted.
+    //                          Anyone retrying this must fix balanced_skip_q's injector/receiver
+    //                          parity FIRST -- widening the float unit alone is a dead end, and the
+    //                          non-balanced dense config (mla_dense_small) keeps passing throughout,
+    //                          so only the balanced id catches it.
+    //   (!kv_pad_rotation_enabled was here and has been REMOVED -- kv-pad now rotates. See the
+    //    rot_active_ordinal note in the predicate for why the device-derived mask stopped mattering.)
+    //   (active_ring_iter_mask == full_ring_iter_mask was here and has been REMOVED -- partial masks
+    //    are handled by ordinal indexing. See the predicate. It still feeds the log line below, which
+    //    reports whether the mask was full, since that is useful context when reading a decline.)
+    //   (rot_float_chunks != 0 and rot_rows_needed < grid_size.y were COST guards here and have
+    //    been REMOVED -- see the predicate for why both are provable no-ops rather than guards.)
+    //   rot_base_chunks >= 1   definitional. At base 0 the first failure is actually the compute
+    //                          kernel's static_assert(rot_max_slots >= 2), ahead of the reader's
+    //                          rot_my_count - 1 underflow.
+    const bool use_rotated_q_split =
+        !rotated_q_split_disabled &&
+        // Path scope: latent-V (V packed into K) on the streaming compute path, with K streamed
+        // through the row-wide mcast batch chain. Only the streaming compute kernel carries the
+        // rotated-Q-split hook; on any other path compute would desync from the reader and writer,
+        // so the compute kernel static_asserts this too. These two terms also subsume
+        // !has_sliding_window, enable_kv_chains, k_uses_batch_chain and B == 1, and v_shares_k_buffer
+        // subsumes !use_attention_sink (the op rejects that pair outright).
+        k_mcast_enabled && build_kv_chains &&
+        // V transport: latent-V only. V is packed into K's prefix, so it rides the K mcast and the
+        // rotation needs nothing extra. This also subsumes !use_attention_sink (the op rejects
+        // sink + latent-V outright) and pins us to the streaming compute path.
+        //
+        // Separate-V rotation was implemented and then REMOVED (2026-08-31). It was correct, but it
+        // bought +4.0% at exactly one core count (100, stock p150) on a path running 16-29% math
+        // utilization, while costing -11.4% at 110 cores and -2.7% at 48. Its enablement rule
+        // (rot_float_chunks % grid_size.x == 0, "floats fill their hosting rows") was fitted to four
+        // points that all varied grid COLUMNS at ten rows; varying ROWS reaches core counts where one
+        // num_cores can be either fill class, and there the rule predicts BACKWARDS:
+        //   8x6  48 cores base 5 floats 40 EVEN     ON 13.251-13.267 OFF 12.897-12.918  -2.7%
+        //   6x8  48 cores base 5 floats 40 PARTIAL  ON 13.511-13.520 OFF 13.555-13.567  +0.3%
+        // (5 runs per arm, tight -- not noise). No other candidate separated the seven points either:
+        // base, cols, rows, rows_needed and float-free-row count each put a win and a loss in the same
+        // bucket. Keeping a perf guard nobody can explain, to gate a feature that helps one grid, was
+        // a worse trade than dropping the branch -- and dropping it deletes six sub-conditions from
+        // this predicate, including that guard and the head-boundary deadlock condition.
+        // If separate-V rotation is ever wanted back, the principled version is head-ALIGNED float
+        // packing: group floats so each hosting row's floats share one head, then row-mcast V on the
+        // float slot reusing the head chain's semaphores, which are idle there. That removes the
+        // reason floats fall off the chain at all, rather than gating on a fitted rule.
+        v_shares_k_buffer && !args.is_balanced &&
+        // Partial active masks are handled, not excluded. The rotation schedule is indexed by the
+        // ORDINAL of an iteration within the active subsequence (rot_active_ordinal, in
+        // chunked_prefill_utils.hpp) rather than by absolute ring_iter, so a skipped iteration is
+        // harmless: consecutive ordinals are consecutive EXECUTED iterations, which is the only thing
+        // the donor-signal / receiver-wait pair actually requires. For a full mask ordinal ==
+        // ring_iter identically, so chunked prefill is bit-identical to before.
+        //
+        // This is also what unblocked kv-pad, and the reason two earlier attempts failed. Both tried
+        // to make the HOST agree with the device about which iterations run -- impossible under
+        // kv_pad_from_metadata, where the kernels overwrite active_ring_iter_mask from trace metadata
+        // the host never sees. The host does not need to agree: every per-ordinal entry it emits is
+        // already a valid partition of all Q chunks, and the KERNELS choose which entries get used.
+        // All three read the same device-derived mask before their ring loop (reader :506, writer
+        // :569, compute via cb_kv_pad_derived) and all three `continue` past inactive iterations on
+        // it, so their ordinals cannot diverge.
+        //
+        // No guard is needed for the last active iteration either: is_last_active_ring_iter is
+        // mask-aware, so that iteration takes the final-output branch and creates NO deferred save,
+        // which means the host's float_dest at the last ordinal is simply never read -- no unpaired
+        // donor signal, no stale semaphore.
+        // Degenerate cases need NO guard: they are provably no-ops, and both were measured.
+        // rot_float_chunks == 0 (work divides evenly): with no floats, every core's rotated range
+        // i*base .. i*base+base-1 is IDENTICAL to its static range on every iteration, so the
+        // rotation reduces to the static split rather than merely resembling it. There is nothing to
+        // hand off, and iteration 0 never receives a float.
+        // rot_rows_needed == grid_size.y (floats reach every row): no row is float-free, so there is
+        // nowhere cheaper to move the +1 mcast slot to; the cycle still permutes WHICH row hosts
+        // which float, which is harmless.
+        // Both used to decline to the static path purely as a cost guard. Removing them widens the
+        // predicate by two terms with no behavioural change. Verified on bh-lb-33 ring-8 after the
+        // removal, kimi50k q32/k640 via RING_MLA_SDPA_GRID_OVERRIDE:
+        //   grid 7x10 (70 cores | 280 chunks) -> base 4, floats 0, rows_needed 0: ACTIVE, PCC pass
+        //   grid 11x2 (base 12, floats 16, rows_needed 2 of 2 rows): ACTIVE, PCC pass
+        // and the whole latent-V suite unchanged on the default grid: sweep accuracy 10 passed
+        // (includes every base-2 q64 id, the shapes that catch a broken handoff), determinism
+        // 10 passed, perf q32/k640 68.04% and q64/k448 68.00% -- both inside their committed bands.
+        // Zero-float perf is neutral rather than better, as expected: ON 15.525/15.572 ms vs OFF
+        // 15.586/15.556 ms.
+        // rot_base_chunks >= 1: every core must own at least one chunk every iteration, since the
+        // reader decodes slot (rot_my_count - 1) on padded iterations and would underflow at 0.
+        // base == 1 is now supported and is the largest win (measured 1.71x on kimi_k3 q128: 15.587
+        // -> 9.091 ms at k224, 14.967 -> 8.746 ms at k256), because it is the worst static imbalance
+        // -- half the rows would otherwise pay the +1 mcast slot on every ring iteration.
+        //
+        // Getting below the old >= 2 bound took three fixes, all in the writer/reader, and all of
+        // them are no-ops at base >= 3 (see each site for why):
+        //   - the reader pinned need_q_read and the writer pinned single_q_chunk to the FIXED slot
+        //     count rather than the static flat count. Compute derives its accumulator mode from
+        //     rot_max_slots, and at base == 1 a core whose static count was 1 pushed Q once for the
+        //     whole op while compute expected it per iteration -- that was the base == 1 HANG
+        //     (cores parked in chain_link.hpp receiver_sem.wait(VALID), the rest behind them);
+        //   - the early-flush decision compares flat chunk ids instead of using the positional
+        //     q_per_core == 2 proxy, which was evaluated on the current iteration's count while the
+        //     pending save came from the previous one. That was the base == 2 wrong-numbers bug;
+        //   - the cross-ring prefetch is postponed past this slot's own save when they are the same
+        //     chunk, which only happens when a core owns exactly one chunk that iteration.
+        rot_base_chunks >= 1;
+
+    struct RotatedIterSched {
+        std::vector<uint32_t> my_chunks;   // flat chunk ids; base chunks first, float (if any) last
+        uint32_t row_slot_count = 0;       // row max chunk count this iteration = K mcast slots to run
+        uint32_t float_migrated_in = 0;    // 1 if the last chunk was owned by another core last iteration
+        uint32_t float_dest = kRotNoDest;  // packed physical core owning this float next iteration
+    };
+    std::vector<std::vector<RotatedIterSched>> rot_sched;  // [core][ring_iter]
+    std::vector<uint32_t> rot_handoff_sem_ids;
+    // Appends one iteration's chunk-id list padded to the fixed rot_max_slots length, so every
+    // ring iteration occupies the same number of runtime args and the kernels can index by stride.
+    const auto append_rot_chunk_ids = [&](CheckedRuntimeArgList& args_out, const RotatedIterSched& sched) {
+        for (uint32_t slot = 0; slot < rot_base_chunks + 1; ++slot) {
+            args_out.push_back(slot < sched.my_chunks.size() ? sched.my_chunks[slot] : 0);
+        }
+    };
+    if (use_rotated_q_split) {
+        const uint32_t cores_per_row = grid_size.x;
+        const uint32_t num_rows = grid_size.y;
+        const uint32_t rows_needed = rot_rows_needed;
+        // The block below indexes batch_chain_configs by core; k_mcast_enabled implies it is built
+        // per core, but that implication is ~90 lines away, and getting it wrong is out-of-bounds
+        // UB on an empty vector rather than a diagnosable failure.
+        TT_FATAL(
+            batch_chain_configs.size() == num_cores,
+            "RingJoint rotated Q split expects one batch-chain config per core, got {} for {} cores",
+            batch_chain_configs.size(),
+            num_cores);
+        // The row-wide mcast machinery assumes the injector never runs a padded iteration (it is
+        // chosen among row-max cores; padded members freeze their K-CB write phase, and the mcast
+        // lands at the injector's phase). Preserve that invariant per iteration: within a row
+        // hosting floats, the injector's column takes the first float.
+        constexpr uint32_t kNoInjectorCol = std::numeric_limits<uint32_t>::max();
+        std::vector<uint32_t> injector_col(num_rows, kNoInjectorCol);
+        for (uint32_t row = 0; row < num_rows; ++row) {
+            for (uint32_t col = 0; col < cores_per_row; ++col) {
+                if (batch_chain_configs[row * cores_per_row + col].is_injector) {
+                    injector_col[row] = col;
+                    break;
+                }
+            }
+            // Defaulting to column 0 instead would put the first float on a non-injector core and
+            // quietly violate the invariant above, as a wrong-but-running program.
+            TT_FATAL(
+                injector_col[row] != kNoInjectorCol,
+                "RingJoint rotated Q split: row {} has no K mcast injector, but k_mcast_enabled "
+                "configures one per row",
+                row);
+        }
+        // Float f's owner at iteration t: rows rotate by rows_needed each iteration so every row
+        // hosts floats (the +1 mcast slot) an equal ~ring_size*rows_needed/num_rows share of
+        // iterations. (row, position) is unique per f within an iteration, so a core owns at most
+        // one float at a time; position 0 maps to the row's injector column.
+        auto float_owner = [&](uint32_t ring_iter, uint32_t float_idx) {
+            const uint32_t row = ((ring_iter * rows_needed) + (float_idx / cores_per_row)) % num_rows;
+            const uint32_t pos = float_idx % cores_per_row;
+            const uint32_t inj = injector_col[row];
+            const uint32_t col = pos == 0 ? inj : (pos <= inj ? pos - 1 : pos);
+            return row * cores_per_row + col;
+        };
+        rot_sched.assign(num_cores, std::vector<RotatedIterSched>(ring_size));
+        for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                auto& sched = rot_sched[core_idx][ring_iter];
+                sched.my_chunks.reserve(rot_base_chunks + 1);
+                for (uint32_t b = 0; b < rot_base_chunks; ++b) {
+                    sched.my_chunks.push_back(core_idx * rot_base_chunks + b);
+                }
+            }
+        }
+        // owner_of[ring_iter][float_idx]: which core holds float `float_idx` on that iteration.
+        // Materialized because the loop below needs each float's owner in the previous and next
+        // iterations as well as this one, and re-evaluating float_owner four times per (iter, float)
+        // is what made this schedule hard to check.
+        std::vector<std::vector<uint32_t>> owner_of(ring_size, std::vector<uint32_t>(rot_float_chunks));
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            for (uint32_t float_idx = 0; float_idx < rot_float_chunks; ++float_idx) {
+                owner_of[ring_iter][float_idx] = float_owner(ring_iter, float_idx);
+            }
+        }
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            for (uint32_t float_idx = 0; float_idx < rot_float_chunks; ++float_idx) {
+                const uint32_t owner = owner_of[ring_iter][float_idx];
+                auto& sched = rot_sched[owner][ring_iter];
+                sched.my_chunks.push_back(rot_base_chunks * num_cores + float_idx);
+                // (row, pos) is unique per float within an iteration, so a core holds at most one
+                // float and these two fields are assigned at most once each.
+                TT_ASSERT(sched.my_chunks.size() == rot_base_chunks + 1);
+                sched.float_migrated_in = (ring_iter > 0 && owner_of[ring_iter - 1][float_idx] != owner) ? 1 : 0;
+                if (ring_iter + 1 < ring_size) {
+                    const uint32_t next_owner = owner_of[ring_iter + 1][float_idx];
+                    if (next_owner != owner) {
+                        const auto& dest_phys = core_work[next_owner].physical_core;
+                        sched.float_dest = rot_pack_dest(dest_phys.x, dest_phys.y);
+                    }
+                }
+            }
+            // Every core in a row runs the row's max slot count, so padded members still relay the
+            // mcast handshakes.
+            for (uint32_t row = 0; row < num_rows; ++row) {
+                uint32_t row_max = 0;
+                for (uint32_t col = 0; col < cores_per_row; ++col) {
+                    row_max = std::max(
+                        row_max,
+                        static_cast<uint32_t>(rot_sched[row * cores_per_row + col][ring_iter].my_chunks.size()));
+                }
+                for (uint32_t col = 0; col < cores_per_row; ++col) {
+                    rot_sched[row * cores_per_row + col][ring_iter].row_slot_count = row_max;
+                }
+            }
+        }
+        // The mcast injector's forward gate (q_iter_local < next_core_q_chunks) must cover the
+        // +1-slot iterations of every row, not just the injector's static flat-split count.
+        for (auto& cfg : batch_chain_configs) {
+            if (cfg.participates && cfg.is_injector) {
+                cfg.next_core_q_chunks = rot_base_chunks + 1;
+            }
+        }
+        // Handoff semaphores for the iterations that can RECEIVE a migrated float (1..ring_size-1;
+        // iteration 0 starts fresh). Receiver resets its slot to 0 after the wait so a cached
+        // program replays cleanly. Slots are REUSED across iterations as a ring of
+        // kRotHandoffSemDepth (see rot_handoff_sem_count) rather than one per iteration: program
+        // semaphores are a scarce resource (NUM_SEMAPHORES=16, shared with the chain and fused
+        // all-gather sems), and one-per-iteration made this feature the largest single consumer
+        // (7 of 16 at ring-8) and scaled with ring length. With the V head chain skipped for
+        // latent-V, ring-8 now fits comfortably and the count no longer grows with ring_size; the
+        // TT_FATAL below keeps that true rather than leaving it to this comment.
+        for (uint32_t sem_slot = 0; sem_slot < rot_handoff_sem_count(ring_size); ++sem_slot) {
+            const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+            // The descriptor path has no budget check of its own: an id >= NUM_SEMAPHORES surfaces
+            // later as a bare "bitset::set: __position (17) >= _Nb (16)" IndexError from whichever
+            // helper next scans for a free id, naming neither SDPA nor this feature.
+            // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which is
+            // not reachable from a ttnn op through any public header.
+            constexpr uint32_t kSemaphoresPerCore = 16;
+            TT_FATAL(
+                sem_id < kSemaphoresPerCore,
+                "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
+                "allocated {} and a core supports {}. Free some (e.g. skip the V head chain) or set "
+                "RING_MLA_DISABLE_ROTATED_Q_SPLIT=1.",
+                rot_handoff_sem_count(ring_size),
+                desc.semaphores.size(),
+                kSemaphoresPerCore);
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = sem_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = core_grid_set,
+                .initial_value = 0,
+            });
+            rot_handoff_sem_ids.push_back(sem_id);
+        }
+        // log_info, matching the decline branch below: one line per program compile (programs are
+        // cached), and it is the only way a user can confirm the rotation is actually active for a
+        // given shape and core count.
+        log_info(
+            tt::LogOp,
+            "Rotated Q split ACTIVE: base={} floats={} rows_needed={} ring_size={} active_iters={} "
+            "kv_pad_rotation={} (ideal slots {} vs flat {})",
+            rot_base_chunks,
+            rot_float_chunks,
+            rows_needed,
+            ring_size,
+            std::popcount(active_ring_iter_mask),
+            kv_pad_rotation_enabled,
+            total_q_chunks * ring_size / num_cores,
+            ring_size * (rot_base_chunks + 1));
+    } else if (v_shares_k_buffer && kernel_chunked) {
+        // Latent-V chunked prefill is the shape this rotation exists for, so when it declines there
+        // say why at a level a user actually sees. Silently taking the +1-slot-every-iteration split
+        // reads as an unexplained regression.
+        log_info(
+            tt::LogOp,
+            "Ring MLA rotated Q split declined (base={} floats={} rows_needed={} of {} rows, ring_size={}, "
+            "disabled={} balanced={} kv_pad_rotation={} k_mcast={} all_iters_active={}); using the static "
+            "flat split.",
+            rot_base_chunks,
+            rot_float_chunks,
+            rot_rows_needed,
+            grid_size.y,
+            ring_size,
+            rotated_q_split_disabled,
+            args.is_balanced,
+            kv_pad_rotation_enabled,
+            k_mcast_enabled,
+            active_ring_iter_mask == full_ring_iter_mask);
+    }
+
+    // Rotated Q split, compile-time. Value is the per-iteration chunk-LIST LENGTH (base chunks plus
+    // one float slot), or 0 when the rotation declines -- kernels gate on `> 0` rather than on a
+    // preprocessor define, so both paths always compile and stay type-checked. Appended LAST to
+    // every kernel's compile-time args and pushed UNCONDITIONALLY, so the index does not depend on
+    // the decision: reader cb_arg_offset + 5, writer + 24, compute + 25 (each is that kernel's CB
+    // block LENGTH, not the last CB index it reads). Each kernel adds its own
+    // header words to this to get its runtime-arg stride (see chunked_prefill_utils.hpp).
+    const uint32_t rot_max_slots_ct = use_rotated_q_split ? rot_base_chunks + 1 : 0;
+    for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
+        args->push_back(kRotCtArgSentinel);
+        args->push_back(rot_max_slots_ct);
+    }
+
+    // Head chains (MHA and separate-V shared-K) are built HERE, after the rotated-Q-split
+    // decision, because their per-(head, core) forwarding counts must describe whichever Q split
+    // actually ships. Moved down from above the K-chain pass; verified behaviour-neutral -- nothing
+    // between the old and new positions reads head_chain_configs or mcast_chains, and the K chain's
+    // own build_linear_chain call still sees the STATIC head_work it needs for its injector rule.
     // Build head chains for MHA and separate-V shared-K. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
@@ -2401,174 +3002,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             static_cast<uint32_t>(candidates.size()));
     }
 
-    uint32_t gqa_grouped_chains = 0;
-    uint32_t gqa_grouped_participant_cores = 0;
-    uint32_t gqa_local_fallback_cores = 0;
-    bool gqa_mcast_enabled = false;
-    std::string gqa_mcast_fallback_reason;
-    std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
-    if (gqa_grouped_kv && build_kv_chains) {
-        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
-
-        for (uint32_t ci = 0; ci < num_cores; ++ci) {
-            if (core_work[ci].global_q_count == 0) {
-                continue;
-            }
-
-            bool has_single_group = false;
-            bool spans_multiple_groups = false;
-            uint32_t single_group_id = 0;
-            uint32_t q_chunk_count = 0;
-            for (const auto& hw : core_work[ci].head_work) {
-                const uint32_t kv_head = hw.head / q_heads_per_kv;
-                if (!has_single_group) {
-                    has_single_group = true;
-                    single_group_id = kv_head;
-                } else if (single_group_id != kv_head) {
-                    spans_multiple_groups = true;
-                    break;
-                }
-                q_chunk_count += hw.q_chunk_count;
-            }
-
-            if (has_single_group && !spans_multiple_groups) {
-                kv_group_segments[single_group_id].emplace_back(ci, q_chunk_count);
-                gqa_grouped_participant_cores++;
-            } else {
-                gqa_local_fallback_cores++;
-            }
-        }
-
-        for (uint32_t kv_head = 0; kv_head < static_cast<uint32_t>(kv_group_segments.size()); ++kv_head) {
-            const auto& chain_segs = kv_group_segments[kv_head];
-            if (chain_segs.size() < 2) {
-                continue;
-            }
-            if (build_linear_chain(chain_segs, kv_head, gqa_chain_configs, core_work, false)) {
-                gqa_grouped_chains++;
-            }
-        }
-
-        // Production Minimax3 GQA has one local K/V head per chip (B=1, NHK=NHV=1). In that case every
-        // active Q-head core consumes the same K and V chunks, so use row-wide multicast instead
-        // of the store-and-forward grouped chain. Idle cores in an active row participate in padded iterations.
-        if (NHK != 1) {
-            gqa_mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
-        } else if (num_cores < 2) {
-            gqa_mcast_fallback_reason = "num_cores < 2";
-        } else if (grid_size.x < 2) {
-            gqa_mcast_fallback_reason = "grid_size.x < 2 (singleton rows)";
-        } else {
-            std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-            uint32_t gqa_mcast_rows = 0;
-
-            for (uint32_t row = 0; row < grid_size.y; ++row) {
-                const auto selection = select_row_wide_chain_mcast(row, recent_cols);
-                if (!selection.has_value()) {
-                    continue;
-                }
-                configure_row_wide_chain_mcast(*selection, 0, gqa_chain_configs, gqa_chain_max_q);
-                gqa_mcast_rows++;
-                log_debug(
-                    tt::LogOp,
-                    "GQA K/V mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                    selection->row,
-                    selection->injector_idx,
-                    selection->injector_physical.x,
-                    selection->injector_physical.y,
-                    selection->max_q,
-                    selection->phys_start.x,
-                    selection->phys_start.y,
-                    selection->phys_end.x,
-                    selection->phys_end.y);
-            }
-
-            gqa_mcast_enabled = gqa_mcast_rows > 0;
-            if (!gqa_mcast_enabled) {
-                gqa_mcast_fallback_reason = "no active groups";
-            }
-        }
-    }
-
-    // Build the shared-K chain for separate-V/latent cases.
-    // K is shared across all heads, so all active cores form one chain.
-    // Sorted by physical position for a stable unicast ordering (overwritten by mcast pass if eligible).
-    if (k_uses_batch_chain && build_kv_chains) {
-        std::vector<uint32_t> core_indices;
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            if (core_work[i].global_q_count == 0) {
-                continue;
-            }
-            core_indices.push_back(i);
-        }
-
-        std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
-            const auto& pa = core_work[a].physical_core;
-            const auto& pb = core_work[b].physical_core;
-            return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
-        });
-
-        std::vector<ChainSegment> chain_segs;
-        chain_segs.reserve(core_indices.size());
-        for (uint32_t ci : core_indices) {
-            chain_segs.emplace_back(ci, core_work[ci].global_q_count);
-        }
-        if (build_linear_chain(chain_segs, 0, batch_chain_configs, core_work)) {
-            log_debug(tt::LogOp, "K unicast chain: {} cores", chain_segs.size());
-        }
-    }
-
-    // K multicast pass: one mcast chain per logical row. Shared-K keeps the all-or-nothing policy:
-    // every row must contain work, otherwise the previously built linear chain remains active.
-    bool k_mcast_enabled = false;
-    std::string k_mcast_fallback_reason;
-    std::vector<uint32_t> k_chain_max_q(batch_chain_configs.size(), 0);  // per-core loop-padding count
-
-    if (!k_uses_batch_chain || !enable_kv_chains) {
-        // No non-GQA shared-K chain to multicast.
-    } else if (num_cores < 2) {
-        k_mcast_fallback_reason = "num_cores < 2";
-    } else if (grid_size.x < 2) {
-        // Each chain would be a singleton (1 core, no sinks) — mcast is degenerate.
-        k_mcast_fallback_reason = "grid_size.x < 2 (singleton chains)";
-    } else {
-        std::vector<RowWideChainMcastSelection> row_mcast_selections;
-        row_mcast_selections.reserve(grid_size.y);
-        std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-
-        bool all_chains_picked = true;
-        for (uint32_t row = 0; row < grid_size.y; ++row) {
-            const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
-            if (!selection.has_value()) {
-                k_mcast_fallback_reason = fmt::format("row {} has no work", row);
-                all_chains_picked = false;
-                break;
-            }
-            row_mcast_selections.push_back(*selection);
-        }
-
-        if (all_chains_picked) {
-            k_mcast_enabled = true;
-
-            for (const auto& selection : row_mcast_selections) {
-                configure_row_wide_chain_mcast(selection, 0, batch_chain_configs, k_chain_max_q);
-
-                log_debug(
-                    tt::LogOp,
-                    "K mcast row {}: injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                    selection.row,
-                    selection.injector_idx,
-                    selection.injector_physical.x,
-                    selection.injector_physical.y,
-                    selection.max_q,
-                    selection.phys_start.x,
-                    selection.phys_start.y,
-                    selection.phys_end.x,
-                    selection.phys_end.y);
-            }
-        }
-    }
-
     // Update mcast compile-time args
     const bool head_mcast_enabled = (mcast_chains > 0);
 
@@ -2744,6 +3177,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
+        // Rotated Q split: per ring iteration [row_slot_count, my_count, chunk ids].
+        // Header width must stay kRotReaderIterHeaderWords.
+        if (use_rotated_q_split) {
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rot_sched[i][ring_iter];
+                reader_args.push_back(sched.row_slot_count);
+                reader_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
+                append_rot_chunk_ids(reader_args, sched);
+            }
+        }
+
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -2762,7 +3206,31 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "writer.single_valid_kv_chunk_mask");
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
+        // The writer's RingSDPAOpReceiver is constructed with wait_for_op_signal=false and so
+        // consumes only the first few of these; ring_joint_writer.cpp steps over the remainder to
+        // reach the rotated block appended below. Pin the count here so a signaler that grows a word
+        // fails the build instead of silently shifting every rotated arg.
+        TT_FATAL(
+            !use_rotated_q_split || writer_signaler_args.size() == RingSDPAFusedOpSignaler::kRtArgCount,
+            "RingJoint rotated Q split assumes {} fused-op writer args, got {}",
+            RingSDPAFusedOpSignaler::kRtArgCount,
+            writer_signaler_args.size());
         writer_args.append(writer_signaler_args);
+        // Rotated Q split: the handoff semaphore ids, indexed by (ring_iter - 1) % count on both
+        // sides, then per ring iteration [my_count, float_migrated_in, float_dest, chunk ids].
+        // Header width must stay kRotWriterIterHeaderWords.
+        if (use_rotated_q_split) {
+            for (uint32_t sem_slot = 0; sem_slot < rot_handoff_sem_count(ring_size); ++sem_slot) {
+                writer_args.push_back(rot_handoff_sem_ids[sem_slot]);
+            }
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rot_sched[i][ring_iter];
+                writer_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
+                writer_args.push_back(sched.float_migrated_in);
+                writer_args.push_back(sched.float_dest);
+                append_rot_chunk_ids(writer_args, sched);
+            }
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -2792,6 +3260,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Rotated Q split: per ring iteration [my_count, chunk ids].
+        // Header width must stay kRotComputeIterHeaderWords.
+        if (use_rotated_q_split) {
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const auto& sched = rot_sched[i][ring_iter];
+                compute_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
+                append_rot_chunk_ids(compute_args, sched);
+            }
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
