@@ -99,9 +99,33 @@ def _latest_belongs_to(latest: Path, model_root) -> bool:
     try:
         declared = (json.loads((latest / "manifest.json").read_text()).get("config") or {}).get("model_root")
     except (OSError, ValueError, AttributeError):
-        return True
+        declared = ""
     if not str(declared or "").strip():
-        return True
+        # NO MANIFEST IS NOT A YES. Defaulting to "this run is yours" is what the docstring above
+        # describes and what it still allowed: a run whose manifest never reached this checkout --
+        # an isolated run writes its manifest inside the /tmp worktree and mirrors back only the
+        # report -- hands its directory to ANY caller. Observed twice on 2026-09-03, the tool's own
+        # suite replacing a finished 32 KB report with a 57-byte and then a 48-byte fixture, and
+        # failing two of its own tests in the checkout where a real runs/latest exists.
+        #
+        # The directory NAMES the model. Run.create builds its id as "<timestamp>-<model dir name>",
+        # so the name is a fact the run wrote about itself and survives when the manifest does not.
+        # No name to read, and no model to compare it with, still means yes -- that is the early-run
+        # case this must not regress.
+        _model_leaf = Path(model_root).name.strip()
+        try:
+            _run_leaf = latest.resolve().name.strip()
+        except OSError:
+            return True
+        if not (_model_leaf and _run_leaf):
+            return True
+        if _run_leaf.endswith(_model_leaf):
+            return True
+        # ONLY REFUSE WHEN THE NAME POSITIVELY NAMES SOMEONE ELSE. Run.create builds its id as
+        # "<timestamp>-<model dir name>", so a name carrying a model has the separator. A name
+        # without one -- a hand-made or legacy directory -- states no owner, and "no information"
+        # must keep the conservative answer this function has always given for the early-run case.
+        return "-" not in _run_leaf
     try:
         return Path(declared).resolve() == Path(model_root).resolve()
     except OSError:
