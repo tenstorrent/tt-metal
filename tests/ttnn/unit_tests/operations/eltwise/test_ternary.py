@@ -489,3 +489,19 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
+
+def test_addcdiv_overflow(device):
+    # Regression test for ttnn.addcdiv scaling overflow issue #54055
+    in0 = torch.tensor([0.0] * 32 * 32, dtype=torch.float32).reshape(1, 1, 32, 32)
+    in1 = torch.tensor([3.0e38] * 32 * 32, dtype=torch.float32).reshape(1, 1, 32, 32)
+    in2 = torch.tensor([8.0] * 32 * 32, dtype=torch.float32).reshape(1, 1, 32, 32)
+    
+    in0_dev = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+    in1_dev = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+    in2_dev = ttnn.from_torch(in2, layout=ttnn.TILE_LAYOUT, device=device)
+    
+    got = ttnn.addcdiv(in0_dev, in1_dev, in2_dev, value=4.0)
+    got = ttnn.to_torch(got)
+    ref = torch.addcdiv(in0, in1, in2, value=4.0)
+    
+    assert torch.allclose(got, ref)
