@@ -71,9 +71,14 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // writing them entirely for a run of unclamped bricks.
     const bool relative_mask_table = config.stride.time() == 1 && config.stride.height() == 1 &&
                                      config.stride.width() == 1 && tensors.interior_mask.has_value();
-    // Must match `interior_table_supported` in neighborhood_reader.cpp exactly: the reader skips
-    // rewriting the mask on the strength of the pages cycling, which only holds at this size.
-    const bool persistent_mask = relative_mask_table && !per_brick_mask;
+    // Must agree with `interior_table_supported` in neighborhood_reader.cpp: the reader skips
+    // rewriting the mask on the strength of the pages cycling, which only holds at this size (the
+    // reader may skip only when this is persistent; persistent without skipping is merely unused
+    // slack). Per-brick blocks are query_tile_rows times bigger, so they get the whole-item CB only
+    // while it fits the shared L1 budget; past it the reader generates every chunk as before.
+    const bool per_brick_persistent_fits =
+        mask_tiles_per_kv_chunk * kv_chunk_count <= kernel_args::MAX_PERSISTENT_MASK_TILES;
+    const bool persistent_mask = relative_mask_table && (!per_brick_mask || per_brick_persistent_fits);
     const uint32_t mask_cb_pages =
         persistent_mask ? mask_tiles_per_kv_chunk * kv_chunk_count : mask_tiles_per_kv_chunk * 2;
 

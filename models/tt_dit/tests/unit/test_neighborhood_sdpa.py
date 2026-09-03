@@ -388,10 +388,39 @@ def test_interior_table_matches_generated_masks(mesh_device, owned_width, brick)
     bricks on all three axes -- at (12, 16, 16) the time axis has none, since a brick-aligned
     origin cannot land on the single unclamped time site.
     """
+    _run_interior_table_case(mesh_device, owned_width, brick, volume=(16, 24, 24))
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+@pytest.mark.parametrize(
+    # Deep enough in T that a 2-brick T-column chunk can sit with every brick's window inside the
+    # volume: (2,4,4) bricks need chunk sites [8,16) of 24; (8,2,2) bricks need [16,32) of 40.
+    "brick, volume",
+    [(None, (24, 24, 24)), ((8, 2, 2), (40, 24, 24))],
+    ids=["chosen_brick", "brick_822"],
+)
+def test_interior_table_per_brick_persistence(mesh_device, owned_width, brick, volume, monkeypatch):
+    """The uploaded table under the PER-BRICK mask layout (a 2-brick T-column chunk), on a volume
+    deep enough that some chunks are fully interior.
+
+    This is the shipped stage-5 configuration. The reader keeps the whole per-brick mask block
+    resident in cb_mask and skips rewriting it for a run of interior chunks; an edge chunk dirties
+    the pages and the next interior chunk refills them. Every core here sees edge -> interior ->
+    edge sequences, so a wrong skip, a wrong refill, or a block that is not actually identical
+    across chunks shows up as a PCC miss. test_matches_torch_reference cannot catch any of this:
+    it passes no table, so the persistent path never runs there.
+    """
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+    monkeypatch.setenv("DIFFVAE_NA_UNSAFE_CHUNK", "1")
+    _run_interior_table_case(mesh_device, owned_width, brick, volume)
+
+
+def _run_interior_table_case(mesh_device, owned_width, brick, volume):
     from models.tt_dit.layers.neighborhood_attention import _build_relative_masks, halo_sites
 
     torch.manual_seed(0)
-    volume, context_window, stride = (16, 24, 24), (11, 11, 11), (1, 1, 1)
+    context_window, stride = (11, 11, 11), (1, 1, 1)
     head_count, head_dim = 2, 64
     if brick is None:
         brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
