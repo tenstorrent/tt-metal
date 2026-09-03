@@ -142,13 +142,29 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto spec_required = compute_output_specs(args, tensor_args);
         const auto& out_tensor = tensor_args.preallocated_output.value();
+        // Padded, not logical: ttnn::slice pads the tile-path ends up to a tile boundary before
+        // calling here and views the result back down afterwards, so the caller's tensor legitimately
+        // carries the unpadded logical shape. Both shapes coincide on the row-major path.
         TT_FATAL(
-            out_tensor.padded_shape() == output_shape_required,
-            "The preallocated output tensor needs a shape of {}, however it is {}",
-            output_shape_required,
+            out_tensor.padded_shape() == spec_required.padded_shape(),
+            "The preallocated output tensor needs a padded shape of {}, however it is {}",
+            spec_required.padded_shape(),
             out_tensor.padded_shape());
+        // create_output_tensors hands the program the caller's tensor verbatim, so the destination's
+        // page geometry has to be what the factories were built against. One comparison covers dtype,
+        // page_config, memory_config and alignment — including the fields compute_program_hash omits.
+        // page_config is the load-bearing one: the writer's TensorAccessorArgs bakes the destination's
+        // aligned page size in as a compile-time word, and for a tile-paged buffer that size is
+        // tile.get_tile_size(dtype), so two outputs differing only in tile would share one program
+        // whose writer addresses the wrong page offsets. A mismatch here is a caller error in every
+        // case, so reject it rather than key on it.
+        TT_FATAL(
+            out_tensor.tensor_spec().tensor_layout() == spec_required.tensor_layout(),
+            "The preallocated output tensor needs a layout of {}, however it is {}",
+            spec_required.tensor_layout(),
+            out_tensor.tensor_spec().tensor_layout());
     }
     auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
@@ -172,30 +188,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             "slice does not currently support tiles other than 32x32, got {}x{}",
             tile.get_height(),
             tile.get_width());
-        if (tensor_args.preallocated_output.has_value()) {
-            const auto& out_tensor = tensor_args.preallocated_output.value();
-            // Layout and dtype must be checked before the tile: PageConfig::get_tile() reports a default
-            // 32x32 Tile for a ROW_MAJOR tensor, so the comparison below would accept one. Both properties
-            // are pinned to the input by compute_output_specs, which is what the tile factories are built
-            // against, so this rejects only combinations the op never produced for itself.
-            TT_FATAL(
-                out_tensor.layout() == Layout::TILE,
-                "The preallocated output tensor must be TILE layout to match the input, but it has {} layout",
-                out_tensor.layout());
-            TT_FATAL(
-                out_tensor.dtype() == tensor_args.input.dtype(),
-                "The preallocated output tensor dtype ({}) must match the input tensor dtype ({})",
-                out_tensor.dtype(),
-                tensor_args.input.dtype());
-            const auto out_tile = out_tensor.tensor_spec().tile();
-            TT_FATAL(
-                out_tile == tile,
-                "The preallocated output tensor tile ({}x{}) must match the input tensor tile ({}x{})",
-                out_tile.get_height(),
-                out_tile.get_width(),
-                tile.get_height(),
-                tile.get_width());
-        }
         TT_FATAL(
             tensor_args.input.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
