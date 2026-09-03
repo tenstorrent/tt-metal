@@ -31,13 +31,20 @@ class Scratchpad;
 // sidecar, so the generated bindings header (and anything else that just needs to name a binding)
 // does not have to pull in the whole Scratchpad implementation. See api/scratchpad.h for the
 // Scratchpad class this token constructs.
+namespace binding_details {
+template <const auto& Token>
+struct LLKOperandExtractor;
+}
+
 class ScratchpadBindingToken {
 public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
     // Binding token constructor when host supplies LLK metadata.
-    // See "Entry format metadata" in ScratchpadSpec. Plain working memory uses the two-arg form.
+    // See "Entry format metadata" in ScratchpadSpec. LLKOperandFrom reads these via
+    // binding_details::LLKOperandExtractor (api/llk_operand_from_tokens.h). Plain working memory
+    // uses the two-arg form.
     constexpr ScratchpadBindingToken(
         uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
@@ -45,6 +52,9 @@ public:
 private:
     template <typename T>
     friend class Scratchpad;
+
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size

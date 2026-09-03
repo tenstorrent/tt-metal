@@ -12,7 +12,8 @@ namespace binding_details {
 
 // The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen. Kernels never name
 // this type: headergen emits it as a nested braced-initializer on the token's constructor.
-// to_llk_mem_descriptor(token) was dropped in the rebase onto main; see llk_operand.h.
+// Compute kernels read it via LLKOperandFrom (api/llk_operand_from_tokens.h) /
+// binding_details::LLKOperandExtractor — not by naming this struct.
 //
 // This separation is explicitly designed to avoid:
 // 1. Coupling of LLK metadata with the Metal 2.0 binding infrastructure.
