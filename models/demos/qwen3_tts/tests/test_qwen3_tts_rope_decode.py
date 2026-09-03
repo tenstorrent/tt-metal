@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.demos.qwen3_tts.tt.rope import (
+    _rope_decode_memcfg,
     apply_rope_qk,
     get_decode_transformation_mat,
     get_rope_tensors,
@@ -95,6 +96,66 @@ def test_decode_mode_matches_prefill_mode(device, n_q, n_kv, start_pos=128):
             f"(|ref|max={a.abs().max().item():.4g})"
         )
         assert max_diff == 0.0, f"{name}: decode-mode RoPE is not bit-identical (max diff {max_diff})"
+
+
+@pytest.mark.parametrize("n_q,n_kv", HEAD_COUNTS, ids=[f"heads{q}kv{k}" for q, k in HEAD_COUNTS])
+def test_k_keep_decode_layout(device, expect_error, n_q, n_kv, start_pos=128):
+    """``k_keep_decode_layout`` must return the pre-transpose K, bit for bit.
+
+    The decode kernel's own output is ``[1, 1, n_kv, head_dim]`` height-sharded on one
+    core — byte-identical to what ``paged_update_cache`` requires — so the traced decode
+    path skips both the transpose back and its own transpose into the cache layout. This
+    pins that the kept tensor is exactly the transposed-back one, un-transposed, and that
+    asking for it on a shape the decode kernel cannot serve raises instead of silently
+    handing back the other layout.
+    """
+    torch.manual_seed(0)
+    q_t = torch.randn(1, n_q, 1, HEAD_DIM, dtype=torch.bfloat16)
+    k_t = torch.randn(1, n_kv, 1, HEAD_DIM, dtype=torch.bfloat16)
+    cos, sin = get_rope_tensors(device, HEAD_DIM, 1, torch.tensor([start_pos]))
+    prefill_mat = get_transformation_mat(HEAD_DIM, device)
+    decode_mat = get_decode_transformation_mat(device)
+    kc = _kcfg()
+
+    def run(keep):
+        return apply_rope_qk(
+            _to_dev(q_t, device),
+            _to_dev(k_t, device),
+            cos,
+            sin,
+            prefill_mat,
+            head_dim=HEAD_DIM,
+            decode_trans_mat=decode_mat,
+            compute_kernel_config=kc,
+            k_keep_decode_layout=keep,
+        )
+
+    ref_q, ref_k = run(False)
+    got_q, got_k = run(True)
+
+    assert list(got_k.shape) == [1, 1, n_kv, HEAD_DIM], f"kept K shape {got_k.shape}"
+    assert got_k.memory_config() == _rope_decode_memcfg(HEAD_DIM), "kept K must stay in the decode layout"
+    # Q is unaffected by the flag.
+    assert (ttnn.to_torch(ref_q).float() - ttnn.to_torch(got_q).float()).abs().max().item() == 0.0
+    # The kept K, transposed back on the host, must equal the op-transposed K exactly.
+    a = ttnn.to_torch(ref_k).float()
+    b = ttnn.to_torch(got_k).float().transpose(1, 2)
+    assert a.shape == b.shape, f"{a.shape} != {b.shape}"
+    max_diff = (a - b).abs().max().item()
+    print(f"[rope keep_decode_layout heads={n_q}/{n_kv}] max|transposed - kept| = {max_diff:.4g}")
+    assert max_diff == 0.0
+
+    with expect_error(ValueError, "k_keep_decode_layout"):
+        apply_rope_qk(
+            _to_dev(torch.randn(1, n_q, 32, HEAD_DIM, dtype=torch.bfloat16), device),
+            _to_dev(torch.randn(1, n_kv, 32, HEAD_DIM, dtype=torch.bfloat16), device),
+            *get_rope_tensors(device, HEAD_DIM, 32, torch.arange(32)),
+            prefill_mat,
+            head_dim=HEAD_DIM,
+            decode_trans_mat=decode_mat,
+            compute_kernel_config=kc,
+            k_keep_decode_layout=True,
+        )
 
 
 def test_routing(device, monkeypatch):

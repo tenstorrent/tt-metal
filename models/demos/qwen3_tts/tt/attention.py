@@ -24,6 +24,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     dram_sharded_program_config,
     find_grid_k_n,
     sharded_hidden_width_memcfg,
+    unpad_dram_sharded_out,
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
@@ -52,6 +53,52 @@ def prepare_fused_sdpa_mask(mask):
     return mask, own
 
 
+def decode_sdpa_k_chunk(k_len: int, max_chunk: int = 672) -> int:
+    """k_chunk_size for a single-token query over a ``k_len`` KV cache.
+
+    Measured on wormhole (Sq=1, dh=128, kv 352 and 1312, 8 and 16 local heads): SDPA
+    device time tracks the *chunk-padded* KV length ``ceil(k_len/k) * k`` plus ~1.2 us
+    per chunk iteration. So a chunk that divides the cache exactly is always best, and
+    among those the largest wins — kv=352 went 38.4 us (k=64, 6 chunks) -> 26.8 us
+    (k=352, 1 chunk), while k=320 (2 chunks, 640 padded rows) cost 60.9 us. The 20-rows
+    -per-chunk penalty below encodes that overhead; it picks 352 for kv=352, 416 for
+    kv=800 and 672 for kv=1312 (chunks are tile-aligned, so kv=800 cannot be halved
+    exactly).
+
+    ``max_chunk`` caps the single-chunk case: k_chunk=1312 exceeds the program size
+    limit (``program.cpp`` TT_THROW), 672 is the largest value verified to build.
+    ``k_len`` is rounded up to a whole tile first.
+    """
+    tile = ttnn.TILE_SIZE
+    # The eager decode fallback slices the cache to start_pos+1, so k_len can be any
+    # logical length; the kernel reads whole tiles either way.
+    k_len = max(tile, -(-k_len // tile) * tile)
+    best_k, best_cost = tile, None
+    for k in range(tile, min(k_len, max_chunk) + tile, tile):
+        n_chunks = -(-k_len // k)
+        cost = n_chunks * k + 20 * n_chunks
+        if best_cost is None or cost < best_cost:
+            best_k, best_cost = k, cost
+    return best_k
+
+
+def talker_fused_sdpa_enabled(device) -> bool:
+    """True when :class:`Attention` routes decode / masked prefill through fused SDPA.
+
+    Fused SDPA is the default on every Wormhole SKU. ``QWEN3_TTS_TALKER_MANUAL_SDPA=1``
+    restores the manual fp32 BMM chain (typecast Q/K/V, GQA ``repeat_interleave``,
+    QK / scale / mask / softmax / PV, typecast back) for A/B and rollback; N150 has no
+    manual path any more, so it ignores the flag.
+
+    ``Talker._forward_layers`` calls this to convert the fp32 padding mask once per
+    step rather than once per layer. The layer re-checks anyway —
+    :func:`prepare_fused_sdpa_mask` is idempotent.
+    """
+    from models.demos.qwen3_tts.tt.mesh_utils import is_n150
+
+    return is_n150(device) or os.environ.get("QWEN3_TTS_TALKER_MANUAL_SDPA", "0") != "1"
+
+
 class Attention(LightweightModule):
     """
     Multi-head attention with GQA and QK-norm for Qwen3-TTS.
@@ -60,9 +107,9 @@ class Attention(LightweightModule):
     - Grouped Query Attention (GQA) with 16 Q heads and 8 KV heads
     - QK-normalization (q_norm, k_norm) for stable training
     - RoPE positional embeddings
-    - Attention: N150 uses fused SDPA on every path (bf16, HiFi4 + fp32 dest acc).
-      Other cards keep fused causal prefill and the manual fp32 BMM chain for
-      decode / custom masks.
+    - Attention: fused SDPA on every path (bf16, HiFi4 + fp32 dest acc) for every
+      Wormhole SKU. QWEN3_TTS_TALKER_MANUAL_SDPA=1 falls back to the manual fp32
+      BMM chain (see talker_fused_sdpa_enabled).
     """
 
     def __init__(
@@ -90,6 +137,7 @@ class Attention(LightweightModule):
 
         self.tp_size = get_tp_size(device) if is_mesh_device_flag else 1
         self._n150 = is_n150(device)
+        self._fused_sdpa = talker_fused_sdpa_enabled(device)
         if self.tp_size > 1:
             assert num_heads % self.tp_size == 0
             assert num_kv_heads % self.tp_size == 0
@@ -240,13 +288,24 @@ class Attention(LightweightModule):
         q_norm_weight = _permute_rope_head_dim_vector(state_dict[f"{layer_prefix}.self_attn.q_norm.weight"], head_dim)
         k_norm_weight = _permute_rope_head_dim_vector(state_dict[f"{layer_prefix}.self_attn.k_norm.weight"], head_dim)
 
+        # ttnn's SDPA wrapper folds `scale` into the softmax exponent, so it has to
+        # pre-multiply the additive mask by 1/scale on EVERY call — a 6 us DRAM pass
+        # over a mask that is pure {0, -inf} and therefore scale-invariant. Passing
+        # scale=1.0 skips it; the softmax scale rides along in the q_norm gain instead,
+        # which is a load-time constant. RoPE is a rotation, so scaling Q before it is
+        # the same as scaling the scores after (verified: attention_decode PCC).
+        self._sdpa_scale = 1.0 if self._fused_sdpa else self.scale
+        _q_norm_gain = self.scale if self._fused_sdpa else 1.0
+        if _q_norm_gain != 1.0:
+            q_norm_weight = (q_norm_weight.float() * _q_norm_gain).to(q_norm_weight.dtype)
+
         TILE = 32
         q_norm_torch = q_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
         k_norm_torch = k_norm_weight.unsqueeze(0).view(1, 1, head_dim).reshape([1, 1, head_dim // TILE, TILE])
 
         _qk_norm_gamma_memcfg = ttnn.L1_MEMORY_CONFIG
 
-        _qn_cache = get_cache_name("q_norm")
+        _qn_cache = get_cache_name("q_norm_sdpa_scaled" if _q_norm_gain != 1.0 else "q_norm")
         if _qn_cache is not None:
             self.q_norm_weight = ttnn.as_tensor(
                 q_norm_torch,
@@ -288,6 +347,7 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper_replicate,
             )
 
+        _compute_grid_sdpa = device.compute_with_storage_grid_size()
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -295,8 +355,8 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        # Manual fp32 BMM chain (decode + masked prefill on non-N150).
-        if not self._n150:
+        # Manual fp32 BMM chain — only reachable via QWEN3_TTS_TALKER_MANUAL_SDPA=1.
+        if not self._fused_sdpa:
             self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
@@ -306,8 +366,7 @@ class Attention(LightweightModule):
 
         # Fused SDPA. HiFi4 on bf16 Q/K/V: k_norm gain ≈ 68 amplifies K to ~±260,
         # so the multiply needs the full bf16 mantissa. fp32_dest_acc_en keeps
-        # softmax + matmul accumulation in fp32. N150 uses this for every path;
-        # other cards keep it for causal prefill only.
+        # softmax + matmul accumulation in fp32. Used for every path on every SKU.
         self.sdpa_prefill_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -322,6 +381,13 @@ class Attention(LightweightModule):
             q_chunk_size=64,
             k_chunk_size=64,
         )
+        # Decode attends one query row to the whole KV cache, so that config is wrong
+        # twice over: q_chunk_size=64 pads the single query tile to two and doubles
+        # every chunk (82 -> 38 us at kv=352), and k_chunk_size=64 leaves 6 chunks
+        # where one exact-divisor chunk costs 26.8 us. Keyed by cache length; a
+        # program config is a host-side object, so building it lazily is trace-safe.
+        self._decode_sdpa_grid = (_compute_grid_sdpa.x, _compute_grid_sdpa.y)
+        self._decode_sdpa_progcfg_by_k = {}
 
         # Sharded transformation matrix for the decode-mode RoPE kernel. Same 32x32 matrix
         # as the prefill one, different memory config — built here so it exists before any
@@ -575,6 +641,19 @@ class Attention(LightweightModule):
         # Backwards-compat alias for any callers still expecting the merged name.
         self.paged_input_mem_config = self.paged_k_input_mem_config
 
+    def _decode_sdpa_program_config(self, k_len: int):
+        """Cached decode SDPA program config for a ``k_len`` KV cache."""
+        pc = self._decode_sdpa_progcfg_by_k.get(k_len)
+        if pc is None:
+            pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self._decode_sdpa_grid,
+                exp_approx_mode=False,
+                q_chunk_size=ttnn.TILE_SIZE,
+                k_chunk_size=decode_sdpa_k_chunk(k_len),
+            )
+            self._decode_sdpa_progcfg_by_k[k_len] = pc
+        return pc
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -621,6 +700,9 @@ class Attention(LightweightModule):
         batch_size = x.shape[0]
         is_decode = mode == "decode"
         seq_len = x.shape[2]
+        # The graph server.py captures: device-side position, K/V written by
+        # paged_fused_update_cache, attention over the whole cache.
+        _traced_decode = is_decode and seq_len == 1 and cur_pos_tensor is not None and kv_cache is not None
         if is_decode or seq_len == 1:
             wqkv_progcfg = self._decode_wqkv_progcfg
             wo_progcfg = self._decode_wo_progcfg
@@ -666,7 +748,10 @@ class Attention(LightweightModule):
                 xqkv = ttnn.to_memory_config(xqkv_sharded, _qkv_split_in_memcfg)
                 ttnn.deallocate(xqkv_sharded)
                 xqkv_already_sharded_for_split = True
-            elif self._n150 and self._decode_wqkv_n_padded != self._fused_qkv:
+            elif self._decode_wqkv_n_padded != self._fused_qkv:
+                # Slice the padded QKV N (WH pads 4096->4224 / 2048->2304 for the 12
+                # DRAM banks) straight into the nlp_create_qkv_heads shard spec: drops
+                # both the S->I and the I->S the L1-interleaved route needs.
                 xqkv = ttnn.slice(
                     xqkv_sharded,
                     [0, 0, 0, 0],
@@ -731,13 +816,19 @@ class Attention(LightweightModule):
             )
             ttnn.deallocate(xqkv_for_split)
             # q_norm / k_norm / rotary_embedding_llama expect L1_INTERLEAVED
-            # (rms_norm rejects HEIGHT_SHARDED).
+            # (rms_norm rejects HEIGHT_SHARDED — verified, not assumed).
             q = ttnn.to_memory_config(q_sharded, ttnn.L1_MEMORY_CONFIG)
             k = ttnn.to_memory_config(k_sharded, ttnn.L1_MEMORY_CONFIG)
-            v = ttnn.to_memory_config(v_sharded, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(q_sharded)
             ttnn.deallocate(k_sharded)
-            ttnn.deallocate(v_sharded)
+            if _traced_decode:
+                # V skips both norm and RoPE: its only consumer is the transpose into
+                # the paged-cache layout, and transpose does take HEIGHT_SHARDED
+                # (bit-exact vs the interleaved route), so this S->I is dead weight.
+                v = v_sharded
+            else:
+                v = ttnn.to_memory_config(v_sharded, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(v_sharded)
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv,
@@ -774,6 +865,10 @@ class Attention(LightweightModule):
         # This avoids per-call reshape/permute/reshape churn in decode/prefill.
         # apply_rope_qk picks the decode-mode kernel at seq==1 (bit-identical, ~3x cheaper
         # per layer) and the prefill kernel otherwise.
+        # Traced decode writes K straight to the cache, and paged_update_cache wants
+        # exactly the decode-RoPE output layout ([1, 1, kv_heads, dim] height-sharded on
+        # one core). Ask for it and the transpose-back plus our own transpose both go.
+        _k_in_cache_layout = _traced_decode and self._decode_trans_mat is not None and self.num_heads <= 32
         q, k = apply_rope_qk(
             q,
             k,
@@ -784,6 +879,7 @@ class Attention(LightweightModule):
             decode_trans_mat=self._decode_trans_mat,
             compute_kernel_config=self.rope_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            k_keep_decode_layout=_k_in_cache_layout,
         )
         # Keep Q/K in interleaved layout after RoPE.
 
@@ -808,9 +904,19 @@ class Attention(LightweightModule):
                     # paged_update_cache requires; eliminates a separate I→S per K/V.
                     # K and V land on different cores (paged_fused_update_cache parallelizes
                     # across them and rejects overlapping shard grids).
-                    k_paged_hs = ttnn.transpose(k, 1, 2, memory_config=self.paged_k_input_mem_config)
+                    if _k_in_cache_layout:
+                        # RoPE already produced [1, 1, kv_heads, dim] — normally in this
+                        # exact memcfg, so no op at all; a reshard only if that ever drifts
+                        # (transposing again here would undo the layout, not reach it).
+                        if k.memory_config() == self.paged_k_input_mem_config:
+                            k_paged_hs = k
+                        else:
+                            k_paged_hs = ttnn.to_memory_config(k, self.paged_k_input_mem_config)
+                            ttnn.deallocate(k)
+                    else:
+                        k_paged_hs = ttnn.transpose(k, 1, 2, memory_config=self.paged_k_input_mem_config)
+                        ttnn.deallocate(k)
                     v_paged_hs = ttnn.transpose(v, 1, 2, memory_config=self.paged_v_input_mem_config)
-                    ttnn.deallocate(k)
                     ttnn.deallocate(v)
                     # Typecast K/V to cache dtype if cache is higher precision (e.g. fp32).
                     # paged_fused_update_cache requires matching dtypes between input and cache.
@@ -911,12 +1017,13 @@ class Attention(LightweightModule):
 
             updated_kv_cache = (k_cache, v_cache)
 
-        # N150: fused SDPA on every path (GQA-native, no repeat_interleave).
-        # Other cards: fused causal prefill only; decode / custom masks stay on
-        # the manual fp32 BMM chain.
+        # Fused SDPA on every path: GQA-native, so no repeat_interleave, and bf16
+        # throughout, so no Q/K/V bf16<->fp32 hops. On the N300 deployed decode window
+        # that chain was 11 ops / 134 us of a 551 us layer. The `else` below is the
+        # pre-fusion graph, kept for QWEN3_TTS_TALKER_MANUAL_SDPA=1.
         _q_seq = int(q.shape[2])
         _k_seq_inner = int(k_for_attn.shape[2])
-        if self._n150:
+        if self._fused_sdpa:
             _explicit_mask = (
                 decode_attn_mask
                 if decode_attn_mask is not None
@@ -926,16 +1033,27 @@ class Attention(LightweightModule):
             )
             _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
             _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)
-            _sdpa_out_memcfg = _prefill_nlp["concat_in"] if _prefill_nlp is not None else ttnn.L1_MEMORY_CONFIG
+            # SDPA accepts a height-sharded output, and nlp_concat_heads' input spec is
+            # exactly that (one head per core) — write it directly instead of I2S'ing.
+            if _prefill_nlp is not None:
+                _sdpa_out_memcfg = _prefill_nlp["concat_in"]
+            elif is_decode and _q_seq == 1:
+                # Matches sharded_concat_decode below, which is what consumes this spec.
+                _sdpa_out_memcfg = self._decode_concat_heads_in_memcfg
+            else:
+                _sdpa_out_memcfg = ttnn.L1_MEMORY_CONFIG
+            _sdpa_progcfg = (
+                self._decode_sdpa_program_config(_k_seq_inner) if _q_seq == 1 else self.sdpa_prefill_program_config
+            )
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k_for_attn,
                 v_for_attn,
                 attn_mask=_explicit_mask,
                 is_causal=_use_causal,
-                scale=self.scale,
+                scale=self._sdpa_scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
-                program_config=self.sdpa_prefill_program_config,
+                program_config=_sdpa_progcfg,
                 memory_config=_sdpa_out_memcfg,
             )
             ttnn.deallocate(q)
@@ -1097,24 +1215,11 @@ class Attention(LightweightModule):
             if wo_n_unpadded:
                 output = out_sharded
             else:
-                output_padded = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(out_sharded)
-                output = ttnn.slice(
-                    output_padded,
-                    [0, 0, 0, 0],
-                    [
-                        output_padded.shape[0],
-                        output_padded.shape[1],
-                        output_padded.shape[2],
-                        self.hidden_size,
-                    ],
-                    memory_config=(
-                        self._decode_residual_memcfg
-                        if self._decode_residual_memcfg is not None
-                        else ttnn.L1_MEMORY_CONFIG
-                    ),
+                output = unpad_dram_sharded_out(
+                    out_sharded,
+                    self.hidden_size,
+                    self._decode_residual_memcfg if self._decode_residual_memcfg is not None else ttnn.L1_MEMORY_CONFIG,
                 )
-                ttnn.deallocate(output_padded)
         else:
             output = ttnn.linear(
                 attn_output,
