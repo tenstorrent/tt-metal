@@ -776,6 +776,7 @@ def load_captured_routing(
         # Lazy import: transformer_helpers imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
+        # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
         if model not in {"dsv3", "kimi26", "glm52"}:
             raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
 

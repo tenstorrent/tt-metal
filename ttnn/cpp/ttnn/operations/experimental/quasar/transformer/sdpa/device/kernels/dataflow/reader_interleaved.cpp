@@ -18,7 +18,7 @@
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
-// Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
+// Fetch a KV chunk into L1 for forwarding. No DFB lifecycle — caller manages
 // reserve_back / push_back. Single read barrier at end for lower latency.
 template <uint32_t tile_bytes, bool transpose, typename ReaderType>
 FORCE_INLINE void read_chunk_for_forwarding(
@@ -100,7 +100,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr bool mcast_enabled = get_arg(args::mcast_enabled) == 1;
     constexpr bool use_zigzag_balancing = get_arg(args::use_zigzag_balancing) == 1;
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from cu_window_seqlens,
-    // streams only that range, and feeds it to compute over a ctrl CB.
+    // streams only that range, and feeds it to compute over a ctrl DFB.
     constexpr bool use_windowed_narrowing = get_arg(args::use_windowed_narrowing) == 1;
 
     // Tensor base addresses are supplied by TensorBindings (tensor::*), not runtime args.
@@ -310,7 +310,7 @@ void kernel_main() {
     }
 #endif
 
-    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own CB
+    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own DFB
     // with its own producer contract), resolving the per-device Q-offset override first so the 4-byte read
     // can stage through the same landing spot before the full array overwrites it.
     [[maybe_unused]] volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
@@ -356,7 +356,7 @@ void kernel_main() {
         // Global Q scheduling: iterate over a linear range of B*NQH*q_num_chunks chunks.
         // - per_head_q_iter resets on (nb, nq) transition: chain forwarding's
         //   `q_iter < next_core_q_chunks` gate expects this (chains are non-causal only).
-        // - is_chunked: page-table read on nb transition, single-entry CB rotated forward.
+        // - is_chunked: page-table read on nb transition, single-entry DFB rotated forward.
         // - use_attention_sink: pushed every iter, since compute pops Sq_chunk_t per
         //   sdpa_inner_loop call and under global_q each iter is exactly one call.
         uint32_t prev_nb = static_cast<uint32_t>(-1);
@@ -380,11 +380,12 @@ void kernel_main() {
                         dfb_page_table.pop_front(1);
                     }
                     dfb_page_table.reserve_back(1);
-                    // Inlined page-table read. The legacy shared helper read_page_table_for_batch (in
-                    // dataflow_common.hpp) takes a TensorAccessorArgs + raw address; a tensor:: binding
-                    // token cannot cross into that shared header, so the read is inlined here against the
-                    // page_table TensorBinding. The redundant page-size 3rd accessor arg is dropped (the
-                    // binding supplies the aligned page size); page_table_stick_size remains the read size.
+                    // Inlined page-table read. It is kept here rather than in a shared dataflow_common.hpp
+                    // helper because such a helper would take a TensorAccessorArgs + raw address, and a
+                    // tensor:: binding token cannot cross into a shared header -- so the read is inlined
+                    // against the page_table TensorBinding. The redundant page-size 3rd accessor arg is
+                    // dropped (the binding supplies the aligned page size); page_table_stick_size remains
+                    // the read size.
                     uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(
@@ -431,8 +432,8 @@ void kernel_main() {
             const uint32_t q_iter = per_head_q_iter;
             ++per_head_q_iter;
 
-            // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl CB
-            // BEFORE any blocking CB reserve, so compute learns its bounds even while this reader is
+            // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl DFB
+            // BEFORE any blocking DFB reserve, so compute learns its bounds even while this reader is
             // parked on dfb_k space. The writer self-computes the same range from the same tensor.
             [[maybe_unused]] uint32_t windowed_k_lo = 0;
             [[maybe_unused]] uint32_t windowed_k_hi = k_num_chunks;
@@ -482,7 +483,7 @@ void kernel_main() {
             if constexpr (is_causal) {
                 // Clamp to total K-tile extent (Skt = k_num_chunks * Sk_chunk_t). Without
                 // this, when Q-chunk extends past K (e.g., Sq_chunk_t > k_num_chunks*Sk_chunk_t),
-                // the K-loop pushes more chunks than compute consumes → CB deadlock.
+                // the K-loop pushes more chunks than compute consumes → DFB deadlock.
                 const uint32_t q_high_unclamped = q_low_idx + Sq_chunk_t;
                 q_high_idx = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {

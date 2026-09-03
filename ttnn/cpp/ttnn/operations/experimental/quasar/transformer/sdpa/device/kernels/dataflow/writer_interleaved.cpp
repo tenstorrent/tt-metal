@@ -93,7 +93,7 @@ void kernel_main() {
     constexpr auto dfb_chunk_start_idx = dfb::out;  // placeholder; chunk-start tensor path inactive
 #endif
 #ifdef WINDOWED_Q_OFFSET_TENSOR
-    // Dedicated 1-tile CB for the per-device Q-offset tensor (self-loop; only referenced behind this
+    // Dedicated 1-tile DFB for the per-device Q-offset tensor (self-loop; only referenced behind this
     // gate, so no placeholder alias is needed).
     constexpr auto dfb_windowed_q_offset = dfb::windowed_q_offset;
 #endif
@@ -140,7 +140,7 @@ void kernel_main() {
         noc.async_read(
             cu_window_reader, CoreLocalMem<uint32_t>(dfb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
         noc.async_read_barrier();
-        // Per-device Q origin, if supplied as a tensor: lands in its own dedicated CB (every other CB
+        // Per-device Q origin, if supplied as a tensor: lands in its own dedicated DFB (every other DFB
         // here has a producer/consumer contract with another kernel that a writer-side reserve would
         // break). Its value overrides the scalar q_tok_offset.
 #ifdef WINDOWED_Q_OFFSET_TENSOR
