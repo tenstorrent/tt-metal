@@ -306,7 +306,8 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-    try:
+
+    def try_direct():
         return _depthwise_tap_conv1d(
             x_BTC,
             weight,
@@ -324,48 +325,73 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             wkey=wkey,
             prepared=prepared,
         )
-    except RuntimeError as exc:
+
+    def try_chunk(chunk):
         # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
         # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
         # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration. Its error text is not a stable API, so any RuntimeError takes a fallback.
-        #
-        # Before giving up, retry on channel slices. The failure is the slicer running out of L1: a
+        # configuration for the direct form. The failure is the slicer running out of L1: a
         # depthwise conv1d lays the K sticks out contiguously, so the activation block is C*K wide
-        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and the
-        # filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops against
-        # MAC's 3K-1, on a faster op.
-        for chunk in (128, 64, 32):
-            if C % chunk or chunk >= C:
-                continue
-            try:
-                out = _depthwise_tap_conv1d_chunked(
-                    x_BTC,
-                    taps,
-                    stride,
-                    B=B,
-                    C=C,
-                    T_pad=T_pad,
-                    T_out=T_out,
-                    K=K,
-                    chunk=chunk,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    conv_config=conv_config,
-                    compute_config=cache["cc"],
-                    cache=cache,
-                )
-                logger.warning(
-                    f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
-                    f"using {C // chunk} chunks of {chunk}"
-                )
-                return out
-            except RuntimeError:
-                continue
+        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and
+        # the filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops
+        # against MAC's 3K-1, on a faster op.
+        if C % chunk or chunk >= C:
+            raise RuntimeError(f"chunk {chunk} does not divide C={C}")
+        out = _depthwise_tap_conv1d_chunked(
+            x_BTC,
+            taps,
+            stride,
+            B=B,
+            C=C,
+            T_pad=T_pad,
+            T_out=T_out,
+            K=K,
+            chunk=chunk,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=cache["cc"],
+            cache=cache,
+        )
+        logger.warning(
+            f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
+            f"using {C // chunk} chunks of {chunk}"
+        )
+        return out
+
+    def try_mac(exc):
         # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
         # all -- slower, but bit-equal to the conv1d path in fp32, so purely an availability fallback.
-        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})")
+        # `exc` is None when MAC is a cached winner tried before anything else has failed this call.
+        reason = f" ({exc})" if exc is not None else ""
+        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+
+    # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
+    # winner found in warmup and try it first, skipping the dead ends that preceded it. A miss still
+    # falls through the whole chain, so this can't fail a call that would otherwise succeed. The
+    # slicer's error text is not a stable API, so any RuntimeError just tries the next candidate.
+    candidates = ["direct", 128, 64, 32, "mac"]
+    path_key = ("tap_path", C, stride, K)
+    known = cache.get(path_key)
+    if known in candidates:
+        candidates.insert(0, candidates.pop(candidates.index(known)))
+
+    last_exc = None
+    for candidate in candidates:
+        try:
+            if candidate == "direct":
+                out = try_direct()
+            elif candidate == "mac":
+                out = try_mac(last_exc)
+            else:
+                out = try_chunk(candidate)
+        except RuntimeError as exc:
+            last_exc = exc
+            continue
+        cache[path_key] = candidate
+        return out
+    raise last_exc
 
 
 def _depthwise_tap_conv1d_chunked(
@@ -510,6 +536,12 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
+# T-shard alignment is `factor`, not `32 * factor`: the coarser alignment only existed because
+# TILE-layout mesh_partition needs a tile-aligned offset, but partitioning is done in ROW_MAJOR
+# (fine at any offset) and every caller untilized right after. The tighter pad (49 -> 1 rows at
+# T=207, factor 8) also lets `_set_tpad_tail` fix just the pad suffix in place (`_set_tpad_tail_local`).
+
+
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """Partition T across the mesh (inverse of _all_gather_t)."""
     if isinstance(parallel_config, AudioTParallelConfig):
@@ -579,9 +611,35 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-            mt = _partition_t(mt, parallel_config)
-            pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
+            # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
+            # partition constraint entirely.
+            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+            pair.append(_partition_t(mt, parallel_config))
+        cached = tuple(pair)
+        cache[key] = cached
+    return cached
+
+
+def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image, local_T, cache):
+    """The last ``tpad_image`` local rows of the validity mask and its complement.
+
+    Only the final shard(s) carry pad rows, so away from them the suffix mask is all ones and
+    multiplying by it is a no-op -- which is what lets one mesh-uniform local range stand in for a
+    pad region that sits at a different global offset on every shard.
+    """
+    key = ("suffix", global_T, tpad_image, local_T, dtype)
+    cached = cache.get(key)
+    if cached is None:
+        m = torch.ones(1, global_T, 1, dtype=torch.float32)
+        m[:, global_T - tpad_image :, :] = 0.0
+        # Reshape to per-shard rows, keep each shard's trailing `tpad_image` rows, and restack so the
+        # mesh partition below hands every device its own suffix.
+        per_shard = m.reshape(1, global_T // local_T, local_T, 1)[:, :, local_T - tpad_image :, :]
+        suffix = per_shard.reshape(1, -1, 1)
+        pair = []
+        for t in (suffix, 1.0 - suffix):
+            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+            pair.append(_partition_t(mt, parallel_config))
         cached = tuple(pair)
         cache[key] = cached
     return cached
@@ -595,6 +653,12 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
+    if tpad_image < local_T:
+        # The pad fits inside one shard's tail, so fix just those rows in place instead of
+        # multiplying every body row by 1.0.
+        return _set_tpad_tail_local(
+            x_BTC, tpad_image, mode=mode, mesh_device=mesh_device, parallel_config=parallel_config, cache=cache
+        )
     M, inv = _tpad_mask(
         mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
     )
@@ -614,6 +678,44 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     ttnn.deallocate(xm)
     ttnn.deallocate(fill)
     return out
+
+
+def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+    """``_set_tpad_tail`` restricted to the pad suffix, written back in place.
+
+    Slices the suffix, fixes it, and writes it back with `ttnn.experimental.slice_write`
+    (bit-identical to the full-tensor multiply, cheaper in ROW_MAJOR). Safe in place because every
+    op with a receptive field runs its own tail-set first (no stale reads) and the pad is cropped
+    from the final waveform. The caller's tensor is mutated and returned, so its
+    `if xs is not x: deallocate(xs)` correctly skips the free.
+    """
+    B, local_T, C = x_BTC.shape
+    global_T = local_T * parallel_config.factor
+    assert tpad_image < global_T, f"pad image ({tpad_image}) leaves no real rows (global T {global_T})"
+    if mode not in ("zeros", "replicate"):
+        raise ValueError(f"unknown mode {mode!r}")
+    begin = local_T - tpad_image
+    M_suf, inv_suf = _tpad_mask_suffix(
+        mesh_device, parallel_config, x_BTC.get_dtype(), global_T, tpad_image, local_T, cache
+    )
+
+    suffix = ttnn.slice(x_BTC, [0, begin, 0], [B, local_T, C])
+    fixed = ttnn.multiply(suffix, M_suf)
+    ttnn.deallocate(suffix)
+    if mode == "replicate":
+        # The real-last row sits just before the pad on the shard that holds it; on every other shard
+        # inv_suf is zero, so whichever row this picks up there contributes nothing.
+        idx = (global_T - tpad_image - 1) % local_T
+        last = ttnn.slice(x_BTC, [0, idx, 0], [B, idx + 1, C])
+        fill = ttnn.multiply(last, inv_suf)
+        ttnn.deallocate(last)
+        combined = ttnn.add(fixed, fill)
+        ttnn.deallocate(fixed)
+        ttnn.deallocate(fill)
+        fixed = combined
+    ttnn.experimental.slice_write(fixed, x_BTC, [0, begin, 0], [B, local_T, C], [1, 1, 1])
+    ttnn.deallocate(fixed)
+    return x_BTC
 
 
 def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1198,9 +1300,7 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-            y = _partition_t(y, self.parallel_config)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+            y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         if ch_axis is not None:
             # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.

@@ -2,10 +2,43 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 from models.tt_transformers.tt.common import Mode
+
+
+def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
+    """Choose the Galaxy decode RMSNorm grid as (y, x).
+
+    Returns the legacy ``(min(4, dim // 4 // 32 // 8), 8)`` grid for every dim it
+    already handled. Only dims that grid cannot tile-align get an override, and a
+    dim with no tile-aligned override keeps the legacy grid with a warning rather
+    than raising -- ``gather_in_mem_cfg`` / ``ln_prg_cfg`` are consumed only on the
+    sharded decode path, so raising here would break prefill-only Galaxy runs that
+    never read them (e.g. every Gemma variant).
+    """
+    hidden_size_per_device = dim // 4
+    legacy_core_grid = (min(4, hidden_size_per_device // 32 // 8), 8)
+
+    if hidden_size_per_device == 1280:
+        # Qwen's silicon-validated Galaxy layout: 10 cores with four tiles per shard.
+        # The legacy grid would be (4, 8) = 32 cores, which cannot tile-align 1280.
+        core_grid = (5, 2)
+    else:
+        core_grid = legacy_core_grid
+
+    num_cores = core_grid[0] * core_grid[1]
+    if num_cores == 0 or hidden_size_per_device % (num_cores * 32) != 0:
+        logger.warning(
+            f"Galaxy distributed norm hidden size {hidden_size_per_device} is not tile-shardable "
+            f"across grid {core_grid}; keeping the legacy grid {legacy_core_grid}. The sharded "
+            "decode norm config will be misaligned if it is used."
+        )
+        return legacy_core_grid
+    return core_grid
 
 
 class DistributedNorm(LightweightModule):
@@ -20,10 +53,7 @@ class DistributedNorm(LightweightModule):
         self.enable_all_gather = enable_all_gather
 
         if TG:
-            core_grid_ln = (
-                min(4, args.dim // 4 // 32 // 8),
-                8,
-            )  # dividing by 4 and 8 for num_cols and num_rows of mesh, and 32 for tile size
+            core_grid_ln = galaxy_distributed_norm_core_grid(args.dim)
             num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
             hidden_size_per_device_distributed_ln = args.dim // 4
             self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(

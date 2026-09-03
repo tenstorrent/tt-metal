@@ -1298,13 +1298,18 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
     SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
+    // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
+    // write-before-atomic without flushing the write pipeline.
+    ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
+
     uint64_t write_noc_addr =
         get_noc_addr_helper(fields.write_fields.dst_noc_encoding, fields.write_fields.dst_address);
     uint64_t atomic_noc_addr =
         get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val},
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
         fields.write_fields.payload_size_bytes);
 
     config->noc_fields_.write_atomic_inc_fields = fields;
@@ -1321,7 +1326,8 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
         get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val},
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
         fields.write_fields.payload_size_bytes);
 }
 
