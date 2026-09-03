@@ -21,6 +21,16 @@
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
 #
+# Multi-device tests (one entry point, no second script to remember):
+#   --op <name> / --topology <name> / --runtime <sim|hardware>
+#               Delegate to scripts/run_multidevice_sim_pytest.py, which owns the
+#               per-topology environment (mesh shape, fabric config, sim vs real
+#               silicon), FAST dispatch (fabric requires it), and its own
+#               wall-clock hang backstop. All remaining args pass through.
+#   Auto-route: a test path under eval/golden_tests/<op>/ whose <op> appears in
+#               scripts/multidevice_sim_topologies.yaml applies_to_ops is routed
+#               the same way without any flag. Single-chip behavior is unchanged.
+#
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
 #   --dev    - Debug mode with watcher, asserts, and triage (see above).
@@ -52,6 +62,7 @@ fi
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+MULTIDEV_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -62,11 +73,38 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        --op|--topology|--runtime)
+            # Multi-device selector: collect for the topology-aware runner.
+            if [[ $# -lt 2 ]]; then
+                echo "SAFE_PYTEST_ERROR: $1 requires a value" >&2
+                exit 3
+            fi
+            MULTIDEV_ARGS+=("$1" "$2")
+            shift 2
+            ;;
         *)
             break
             ;;
     esac
 done
+
+# --- Multi-device routing: one entry point for single- and multi-chip tests ---
+# Explicit --op/--topology/--runtime, or a test path inside a multi-device op's golden
+# suite, delegates to the topology-aware runner. It owns per-topology env + FAST
+# dispatch + its own hang backstop, so none of the single-chip machinery below
+# (slow-dispatch default, flock, dispatch-timeout triage) applies to that path.
+if [[ ${#MULTIDEV_ARGS[@]} -eq 0 && $# -gt 0 ]]; then
+    if [[ "$1" =~ eval/golden_tests/([A-Za-z0-9_]+)/ ]]; then
+        _md_op="${BASH_REMATCH[1]}"
+        if grep -Eq "applies_to_ops:.*\b${_md_op}\b" "${REPO_DIR}/scripts/multidevice_sim_topologies.yaml" 2>/dev/null; then
+            echo "SAFE_PYTEST: multi-device op '${_md_op}' detected -> topology-aware runner" >&2
+            MULTIDEV_ARGS+=(--op "${_md_op}")
+        fi
+    fi
+fi
+if [[ ${#MULTIDEV_ARGS[@]} -gt 0 ]]; then
+    exec python3 "${REPO_DIR}/scripts/run_multidevice_sim_pytest.py" "${MULTIDEV_ARGS[@]}" -- "$@"
+fi
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
