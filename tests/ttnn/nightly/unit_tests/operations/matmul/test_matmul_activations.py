@@ -310,7 +310,7 @@ def test_matmul_with_fused_activations(
         # activation with its custom parameters             atol     rtol     frob      pcc
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 3.0), 3.7732, 0.0046, 0.1338, 0.98297),  # Custom max=3.0
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 3.7732, 0.0046, 0.1608, 0.98708),  # Custom min/max
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1), 4.3585, 0.0358, 0.0862, 0.99518),  # Custom alpha/lambda
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1), 5.6739, 0.0358, 0.0854, 0.99512),  # Custom scale/alpha
         (
             ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),
             3.7732,
@@ -627,14 +627,14 @@ def apply_activation_to_reference(tensor, activation):
         max_val = params[1] if len(params) > 1 else 1.0
         return torch.nn.functional.hardtanh(tensor, min_val=min_val, max_val=max_val)
     elif op_type == ttnn.UnaryOpType.SELU:
-        # The fused activation interface documents the first parameter as alpha
-        # and the second as the scale, so the reference reads them in that
-        # order. With no parameters the standard SELU constants apply. SELU is
-        # scale * (max(0, x) + min(0, alpha * (exp(x) - 1))).
+        # The first parameter is the scale and the second is alpha, the order the
+        # kernel takes them in. With no parameters the standard SELU constants
+        # apply. SELU is scale * x for x >= 0, and scale * alpha * (exp(x) - 1)
+        # for x < 0.
         if not params:
             return torch.nn.functional.selu(tensor)
-        alpha = params[0]
-        scale = params[1] if len(params) > 1 else 1.0507009873554805
+        scale = params[0]
+        alpha = params[1] if len(params) > 1 else 1.6732632423543772
         return scale * torch.where(tensor > 0, tensor, alpha * (torch.exp(tensor) - 1.0))
     elif op_type == ttnn.UnaryOpType.SOFTPLUS:
         beta = params[0] if params else 1.0
@@ -990,8 +990,8 @@ def test_special_activation_combinations(
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 1.0), 0.0724, 0.0358, 0.0449, 0.98184),
         # Custom min/max
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 0.2897, 0.0046, 0.0959, 0.99541),
-        # Custom alpha/lambda
-        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2), 0.4854, 0.0358, 0.1037, 0.99462),
+        # Custom scale/alpha
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2), 0.4854, 0.0358, 0.1033, 0.99463),
         # Custom beta/threshold
         (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0), 0.2887, 0.0358, 0.0716, 0.99326),
     ],
