@@ -37,8 +37,10 @@
 
 // l1_client event counter: a single 32-bit saturating clear-on-read CSR fed by a count-time mux,
 // selected as subport*8 + event via PROFILE_PERF_COUNTERS_L1_SEL. Subports: 0-3 TRISC, 4 THCON,
-// 5-24 unpacker read ports, 25-36 packer write ports. The 8 event-bit meanings are not confirmed
-// against the L1 RTL yet, so the host labels them by raw event index.
+// 5-24 unpacker read ports, 25-36 packer write ports. Events (A0 L1 RTL): 0 unused, 1 SBank pop,
+// 2/3 issue stall/work carries, 4/5 flex stall/work carries, 6 pending-request carry, 7 order
+// FIFO active. Carry events pulse once per lane count, and all depend on the per-subport
+// perf_cnt_enable in the client CSR config.
 #define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL                                  \
     (LOCAL_REGS_BASE + (NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR - \
                         NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR))

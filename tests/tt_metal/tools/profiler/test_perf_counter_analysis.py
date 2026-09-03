@@ -82,7 +82,7 @@ QUASAR_CAPTURE_TYPES = (
         "SRCA_STALL_MATH",
     ]
     + [f"THREAD_INSTRUCTIONS_{t}" for t in range(4)]
-    + ["L1_CLIENT_UNPACK3_EVENT0"]
+    + ["L1_CLIENT_UNPACK3_SBANK_POP"]
 )
 
 QUASAR_EXPECTED_METRICS = [
@@ -93,7 +93,7 @@ QUASAR_EXPECTED_METRICS = [
     "XSEARCH Instrn Avail Rate T0",
     "INSTISSUE Instrn Avail Rate T3",
     "CFG Instrn Avail Rate T3",
-    "L1_CLIENT_UNPACK3_EVENT0 Rate",
+    "L1_CLIENT_UNPACK3_SBANK_POP Rate",
 ]
 
 
@@ -131,13 +131,13 @@ def test_counter_type_names_match_enum():
 
 
 def test_l1_client_labels_cover_all_subport_ranges():
-    assert quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_EVENT0"
-    assert quasar_l1_client_label(3 * 8 + 5) == "L1_CLIENT_TRISC3_EVENT5"
-    assert quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_EVENT7"
-    assert quasar_l1_client_label(5 * 8) == "L1_CLIENT_UNPACK0_EVENT0"
-    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK19_EVENT3"
-    assert quasar_l1_client_label(25 * 8) == "L1_CLIENT_PACK0_EVENT0"
-    assert quasar_l1_client_label(36 * 8 + 7) == "L1_CLIENT_PACK11_EVENT7"
+    assert quasar_l1_client_label(0) == "L1_CLIENT_TRISC0_UNUSED"
+    assert quasar_l1_client_label(3 * 8 + 5) == "L1_CLIENT_TRISC3_FLEX_WORK_CARRY"
+    assert quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"
+    assert quasar_l1_client_label(5 * 8 + 1) == "L1_CLIENT_UNPACK0_SBANK_POP"
+    assert quasar_l1_client_label(24 * 8 + 3) == "L1_CLIENT_UNPACK19_ISSUE_WORK_CARRY"
+    assert quasar_l1_client_label(25 * 8 + 2) == "L1_CLIENT_PACK0_ISSUE_STALL_CARRY"
+    assert quasar_l1_client_label(36 * 8 + 6) == "L1_CLIENT_PACK11_PENDING_REQS_CARRY"
 
 
 def test_quasar_capture_produces_quasar_metrics_per_op():
