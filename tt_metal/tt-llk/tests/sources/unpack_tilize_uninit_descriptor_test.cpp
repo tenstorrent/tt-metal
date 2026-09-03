@@ -31,8 +31,12 @@
 //          unconditionally, plus x_dim/z_dim=1 on the non-8-bit whole-tile path),
 //          so teardown must re-establish z_dim = tilize_num_faces. y_dim is still
 //          untouched.
-//   5. Both arches: `Tile_x_dim_cntx0` is owned by tilize init, so teardown must
-//      put the canonical face_r_dim-derived value back.
+//   5. Wormhole only: `Tile_x_dim_cntx0` is owned by tilize init, so teardown must
+//      put the canonical face_r_dim-derived value back. Deliberately NOT asserted on
+//      Blackhole: `_llk_unpack_tilize_uninit_wrapper_` hardcodes MAX_FACE_R_DIM there
+//      rather than threading this test's face_r_dim through, so the expected value
+//      would not correspond to the operand under test. The Blackhole assertions above
+//      cover the descriptor word, which is what this test exists for.
 
 #include <cstdint>
 
