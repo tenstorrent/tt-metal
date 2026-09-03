@@ -880,6 +880,56 @@ def _win_set(attempts, baseline_ms=None) -> set:
         return set()
 
 
+# THE MATH-FIDELITY RUNGS, ONE LIST. _fidelity_breakdown held it as a local so the ladder always
+# renders all four whether or not a mode carries ops; naming a peak back to its rung needs the same
+# list, and a second copy is how two orderings drift.
+_RUNGS = ["lofi", "hifi2", "hifi3", "hifi4"]
+
+
+def _rung_of_peak(peak_flops) -> str:
+    """Which fidelity rung a peak FLOP/s figure IS, or "" when it matches none.
+
+    The ladder already prices every rung; this answers the inverse so a PINNED peak can be named
+    without a second table. Matched against the arch's own rung->peak map, so a model on different
+    silicon resolves against that silicon and no rung name is written here.
+    """
+    try:
+        from agent.environment import ARCH_FACTS
+        from agent.perf_target import chip_peak_flops as _cpf
+
+        if not peak_flops or float(peak_flops) <= 0:
+            return ""
+        _facts = ARCH_FACTS.get(str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()) or {}
+        for _r in _RUNGS:
+            _p = _cpf(_facts, _r)
+            if _p and abs(float(_p) - float(peak_flops)) < 1e9:
+                return _r
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _observed_rung(stage, profile) -> str:
+    """The rung THIS capture runs `stage` at, whatever is pinned. "" when the capture cannot say.
+
+    _peak_for_stage answers a different question and cannot be reused for this: when a per-stage peak
+    is pinned it returns that value with an EMPTY rung, so the name is available only on the path
+    where nothing is pinned. Reading its second element as "the rung in use" therefore reports the
+    pinned rung on some stages and the observed one on others, with nothing to tell them apart.
+    """
+    try:
+        _sb = ((profile or {}).get("stage_buckets") or {}).get(stage)
+        if not _sb:
+            return ""
+        _rows, _ = _fidelity_breakdown({"buckets": _sb})
+        if not _rows:
+            return ""
+        _top = max(_rows, key=lambda r: r[1])
+        return str(_top[0]) if _top[1] else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
     """(peak FLOP/s, dominant fidelity) for ONE stage, or (0.0, "") when the capture did not mark it.
 
@@ -916,6 +966,29 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
         return 0.0, ""
 
 
+def _unit_key(unit) -> str:
+    """The UNIT an anchor is keyed by, given either the unit or the rate label built from it.
+
+    Anchors are written keyed on the UNIT -- perf_mcp._persist_throughput pins depth=snap["unit"],
+    which is "token" -- while the report carries the RATE label, "tok/s/u", because that is what the
+    column says. Handing the rate label to a lookup keyed on the unit misses, and misses SILENTLY:
+    the caller sees "nothing pinned" and falls back to the value it derived from the current build.
+
+    Measured on voxtral: the peak anchor holds 175.5 TFLOPS at depth "token" and every lookup passed
+    "tok/s/u", so the pinned ceiling was never applied and the roof recomputed itself from each new
+    capture -- the precise defect the anchor exists to prevent, and the comment at its call site
+    describes.
+
+    "tok" is the only abbreviation the rate builder introduces; every other unit reaches the label
+    whole, so the leading segment IS the unit.
+    """
+    u = str(unit or "").strip().lower()
+    if not u:
+        return "token"
+    seg = u.split("/")[0].strip()
+    return "token" if seg == "tok" else (seg or "token")
+
+
 def _pinned_peak_flops(unit, model: str = "", task: str = ""):
     """The pinned peak FLOP/s for this (model, task, unit), or None if nothing is pinned.
 
@@ -926,8 +999,7 @@ def _pinned_peak_flops(unit, model: str = "", task: str = ""):
     """
     try:
         led = _ledger()
-        d = str(unit or "token").strip().lower() or "token"
-        return led.anchor_value(led.KIND_PEAK_FLOPS, depth=d, model=model, task=task)
+        return led.anchor_value(led.KIND_PEAK_FLOPS, depth=_unit_key(unit), model=model, task=task)
     except Exception:  # noqa: BLE001
         return None
 
@@ -1870,6 +1942,17 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # One variable shared by three stacks was only ever a consequence of there being one number.
         _stage_peak, _stage_dom = _peak_for_stage(name, profile, model, task)
         _pk_use = _stage_peak or peak_flops
+        # THE PINNED peak for this stage, distinct from _stage_peak: _peak_for_stage returns the
+        # pinned value on one path and a capture-derived one on the other, and the caller cannot tell
+        # which it got. Only the anchor is a baseline.
+        _stage_pin = 0.0
+        try:
+            _led_p = _ledger().anchor_value(
+                _ledger().KIND_PEAK_FLOPS, depth=str(name or "").strip().lower(), model=model, task=task
+            )
+            _stage_pin = float(_led_p) if _led_p and float(_led_p) > 0 else 0.0
+        except Exception:  # noqa: BLE001
+            _stage_pin = 0.0
         comp_ms = ((flops / _pk_use) * 1000.0) if (flops and _pk_use > 0) else None
         # MEASURED FIRST, APPORTIONED SECOND -- which is what _roofline_stage_share's docstring has
         # always claimed and what the order here contradicted. The profile records what a stage
@@ -1928,6 +2011,20 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             # 38: encode, prefill and decode each resolved hifi4 independently and the caveat still
             # printed.
             "peak_stage": _stage_dom or "",
+            # THE PINNED RUNG AND THE OBSERVED ONE, SEPARATELY, on every stage. `peak_stage` cannot
+            # serve as either: it is empty exactly when a per-stage peak IS pinned, so it names the
+            # observed rung on unpinned stages and nothing on pinned ones. Reading it as "in use"
+            # therefore reported the starting rung on a run whose whole job was lowering fidelity --
+            # voxtral banked 7 fidelity wins and the ladder still marked HiFi4, a rung the finished
+            # capture records zero FLOPs at.
+            #
+            # baseline is named from the PINNED peak (per-stage anchor, else the whole-model one the
+            # ceiling is scored against) and stays put by design; now is named from THIS capture.
+            # Either may be "" -- an unpinned model has no baseline to state, an unmarked capture no
+            # observation -- and a blank column is the honest answer rather than the other one
+            # standing in for it.
+            "rung_baseline": _rung_of_peak(_stage_pin or _pinned_peak_flops(unit, model, task)),
+            "rung_now": _observed_rung(name, profile),
             # This build's observed read set beside the pinned one, so a dtype win shows as the
             # bytes genuinely falling rather than as the ceiling quietly following them down.
             "bytes_now": _b_now or None,
@@ -1984,7 +2081,7 @@ def _fidelity_breakdown(profile):
         # ALWAYS all four modes, present or not. A mode with no ops still states its peak, so the
         # reader sees the whole ladder the model could be sitting on rather than only where it
         # happens to sit today -- and a zero row is the visible answer to "what would HiFi4 cost".
-        order = ["lofi", "hifi2", "hifi3", "hifi4"]
+        order = list(_RUNGS)
         keys = order + [f for f in agg if f not in order]
         rows = [(f, agg.get(f, (0, 0.0))[0], (peaks.get(f) or 0.0) * cores, agg.get(f, (0, 0.0))[1]) for f in keys]
         return rows, sum(r[3] for r in rows)
@@ -2254,14 +2351,35 @@ def _roofline_tables(
         for _st_o, _rf_o in _cols:
             _own[_st_o] = str((_rf_o or {}).get("peak_stage") or "").strip().lower() or _in_use
 
-        def _cell(_st_c, _rf_c, _rung, _peak):
-            """This stage's cost at this rung, marked when it is the rung the stage runs at."""
-            _v = _n((_rf_c["flops"] / (_peak * 1e12)) * 1000.0)
-            return ("%s \u2190 in use" % _v) if _own.get(_st_c) == str(_rung) else _v
+        # BOTH RUNGS, ON EVERY STAGE. Where the ceiling was PINNED and where the build runs TODAY are
+        # different facts and a run that lowers fidelity separates them by design. One marker could
+        # only ever name one, and named the pinned one -- so voxtral's ladder marked HiFi4 on all
+        # three stacks after 7 fidelity wins had moved them to LoFi/HiFi2, a rung the finished capture
+        # records zero FLOPs at. Falls back to the previous single mark when a stage states only one
+        # of the two, so an unpinned model or an unmarked capture reads exactly as it did.
+        _base_r, _now_r = {}, {}
+        for _st_o, _rf_o in _cols:
+            _base_r[_st_o] = str((_rf_o or {}).get("rung_baseline") or "").strip().lower()
+            _now_r[_st_o] = str((_rf_o or {}).get("rung_now") or "").strip().lower()
 
-        # Widened from 18 so a marked cell does not overflow its column; the rule under the header is
-        # derived from the header itself, so it follows automatically.
-        _fr = " %-14s\u2502 %-18s" + "\u2502 %-20s" * len(_cols) + "\u2502 %s"
+        def _cell(_st_c, _rf_c, _rung, _peak):
+            """This stage's cost at this rung, marked with the rung it was pinned at and runs at."""
+            _v = _n((_rf_c["flops"] / (_peak * 1e12)) * 1000.0)
+            _b, _w = _base_r.get(_st_c) or "", _now_r.get(_st_c) or ""
+            if not (_b or _w):
+                return ("%s \u2190 in use" % _v) if _own.get(_st_c) == str(_rung) else _v
+            _is_b, _is_w = _b == str(_rung), _w == str(_rung)
+            if _is_b and _is_w:
+                return "%s \u2190 baseline+now" % _v
+            if _is_w:
+                return "%s \u2190 now" % _v
+            if _is_b:
+                return "%s \u2190 baseline" % _v
+            return _v
+
+        # Widened from 18, then from 20 when a marked cell began naming both the pinned rung and the
+        # observed one; the rule under the header derives from the header, so it follows.
+        _fr = " %-14s\u2502 %-18s" + "\u2502 %-22s" * len(_cols) + "\u2502 %s"
         _hdr = _fr % (("precision", "peak") + tuple("%s ms" % st for st, _ in _cols) + ("",))
         # THE FRAME FOLLOWS THE TABLE. All three rules were a flat W wide while the header grew with
         # the stage count and the column width, so a wide table overflowed its own frame by however
