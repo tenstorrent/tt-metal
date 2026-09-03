@@ -1649,7 +1649,9 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `d91df21262a` | FM-021: `in0_block_w` back to 4 after the readiness gates measured what it costs |
 | `3c1ff5dcbb0` | the FM-020/021/022 evidence sweep and the report rebuilt from it |
 | `486a011258e` | FM-023: the mid-loop sampling-mode capture, the refused request seed, four regenerated artifacts and the report updated from them |
-| (this commit) | records the SHA above |
+| `661f0f10db5` | records the SHA above and the stage's closing state |
+| `4fe87ba0060` | the batch-32 suite re-run against FM-023 (10 passed, no artifact moved) |
+| (this commit) | records the two SHAs above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
 against `13148176475` (round 4), `ca0b1330d38` (round 5) and
