@@ -22,6 +22,12 @@
 namespace ckernel {
 namespace sfpu {
 
+// Degree-2 polynomial refining 2**frac over frac in [0, 2^23]
+// (Moroz et al. 2022, Section 5).
+constexpr float EXP_21F_C0 = 1.0017248f;
+constexpr float EXP_21F_C1 = 7.839635491371155e-08f;
+constexpr float EXP_21F_C2 = 4.791750143340323e-15f;
+
 /*
  * _float_to_int32_positive_ use branch to handle special cases
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
@@ -69,7 +75,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -94,6 +100,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
  * @param val The input value (sfpi::vFloat vector), can be any floating point number
  *
  * @return sfpi::vFloat Result of exp(val)
+ *
+ * @tparam COEFFS_IN_PRGM_REGS Requires the caller's init to have loaded
+ *      vConstFloatPrgm1 = EXP_21F_C1 and vConstFloatPrgm2 = EXP_21F_C2, and to
+ *      keep them intact until the last call. _init_exponential_tti_bf16_ uses
+ *      the opposite assignment, so the two cannot be mixed.
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -134,13 +145,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
     if constexpr (COEFFS_IN_PRGM_REGS) {
-        // The degree-1/2 coefficients are fp32 (not bf16-encodable), so as immediates
-        // they cost two SFPLOADI per use per datum — sfpi never hoists volatile
-        // immediate loads. Callers that preload them into vConstFloatPrgm1/2 at init
-        // (sigmoid/silu; Prgm0 stays owned by sfpu_reciprocal's 2.0f) skip that cost.
-        frac = PolynomialEvaluator::eval(frac, 1.0017248f, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2);
+        frac = PolynomialEvaluator::eval(frac, EXP_21F_C0, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2);
     } else {
-        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+        frac = PolynomialEvaluator::eval(frac, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2);
     }
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
@@ -164,18 +171,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
  *
  * Requires _init_exponential_tti_bf16_() to have been called to configure
  * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
- *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
- *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *   - LREG12 = 1/ln2      (sfpi::vConstFloatPrgm0)
+ *   - LREG13 = EXP_21F_C2 (sfpi::vConstFloatPrgm1)
+ *
+ * The sfpi _sfpu_exp_21f_bf16_<COEFFS_IN_PRGM_REGS=true> above expects
+ * vConstFloatPrgm1 = EXP_21F_C1 instead, so the two preload conventions
+ * are mutually exclusive within one init.
  */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants. Loaded once before the loop.
     //
     //   LREG5 = 127.0f                      (bias term in z = x/ln2 + 127)
-    //   LREG6 = 7.839635491371155e-08f      (poly coeff c1)
-    //   LREG7 = 1.0017248f                  (poly coeff c0)
+    //   LREG6 = EXP_21F_C1
+    //   LREG7 = EXP_21F_C0                  (as fp16a 0x3c02 = 1.001953125)
     //   LREG12 = 1/ln2                      (programmable, set in init)
-    //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
+    //   LREG13 = EXP_21F_C2                 (programmable, set in init)
     //
     // In-loop scratch:
     //   LREG0 = val → integer-part work
@@ -1070,7 +1081,7 @@ void exp_init() {
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
             TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
 
-            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
+            // LREG13 = EXP_21F_C2 = 4.791750143340323e-15f (0x27aca418)
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
