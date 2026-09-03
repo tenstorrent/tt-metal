@@ -95,6 +95,10 @@ void kernel_main() {
     constexpr uint32_t dfb_xmm_id = dfb::xmm;
 #ifndef RMSNORM
     constexpr auto dfb_ex_id = dfb::ex;
+#else
+    // The LayerNorm-only input descriptor below is wrapped in Optional<false>, but its template arguments still need
+    // a valid DFB identifier when compiling the RMSNorm specialization.
+    constexpr auto dfb_ex_id = dfb_in_id;
 #endif
     constexpr auto dfb_ex2_id = dfb::ex2;
     constexpr auto dfb_xmm2_id = dfb::xmm2;

@@ -165,7 +165,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         DataflowBuffer dfb_in_rm_obj(dfb_in_rm_id);
-        tilize_all_blocks_to_cb<block_size>(dfb_in_rm_obj, dfb_in_obj, Wt);
+        tilize_all_blocks_to_dfb<block_size>(dfb_in_rm_obj, dfb_in_obj, Wt);
         // Re-init binary ops after tilize/untilize reconfiguration. compute_kernel_hw_startup is call-once;
         // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
 #ifdef FUSE_PRE_ADD
@@ -371,7 +371,7 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
         constexpr auto dfb_out_rm_id = dfb::out_rm;
         DataflowBuffer dfb_out_rm_obj(dfb_out_rm_id);
-        untilize_all_blocks_from_cb<block_size>(dfb_out_obj, dfb_out_rm_obj, Wt);
+        untilize_all_blocks_from_dfb<block_size>(dfb_out_obj, dfb_out_rm_obj, Wt);
 #endif
     }  // NCHt loop
     // The reduce scaler is generated once by the reader and reused (waited inside row_wise_mean)

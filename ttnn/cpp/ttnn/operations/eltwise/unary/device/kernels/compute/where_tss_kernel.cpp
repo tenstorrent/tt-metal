@@ -11,10 +11,18 @@
 
 namespace ckl = compute_kernel_lib;
 
-constexpr auto kWhereDF = static_cast<DataFormat>(get_compile_time_arg_val(0));
+#if defined(INP_INT32)
+constexpr auto kWhereDF = DataFormat::Int32;
+#elif defined(INP_UINT32)
+constexpr auto kWhereDF = DataFormat::UInt32;
+#elif defined(INP_FLOAT32)
+constexpr auto kWhereDF = DataFormat::Float32;
+#else
+// The legacy kernel used Float16_b for BF16 and both BFP input dtypes.
+constexpr auto kWhereDF = DataFormat::Float16_b;
+#endif
+
 constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
-constexpr bool kIsFloat = kWhereDF == DataFormat::Float32 || kWhereDF == DataFormat::Float16_b;
-static_assert(kIsInt || kIsFloat, "where_tss supports only Int32, UInt32, Float32, and Float16_b");
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -36,10 +44,10 @@ void kernel_main() {
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
-        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
+        ckl::Optional<!kIsInt, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
         // false_value -> D2.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D2>>{packed_scalar2},
-        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
+        ckl::Optional<!kIsInt, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(

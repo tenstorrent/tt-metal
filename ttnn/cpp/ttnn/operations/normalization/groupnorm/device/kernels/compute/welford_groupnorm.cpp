@@ -23,9 +23,31 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
 namespace ckl = compute_kernel_lib;
+
+struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
+    static ALWI void init() {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_INIT_ACTIVATION
+#endif
+    }
+
+    static ALWI void exec_impl([[maybe_unused]] uint32_t i) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        constexpr uint32_t dst0 = 0;
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+    }
+};
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+constexpr bool fused_activation_enabled = true;
+#else
+constexpr bool fused_activation_enabled = false;
+#endif
 
 void kernel_main() {
     /*
@@ -636,7 +658,11 @@ void kernel_main() {
                         pack_reconfig_data_format(dfb_out_id);
                     }
 #endif
-                    ckl::copy<x_per_tile_input, out_per_tile_output>(ckl::IterationShape::one_tile());
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::CopyTile<x_per_tile_input, ckl::Dst::D0>{},
+                        ckl::Optional<fused_activation_enabled, FusedActivation>{},
+                        ckl::PackTile<out_per_tile_output>{});
 #ifndef UNTILIZE_OUT
                     if constexpr (enable_fp32_reconfig) {
                         pack_reconfig_data_format(dfb_x_id);
