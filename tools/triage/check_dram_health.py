@@ -45,6 +45,7 @@ script_config = ScriptConfig(depends=["run_checks"])
 # BIST occupies the upper half of DDR_STATUS only on Blackhole from here on. Gate matches UMD.
 BIST_MIN_FW = FirmwareVersion(19, 7, 0)
 
+TAG_ENABLED_GDDR = int(tt_umd.TelemetryTag.ENABLED_GDDR)
 TAG_DDR_STATUS = int(tt_umd.TelemetryTag.DDR_STATUS)
 TAG_DDR_SPEED = int(tt_umd.TelemetryTag.DDR_SPEED)
 TAG_GDDR_TEMP_BASE = int(tt_umd.TelemetryTag.GDDR_0_1_TEMP)
@@ -57,6 +58,7 @@ TAG_GDDR_UNCORR = int(tt_umd.TelemetryTag.GDDR_UNCORR_ERRS)
 class DramHealthRow:
     # "Dev" comes from PerDeviceCheckResult; redeclaring it makes the sqlite serializer raise.
     instance: int = triage_field("GDDR Inst")
+    ddr_bank: int = triage_field("DDR Bank")
     corrected_rd: int = triage_field("Corrected Reads")
     corrected_wr: int = triage_field("Corrected Writes")
     uncorrected_rd: int = triage_field("Uncorrected Reads")
@@ -87,6 +89,7 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
     modules = len(endpoints)
 
     try:
+        enabled_mask = read_arc_telemetry_entry(device_id, TAG_ENABLED_GDDR) & 0xFF
         speed = read_arc_telemetry_entry(device_id, TAG_DDR_SPEED)
         status_word = read_arc_telemetry_entry(device_id, TAG_DDR_STATUS)
         uncorr_bitmask = read_arc_telemetry_entry(device_id, TAG_GDDR_UNCORR)
@@ -100,26 +103,31 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
     statuses = decode_ddr_status(status_word, modules, check_bist)
 
     rows: list[DramHealthRow] = []
+    bank = 0
     for i in range(modules):
+        if not (enabled_mask >> i) & 1:
+            continue
+
         training, bist = statuses[i]
         m = decode_gddr_module(i, temp_words[i // 2], corr_words[i // 2], uncorr_bitmask)
 
         log_check_device(
             device,
             not (m.uncorr_rd or m.uncorr_wr),
-            f"GDDR instance {i}: uncorrected EDC errors rd/wr {m.uncorr_rd}/{m.uncorr_wr} - "
+            f"GDDR instance {i} (DDR bank {bank}): uncorrected EDC errors rd/wr {m.uncorr_rd}/{m.uncorr_wr} - "
             f"corruption was detected and not fixed, so wrong data reached the consumer.",
         )
 
         log_check_device(
             device,
             training == "SUCCESS" and (not check_bist or bist == "SUCCESS"),
-            f"GDDR instance {i} did not come up cleanly: training={training} bist={bist}",
+            f"GDDR instance {i} (DDR bank {bank}) did not come up cleanly: training={training} bist={bist}",
         )
 
         rows.append(
             DramHealthRow(
                 instance=i,
+                ddr_bank=bank,
                 corrected_rd=m.corr_rd,
                 corrected_wr=m.corr_wr,
                 uncorrected_rd=m.uncorr_rd,
@@ -132,6 +140,7 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
                 speed_mts=speed,
             )
         )
+        bank += 1
 
     return rows
 
