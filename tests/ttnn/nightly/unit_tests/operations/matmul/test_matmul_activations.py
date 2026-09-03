@@ -5,19 +5,58 @@
 """Extended matmul tests with all supported fused activations."""
 
 import functools
+import re
 
 import pytest
 from loguru import logger
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
-from tests.ttnn.nightly.unit_tests.operations.matmul.numeric_tolerances import (
-    activation_params,
-    matmul_numeric_tolerances,
-)
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import torch.nn.functional as F
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+# Every tolerance in this file is a literal, predicted from the number formats on
+# the device path rather than observed. numeric_tolerances.py in this directory
+# records the error budget the literals come from and how each one is arrived at;
+# nothing imports it, so re-derive the tables from it by hand if a test's shapes,
+# seeds or activations change.
+#
+# The shape of the answer, from that budget: the relative error of a matmul does
+# not grow with K. Each product carries a fractional slip from the mantissa bits
+# the multiplier discards, those slips multiply values of random sign, so the
+# error grows as sqrt(K) and so does the result. They cancel. At LoFi the
+# multiplier keeps only 4 of the 7 mantissa bits of the right hand operand, a 3.6
+# percent relative error that dominates every other term, which is why the limits
+# below barely move with K or with the data type.
+
+# rtol carries only what scales with an element's own value: the rounding into the
+# output format, doubled for the safety factor, plus two units in the last place
+# when the activation is a fitted polynomial rather than a clamp the device
+# evaluates exactly. Everything else in a matmul's error is proportional to the
+# size of the whole dot product, not to the element, so atol carries it.
+_RTOL_BY_OUTPUT_FORMAT = {
+    (ttnn.bfloat16, True): 0.0046,
+    (ttnn.bfloat16, False): 0.0358,
+    (ttnn.bfloat8_b, True): 0.0181,
+    (ttnn.bfloat8_b, False): 0.0493,
+}
+
+_ACTIVATION_PARAMS_PATTERN = re.compile(r"params=\[([^\]]*)\]")
+
+
+def activation_params(activation):
+    """Parameters of a ``ttnn.UnaryWithParam``, read from its text form.
+
+    The binding exposes ``op_type`` but no accessor for the parameters, so the
+    only way to recover them is the object's own text form.
+    """
+    if activation is None:
+        return []
+    match = _ACTIVATION_PARAMS_PATTERN.search(repr(activation))
+    if match is None or not match.group(1).strip():
+        return []
+    return [float(value) for value in match.group(1).split(",")]
 
 
 def get_activation_golden_function(activation):
@@ -77,32 +116,45 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
+# Limits for each activation, folded over the two shapes, both data types and both
+# packer_l1_acc settings. Each is the most permissive value the budget gives over
+# those cases, so no case is held tighter than predicted; the trailing comment
+# gives the full range, widest spread 1.69x. The last field says whether the
+# device evaluates the activation exactly, with comparison and selection only,
+# rather than with a fitted polynomial, which is what picks rtol out of
+# _RTOL_BY_OUTPUT_FORMAT.
+#
+# atol for an activation that saturates is set by that activation's own output
+# range rather than by K, which is why hardtanh sits at 4.0 and the unbounded
+# activations near 10.
 @pytest.mark.parametrize(
-    "activation",
+    "activation, atol, frobenius_threshold, pcc_threshold, evaluated_exactly",
     [
-        None,  # No activation
+        # activation                atol      frob       pcc    exact      derived atol      frobenius            pcc
+        (None, 9.857, 0.0886, 0.99607, True),  # 5.83..9.86   0.0766..0.0886  0.99608..0.99707
         # String-based activations
-        "relu",
-        "relu6",
-        "silu",
-        "gelu",
-        "tanh",
-        "sigmoid",
-        "hardsigmoid",
-        "hardtanh",
-        "selu",
-        "softplus",
-        # UnaryWithParam versions with default parameters
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU),
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS),
+        ("relu", 9.857, 0.0879, 0.99433, True),  # 5.83..9.86   0.0765..0.0878  0.99433..0.99572
+        ("relu6", 9.857, 0.1528, 0.97807, True),  # 5.83..9.86   0.1204..0.1528  0.97808..0.98686
+        ("silu", 10.3894, 0.0997, 0.99272, False),  # 6.27..10.39   0.0850..0.0996  0.99273..0.99476
+        ("gelu", 10.1969, 0.0995, 0.99274, False),  # 6.17..10.20   0.0848..0.0994  0.99275..0.99476
+        ("tanh", 3.9426, 0.2803, 0.96072, False),  # 3.59..3.94   0.2264..0.2803  0.96072..0.97437
+        ("sigmoid", 1.6864, 0.1563, 0.97458, False),  # 1.24..1.69   0.1206..0.1562  0.97459..0.98475
+        ("hardsigmoid", 1.6429, 0.1525, 0.9758, False),  # 0.97..1.64   0.1173..0.1524  0.97581..0.98557
+        ("hardtanh", 4.0, 0.3064, 0.95307, True),  # 4.00..4.00   0.2542..0.3064  0.95307..0.96770
+        ("selu", 10.6898, 0.1013, 0.99308, False),  # 6.46..10.69   0.0865..0.1012  0.99309..0.99507
+        ("softplus", 9.857, 0.0982, 0.9929, False),  # 5.83..9.86   0.0829..0.0981  0.99290..0.99495
+        # UnaryWithParam versions with default parameters, same limits as the
+        # string spelling of the same activation
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), 9.857, 0.0879, 0.99433, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6), 9.857, 0.1528, 0.97807, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), 10.3894, 0.0997, 0.99272, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU), 10.1969, 0.0995, 0.99274, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH), 3.9426, 0.2803, 0.96072, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID), 1.6864, 0.1563, 0.97458, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID), 1.6429, 0.1525, 0.9758, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH), 4.0, 0.3064, 0.95307, True),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU), 10.6898, 0.1013, 0.99308, False),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS), 9.857, 0.0982, 0.9929, False),
     ],
     ids=[
         "no_activation",
@@ -143,6 +195,10 @@ def find_max_subblock(out_block_h, out_block_w):
 def test_matmul_with_fused_activations(
     device,
     activation,
+    atol,
+    frobenius_threshold,
+    pcc_threshold,
+    evaluated_exactly,
     M,
     K,
     N,
@@ -233,45 +289,45 @@ def test_matmul_with_fused_activations(
     activation_fn = get_activation_golden_function(activation)
     pt_out = activation_fn(pt_matmul)
 
-    tolerances = matmul_numeric_tolerances(
-        pt_matmul,
-        fused_activation,
-        activation_fn,
-        K=K,
-        in0_dtype=dtype,
-        in1_dtype=dtype,
-        out_dtype=dtype,
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=packer_l1_acc,
-        k_tiles_per_block=in0_block_w,
-        # Both operands are bfloat16, so the reference product is rounded to
-        # bfloat16 as well.
-        reference_dtype=ttnn.bfloat16,
-    )
-
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
+        atol=atol,
+        rtol=_RTOL_BY_OUTPUT_FORMAT[(dtype, evaluated_exactly)],
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         check_ulp=False,
-        **tolerances,
     )
 
 
+# One shape, one data type and one packer_l1_acc setting here, so each row holds
+# the limits for exactly its own case with nothing folded in. rtol is 0.0045 for
+# the two clamps and 0.0358 for the two fitted polynomials, matching
+# _RTOL_BY_OUTPUT_FORMAT for a bfloat16 output.
 @pytest.mark.parametrize(
-    "activation",
+    "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
-        # Test activations with custom parameters
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 3.0),  # Custom max=3.0
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0),  # Custom min/max
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1),  # Custom alpha/lambda
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),  # Custom beta/threshold
+        # activation with its custom parameters             atol     rtol     frob      pcc
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 3.0), 3.7732, 0.0046, 0.1338, 0.98297),  # Custom max=3.0
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 3.7732, 0.0046, 0.1608, 0.98708),  # Custom min/max
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.1), 4.3585, 0.0358, 0.0862, 0.99518),  # Custom alpha/lambda
+        (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),
+            3.7732,
+            0.0358,
+            0.0831,
+            0.99489,
+        ),  # Custom beta/threshold
     ],
     ids=["relu6_custom", "hardtanh_custom", "selu_custom", "softplus_custom"],
 )
 def test_matmul_with_custom_activation_params(
     device,
     activation,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     function_level_defaults,
 ):
     """Test matmul with activations using custom parameters."""
@@ -336,26 +392,14 @@ def test_matmul_with_custom_activation_params(
     activation_fn = functools.partial(apply_activation_to_reference, activation=activation)
     pt_out = activation_fn(pt_matmul)
 
-    tolerances = matmul_numeric_tolerances(
-        pt_matmul,
-        activation,
-        activation_fn,
-        K=K,
-        in0_dtype=ttnn.bfloat16,
-        in1_dtype=ttnn.bfloat16,
-        out_dtype=ttnn.bfloat16,
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-        k_tiles_per_block=in0_block_w,
-        reference_dtype=ttnn.bfloat16,
-    )
-
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         check_ulp=False,
-        **tolerances,
     )
 
 
@@ -367,15 +411,28 @@ def test_matmul_with_custom_activation_params(
     ],
     ids=["1d_multicast", "2d_multicast"],
 )
+# Folded over the 1D and 2D grid configs, which differ only in how many K tiles a
+# block covers (1 against 2) and so move the limits by at most 1.01x.
 @pytest.mark.parametrize(
-    "activation",
-    ["relu", "gelu", "sigmoid", "hardtanh", "softplus"],
+    "activation, atol, rtol, frobenius_threshold, pcc_threshold",
+    [
+        # activation      atol     rtol     frob      pcc
+        ("relu", 5.9798, 0.0046, 0.076, 0.99576),
+        ("gelu", 6.3191, 0.0358, 0.0843, 0.99479),
+        ("sigmoid", 1.2673, 0.0358, 0.1185, 0.9851),
+        ("hardtanh", 4.0, 0.0046, 0.2471, 0.96947),
+        ("softplus", 5.9798, 0.0358, 0.0825, 0.99498),
+    ],
     ids=["relu", "gelu", "sigmoid", "hardtanh", "softplus"],
 )
 def test_activation_with_different_program_configs(
     device,
     grid_config,
     activation,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     function_level_defaults,
 ):
     """Test activations work with different program configurations."""
@@ -465,26 +522,14 @@ def test_activation_with_different_program_configs(
     activation_fn = get_activation_golden_function(activation)
     pt_out = activation_fn(pt_matmul)
 
-    tolerances = matmul_numeric_tolerances(
-        pt_matmul,
-        fused_activation,
-        activation_fn,
-        K=K,
-        in0_dtype=ttnn.bfloat16,
-        in1_dtype=ttnn.bfloat16,
-        out_dtype=ttnn.bfloat16,
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-        k_tiles_per_block=in0_block_w,
-        reference_dtype=ttnn.bfloat16,
-    )
-
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         check_ulp=False,
-        **tolerances,
     )
 
 
@@ -615,6 +660,10 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
     in0_dtype,
     in1_dtype,
     out_dtype,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     function_level_defaults,
 ):
     torch.manual_seed(0)
@@ -734,51 +783,45 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
 
     tt_out = tt2torch_tensor(output_t)
 
-    tolerances = matmul_numeric_tolerances(
-        pt_pre_activation,
-        activation_param,
-        activation_fn,
-        K=K,
-        in0_dtype=in0_dtype,
-        in1_dtype=in1_dtype,
-        out_dtype=out_dtype,
-        math_fidelity=fidelity,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=packer_l1_acc,
-        # The program config is given a quarter of the per-core K width.
-        k_tiles_per_block=max(1, in0_block_w // 4),
-    )
-
     assert_numeric_metrics(
         pt_out,
         tt_out,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         check_ulp=False,
-        **tolerances,
     )
 
 
 @pytest.mark.parametrize("fidelity", [ttnn.MathFidelity.LoFi], ids=["LoFi"])
 @pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["no_l1_acc", "l1_acc"])
 @pytest.mark.parametrize(
-    "has_bias, activation",
+    "has_bias, activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
+        # Limits folded over the two shapes and both packer_l1_acc settings,
+        # widest spread 1.46x, on atol between K = 4096 and K = 8192. The 32 bit
+        # accumulator puts rtol at its floor everywhere except selu and softplus,
+        # which take their 16 bit polynomial branch whatever the accumulator is.
+        #
+        #                       atol     rtol     frob      pcc
         # Test bias alone
-        (True, None),
-        (False, None),
+        (True, None, 33.6096, 0.0046, 0.0769, 0.99704),
+        (False, None, 33.607, 0.0046, 0.0769, 0.99704),
         # Test activation alone
-        (False, "relu"),
-        (False, "gelu"),
-        (False, "sigmoid"),
+        (False, "relu", 33.607, 0.0046, 0.0768, 0.99566),
+        (False, "gelu", 33.9469, 0.0046, 0.0769, 0.99565),
+        (False, "sigmoid", 1.9992, 0.0046, 0.2126, 0.95478),
         # Test bias + activation combinations (main focus)
-        (True, "relu"),
-        (True, "gelu"),
-        (True, "sigmoid"),
-        (True, "hardtanh"),
-        (True, "selu"),
-        (True, "softplus"),
+        (True, "relu", 33.6096, 0.0046, 0.0769, 0.99566),
+        (True, "gelu", 33.9495, 0.0046, 0.077, 0.99565),
+        (True, "sigmoid", 1.9992, 0.0046, 0.2132, 0.95453),
+        (True, "hardtanh", 4.0, 0.0046, 0.3372, 0.94316),
+        (True, "selu", 35.6466, 0.0358, 0.0853, 0.99481),
+        (True, "softplus", 33.6096, 0.0358, 0.0845, 0.99476),
         # Test with UnaryWithParam
-        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 6.0)),
-        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0)),
+        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6, 6.0), 12.0, 0.0046, 0.211, 0.95665),
+        (True, ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0), 4.0, 0.0046, 0.3372, 0.94316),
     ],
     ids=[
         "bias_only",
@@ -817,6 +860,10 @@ def test_matmul_dram_sharded_with_bias_and_activation(
     packer_l1_acc,
     has_bias,
     activation,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     grid_size,
     in0_dtype,
     in1_dtype,
@@ -840,28 +887,41 @@ def test_matmul_dram_sharded_with_bias_and_activation(
         in0_dtype=in0_dtype,
         in1_dtype=in1_dtype,
         out_dtype=out_dtype,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         function_level_defaults=function_level_defaults,
     )
 
 
 @pytest.mark.parametrize(
-    "activation_combo",
+    "activation, fidelity, packer_l1_acc, atol, rtol, frobenius_threshold, pcc_threshold",
     [
+        # One shape and one setting each, so nothing is folded into these limits.
+        # HiFi2 makes the whole budget about three times smaller than LoFi, since
+        # it consumes the right hand operand's full mantissa instead of 4 of its
+        # 7 bits, which is why tanh reaches 0.992 here.
+        #
         # Special combinations to test edge cases
-        ("tanh", ttnn.MathFidelity.HiFi2, True),  # High precision with tanh
-        ("gelu", ttnn.MathFidelity.LoFi, False),  # Fast approximation with GELU
-        ("sigmoid", ttnn.MathFidelity.LoFi, True),  # Sigmoid with L1 accumulation
+        ("tanh", ttnn.MathFidelity.HiFi2, True, 3.5315, 0.0046, 0.1249, 0.99221),  # High precision with tanh
+        ("gelu", ttnn.MathFidelity.LoFi, False, 16.777, 0.0046, 0.0767, 0.9957),  # Fast approximation with GELU
+        ("sigmoid", ttnn.MathFidelity.LoFi, True, 1.9354, 0.0046, 0.1738, 0.96931),  # Sigmoid with L1 accumulation
     ],
     ids=["tanh_hifi", "gelu_lofi", "sigmoid_l1acc"],
 )
 def test_special_activation_combinations(
     device,
-    activation_combo,
+    activation,
+    fidelity,
+    packer_l1_acc,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     function_level_defaults,
 ):
     """Test specific activation combinations with different settings."""
-    activation, fidelity, packer_l1_acc = activation_combo
-
     # Fixed test parameters
     M, K, N = 32, 2048, 1024
     grid_size = (8, 1)
@@ -883,31 +943,57 @@ def test_special_activation_combinations(
         in0_dtype=ttnn.bfloat16,
         in1_dtype=ttnn.bfloat8_b,
         out_dtype=ttnn.bfloat16,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         function_level_defaults=function_level_defaults,
     )
 
 
+# Limits folded over the three shapes. The inputs here are scaled by 0.1, so the
+# products are a hundredth the size of the other tests' and every absolute limit
+# scales with them.
+#
+# gelu_fast and tanh_fast replace the fitted polynomial with a handful of straight
+# line segments, whose error is absolute and so does not shrink with the output.
+# At this input scale that error is the whole budget, which is why their limits
+# are an order of magnitude looser than accurate gelu's and tanh's. gelu_fast is
+# the one entry in this file whose fold exceeds 2x (its pcc runs 0.856 at K = 2048
+# to 0.931 at K = 4096, a 2.08x spread in the distance from 1); it is left folded
+# because the spread comes entirely from the segment error bound, the single
+# quantity in the budget that is estimated rather than derived, so splitting it
+# would give false precision.
 @pytest.mark.parametrize(
-    "activation",
+    "activation, atol, rtol, frobenius_threshold, pcc_threshold",
     [
-        None,
-        "relu",
-        "relu6",
-        "silu",
-        "gelu",
-        "tanh",
-        "sigmoid",
-        "hardsigmoid",
-        "hardtanh",
-        "selu",
-        "softplus",
+        #                                              atol     rtol     frob      pcc
+        (None, 0.2897, 0.0046, 0.0958, 0.99541),
+        ("relu", 0.2897, 0.0046, 0.0948, 0.99341),
+        ("relu6", 0.2897, 0.0046, 0.0948, 0.99341),
+        ("silu", 0.3186, 0.0358, 0.1042, 0.99416),
+        ("gelu", 0.3269, 0.0358, 0.1051, 0.99367),
+        ("tanh", 0.2892, 0.0358, 0.1050, 0.99449),
+        ("sigmoid", 0.0724, 0.0358, 0.0449, 0.98184),
+        ("hardsigmoid", 0.0483, 0.0358, 0.0410, 0.96747),
+        ("hardtanh", 0.2897, 0.0046, 0.1002, 0.99498),
+        ("selu", 0.4741, 0.0358, 0.1039, 0.99458),
+        ("softplus", 0.2736, 0.0358, 0.0533, 0.98921),
         # Test with UnaryWithParam objects with parameters
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),  # fast_and_approximate mode
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0),  # fast_and_approximate mode
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 1.0),  # fast_and_approximate mode
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0),  # Custom min/max
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2),  # Custom alpha/lambda
-        ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),  # Custom beta/threshold
+        # fast_and_approximate mode
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0), 0.5869, 0.0046, 0.5131, 0.85621),
+        # fast_and_approximate mode
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 1.0), 0.5892, 0.0046, 0.3976, 0.92096),
+        # The first parameter of sigmoid is the vector mode, not the
+        # fast_and_approximate flag, which is the second one, so this case runs
+        # the accurate sigmoid and carries the same limits as it.
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 1.0), 0.0724, 0.0358, 0.0449, 0.98184),
+        # Custom min/max
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -2.0, 2.0), 0.2897, 0.0046, 0.0959, 0.99541),
+        # Custom alpha/lambda
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.5, 1.2), 0.4854, 0.0358, 0.1037, 0.99462),
+        # Custom beta/threshold
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0), 0.2887, 0.0358, 0.0716, 0.99326),
     ],
     ids=[
         "no_activation",
@@ -946,6 +1032,10 @@ def test_special_activation_combinations(
 def test_matmul_1d_gather_with_activations(
     device,
     activation,
+    atol,
+    rtol,
+    frobenius_threshold,
+    pcc_threshold,
     M,
     K,
     N,
@@ -1026,27 +1116,16 @@ def test_matmul_1d_gather_with_activations(
     activation_fn = functools.partial(apply_activation_to_reference, activation=activation_param)
     reference = activation_fn(pt_pre_activation)
 
-    tolerances = matmul_numeric_tolerances(
-        pt_pre_activation,
-        activation_param,
-        activation_fn,
-        K=K,
-        in0_dtype=in0_dtype,
-        in1_dtype=in1_dtype,
-        out_dtype=out_dtype,
-        # No compute kernel config is passed, so the op's own defaults apply:
-        # LoFi because a program config was supplied, a 16 bit accumulator
-        # because the output is not float32, and accumulation in memory for the
-        # same reason.
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=out_dtype != ttnn.float32,
-        k_tiles_per_block=2,
-    )
-
+    # No compute kernel config is passed, so the limits above were derived from
+    # the op's own defaults: LoFi because a program config was supplied, a 16 bit
+    # accumulator because the output is not float32, and accumulation in memory
+    # for the same reason.
     assert_numeric_metrics(
         reference,
         output,
+        atol=atol,
+        rtol=rtol,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=pcc_threshold,
         check_ulp=False,
-        **tolerances,
     )
