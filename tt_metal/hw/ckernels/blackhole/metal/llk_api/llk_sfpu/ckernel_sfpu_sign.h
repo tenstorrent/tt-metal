@@ -26,8 +26,10 @@ inline void calculate_sign(const uint /*exponent_size_8*/) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat res = 1.0f;
-        // (v == 0.0f) is false for -0.0 on the SFPU while (v < 0.0f) is true, so
-        // _sfpu_is_fp16_zero_ misses negative zero. abs() matches both zeros.
+        // SFPSETCC is unspecified for -0.0 (VectorUnit.md specifies the compare only for
+        // inputs that are neither negative zero nor NaN), so (v < 0.0f) can capture -0.0
+        // and _sfpu_is_fp16_zero_ can miss it. SFPABS clears the sign bit, which brings
+        // the compare back inside the contract.
         v_if(sfpi::abs(v) == 0.0F) { res = 0.0f; }
         v_elseif(v < 0.0F) { res = -1.0f; }
         v_endif;
