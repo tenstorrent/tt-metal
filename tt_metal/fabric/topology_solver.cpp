@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -120,45 +121,56 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
     return adjacency_map;
 }
 
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType /*cluster_type*/,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> adjacency_map;
+    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank) {
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> adjacency_map;
 
-    // Build a set of ASIC IDs for each mesh based on mesh rank mapping
-    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_asic_ids;
-    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-        for (const auto& [asic_id, _] : asic_map) {
-            mesh_asic_ids[mesh_id].insert(asic_id);
+    // The graph is keyed on addresses; the descriptor answers questions about its own ASIC labels.
+    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor);
+
+    // Build a set of nodes for each mesh based on mesh rank mapping
+    std::map<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>> mesh_nodes;
+    for (const auto& [mesh_id, node_map] : physical_node_id_to_mesh_rank) {
+        for (const auto& [node_id, _] : node_map) {
+            mesh_nodes[mesh_id].insert(node_id);
         }
     }
 
-    for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
-        auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
-                                       const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
-            std::vector<tt::tt_metal::AsicID> adjacents;
+    for (const auto& [mesh_id, mesh_node_ids] : mesh_nodes) {
+        auto get_local_adjacents = [&](const tt::tt_metal::PhysicalNodeId& node_id,
+                                       const std::unordered_set<tt::tt_metal::PhysicalNodeId>& mesh_node_ids) {
+            std::vector<tt::tt_metal::PhysicalNodeId> adjacents;
+
+            const auto asic_it = node_index.node_id_to_asic_id.find(node_id);
+            if (asic_it == node_index.node_id_to_asic_id.end()) {
+                // The rank map named an address the descriptor does not describe; it has no edges.
+                return adjacents;
+            }
+            const tt::tt_metal::AsicID asic_id = asic_it->second;
 
             for (const auto& neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
                 // Skip self-connections
                 if (neighbor == asic_id) {
                     continue;
                 }
+                const auto neighbor_node_id = node_index.asic_id_to_node_id.at(neighbor);
                 // Make sure that the neighbor is in the mesh
-                if (mesh_asics.contains(neighbor)) {
+                if (mesh_node_ids.contains(neighbor_node_id)) {
                     // Add each neighbor multiple times based on number of ethernet connections
                     auto eth_connections = physical_system_descriptor.get_eth_connections(asic_id, neighbor);
-                    adjacents.insert(adjacents.end(), eth_connections.size(), neighbor);
+                    adjacents.insert(adjacents.end(), eth_connections.size(), neighbor_node_id);
                 }
             }
             return adjacents;
         };
 
-        AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap physical_adjacency_map;
-        for (const auto& asic_id : mesh_asics) {
-            physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_asics);
+        AdjacencyGraph<tt::tt_metal::PhysicalNodeId>::AdjacencyMap physical_adjacency_map;
+        for (const auto& node_id : mesh_node_ids) {
+            physical_adjacency_map[node_id] = get_local_adjacents(node_id, mesh_node_ids);
         }
-        adjacency_map[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adjacency_map);
+        adjacency_map[mesh_id] = AdjacencyGraph<tt::tt_metal::PhysicalNodeId>(physical_adjacency_map);
     }
 
     return adjacency_map;

@@ -20,30 +20,48 @@ namespace {
 
 constexpr uint32_t kMaxPackedComponent = 0xffff;
 
-// A trailing "_<digits>" is the uniqueness suffix run_local_discovery appends as
-// hostname + "_" + rank. Only a run of digits counts, so a cluster id that genuinely ends in
-// "_something" is left alone.
-std::string_view strip_rank_suffix(std::string_view cluster_id) {
-    const std::size_t underscore = cluster_id.find_last_of('_');
-    if (underscore == std::string_view::npos || underscore + 1 == cluster_id.size()) {
-        return cluster_id;
+// True when every dot-separated label is a legal DNS label, i.e. the dots are domain separators
+// rather than ordinary characters. Synthesized cluster ids such as "dual_glx_2.5d_torus_cluster_desc"
+// (used when a mock cluster descriptor leaves cluster_id empty) also contain dots, and cutting those
+// at the first dot would merge distinct hosts into one address.
+bool looks_like_fqdn(std::string_view cluster_id) {
+    if (cluster_id.find('.') == std::string_view::npos) {
+        return false;
     }
-    const std::string_view suffix = cluster_id.substr(underscore + 1);
-    const bool all_digits = std::all_of(
-        suffix.begin(), suffix.end(), [](const char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
-    return all_digits ? cluster_id.substr(0, underscore) : cluster_id;
+    for (std::size_t start = 0;;) {
+        const std::size_t dot = cluster_id.find('.', start);
+        const std::size_t end = dot == std::string_view::npos ? cluster_id.size() : dot;
+        const std::string_view label = cluster_id.substr(start, end - start);
+        if (label.empty()) {
+            return false;
+        }
+        const bool dns_label = std::all_of(label.begin(), label.end(), [](const char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-';
+        });
+        if (!dns_label) {
+            return false;
+        }
+        if (dot == std::string_view::npos) {
+            return true;
+        }
+        start = dot + 1;
+    }
 }
 
 }  // namespace
 
-std::string canonical_cluster_id_for_node_id(std::string_view cluster_id, bool hosts_unique) {
-    if (!hosts_unique) {
-        cluster_id = strip_rank_suffix(cluster_id);
+std::string canonical_cluster_id_for_node_id(std::string_view cluster_id) {
+    // A leading dot is an empty first label, so there is no name here to address. Rejected up front
+    // because the FQDN strip below no longer runs unconditionally and would otherwise let it pass.
+    if (!cluster_id.empty() && cluster_id.front() == '.') {
+        return {};
     }
 
     // First DNS label: an FQDN and its short name have to canonicalize to the same string, because
-    // one side of a join may report either.
-    cluster_id = cluster_id.substr(0, cluster_id.find('.'));
+    // one side of a join may report either. Only when the dots really are domain separators.
+    if (looks_like_fqdn(cluster_id)) {
+        cluster_id = cluster_id.substr(0, cluster_id.find('.'));
+    }
 
     std::string canonical(cluster_id);
     std::transform(canonical.begin(), canonical.end(), canonical.begin(), [](const char c) {
@@ -52,8 +70,8 @@ std::string canonical_cluster_id_for_node_id(std::string_view cluster_id, bool h
     return canonical;
 }
 
-PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, ASICLocation loc, bool hosts_unique) {
-    const std::string canonical = canonical_cluster_id_for_node_id(cluster_id, hosts_unique);
+PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, ASICLocation loc) {
+    const std::string canonical = canonical_cluster_id_for_node_id(cluster_id);
 
     TT_FATAL(
         !canonical.empty(),
@@ -82,8 +100,29 @@ PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, A
     return id;
 }
 
-PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor, bool hosts_unique) {
-    return make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location, hosts_unique);
+PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor) {
+    return make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);
+}
+
+PhysicalNodeIdIndex build_physical_node_id_index(const PhysicalSystemDescriptor& descriptor) {
+    PhysicalNodeIdIndex index;
+    const auto& asic_descriptors = descriptor.get_asic_descriptors();
+    index.node_id_to_asic_id.reserve(asic_descriptors.size());
+    index.asic_id_to_node_id.reserve(asic_descriptors.size());
+
+    for (const auto& [asic_id, asic_descriptor] : asic_descriptors) {
+        const PhysicalNodeId node_id = node_id_from_asic_descriptor(asic_descriptor);
+        const auto [it, inserted] = index.node_id_to_asic_id.emplace(node_id, asic_id);
+        TT_FATAL(
+            inserted,
+            "Two ASICs in the physical system descriptor share the address {}: ids {} and {}. An address names one "
+            "chip, so this would merge them into a single topology node.",
+            node_id,
+            it->second,
+            asic_id);
+        index.asic_id_to_node_id.emplace(asic_id, node_id);
+    }
+    return index;
 }
 
 PhysicalNodeFields decode_physical_node_id(const PhysicalNodeId& id) {
