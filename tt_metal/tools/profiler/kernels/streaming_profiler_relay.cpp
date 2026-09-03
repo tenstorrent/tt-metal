@@ -201,7 +201,7 @@ struct SpoolPump {
     uint32_t dma_rd_issued = 0;
     uint32_t chunks = 0;  // refills so far; also the sequence number the oldest-first ship compares
     Bounce b[2] = {};
-    bool notify_pending = false;  // pump ships owe the host a bytes_sent notify (batched per sweep)
+    bool notify_pending = false;  // ships owe the host a bytes_sent notify (batched per sweep)
     uint32_t level = kLevelIdle;
     // Latched trickle for a workload too light to reach the bands; cleared when the spool empties.
     bool fresh_boost = false;
@@ -649,6 +649,9 @@ static FORCE_INLINE void finish(
 
     // socket_barrier waits for the host to ack everything, so it would hang on a dead consumer.
     if (!killed) {
+        if constexpr (!kSpool) {
+            pump.notify();
+        }
         socket_barrier(sender);
     }
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
@@ -815,6 +818,14 @@ static FORCE_INLINE bool emit_slots(
         pump.rebalance();
     } else {
         staged_store_fence();
+        // Credit only returns for bytes the host has been told about, so a FIFO without room is notified before
+        // the wait; otherwise bytes_sent goes out once per sweep, as the pump's does.
+        if (pump.notify_pending) {
+            invalidate_l1_cache();
+            if (sender.downstream_fifo_total_size - (sender.bytes_sent - *pump.acked_) < bytes) {
+                pump.notify();
+            }
+        }
         if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
             return true;
         }
@@ -823,7 +834,7 @@ static FORCE_INLINE bool emit_slots(
             push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
         }
         socket_push_pages(sender, bytes / kPageBytes);
-        notify_bytes_sent(sender);
+        pump.notify_pending = true;
     }
     return false;
 }
@@ -1044,6 +1055,8 @@ void kernel_main() {
                 pump.pass();
                 pump.notify();
             }
+        } else {
+            pump.notify();
         }
 
         if constexpr (kLaneShipWords != 0) {
