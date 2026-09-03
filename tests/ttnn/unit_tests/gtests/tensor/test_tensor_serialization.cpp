@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -96,6 +97,52 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
             EXPECT_FLOAT_EQ(static_cast<float>(test_data[i]), static_cast<float>(loaded_data[i]));
         }
     }
+}
+
+// Range lockstep lives on the MemoryConfig, so it has to survive serialization: any path that
+// rebuilds a spec from its stored form -- a warm tensor cache, for instance -- would otherwise
+// silently drop it and the buffer would revert to a chip-wide allocation scan.
+TEST_F(TensorSerializationFlatbufferTest, WithRangeLockstepAllocation) {
+    TemporaryFile test_file("flatbuffer_range_lockstep.tensorbin");
+    std::vector<float> test_data{1.0f, 2.0f, 3.0f, 4.0f};
+
+    auto memory_config = MemoryConfig(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(CoreRangeSet(CoreCoord(0, 0)), {32, 32}, ShardOrientation::ROW_MAJOR));
+    tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(memory_config, true);
+
+    Tensor original_tensor = Tensor::from_vector(
+        test_data,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{1, 1, 2, 2}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, memory_config)));
+
+    dump_tensor_flatbuffer(test_file.string(), original_tensor);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_TRUE(tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+        loaded_tensor.memory_config()))
+        << "range lockstep was dropped by the flatbuffer round-trip";
+    EXPECT_TRUE(loaded_tensor.memory_config() == original_tensor.memory_config());
+}
+
+// A config that never opted in must not come back opted in.
+TEST_F(TensorSerializationFlatbufferTest, WithoutRangeLockstepAllocation) {
+    TemporaryFile test_file("flatbuffer_no_range_lockstep.tensorbin");
+    std::vector<float> test_data{1.0f, 2.0f};
+
+    Tensor original_tensor = Tensor::from_vector(
+        test_data,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{1, 1, 1, 2},
+            TensorLayout(
+                DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
+
+    dump_tensor_flatbuffer(test_file.string(), original_tensor);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_FALSE(tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+        loaded_tensor.memory_config()));
 }
 
 TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
