@@ -39,16 +39,21 @@ void validate_tensor(const Tensor& tensor, tt::tt_metal::IDevice* device, std::s
     TT_FATAL(tensor.device() == device, "KDA performance model requires all {} tensors on the same device", role);
 }
 
-const Tensor& tensor_ref(const Tensor& tensor) { return tensor; }
+double mandatory_dram_bytes(
+    const Tensor& tensor, tt::tt_metal::IDevice* device, std::string_view role, int& profiler_bytes) {
+    validate_tensor(tensor, device, role);
+    if (!tensor.memory_config().is_dram()) {
+        profiler_bytes = 0;
+        return 0.0;
+    }
 
-const Tensor& tensor_ref(const Tensor* tensor) {
-    TT_FATAL(tensor != nullptr, "KDA performance model received a null tensor");
-    return *tensor;
+    const double bytes = physical_bytes(tensor);
+    profiler_bytes = narrow_profiler_int("tensor bytes", bytes);
+    return bytes;
 }
 
-template <typename TensorSequence>
 double mandatory_dram_bytes(
-    const TensorSequence& tensors,
+    std::span<const Tensor* const> tensors,
     tt::tt_metal::IDevice* device,
     std::string_view role,
     std::vector<int>& profiler_bytes) {
@@ -56,13 +61,22 @@ double mandatory_dram_bytes(
 
     double total_bytes = 0.0;
     for (std::size_t index = 0; index < tensors.size(); ++index) {
-        const Tensor& tensor = tensor_ref(tensors[index]);
-        validate_tensor(tensor, device, role);
-        if (tensor.memory_config().is_dram()) {
-            const double bytes = physical_bytes(tensor);
-            profiler_bytes[index] = narrow_profiler_int("tensor bytes", bytes);
-            total_bytes += bytes;
-        }
+        TT_FATAL(tensors[index] != nullptr, "KDA performance model received a null tensor");
+        total_bytes += mandatory_dram_bytes(*tensors[index], device, role, profiler_bytes[index]);
+    }
+    return total_bytes;
+}
+
+double mandatory_dram_bytes(
+    const std::vector<Tensor>& tensors,
+    tt::tt_metal::IDevice* device,
+    std::string_view role,
+    std::vector<int>& profiler_bytes) {
+    profiler_bytes.assign(tensors.size(), 0);
+
+    double total_bytes = 0.0;
+    for (std::size_t index = 0; index < tensors.size(); ++index) {
+        total_bytes += mandatory_dram_bytes(tensors[index], device, role, profiler_bytes[index]);
     }
     return total_bytes;
 }
