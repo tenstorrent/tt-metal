@@ -80,7 +80,7 @@ def test_sp1_kvpe_slice_materializes_only_multi_slot_cache(monkeypatch, slots):
 
     monkeypatch.setattr(ttnn, "slice", fake_slice)
     monkeypatch.setattr(mla_module, "MlaKvCache", lambda **kwargs: SimpleNamespace(**kwargs))
-    self = SimpleNamespace(sp_factor=1)
+    self = SimpleNamespace(sp_factor=1, _kv_dedup=False)  # sp==1 slice is the non-dedup path
 
     gathered = ttMLA._gather_kvpe_prefix(
         self, cache, cache_batch_idx=slots - 1, populated_global=64, block_cyclic_chunk_local=64
