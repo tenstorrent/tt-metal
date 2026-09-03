@@ -4,37 +4,6 @@
 
 """Merge a run's per-shard Parquets into one file per architecture.
 
-The perf suite runs as ten CI jobs -- five pytest-split groups on each of two
-architectures -- on ten machines with no shared filesystem, so each shard writes
-its own Parquet. The warehouse wants the opposite: **one file is one run**
-(``data_airflow`` ``dags/pipelines/llk_perf_run``), with RUNS carrying a single
-ARCH and a single RUN_TS. This module closes that gap.
-
-It runs in the one place a single process holds every shard: after the CI job
-has downloaded the run's artefacts, and inside the backfill CLI for nights
-already archived. Both call ``merge_run``, so a backfilled night and tonight's
-nightly are byte-comparable.
-
-What merging has to unify
--------------------------
-The loader fails a file whose run-level columns are not constant. Measured
-across three real nightlies, only two of the six vary between shards:
-
-===============  ==========================================================
-``commit_sha``   already constant -- one workflow, one SHA
-``pipeline``     already constant
-``arch``         already constant *within* an architecture's shards
-``pr_number``    already constant
-``run_id``       **varies** -- per shard, by design (see ``core._run_id``)
-``timestamp``    **varies** -- each shard stamps its own report write time,
-                 26 to 156 minutes apart
-===============  ==========================================================
-
-So ``merge_run`` groups by ``arch``, concatenates, then stamps one ``run_id``
-and the earliest ``timestamp``. Earliest, because RUN_TS is documented as "when
-the run executed"; a shard's write time is when it *finished*, and the first one
-to finish is the closest available answer.
-
 Merging is safe with respect to the loader's other hard rule -- one
 ``(configuration, marker)`` pair per run. pytest-split partitions by test item,
 so no configuration appears in two shards. Verified across three nightlies, six
@@ -44,19 +13,6 @@ architecture groups, 649k rows: zero repeats.
 import datetime
 import os
 
-# Style follows the warehouse's own RUN_ID examples (nightly-20260806,
-# pr-4821-build-1): a pipeline prefix, then a date. Two components are added
-# because those examples cannot express our case.
-#
-#   <arch>       every run in LLK_PERF.RUNS carries exactly one ARCH and RUN_ID
-#                is unique, so a night that measures two architectures is two
-#                runs and needs two ids.
-#
-#   <run id>     without it a manual dispatch on the same date produces the same
-#                id as that night's scheduled run, and the loader replays by
-#                RUN_ID -- so a partial manual run would silently replace the
-#                real night. It also keeps the link back to the CI run, which
-#                merging would otherwise drop, since no column carries it.
 RUN_ID_TEMPLATE = "{pipeline}-{date}-{workflow_run_id}-{arch}"
 
 
@@ -148,10 +104,6 @@ def merge_run(paths, out_dir, *, prefix="llk_perf_"):
     merged = []
     for arch, group in sorted(group_by_arch(paths).items()):
         tables = [pq.read_table(p) for p in group]
-        # promote_options="permissive": the archive spans a schema change (a
-        # sparse knob added, another removed). Columns absent from one shard
-        # become NULL rather than failing the merge, which is exactly how the
-        # warehouse treats them anyway.
         table = pa.concat_tables(tables, promote_options="permissive")
 
         constant = {}
