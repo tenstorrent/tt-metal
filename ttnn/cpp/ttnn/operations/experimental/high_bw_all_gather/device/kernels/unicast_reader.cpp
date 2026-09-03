@@ -15,7 +15,7 @@
 #include "unicast_common.hpp"
 #include "high_bw_all_gather_metadata.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/high_bw_all_gather_partition.hpp"
+#include "high_bw_all_gather_partition.hpp"
 
 using address_t = uint32_t;
 

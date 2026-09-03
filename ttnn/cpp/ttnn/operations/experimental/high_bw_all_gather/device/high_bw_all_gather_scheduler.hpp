@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "high_bw_all_gather_partition.hpp"
+#include "kernels/high_bw_all_gather_partition.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather::scheduler {
 

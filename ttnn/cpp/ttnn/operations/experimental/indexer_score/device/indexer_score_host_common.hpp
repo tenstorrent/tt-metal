@@ -20,7 +20,7 @@
 #include "ttnn/distributed/types.hpp"                // ttnn::MeshCoordinate
 #include "ttnn/operations/ccl/ccl_common.hpp"        // get_linearized_index_from_physical_coord
 #include "indexer_score_device_operation_types.hpp"  // operation_attributes_t, Tensor
-#include "indexer_score_causal_geometry.hpp"         // shared host/device causal closed form
+#include "kernels/indexer_score_causal_geometry.hpp"  // shared host/device causal closed form
 
 namespace ttnn::operations::experimental::indexer_score::program {
 

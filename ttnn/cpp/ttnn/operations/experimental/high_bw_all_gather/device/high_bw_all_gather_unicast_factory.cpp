@@ -5,7 +5,7 @@
 #include "high_bw_all_gather_unicast_factory.hpp"
 #include "high_bw_all_gather_scheduler.hpp"
 #include "kernels/high_bw_all_gather_metadata.hpp"
-#include "high_bw_all_gather_partition.hpp"
+#include "kernels/high_bw_all_gather_partition.hpp"
 
 #include <array>
 #include <cstddef>
