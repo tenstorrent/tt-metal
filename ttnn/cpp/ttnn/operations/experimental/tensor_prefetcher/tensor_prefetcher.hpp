@@ -13,22 +13,51 @@
 
 #include <memory>
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+class Program;
+namespace distributed {
 class MeshDevice;
 }
+}  // namespace tt::tt_metal
 
 namespace ttnn::operations::experimental {
 
-// Python-facing handle for a Tensor-prefetcher PrefetcherPipe set. TensorPrefetcherPipes is
-// neither copyable nor movable, so Python only ever holds it by shared_ptr; wrapping that in a
-// struct is what nanobind binds.
-struct TensorPrefetcherPipesHandle {
-    std::shared_ptr<tt::tt_metal::experimental::TensorPrefetcherPipes> pipes;
+// One Tensor-prefetcher delivery target: the PrefetcherPipes of every DRAM sender core, all
+// sharing one entry size and ring geometry. A PrefetcherPipe is one sender, so a target that
+// spans the DRAM banks is a list of them; this bundles the list with the geometry every pipe in
+// it agrees on, which is what the prefetcher and the consumer op both name.
+//
+// `pipes` is in BuildTensorPrefetcherSenderMapping order, which is semantic: a bank's pipes are
+// adjacent, and the first of them owns that bank's leading receivers (bank-local slab index 0).
+//
+// Copyable: the pipes are shared. Keep a copy alive for as long as any program has Attached them
+// or the prefetcher may still deliver into them -- an attached Program holds a non-owning pointer
+// to each pipe, and dropping the last copy frees the rings and config pages.
+struct TensorPrefetcherPipes {
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> pipes;
+    // Per-receiver push granularity, shared by every pipe. Every Attach and every queued tensor
+    // must match it: a DRAM sender is never dispatched to and so cannot answer a resize.
+    uint32_t entry_size = 0;
+    // Entries a receiver's ring holds.
+    uint32_t num_entries = 0;
+
+    // Bytes of ring per receiver.
+    uint32_t ring_size() const { return entry_size * num_entries; }
+    // Every receiver across every pipe. This is the core set a consumer program attaches.
+    CoreRangeSet receiver_cores() const;
+    // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, in list order.
+    std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> sender_receiver_core_mapping() const;
+    // Attach every pipe to `program` on its own receiver cores, at the shared entry size. Returns
+    // the program-local pipe id per pipe, in list order; a receiver core's kernel takes the id of
+    // the one pipe it belongs to (as a runtime argument, since one kernel serves receivers of
+    // different pipes).
+    std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
 };
 
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
@@ -82,13 +111,13 @@ void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<TensorPrefetcherPipesHandle>& prefetcher_pipes = std::nullopt,
+    const std::optional<TensorPrefetcherPipes>& prefetcher_pipes = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     bool capture_into_trace = false);
 
 // Create the PrefetcherPipes whose senders are programmable DRAM cores, as a delivery target for
 // the Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
-TensorPrefetcherPipesHandle create_prefetcher_pipes_for_tensor_prefetcher(
+TensorPrefetcherPipes create_prefetcher_pipes_for_tensor_prefetcher(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t entry_size,

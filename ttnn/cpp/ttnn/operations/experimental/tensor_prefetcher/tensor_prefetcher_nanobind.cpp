@@ -18,15 +18,14 @@
 namespace ttnn::operations::experimental {
 
 void bind_tensor_prefetcher(nb::module_& mod) {
-    // TensorPrefetcherPipes is neither copyable nor movable, so Python only ever holds it by
-    // shared_ptr — the same handle create_prefetcher_pipes_for_tensor_prefetcher returns and
-    // queue_tensor_prefetcher_request / the validator accept.
-    nb::class_<TensorPrefetcherPipesHandle>(mod, "TensorPrefetcherPipes")
-        .def("entry_size", [](const TensorPrefetcherPipesHandle& h) { return h.pipes->entry_size(); })
-        .def("num_entries", [](const TensorPrefetcherPipesHandle& h) { return h.pipes->num_entries(); })
-        .def("ring_size", [](const TensorPrefetcherPipesHandle& h) { return h.pipes->ring_size(); })
-        .def("receiver_cores", [](const TensorPrefetcherPipesHandle& h) { return h.pipes->receiver_cores(); })
-        .def("num_pipes", [](const TensorPrefetcherPipesHandle& h) { return h.pipes->num_pipes(); });
+    // Opaque to Python: the delivery target create_prefetcher_pipes_for_tensor_prefetcher returns
+    // and queue_tensor_prefetcher_request / the validator accept. Copies share the same pipes.
+    nb::class_<TensorPrefetcherPipes>(mod, "TensorPrefetcherPipes")
+        .def("entry_size", [](const TensorPrefetcherPipes& p) { return p.entry_size; })
+        .def("num_entries", [](const TensorPrefetcherPipes& p) { return p.num_entries; })
+        .def("ring_size", &TensorPrefetcherPipes::ring_size)
+        .def("receiver_cores", &TensorPrefetcherPipes::receiver_cores)
+        .def("num_pipes", [](const TensorPrefetcherPipes& p) { return p.pipes.size(); });
 
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,
