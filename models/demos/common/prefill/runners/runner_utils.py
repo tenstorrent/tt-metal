@@ -98,9 +98,11 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+def activation_global_spec(chunk_size: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
+    # planes > 1 for a model that carries per-token state across the rank boundary as well as the
+    # activation: the mapper shards dims 2 and 3, so extra planes only widen the per-chip shard.
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, planes, chunk_size, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,

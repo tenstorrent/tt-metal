@@ -83,7 +83,9 @@ DFLASH_ENABLED = (
 )
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
-_L1_SMALL_SIZE = ADAPTER.l1_small_size
+# Env-overridable: on Kimi-K3 AttnRes wants L1_SMALL large and MLA's chunked attention wants it
+# small, and the band satisfying both is narrow (#54834). Re-bisecting it must not need a rebuild.
+_L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 assert not (DFLASH_ENABLED and USE_TRACE), (
@@ -159,12 +161,21 @@ def _socket_next(h2d_service) -> tuple:
     return tt_tokens, _decode_metadata(metadata_msg), metadata_msg
 
 
-def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
-    global_spec = activation_global_spec(chunk_size, hidden_size)
-
-    def _common():
+def build_d2d_pipeline_endpoints(
+    mesh_device,
+    rank: int,
+    num_ranks: int,
+    chunk_size: int,
+    hidden_size: int,
+    inbound_planes: int = 1,
+    outbound_planes: int = 1,
+):
+    # Separate specs per direction: a model whose boundary payload grows with depth (Kimi-K3 carries
+    # one AttnRes snapshot per completed block) sends more planes than it received. This rank's
+    # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
+    def _common(planes):
         return dict(
-            global_spec=global_spec,
+            global_spec=activation_global_spec(chunk_size, hidden_size, planes),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
@@ -178,17 +189,18 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes)
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes)
         )
     logger.info(
-        f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'} "
-        f"outbound={'yes' if outbound else 'no'}, workers={SYNC_WORKER_CORES}, fifo={D2D_FIFO_SIZE_BYTES}B)"
+        f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
+        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={SYNC_WORKER_CORES}, "
+        f"fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
 
@@ -232,10 +244,11 @@ def _d2d_send(
     logger.info(f"[pp rank {rank}] SEND-d2d {where} [xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms")
 
 
-def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
+def _forward_shutdown(d2d_out, rank: int, hidden_size: int, planes: int = 1) -> None:
+    # `planes` must match this rank's OUTBOUND spec, not its inbound one.
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
-        torch.zeros(1, 1, CHUNK_SIZE, hidden_size),
+        torch.zeros(1, planes, CHUNK_SIZE, hidden_size),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
@@ -332,6 +345,7 @@ def run_request_loop(
     num_ranks: int,
     *,
     hidden_size: int,
+    outbound_planes: int = 1,
     h2d_service=None,
     d2d_in=None,
     d2d_out=None,
@@ -358,7 +372,7 @@ def run_request_loop(
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
             if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
+                _forward_shutdown(d2d_out, rank, hidden_size, outbound_planes)
             break
         t = _compute_and_send(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
@@ -514,6 +528,11 @@ def main() -> None:
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     single_rank = num_ranks == 1
     d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
+    # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
+    # receives and what it sends on. Read off the runtime's own config rather than recomputing the
+    # split, so the socket cannot be sized for a range the model was not built with.
+    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx)
+    d2d_out_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers)
 
     ttnn.distributed_context_barrier()
 
@@ -538,7 +557,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(
+            mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width, d2d_in_planes, d2d_out_planes
+        )
         ttnn.distributed_context_barrier()
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -789,6 +810,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             rank,
             num_ranks,
             hidden_size=d2d_activation_width,
+            outbound_planes=d2d_out_planes,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
