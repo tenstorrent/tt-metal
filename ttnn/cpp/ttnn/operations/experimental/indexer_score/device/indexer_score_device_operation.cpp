@@ -319,6 +319,12 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
     TT_FATAL(
         m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "indexer_score: cache_batch_idx_tensor must be interleaved");
+    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments, while the program
+    // hash records only that slot metadata is present. An L1 tensor on one dispatch and a DRAM one on the
+    // next would therefore cache-hit a binary built for the other address space and resolve the address
+    // against the wrong accessor. Pin it to the documented DRAM placement, as chunk_start_idx_tensor is.
+    TT_FATAL(
+        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: cache_batch_idx_tensor must be in DRAM");
 }
 
 }  // namespace
