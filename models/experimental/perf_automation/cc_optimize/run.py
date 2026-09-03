@@ -4488,6 +4488,7 @@ def _emit_summary(
     after_ms=None,
     before_mode: str = "",
     after_mode: str = "",
+    stop_facts: dict | None = None,
 ) -> None:
     import importlib.util
 
@@ -4605,6 +4606,11 @@ def _emit_summary(
             )
         ),
         finalized=True,
+        # WHY THE RUN ENDED, from the loop that ended it. The report showed what was tried and what
+        # won, and nothing at all about whether the run finished or was cut off -- so a run stopped
+        # by its round budget with the gate still saying can_stop=false read exactly like one the
+        # gate had cleared. Only this scope knows; the renderer cannot derive it.
+        stop_facts=stop_facts,
         final_override_ms=_cur_ms,
         throughput=_throughput,
         # summary cannot find the model dir on its own under the by-path load it gets, and the
@@ -5193,6 +5199,7 @@ def optimize_pipeline(
         metric,
         start_sha,
         perf_test=(pipe or {}).get("perf_test", ""),
+        stop_facts={"rounds": rounds, "max_rounds": max_rounds, "can_stop": can_stop, "halted": halted},
     )
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 

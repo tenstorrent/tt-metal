@@ -391,31 +391,30 @@ def _dominant_bound_by(profile: dict | None) -> str:
     return max(weight, key=weight.get) if weight else ""
 
 
-def _perf_mcp():
-    """The perf_mcp module, however this one was loaded, or None.
+def _why_it_ended(stop_facts) -> str:
+    """One checkable sentence saying why the run ended, or "" when the driver did not say.
 
-    summary.py is imported three ways: as `cc_optimize.summary`, as a bare `summary`, and -- in the
-    running tool -- by perf_mcp itself through spec_from_file_location under the name "cc_summary",
-    which leaves it with NO package, so `from .perf_mcp import ...` cannot resolve. Every caller
-    needing something from perf_mcp had to know that and carry its own two-step fallback. Asking
-    sys.modules first also avoids re-importing a module that is, in the tool, already running.
+    A run stopped by its ROUND BUDGET with the gate still reporting can_stop=false looked, in this
+    report, exactly like a run the gate had cleared: same tables, same wins, no statement either
+    way. Those mean opposite things -- "nothing left to reach" against "we ran out of turns" -- and
+    the second decides whether running again is worth anything. Nothing else on the page separates
+    them, and the renderer cannot derive it: only the loop that stopped knows.
+
+    Every number is one the driver held when it stopped, so the claim checks against the run's own
+    log rather than being believed.
     """
-    for _name in ("cc_optimize.perf_mcp", "perf_mcp"):
-        _m = sys.modules.get(_name)
-        if _m is not None:
-            return _m
-    try:
-        from . import perf_mcp as _m  # type: ignore
-
-        return _m
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import perf_mcp as _m  # type: ignore
-
-        return _m
-    except Exception:  # noqa: BLE001 -- a lookup that cannot load must not cost the report
-        return None
+    if not isinstance(stop_facts, dict) or not stop_facts:
+        return ""
+    _r, _m = stop_facts.get("rounds"), stop_facts.get("max_rounds")
+    _used = (" — %s of %s round(s) used" % (_r, _m)) if isinstance(_r, int) and isinstance(_m, int) else ""
+    if stop_facts.get("halted"):
+        return "- run HALTED before the gate cleared it%s" % _used
+    if stop_facts.get("can_stop"):
+        return "- run ended because the gate cleared it: can_stop=true%s" % _used
+    return (
+        "- run ended on the ROUND BUDGET, not because the work was done: the gate still reported can_stop=false%s"
+        % _used
+    )
 
 
 def _levels_display(bound_by: str = "") -> str:
@@ -3082,6 +3081,7 @@ def render_summary(
     residual: dict | None = None,
     baseline_profile: dict | None = None,
     finalized: bool = True,
+    stop_facts: dict | None = None,
     final_override_ms: float | None = None,
     throughput: dict | None = None,
     model_root: str | Path = "",
@@ -3411,6 +3411,11 @@ def render_summary(
     # A SECTION WITH NOTHING IN IT SAYS SO. The old filler pointed the reader at another report
     # instead, which is advice; "none" is the finding.
     _limits_at = len(lines)
+    # FIRST, because it frames every finding under it: a "no lever beat baseline" list means one
+    # thing in a run the gate cleared and another in a run that was cut off mid-climb.
+    _ended = _why_it_ended(stop_facts)
+    if _ended:
+        lines.append(_ended)
     if _no_gain:
         shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
