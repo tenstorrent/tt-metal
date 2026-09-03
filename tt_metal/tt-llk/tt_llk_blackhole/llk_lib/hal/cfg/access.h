@@ -479,6 +479,9 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
 
     const std::uint32_t a = F.addr32(S);
 
+    constexpr std::uint32_t max_value = F.width >= 32 ? 0xffffffffu : ((std::uint32_t {1} << F.width) - 1u);
+    LLK_ASSERT(value <= max_value, "value exceeds field width");
+
     if constexpr (A == Access::MMIO)
     {
         static_assert(F.scope == RegisterScope::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
@@ -495,7 +498,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(a, value << F.shamt(S));
+            TT_SETC16(a, (value << F.shamt(S)) & 0xffffu);
         }
         else
         {
