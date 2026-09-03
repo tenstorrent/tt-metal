@@ -127,6 +127,27 @@ MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
+
+def _resolve_audio_t_shard(
+    requested_factor: int, mesh_shape: tuple[int, ...], tp_axis: int, sp_axis: int
+) -> tuple[int, int | None]:
+    """Resolve the audio-decode T-shard (factor, mesh_axis) from the request and mesh.
+
+    Picks the largest SUPPORTED factor (8, then 4) that is ``<=`` ``requested_factor`` AND has a mesh
+    axis of exactly that many devices, preferring the TP axis then the SP axis. Falls back down the
+    chain ``8 -> 4 -> 1``: factor 8 shards over an 8-wide axis (e.g. the SP axis on a 4x8 mesh),
+    dropping to 4 on a mesh with only a 4-wide axis, then to unsharded ``(1, None)`` when nothing
+    matches (e.g. a single device). Never shards higher than requested, so an explicit lower
+    ``requested_factor`` caps the chain and ``1`` forces unsharded.
+    """
+    for factor in (8, 4):
+        if factor <= requested_factor:
+            axis = next((ax for ax in (tp_axis, sp_axis) if mesh_shape[ax] == factor), None)
+            if axis is not None:
+                return factor, axis
+    return 1, None
+
+
 # Cache namespace under TT_DIT_CACHE_DIR. `utils.cache` keys each entry on this plus the subfolder,
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
@@ -297,26 +318,17 @@ class MiniMaxH3Pipeline:
         # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
         # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
-        # With the default audio_t_factor=4, decode is 2.2 s (full) / 1.6 s (off) on a 4x8 mesh.
+        # These timings are for an explicit audio_t_factor=4 config: decode 2.2 s (full) / 1.6 s (off)
+        # on a 4x8 mesh. The default is now audio_t_factor=8 (~1.4 s full), which shards one axis finer.
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio decode T-sharding: pick the largest SUPPORTED factor (8, then 4) that is <= the
-        # requested `audio_t_factor` AND has a mesh axis of exactly that many devices (preferring the
-        # TP axis, then the SP axis). Falls back down the chain 8 -> 4 -> 1 (unsharded), so the
-        # default is safe on any mesh: factor 8 shards over an 8-wide axis (e.g. the SP axis on a 4x8
-        # mesh), dropping to 4 on a mesh with only a 4-wide axis, then to unsharded on a single
-        # device. Default 8 (~4x faster decode than unsharded); pass a lower audio_t_factor to cap
-        # the chain, or 1 to force unsharded. The resolved factor is logged in _prepare_audio_decoder
-        # before the decode runs.
-        self._audio_t_axis = None
-        self.audio_t_factor = 1
-        for _factor in (8, 4):
-            if _factor <= audio_t_factor:
-                _axis = next((ax for ax in (self.tp_axis, self.sp_axis) if shape[ax] == _factor), None)
-                if _axis is not None:
-                    self.audio_t_factor, self._audio_t_axis = _factor, _axis
-                    break
+        # Audio decode T-sharding: resolve the effective factor/axis from the request and mesh shape
+        # (see `_resolve_audio_t_shard` for the 8 -> 4 -> 1 fallback and TP-before-SP tie-break).
+        # Default 8; the resolved factor is logged in `_prepare_audio_decoder` before the decode runs.
+        self.audio_t_factor, self._audio_t_axis = _resolve_audio_t_shard(
+            audio_t_factor, shape, self.tp_axis, self.sp_axis
+        )
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(

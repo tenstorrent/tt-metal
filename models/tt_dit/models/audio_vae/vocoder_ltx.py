@@ -36,7 +36,7 @@ from ...parallel.manager import CCLManager
 from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
-TILE_HEIGHT = 32
+TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHARDED convs
 
 
 class DilatedConv1d(_AlignedOutConv1d):

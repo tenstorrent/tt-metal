@@ -20,7 +20,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline, _resolve_audio_t_shard
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -75,6 +75,27 @@ SWEEP = [
     for seconds in DURATIONS_S
     for ratio in ASPECT_RATIOS
 ]
+
+
+# Pure (no-device) coverage for the pipeline's audio T-shard resolver -- the entire functional change,
+# which the decoder-level test cannot reach because it constructs ParallelFactor directly. Cases cover
+# both 8x4/4x8 axis orderings, the request cap, the TP-before-SP tie-break, and the 8 -> 4 -> 1 fallback.
+@pytest.mark.parametrize(
+    ("requested", "mesh_shape", "tp_axis", "sp_axis", "expected"),
+    [
+        (8, (4, 8), 0, 1, (8, 1)),  # factor 8 -> the size-8 SP axis
+        (8, (8, 4), 1, 0, (8, 0)),  # reversed 8x4: factor 8 -> size-8 axis 0
+        (4, (4, 8), 0, 1, (4, 0)),  # factor 4 -> the size-4 TP axis
+        (8, (4, 8), 0, 1, (8, 1)),  # default request, standard mesh
+        (8, (4, 32), 0, 1, (4, 0)),  # no size-8 axis -> fall back to 4 (TP)
+        (8, (1, 1), 0, 1, (1, None)),  # single device -> unsharded
+        (4, (4, 4), 0, 1, (4, 0)),  # equal-size axes -> prefer TP
+        (1, (4, 8), 0, 1, (1, None)),  # explicit unsharded
+        (2, (4, 8), 0, 1, (1, None)),  # requested factor below the 4/8 chain -> unsharded
+    ],
+)
+def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
+    assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
 
 
 @pytest.mark.timeout(7200)
