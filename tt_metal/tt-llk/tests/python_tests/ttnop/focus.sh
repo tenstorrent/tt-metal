@@ -80,7 +80,9 @@ echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
      "unpacr_nop=${TTNOP_ENABLE_UNPACR_NOP:-0} repeats=${TTNOP_REPEATS}"
 echo ">> case=${NODE_ID}"
 echo ">> device_jobs=${DEVICE_JOBS} report=${REPORT_DIR}"
-[[ "$METAL" == 0 ]] || echo ">> metal kernel=${TTNOP_METAL_KERNEL:-<most recently loaded>}"
+if [[ "$METAL" == 1 ]]; then
+    echo ">> metal kernel=${TTNOP_METAL_KERNEL:-<most recently loaded>} arch=${CHIP_ARCH} simulator=${TT_METAL_SIMULATOR:-<none>}"
+fi
 
 # Build this one variant if the shared tree does not already hold it. Metal JITs
 # its own kernels on the first launch and has no producer pass.

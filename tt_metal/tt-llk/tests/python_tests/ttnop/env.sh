@@ -68,12 +68,37 @@ build_scanner() {
 metal_env() {
     export TTNOP_METAL=1
     export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$LLK_ROOT/../.." && pwd)}"
+    local default_sim="$TT_METAL_HOME/../tt-umd-simulators/build/emu-quasar-1x3"
+    local simulator="${TT_METAL_SIMULATOR:-${TT_UMD_SIMULATOR_PATH:-}}"
+    if [[ "$CHIP_ARCH" == "quasar" || "${ARCH_NAME:-}" == "quasar" || -n "$simulator" ]] \
+        || { [[ -d "$default_sim" ]] && [[ ! -e /dev/tenstorrent ]]; }; then
+        export CHIP_ARCH=quasar
+        export ARCH_NAME=quasar
+        simulator="${simulator:-$default_sim}"
+        simulator="${simulator%/}"
+        if [[ -d "$simulator" ]]; then
+            export TT_METAL_SIMULATOR="$(cd "$simulator" && pwd)"
+        elif [[ -f "$simulator" ]]; then
+            export TT_METAL_SIMULATOR="$(cd "$(dirname "$simulator")" && pwd)/$(basename "$simulator")"
+        else
+            echo "ttnop: Quasar simulator not found: $simulator" >&2
+            return 4
+        fi
+        PYTEST_SIM_ARGS=()
+    fi
     # ttnn first (so `import ttnn` hits ttnn/ttnn, not the outer namespace), then
     # tools/ (tracy), then what is already there for the plugin, then the repo
     # root for models/ and tests/.
     export PYTHONPATH="$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$PYTHONPATH:$TT_METAL_HOME"
     # Prefer build_Release/{tt_metal,ttnn} over the possibly-stale build_Release/lib copies.
     export LD_LIBRARY_PATH="$TT_METAL_HOME/build_Release/tt_metal:$TT_METAL_HOME/build_Release/ttnn:$TT_METAL_HOME/build_Release/tt_stl:$TT_METAL_HOME/build_Release/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    local metal_py="$TT_METAL_HOME/python_env/bin"
+    if [[ -x "$metal_py/python3" ]]; then
+        export PATH="$metal_py:$PATH"
+    else
+        echo "ttnop: $metal_py/python3 not found; --metal cannot import ttnn from the LLK venv" >&2
+        return 4
+    fi
     # Required. Under fast dispatch the image is staged into a DRAM buffer on the
     # first enqueue, so every later poke into the host image is invisible.
     export TT_METAL_SLOW_DISPATCH_MODE="${TT_METAL_SLOW_DISPATCH_MODE:-1}"

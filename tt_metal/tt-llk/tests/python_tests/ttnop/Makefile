@@ -37,8 +37,8 @@ libttnop_metal.so: metal_shim.cpp
 	$(CXX) -std=c++20 -O2 -Wall -Wextra -fPIC -shared -I$(TT_METAL_HOME)/tt_metal \
 		-o $@ metal_shim.cpp -L$(TT_METAL_LIB) -ltt_metal -Wl,-rpath,$(TT_METAL_LIB)
 
-# 512B = 128 words against the 102 the cave needs (100 fillers + the displaced
-# instruction + the jump back).
+# 512B = 128 words against the 105 the cave needs (100 fillers, one extra slot,
+# the displaced instruction, the jump back, and the two-word PACR trampoline).
 CAVE_BYTES ?= 512
 CAVE_DEFINE ?=
 
@@ -47,9 +47,10 @@ metal_cave: CAVE_DEFINE = -DTTNOP_CAVE_BYTES=$(CAVE_BYTES)
 metal_cave: _cave_linkers
 metal_cave_disable: _cave_linkers
 
-# Mirrors the add_custom_command in tt_metal/hw/CMakeLists.txt that preprocesses
-# main.ld — same flags, same outputs — so only the cave define differs. Keep in
-# step with it. Rebuilding hw_toolchain reverts these, so re-run after a build.
+# Mirrors the add_custom_commands in tt_metal/hw/CMakeLists.txt that preprocess
+# main.ld and script_tng.ld — same flags, same outputs — so only the cave define
+# differs. Keep in step with them. Rebuilding hw_toolchain reverts these, so
+# re-run after a build.
 _cave_linkers:
 	@for arch in wormhole blackhole; do \
 		out="$(TT_METAL_HOME)/runtime/hw/toolchain/$$arch"; mkdir -p "$$out"; \
@@ -60,6 +61,14 @@ _cave_linkers:
 				-E -P -x c -o "$$out/kernel_trisc$$trisc.ld" \
 				"$(TT_METAL_HOME)/tt_metal/hw/toolchain/main.ld" || exit $$?; \
 		done; \
+	done
+	@out="$(TT_METAL_HOME)/runtime/hw/toolchain/quasar"; mkdir -p "$$out"; \
+	for legacy in 0 1; do \
+		suffix=""; [ "$$legacy" = 0 ] || suffix="_lgc"; \
+		$(CXX) -DTYPE_KERNEL=$$legacy -DCOMPILE_FOR_TRISC -DARCH_QUASAR \
+			$(CAVE_DEFINE) -I"$(TT_METAL_HOME)/tt_metal/hw/inc/internal/tt-2xx/quasar" \
+			-E -P -x c -o "$$out/kernel_trisc$$suffix.ld" \
+			"$(TT_METAL_HOME)/tt_metal/hw/toolchain/script_tng.ld" || exit $$?; \
 	done
 	@# KernelCompileHash is build_key + hlk_desc + compute_hash, so it cannot see a
 	@# linker change: kernels cached under the other setting would be reused silently.

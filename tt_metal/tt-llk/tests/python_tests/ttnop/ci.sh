@@ -154,7 +154,7 @@ if [[ -z "$NODEIDS" ]]; then
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
     trap 'rm -rf "$STATE_DIR"; [[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
-    python3 -m pytest --collect-only -q "${CONSUMER_ARGS[@]}" \
+    python3 -m pytest --collect-only -q -o verbosity_test_cases=-1 "${CONSUMER_ARGS[@]}" \
         "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | awk '/::/' > "$NODEIDS"
     CASE_COUNT="$(grep -c . "$NODEIDS" || true)"

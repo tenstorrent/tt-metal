@@ -126,6 +126,9 @@ SECTIONS {
   :
   {
     *(.start)
+#if defined(TYPE_KERNEL) && defined(COMPILE_FOR_TRISC) && defined(TTNOP_CAVE_BYTES)
+    __kernel_body_start = ABSOLUTE(.);
+#endif
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
@@ -134,6 +137,16 @@ SECTIONS {
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
     . = ALIGN(4);
+#if defined(TYPE_KERNEL) && defined(COMPILE_FOR_TRISC) && defined(TTNOP_CAVE_BYTES)
+    __kernel_body_end = ABSOLUTE(.);
+    /* Scratch space for the ttnop timing-perturbation tool. The normal
+       toolchain build leaves TTNOP_CAVE_BYTES undefined. */
+    FILL(0x13000000)
+    . = ALIGN(16);
+    __kernel_cave_start = ABSOLUTE(.);
+    . = . + TTNOP_CAVE_BYTES;
+    __kernel_cave_end = ABSOLUTE(.);
+#endif
    } :text
    IF_KERNEL(__tdata_lma = .;)
 

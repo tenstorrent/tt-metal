@@ -488,6 +488,11 @@ def _offline_check() -> None:
 
     class _Scan:
         cave_start, cave_limit, elf = cave.start, cave.limit, "<offline>"
+        fillers = {
+            "pacr": 0x74000000,
+            "pacr_cfg_set": 0xC8F3E3E2,
+            "pacr_cfg_clr": 0xC8F3E002,
+        }
 
     injector = Injector(image.read, image.write, max_delay=max_delay)
     for delay in (0, 1, 37, max_delay):
@@ -498,17 +503,34 @@ def _offline_check() -> None:
             delay
         ), f"delay {delay}: site jumps to 0x{landed:x}, want 0x{cave.entry(delay):x}"
         # Exactly `delay` fillers are executed: the entry point sits that many words
-        # short of the parked instruction, and every word from there on is a filler.
-        executed = (cave.parked - landed) // 4
+        # short of the displaced instruction, and every word from there on is a filler.
+        executed = (cave.displaced_instruction - landed) // 4
         assert executed == delay, f"delay {delay}: {executed} fillers would run"
         for word in range(delay):
             assert view[image.index(landed + word * 4)] == 0x08000000
-        assert view[image.index(cave.parked)] == site_word, "displaced word not parked"
+        assert view[image.index(cave.displaced_instruction)] == site_word
         back = decode_jal(view[image.index(cave.ret)], cave.ret)
         assert back == site_addr + 4, f"returns to 0x{back:x}, want 0x{site_addr + 4:x}"
 
     injector.restore()
     assert view[image.index(site_addr)] == site_word, "restore did not undo the detour"
+
+    delay = 3
+    injector.arm("pack", _Scan, site, delay, _Scan.fillers["pacr"])
+    landed = decode_jal(view[image.index(site_addr)], site_addr)
+    assert landed == cave.set_addr, "pacr detour did not land on its cfg-set"
+    assert view[image.index(cave.set_addr)] == _Scan.fillers["pacr_cfg_set"]
+    run = decode_jal(view[image.index(cave.set_addr + 4)], cave.set_addr + 4)
+    assert run == cave.entry(delay) - 4
+    assert all(
+        view[image.index(run + word * 4)] == _Scan.fillers["pacr"]
+        for word in range(delay)
+    )
+    assert (
+        view[image.index(cave.displaced_instruction - 4)]
+        == _Scan.fillers["pacr_cfg_clr"]
+    )
+    injector.restore()
 
     print(f"offline check passed (cave 0x{cave.start:x}..0x{cave.end:x})")
 
