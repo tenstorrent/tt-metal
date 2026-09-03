@@ -110,5 +110,24 @@ if kill -0 "$RUNNER_PGID" 2>/dev/null; then
   sleep 20
   kill -9 -"$RUNNER_PGID" 2>/dev/null || kill -9 "$RUNNER_PGID" 2>/dev/null || true
 fi
-echo "[driver] done; logs in $OUT"
-exit $PROD_RC
+# The producer pushes chunks into a socket and exits 0 whether or not the ranks survived, so its rc
+# alone CANNOT see a runner-side crash. When the #55126 assert killed all four ranks this script still
+# reported rc=0, and run_matrix.sh then recorded the cell as complete, skipped its own tt-smi recovery
+# (only reached on a non-zero rc) and SKIPPED the cell on a later re-run because runner.log existed and
+# was non-empty. A dead run must not be able to look like a passing one twice over, so gate on the
+# runner log as well as the producer.
+#
+# Python-level failures only. Rank teardown legitimately logs `TT_FATAL: cq_id 0 is out of range` from
+# the D2D stream-service destructors after the device is closed, and ttnn logs deprecation warnings, so
+# grepping TT_FATAL or "error" would fail every healthy run instead.
+RUNNER_RC=0
+if grep -qE 'Traceback \(most recent call last\)|AssertionError' "$OUT/runner.log" 2>/dev/null; then
+  RUNNER_RC=3
+  echo "[driver] FAIL: runner.log contains a rank-level Python failure; the cell's numbers are not usable:"
+  grep -hoE '(AssertionError|RuntimeError|KeyError|ValueError|TypeError)[^\n]*' "$OUT/runner.log" \
+    | sed 's/\x1b\[[0-9;]*m//g' | sort -u | head -5 | sed 's/^/[driver]   /'
+fi
+
+echo "[driver] done; logs in $OUT (producer rc=$PROD_RC runner rc=$RUNNER_RC)"
+[ "$PROD_RC" != "0" ] && exit "$PROD_RC"
+exit $RUNNER_RC

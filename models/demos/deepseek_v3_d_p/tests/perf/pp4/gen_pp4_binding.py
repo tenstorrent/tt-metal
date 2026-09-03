@@ -28,6 +28,11 @@ from pathlib import Path
 
 TOPO = Path("models/demos/common/prefill/runners/topology_configuration")
 DEFAULT_TEMPLATE = TOPO / "pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml"
+# --profile has its OWN template, and therefore its own output name. Sharing the plain template
+# would write both variants to <stem>.<host>.yaml and the second run would silently overwrite the
+# first -- leaving an "e2e" binding that carries TT_METAL_PROFILER_DIR, so every matrix cell runs
+# instrumented and reports inflated times with no indication why.
+PROFILE_TEMPLATE = TOPO / "pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y_profile.yaml"
 
 
 def probe_columns():
@@ -57,14 +62,18 @@ def probe_columns():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--template", default=str(DEFAULT_TEMPLATE))
+    # Default resolved after parsing, because it depends on --profile.
+    ap.add_argument("--template", default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--profile", action="store_true", help="also add a per-rank TT_METAL_PROFILER_DIR")
     ap.add_argument("--profile-root", default="M4_PROFILE_OUT")
     args = ap.parse_args()
 
     host = socket.gethostname()
-    tpl = Path(args.template)
+    # An explicit --template always wins; otherwise --profile picks the profile template so the two
+    # variants land on different output names (..._torus_y.<host>.yaml vs ..._torus_y_profile.<host>.yaml),
+    # which is what the README documents and what run_matrix.sh / run_single_layer_profile.sh each pick up.
+    tpl = Path(args.template) if args.template else (PROFILE_TEMPLATE if args.profile else DEFAULT_TEMPLATE)
     out = Path(args.out) if args.out else tpl.with_suffix("").with_name(f"{tpl.stem}.{host}.yaml")
 
     full, cols = probe_columns()
