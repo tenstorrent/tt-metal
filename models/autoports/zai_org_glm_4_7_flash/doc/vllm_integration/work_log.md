@@ -1,0 +1,457 @@
+# GLM-4.7-Flash vLLM integration stage: work log
+
+Branch `ttmodelmanager/glm47-flash-probe`, starting commit `8a53bd16b2f`
+(datatype-sweep). Target: one Blackhole p150-class chip, device 0, 1x1 mesh
+(vLLM mesh name `N150`). Repos touched: `tt-metal` (this repo) and
+`/home/stisi/vllm-tt-plugin` (sibling checkout of `tenstorrent/vllm-tt-plugin`,
+not nested inside `tt-metal`).
+
+All commands below are literal and rerunnable from the repo root with
+`./python_env/bin/python` (tt-metal's `python_env`, which already has the TT
+fork of vLLM and `vllm_tt_plugin` installed).
+
+---
+
+## VS-001: minimum-surface bring-up loop, not the full 47-layer model first
+
+Per `$vllm-integration`'s "Minimum-Surface Bring-Up Loop", the adapter's own
+contract (kwarg shapes, row/slot bookkeeping, cache-dtype override, page-table
+refresh, async decode split) was built and proven against a **reduced 2-layer
+model** (`layer_indices=[0, 1]`: the model's one dense layer and one MoE
+layer, one of each kind) before ever launching the full 47-layer model through
+`run_vllm_server`. Test suite:
+`models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py`.
+This is deliberately *not* final serving evidence (see the skill's "the
+reduced target is only an inner-loop tool" warning) -- it exists to catch
+adapter bugs in seconds instead of after a multi-minute full-model boot.
+
+```
+pytest models/autoports/zai_org_glm_4_7_flash/tests/test_generator_vllm_adapter.py -x -q
+```
+
+Four real bugs were caught and fixed by this loop before the full model was
+ever launched:
+
+### VS-001a: page-table change detection was permanently defeated by aliasing
+
+`GLM47FlashForCausalLM` maintains a persistent, slot-indexed torch mirror of
+the page table (`self._pt_mirror`) and calls
+`GLM47FlashGenerator.refresh_page_table(..., only_if_changed=True)` every
+prefill/decode call so an unchanged table costs no host->device copy. The
+first version passed `self._pt_mirror` **itself** (not a copy) both at the
+initial `bind_decode_state` call and on every later `refresh_page_table` call.
+`refresh_page_table`'s `only_if_changed` diff does
+`torch.as_tensor(page_table_torch, dtype=torch.int32)`, which does not copy an
+already-int32 tensor, so the generator's stored "previous value"
+(`self._page_table_torch`) ended up being the *same object* as the adapter's
+live, mutable mirror. Every later in-place scatter-write to the mirror
+silently mutated what the diff considered "the previous value" too, so
+`torch.equal(current, new)` was trivially true forever -- the diff never
+fired again after the very first call, for the rest of the process. Fixed by
+passing `self._pt_mirror.clone()` everywhere the mirror is handed to the
+generator (both the initial `bind_decode_state` and every
+`refresh_page_table`). Caught by
+`test_page_table_refresh_changed_and_unchanged`, which asserts the refresh
+counter increments on a genuinely different table and does not on an
+unchanged one -- it failed silently-wrong (always "unchanged") until fixed.
+
+### VS-001b: low-level `prefill_forward`/`decode_forward` index page_table by absolute slot, not call-local row
+
+The host-sampling-fallback branches (used when `sampling_params is None`,
+e.g. a logprobs request) called
+`GLM47FlashGenerator.prefill_forward`/`decode_forward` (the caller-owned-cache
+low-level contract) passing vLLM's own row-compacted page-table tensor
+directly. That low-level API indexes `page_table` by absolute `user_id`
+(physical slot), not by the row position within whatever tensor is passed --
+`ttnn.experimental.paged_fill_cache(..., batch_idx=user_id)` asserts
+`batch_idx < page_table.shape[0]`, so a 1-row table for `user_id=22` faults
+immediately. Fixed by always passing the full, already-refreshed
+`self.generator._page_table_dev` (shape `[max_batch_size, blocks_per_user]`)
+to these calls instead of the caller's row-compacted tensor.
+
+### VS-001c: `build_generator`'s standalone-cache allocation ran before vLLM's own cache existed
+
+`initialize_vllm_model` originally called `build_generator(...)` with only
+`capture_trace=False`. `build_generator` unconditionally calls
+`generator._ensure_owned_state()`, which -- because no cache is bound yet --
+allocates a full standalone KV cache sized for the model's whole
+`max_seq_len`. On the full 47-layer model at 202752 context this OOMs
+outright (weights alone leave little headroom for a second full-context
+cache), and even when it fits it is exactly the "hidden standalone-cache
+assumption" the goal forbids: vLLM's own `allocate_kv_cache` call, which
+should be the *only* cache allocation, would then bind a second cache and
+orphan the first. Reproduced on real hardware:
+
+```
+TT_FATAL: Out of Memory: Not enough space to allocate 3970695168 B DRAM
+buffer across 8 banks ... (allocated: 3834686336 B, free: 393901568 B, ...)
+```
+(`initialize_vllm_model -> build_generator -> generator._ensure_owned_state
+-> self.allocate_kv_cache() -> model.allocate_kv_cache -> ttnn.allocate_tensor_on_device`.)
+
+Fixed by adding `build_generator(..., defer_cache_and_traces=True)`: builds
+the model/generator/tokenizer only, and returns immediately without touching
+cache/warmup/trace capture at all. `initialize_vllm_model` uses this mode;
+`GLM47FlashForCausalLM.allocate_kv_cache` binds vLLM's cache via
+`bind_decode_state` once it exists, and the plugin's own dedicated warmup
+entry points (VS-001d) do the compile/capture work against that real cache.
+
+### VS-001d: `warmup_model_prefill`/`warmup_model_decode` were missing entirely
+
+`vllm_tt_plugin/model_runner.py`'s `warmup_model()` calls
+`self.model.warmup_model_prefill(...)` and
+`self.model.warmup_model_decode(...)` **unconditionally, with no `hasattr`
+guard** -- a model class that does not define them gets a bare
+`AttributeError` at server startup, after the (expensive) model load has
+already completed. Neither `generator_vllm.py` nor
+`models/common/readiness_check/contract_vllm.py`'s own `VllmGeneratorAdapter`
+protocol were checked against this until a full grep of
+`self.model.<name>(` call sites in `vllm-tt-plugin/src/vllm_tt_plugin/*.py`
+turned up both methods. Added both:
+
+- `warmup_model_prefill`: compiles every prefill-bucket program shape
+  (`GLM47FlashGenerator.warmup_prefill()`). Called twice by the plugin
+  (`enable_trace=False` then `True`); this model's prefill path is never
+  traced (same as the DeepSeek-V3 TT adapter), so both calls run the same
+  idempotent compile sweep.
+- `warmup_model_decode`: a no-op on the `enable_trace=False` (phase 1,
+  compile-only) call, since `capture_decode_trace()`'s own uncaptured warm
+  pass already compiles everything phase 1 would; captures the decode +
+  split-sampling traces on the `enable_trace=True` (phase 2) call.
+
+A regression test (`test_implements_full_vllm_plugin_contract`) now asserts
+every method the plugin's own source calls unconditionally is present, so a
+future refactor cannot silently drop one again.
+
+## VS-002: shared harness bug -- `run_vllm_server.py` used a renamed vLLM CLI flag
+
+`models/common/readiness_check/run_vllm_server.py`'s `_launch_server` passed
+`--plugin-config '{"tt": {...}}'`. The installed vLLM CLI (0.25.1) rejects
+that flag (`error: unrecognized arguments: --plugin-config`); the TT plugin
+config is now read from vLLM's generic `--additional-config`
+(`vllm_tt_plugin/config.py`'s `get_tt_config`/`_extract_tt_config`, which
+still expects the same `{"tt": {...}}` shape from
+`vllm_config.additional_config`). This is shared-harness code used by every
+model's vLLM stage, not GLM-4.7-Flash-specific; fixed directly per
+`$vllm-integration`'s "if logs make the cause obvious, fix it directly"
+guidance. One-line change: `--plugin-config` -> `--additional-config`.
+
+## VS-003: server launch, full 47-layer model
+
+Command (see `readiness_vllm/server.log` for the exact `vllm serve` argv the
+runner builds):
+
+```
+python -m models.common.readiness_check.run_vllm_server \
+  --stages serve \
+  --model-dir models/autoports/zai_org_glm_4_7_flash \
+  --hf-model zai-org/GLM-4.7-Flash \
+  --mesh-device N150 \
+  --max-num-seqs 32 \
+  --max-model-len 202752 \
+  --tt-config '{"trace_region_size": 350000000}'
+```
+
+vLLM auto-detects this model as MLA from HF's `glm4_moe_lite` model_type
+(`vllm/transformers_utils/model_arch_config_convertor.py`'s `is_deepseek_mla`
+list explicitly includes `glm4_moe_lite`), giving `num_kv_heads=1,
+head_size=kv_lora_rank+qk_rope_head_dim=576` for KV-cache-shape purposes --
+exactly this model's paged latent-cache entry, with no
+`get_kv_cache_spec`/hybrid-attention plumbing needed (same precedent as
+DeepSeek-V3). vLLM also auto-disables chunked prefill for this model_type
+(`tt/platform.py:153`), consistent with this adapter's own rejection of a
+non-zero prefill `start_pos`.
+
+### VS-004: `get_max_tokens_all_users` under-reserved headroom for the cache-reset zero buffer
+
+First full 47-layer boot got all the way through weight loading (17.9 GiB),
+vLLM's own KV-cache sizing (`num_gpu_blocks=7956`, "GPU KV cache size:
+509,184 tokens" -- matching this adapter's reported budget), and into
+`allocate_kv_cache`, then OOM'd inside
+`bind_decode_state -> model.prepare_cache_reset -> _cache_zeros ->
+ttnn.zeros`:
+
+```
+TT_FATAL: Out of Memory: Not enough space to allocate 311620608 B DRAM buffer
+across 8 banks, where each bank needs to store 38952576 B, but bank size is
+4228587904 B (allocated: 4176451200 B, free: 52136704 B, largest free block:
+23730880 B)
+```
+
+Root cause: `get_max_tokens_all_users`'s budget subtracted
+`weights_plus_persistent_scratch`, which bakes in `cache_reset_zero_buffer`
+at a *fixed* 0.116 GiB -- the size measured for the single-request,
+202752-context cache (5.431 GiB / 47 layers). But the zero buffer is sized to
+one full layer of *whatever pool vLLM actually allocated* (paged cache shared
+across all users), and this adapter's own multi-user pool is ~2.5x bigger
+(~13.6 GiB) than that single-request cache, so the real zero buffer is
+~0.29 GiB -- about 0.18 GiB more than budgeted, which is why one DRAM bank
+came up ~37 MiB short. Fixed by solving for `T` (total cache tokens) directly
+against `bytes_per_token_all_layers + bytes_per_token_one_layer` (the second
+term being the zero buffer, which scales 1:1 with the same `T`), plus a small
+explicit 0.25 GiB safety margin for bank-level allocation/alignment overhead
+that a whole-device average budget can't see. New reported budget: 487,379
+tokens (was 507,082; test bound in
+`test_get_max_tokens_all_users_matches_contract` left at
+`400_000 < total < 600_000`, still satisfied).
+
+### VS-005: 0.25 GiB margin was still too small -- MoE prefill-warmup scratch, not just bank rounding
+
+Re-running the full 47-layer serve stage with the VS-004 fix got further
+(weights loaded, `get_max_tokens_all_users=487379`, KV cache sized and bound)
+but the engine core still died during `warmup_model_prefill`, not
+`allocate_kv_cache` this time:
+
+```
+TT_FATAL: Out of Memory: ... unable to allocate a 402653184 B (384 MiB) DRAM
+buffer at tt/fused_decoder.py:429
+```
+
+That line is `gu = ttnn.transpose(gu, 1, 3)` -- the post-sparse-matmul
+transpose of the MoE gate_up projection's prefill output, a DRAM scratch
+allocation that only exists transiently during prefill (compiled once per
+prefill-bucket shape by `warmup_model_prefill` before any request is served)
+and is not present at batch 1 in the non-serving readiness harness because
+that harness's own headroom was never this tight. It is real activation
+scratch, not a cache-sizing bug, but it still has to fit in whatever headroom
+`get_max_tokens_all_users` leaves after weights+scratch+sampler+trace+cache --
+and the 0.25 GiB margin (sized only for DRAM-bank rounding, VS-004) had
+nothing left for it. Fixed by raising `safety_margin_gib` from 0.25 to 0.75
+GiB (covers the observed ~0.38 GiB (384 MiB) scratch peak plus the original
+~0.04 GiB bank-rounding term, with room to spare). New reported budget:
+469,104 tokens (test bound `400_000 < total < 600_000` still satisfied;
+reduced-model adapter test suite re-run clean, 9/9 pass).
+
+Per the goal's execution-model instruction (full validation runs longer than
+one turn), the full pipeline (serve+sampling(smoke)+qualitative+benchmark) was
+then launched as a **detached** background process (`setsid`, stdin from
+`/dev/null`, disowned) so it survives this session ending. See "Detached
+validation run" below for the exact PID/log/command.
+
+## Detached validation run (in flight)
+
+Launched 2026-09-03 ~02:36 local, per the goal's execution-model instruction
+(the full serve+sampling+qualitative+benchmark pipeline runs longer than one
+turn budget):
+
+```
+cd /home/stisi/tt-metal
+source python_env/bin/activate
+setsid nohup python3 -m models.common.readiness_check.run_vllm_server \
+  --model-dir models/autoports/zai_org_glm_4_7_flash \
+  --hf-model zai-org/GLM-4.7-Flash \
+  --mesh-device N150 \
+  --max-num-seqs 32 \
+  --max-model-len 202752 \
+  --sampling-profile smoke \
+  --tt-config '{"trace_region_size": 350000000}' \
+  > /tmp/glm47_vllm_detached_run.log 2>&1 < /dev/null &
+disown
+```
+
+- **PID: 35176** (`python3 -m models.common.readiness_check.run_vllm_server ...`).
+  Confirmed reparented to init (`PPid: 1`), own session (`SID 35176`), no
+  controlling TTY (`ps` shows `TT=?`, `STAT=Ssl`) -- survives this agent
+  session ending.
+- Default `--stages` (not passed): runs `serve,sampling,qualitative,benchmark`
+  in one invocation, so a healthy finish produces every required artifact in
+  one pass. `--sampling-profile smoke` for this first full-model pass per
+  `$vllm-integration`'s "smoke first, then full" order; rerun with
+  `--sampling-profile full` after smoke passes, for final evidence.
+- Runner-side log: `/tmp/glm47_vllm_detached_run.log` (stdout+stderr of the
+  `run_vllm_server` driver itself: launch/health-poll/stage-orchestration
+  messages, not the vLLM server's own log).
+- vLLM server log: `models/autoports/zai_org_glm_4_7_flash/readiness_vllm/server.log`
+  (the actual `vllm.entrypoints.openai.api_server` subprocess output -- weight
+  loading progress, warmup, request handling, any TT_FATAL/Traceback).
+- Other artifacts this run should produce under `readiness_vllm/` if it
+  completes: `sampling_tests.log`, `vllm_qualitative_outputs.json`,
+  `vllm_result.json` + `vllm_benchmark.json` + `vllm_benchmark.log` (primary
+  single-user), `vllm_ci_serving_result.json` + `vllm_ci_serving_benchmark.json`
+  + `vllm_ci_serving_benchmark.log` (secondary CI serving-burst).
+
+**To check status from a later session:** `ps -p 35176` (alive = still
+running); tail both logs above; if the process has exited, check its exit
+state from the tail of `/tmp/glm47_vllm_detached_run.log` and whether the
+`readiness_vllm/` artifacts above exist and are non-empty/well-formed.
+
+**Update: that PID 35176 run failed** (see VS-006) -- superseded by a new
+detached run below.
+
+### VS-006: 0.75 GiB margin fixed the 384 MiB peak but exposed a larger 768 MiB one -- wrong lever was margin, right lever is prefill chunk length
+
+The detached run (PID 35176) reached the same op again --
+`tt/fused_decoder.py`'s `FusedDecoder._moe_prefill`, the line-429 MoE gate_up
+post-sparse-matmul transpose (`gu = ttnn.transpose(gu, 1, 3)`) -- now failing
+to allocate 805,306,368 B (768 MiB), with DRAM essentially full (per-bank free
+~48 MiB, largest free block 22.8 MiB). Traced why: this buffer's shape is
+`[1, G, 1, E, 32, 2*inter]` where `G = S // TILE` and `S` is the **prefill
+chunk length being processed** (`tt/fused_decoder.py`'s `_moe_prefill`), not
+anything related to the KV-cache pool. `FusedDecoder.prefill_forward` already
+splits any prompt into `self.prefill_chunk_size`-sized chunks internally
+(`for start in range(0, S_pad, chunk): ...`), so the true worst case per call
+is bounded by `prefill_chunk_size` alone, and `warmup_prefill` directly warms
+each value in `prefill_buckets` (default `(128,256,512,1024,2048)`) as a
+single-chunk call -- the largest bucket, 2048, equals the default
+`prefill_chunk_size`, so warming it hits the worst case directly (`G=64`).
+Measured scaling is exactly linear: 402,653,184 B (384 MiB) at chunk=1024
+(`G=32`) vs. 805,306,368 B (768 MiB) at chunk=2048 (`G=64`) -- solving
+`bytes = G * n_experts(64) * TILE(32) * 2*inter * 2(bf16)` for `inter` from
+either point gives `moe_inter=1536` consistently.
+
+Raising `safety_margin_gib` further would only shrink the KV pool to make
+room for whatever the *largest* warmed chunk needs -- fighting the wrong
+variable, and directly against the goal's "keep max_num_seqs=32,
+max_model_len=202752 unchanged, don't just throw more margin at it" guidance.
+The real fix is capping the chunk length itself, which is spec-preserving:
+`prefill_physical_len`/`FusedDecoder.prefill_forward`'s existing chunking
+already reaches the full 202752-token context via more, smaller chunks
+regardless of `prefill_chunk_size`'s value -- nothing about served context or
+concurrency changes.
+
+Fix: `tt/generator_vllm.py` gained `VLLM_PREFILL_CHUNK_SIZE = 1024` and
+`VLLM_PREFILL_BUCKETS = (128, 256, 512, 1024)` (drops the 2048 entry, which
+would be dead weight as a tail-bucket once chunk=1024 anyway, since a tail
+remainder is always `< prefill_chunk_size`), passed into `build_generator(...)`
+from `initialize_vllm_model` only -- the readiness/full-model/datatype-sweep
+stages keep the model's own default (`prefill_chunk_size=2048`) unchanged, so
+none of their already-published perf/accuracy evidence is affected. This is a
+compute/memory-layout knob, not a precision/fidelity one, so it does not
+touch `doc/datatype_sweep/selected_precision_config.json`'s contract. 1024 is
+not a guess: PID 35176's own run already proved every op for every warmup
+bucket up to and including 1024 completes cleanly end-to-end (all 47 layers)
+on this exact DRAM budget -- only the next bucket, 2048, failed. Reduced-model
+adapter test suite re-ran clean, 9/9 pass, after this change.
+
+Trade-off disclosed, not hidden: `warmup_terminal_shapes`'s per-bucket tile
+offsets actually *decrease* slightly (dropping the 2048 bucket removes its 64
+offsets: 4+8+16+32=60 vs. the previous 124), so terminal-path warmup is
+cheaper, not more expensive. What does get more expensive is a prompt spanning
+many chunk boundaries near the full 202752-token context: roughly 2x as many
+distinct chunk-offset programs as at chunk=2048, compiled lazily on first use
+of that exact prompt length per `warmup_terminal_shapes`'s own docstring (this
+was already true at chunk=2048 -- only the constant changes). No correctness
+impact; a first request at a new very-long length pays more one-time compile
+cost inside its own TTFT.
+
+## Detached validation run #2 (in flight)
+
+Same command as before, relaunched after the VS-006 fix:
+
+```
+cd /home/stisi/tt-metal
+source python_env/bin/activate
+setsid nohup python3 -m models.common.readiness_check.run_vllm_server \
+  --model-dir models/autoports/zai_org_glm_4_7_flash \
+  --hf-model zai-org/GLM-4.7-Flash \
+  --mesh-device N150 \
+  --max-num-seqs 32 \
+  --max-model-len 202752 \
+  --sampling-profile smoke \
+  --tt-config '{"trace_region_size": 350000000}' \
+  > /tmp/glm47_vllm_detached_run2.log 2>&1 < /dev/null &
+disown
+```
+
+- **PID: 35858** (`python3 -m models.common.readiness_check.run_vllm_server ...`).
+  Confirmed reparented to init (`PPid: 1`), own session (`SID 35858`), no
+  controlling TTY (`STAT=Ssl`, `TT=?`) -- survives this agent session ending.
+  Launched 2026-09-03 ~02:47 local.
+- Runner-side log: `/tmp/glm47_vllm_detached_run2.log`.
+- vLLM server log: `models/autoports/zai_org_glm_4_7_flash/readiness_vllm/server.log`
+  (overwritten from run #1; run #1's failure is preserved verbatim in this
+  work log's VS-006 section above and in `/tmp/glm47_vllm_detached_run.log`
+  if that file is still present).
+- Same expected `readiness_vllm/` artifacts as listed for run #1 above.
+- **To check status from a later session:** `ps -p 35858`; tail both logs;
+  if exited, check `/tmp/glm47_vllm_detached_run2.log`'s tail and whether the
+  `readiness_vllm/` artifacts exist and are well-formed. If it failed with a
+  new DRAM peak at some OTHER op (not the VS-006 transpose), that would mean
+  1024 is still too large for some other chunk-scaled op, or margin needs a
+  measured (not guessed) adjustment -- do not just increase margin blindly.
+
+(Continued below as evidence lands.)
+
+---
+
+## VS-007: per-request seed determinism on the device-sampling decode path
+
+**Symptom.** The plugin sampling suite's
+`test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch`
+failed: it re-runs a heterogeneous batch in shuffled order and asserts every
+greedy-or-seeded request reproduces exactly. A `temperature=0.5, seed=42`
+request did not.
+
+**Root cause.** Per-request seeds were never applied on this path at all.
+`generator_vllm.py::_slice_sampling_params_row` forced `seed=None`, and the
+decode path (`apply_decode_sampling_state` -> `apply_decode_state`, and
+`decode_step_traced` -> `sample`) never called `seed_manager.get_new_values()`,
+which is the only place `_active_request_seed` is set. So
+`has_active_request_seed()` was always False and every "seeded" request drew
+from the shared global unseeded `rand_tile` stream, whose per-row output
+depends on batch composition and global step count. This was the documented,
+deferred FM-023 limitation, not an accident.
+
+**Fix** (mirrors `models/tt_transformers/tt/generator.py::sample_decode_on_device`,
+reusing the existing `models/common/sampling` SeedManager; no new seed hashing):
+
+1. `tt/generator.py` `_SamplingArgs`: `salt_duplicate_seeds = False`. The
+   contract shares `seed=42` across requests; salting duplicates apart makes
+   the salt admission-order-dependent and breaks order-independence. Mirrors
+   `models/demos/llama3_70b_galaxy/tt/model_config.py`.
+2. `tt/generator_vllm.py` `_slice_sampling_params_row`: stop forcing
+   `seed=None`; thread the per-row seed through.
+3. `tt/generator_vllm.py` `decode_forward`: pass `start_pos=pos` into
+   `apply_decode_sampling_state` on the `reset_batch` path.
+4. `tt/generator.py` `apply_decode_sampling_state`: accept `start_pos`; after
+   `apply_decode_state`, run `deactivate_slots_except` ->
+   `reset_seed_from_slots` (reset) / `reset_seed_from_slots_if_needed` ->
+   `align_seed_counters_to_positions`. Position anchoring is what keeps the
+   stream row-independent across a mid-generation condense, which is why
+   `slot_remap` stays unconsumed.
+5. `tt/generator.py` `decode_step_traced`: call
+   `seed_manager.get_new_values(active_rows)` before the traced-vs-eager
+   decision and before `sample`. This is the missing per-token advance.
+
+Unseeded batches are unaffected: `get_new_values` early-returns in its steady
+state, `has_active_request_seed()` stays False, and the captured greedy/penalty
+sampling trace still replays.
+
+**Evidence (A/B on hardware, one p150, `--max-model-len 8192`, tests run in
+isolation to avoid the cross-test contamination noted below).**
+
+| test | no-fix baseline | with fix |
+|---|---|---|
+| `test_mixed_params_batch` | FAIL (Request 0) | **PASS** |
+| `test_top1_is_greedy` | PASS | PASS (no regression) |
+| `test_uniform_seed_deterministic` (6 params) | -- | PASS |
+| `test_temperature_varied_in_batch` | FAIL (5) | FAIL (5), unchanged |
+| `test_topk` | FAIL (3) | FAIL (3), unchanged |
+
+Host-side: `models/common/tests/test_sampling.py` seed-isolation tests 9/9 pass.
+Device regression: `tests/test_full_model.py` sampling/seed tests 7/7 pass,
+including `test_request_seed_is_refused_rather_than_silently_ignored` (the
+high-level `set_sampling_params` refusal is off the vLLM low-level path and is
+deliberately left in place).
+
+**Two findings this surfaced, NOT fixed here.**
+
+* **A GLM-specific unseeded per-row variety defect.** `test_temperature_varied_in_batch`
+  fails identically with and without this fix. Cross-checked against
+  SmolLM2-135M served through `tt_transformers`' `LlamaForCausalLM` on the same
+  chip with the same `sample_on_device_mode=all`: the reference model **passes**
+  all 5, so this is not the shared sampler, the plugin, or the single-chip
+  geometry. It is how this model drives the unseeded RNG path. `test_topk` fails
+  on both models but for different assertions (GLM: top_k half lacks variety;
+  SmolLM2: greedy half not deterministic), so it is not evidence of a shared
+  cause. Tracked as the next item.
+* **The reference path fails `test_mixed_params_batch` too.** SmolLM2 via
+  `tt_transformers` fails it (Request 0) while this model with this fix passes,
+  so per-request seed reproducibility appears broken on the reference path on
+  this config. Worth filing upstream.
+
+**Cross-test contamination in `--sampling-profile full`.** Several tests pass in
+isolation but fail inside the 74-test sequence against one long-lived server
+(`test_top1_is_greedy`, `test_mixed_params_batch`, `test_uniform_seed_deterministic[32-0]`).
+The full-profile result is therefore not a clean per-test signal, and the gate
+will stay red on that alone. Needs its own investigation.

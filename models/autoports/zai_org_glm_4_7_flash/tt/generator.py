@@ -107,6 +107,12 @@ class _SamplingArgs:
         self.max_batch_size = max_batch_size
         self.max_top_k = max_top_k
         self.sampling_dp = 1
+        # Shared request seeds must reproduce per-request under vLLM continuous batching:
+        # the isolation contract re-runs a batch in shuffled order and asserts a seeded
+        # request is order-independent. Salting duplicate seeds apart (the default) makes
+        # the salt admission-order-dependent and breaks that contract, so disable it.
+        # Mirrors models/demos/llama3_70b_galaxy/tt/model_config.py (salt_duplicate_seeds).
+        self.salt_duplicate_seeds = False
 
 
 #: Keys that used to vanish into a ``**kwargs`` and change nothing. The three
@@ -445,6 +451,15 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         self.counters["token_readbacks"] += 1
         out = ttnn.to_torch(self._tokens_dev).reshape(-1)[:batch]
         return [int(v) for v in out.tolist()]
+
+    @property
+    def decode_token_output(self):
+        """The persistent device tensor the split sampler writes the sampled
+        token into. Exposed for a vLLM adapter's async decode split: hand this
+        raw tensor back from ``decode_forward(read_from_device=False)`` and
+        defer the actual host read (``.cpu(blocking=False)`` + event) to the
+        caller instead of blocking here."""
+        return self._tokens_dev
 
     # ------------------------------------------------------------------ decode graph
 
@@ -790,6 +805,15 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         if self.host_sampling or self.sampling is None:
             self._host_sample_into_tokens(self._decode_logits)
             return
+        if self._host_positions is not None:
+            active = [i for i, p in enumerate(self._host_positions) if p >= 0]
+            # Advance each live request's per-token device seed, before the
+            # traced-vs-eager decision below and before sampling. This is the
+            # call that makes ``has_active_request_seed()`` meaningful. For an
+            # unseeded batch it early-returns and leaves the flag False, so the
+            # traced greedy/penalty fast path is unchanged; a seeded row forces
+            # the step eager (correct, and required for reproducibility).
+            self.sampling.seed_manager.get_new_values(active)
         replayed = self._sampling_traced and self._sampler_trace_ready()
         self.sampling.sample(logits=self._decode_logits, tt_out_tok=self._tokens_dev, enable_trace=replayed)
         # Counted by what actually happened: an eager sampler run is not a
@@ -1130,6 +1154,84 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             self._maybe_recapture_after_compile()
         return token
 
+    # ------------------------------------------------------------------ vLLM adapter entry points
+
+    def prefill_and_sample(self, prompt_token_ids: List[int], user_id: int = 0, *, recapture: bool = True) -> int:
+        """Public entry point for ``tt/generator_vllm.py``: prefill one request into
+        ``user_id`` against the generator-bound cache/page table (see
+        :meth:`bind_decode_state`) and sample its last position with the same
+        on-device split sampler :meth:`decode_step_traced` uses. No separate
+        sampling path, no host argmax: this is :meth:`_prefill_and_sample_first`,
+        named and exposed for a caller outside this module.
+        """
+        return self._prefill_and_sample_first(prompt_token_ids, user_id=user_id, recapture=recapture)
+
+    def apply_prefill_sampling_state(self, sampling_params, *, empty_slots: List[int], prompt_tokens=None) -> None:
+        """Place per-request sampling params (vLLM's own duck-type-compatible
+        ``TTSamplingParams``, or this package's ``SamplingParams``) at ``empty_slots``
+        without disturbing other live slots. Thin wrapper over
+        ``SamplingGenerator.apply_prefill_state`` (formats first: that method expects
+        already-padded lists). Request seeds are threaded through as given; this
+        generator does not yet track seed continuity across a later batch condense
+        (no ``slot_remap`` consumer here, matching the documented DeepSeek-V3 vLLM
+        adapter precedent), so seeded-reproducibility-only test failures after a
+        condense are a known, accepted gap rather than a crash or wrong token.
+        """
+        if self.sampling is None:
+            return
+        formatted = format_sampling_params(sampling_params, self.sampling.tt_sampling.max_batch_size)
+        self.sampling.apply_prefill_state(
+            sampling_params=formatted, prompt_tokens=prompt_tokens, empty_slots=list(empty_slots)
+        )
+
+    def apply_decode_sampling_state(
+        self, sampling_params, *, reset_batch: bool = False, prompt_tokens=None, output_tokens=None, start_pos=None
+    ) -> None:
+        """Apply this step's batched (per-row) sampling params for decode.
+
+        Only needed at a scheduler-state-change boundary (``reset_batch=True``):
+        continuing rows keep whatever params :meth:`apply_prefill_sampling_state`
+        or a previous call here already placed, and re-applying identical params
+        every step would cost a host round trip per token for no behavior change.
+
+        When ``start_pos`` (the row-ordered live decode positions) is given, each
+        request's explicit seed is registered into the seed manager and its RNG
+        counter is anchored to its absolute decode position, so a seeded request
+        reproduces regardless of which physical row it lands in or which requests
+        share its batch. The per-token advance happens in
+        :meth:`decode_step_traced` via ``seed_manager.get_new_values``. Mirrors the
+        tt_transformers decode-side seed protocol; ``slot_remap`` stays unconsumed
+        because position anchoring makes the stream row-independent.
+        """
+        if self.sampling is None:
+            return
+        import torch
+
+        formatted = format_sampling_params(sampling_params, self.sampling.tt_sampling.max_batch_size)
+        self.sampling.apply_decode_state(
+            [formatted], reset_batch=reset_batch, prompt_tokens=prompt_tokens, output_tokens=output_tokens
+        )
+        if start_pos is None:
+            return
+        sm = self.sampling.seed_manager
+        start_values = torch.as_tensor(start_pos).reshape(-1).tolist()
+        active_seed_slots = [idx for idx, pos in enumerate(start_values[: sm.max_batch_size]) if int(pos) >= 0]
+        # Drop ghost seeds from rows no longer live so a finished request's seed
+        # cannot perturb a later request's salt.
+        sm.deactivate_slots_except(active_seed_slots)
+        seed_values = formatted.seed
+        if reset_batch:
+            sm.reset_seed_from_slots(seed_values, active_seed_slots)
+            align_slots = active_seed_slots
+        else:
+            align_slots = sm.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+        # Anchor counter to position only from a trustworthy source: a batch reset
+        # carries each row's real position from prefill. The counter self-advances
+        # per token, so this preserves reproducibility across a mid-generation
+        # condense without consuming slot_remap.
+        if align_slots:
+            sm.align_seed_counters_to_positions(seed_values, align_slots, start_values)
+
     def reset(self) -> None:
         """Wipe per-prompt state. Keeps weights, device buffers and traces.
 
@@ -1181,6 +1283,19 @@ def build_generator(model_dir, mesh_device, **kwargs) -> GLM47FlashGenerator:
     ``model_dir`` is the autoport directory (``models/autoports/zai_org_glm_4_7_flash``);
     the checkpoint itself is resolved from ``checkpoint_dir=``, the
     ``GLM47_FLASH_SNAPSHOT`` env var, or the local HF cache.
+
+    ``defer_cache_and_traces=True`` (default ``False``) builds the model and
+    generator only, and returns immediately without allocating any KV cache,
+    warming prefill programs, or capturing decode traces. A vLLM adapter's
+    ``initialize_vllm_model`` must use this: the standard path's
+    ``generator._ensure_owned_state()`` allocates a full standalone KV cache
+    unconditionally, which is exactly the "hidden standalone-cache assumption"
+    vLLM ownership must not have, and doing it before vLLM's own
+    ``allocate_kv_cache`` call can OOM outright (weights alone leave little
+    headroom for a second full-context cache at this model's size). The
+    caller is responsible for calling ``bind_decode_state``,
+    ``_ensure_owned_state``, ``warmup_prefill``, and ``capture_decode_trace``
+    itself once vLLM's cache is bound.
     """
     model_dir = Path(model_dir)
     hf_model_id = kwargs.pop("hf_model_id", DEFAULT_HF_MODEL_ID)
@@ -1189,6 +1304,7 @@ def build_generator(model_dir, mesh_device, **kwargs) -> GLM47FlashGenerator:
     enable_sampling = bool(kwargs.pop("enable_sampling", True))
     capture_trace = bool(kwargs.pop("capture_trace", True))
     warmup_prefill_lens = kwargs.pop("warmup_prefill_lens", "buckets")
+    defer_cache_and_traces = bool(kwargs.pop("defer_cache_and_traces", False))
     tokenizer = kwargs.pop("tokenizer", None)
     progress = kwargs.pop("progress", print)
 
@@ -1208,6 +1324,8 @@ def build_generator(model_dir, mesh_device, **kwargs) -> GLM47FlashGenerator:
     generator = GLM47FlashGenerator(
         model, tokenizer=tokenizer, host_sampling=host_sampling, enable_sampling=enable_sampling
     )
+    if defer_cache_and_traces:
+        return generator
     generator._ensure_owned_state()
     if warmup_prefill_lens:
         lens = None if warmup_prefill_lens == "buckets" else warmup_prefill_lens

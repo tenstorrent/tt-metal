@@ -236,7 +236,12 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    # vLLM's CLI renamed `--plugin-config` to `--additional-config` (the TT
+    # plugin reads the same `{"tt": {...}}` shape from
+    # `vllm_config.additional_config`, see vllm_tt_plugin/config.py's
+    # `get_tt_config`/`_extract_tt_config`); `--plugin-config` is rejected as
+    # an unrecognized argument by the currently installed vLLM CLI.
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
