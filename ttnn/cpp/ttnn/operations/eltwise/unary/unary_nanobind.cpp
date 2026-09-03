@@ -819,7 +819,7 @@ void bind_tanh_like(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
 
@@ -919,7 +919,7 @@ void bind_gelu(nb::module_& mod) {
                 - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
                 - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32 — matches torch.nn.functional.gelu(approximate="tanh").
             fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
@@ -1417,7 +1417,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
-        "",
+        "Supported input range is (-5e4, 5e4)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"acosh">(
         mod,
@@ -1611,7 +1611,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
-        "",
+        "Supported input range is (-1e5, 1e5)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"square">(
         mod,
