@@ -611,6 +611,48 @@ def _read_device_token(tok_tt: ttnn.Tensor, index: int = 0) -> int:
 # itself costs ~59 us). Pad value must stay well clear of real logits (O(10)) while
 # staying representable in bfloat16 after the sampling kernel's exp().
 _SAMPLING_PAD_W = 8192
+# ttnn.topk goes multi-core when `topk_multicore_structurally_eligible` holds
+# (ttnn/cpp/ttnn/operations/reduction/topk/device/topk_utils.cpp):
+#
+#     width_gate = (reduced_width >= multi_core_min_width)           # 8192
+#               || (num_tile_rows <= multi_core_low_ht_max_tile_rows # 2
+#                   && reduced_width >= multi_core_low_ht_min_width) # 1024
+#     && is_pow2(reduced_width) && reduced_width < 65535 && k <= 64
+#
+# _SAMPLING_PAD_W=8192 predates the Ht-aware second clause. A CP logit row is
+# [1,1,1,2048] — ONE tile row — so it already qualifies at its native width, and
+# padding to 8192 only makes the sort network 4x wider. Measured on N300:
+#
+#     topk k=64   width 2048  217.2 us   (9 cores)
+#                 width 4096  267.4 us  (17 cores)
+#                 width 8192  431.6 us  (17 cores)  <- was shipping
+#
+# plus the pad itself (Pad 40.4 + 2x FillPad 42.4 = 82.8 us). Total -297 us per
+# sampling call, x15 calls/frame = -4.46 ms of a 32.9 ms CP frame.
+#
+# Numerics: the top-64 VALUES are bit-exact either way (verified with
+# torch.equal in tests/test_qwen3_tts_topk_sweep.py) — with 2048 real logits the
+# -1e4 padding can never enter a top-64. The INDEX order differs only where
+# values are exactly EQUAL in bf16, and the Gumbel noise row is i.i.d. per rank,
+# so permuting which draw lands on which of two equal-logit candidates leaves
+# the sampled distribution unchanged. Distributionally exact, not bit-identical.
+# QWEN3_TTS_SAMPLING_PAD_W=8192 restores the old width.
+_SAMPLING_MIN_MULTICORE_W = 1024  # topk_constants.hpp multi_core_low_ht_min_width
+_SAMPLING_MAX_LOW_HT_TILE_ROWS = 2  # topk_constants.hpp multi_core_low_ht_max_tile_rows
+
+
+def _sampling_topk_width(vocab: int, rows: int) -> int:
+    """Smallest width that keeps ``ttnn.topk`` on its multi-core path."""
+    forced = os.environ.get("QWEN3_TTS_SAMPLING_PAD_W")
+    if forced:
+        return int(forced)
+    tile_rows = (rows + 31) // 32
+    if tile_rows > _SAMPLING_MAX_LOW_HT_TILE_ROWS:
+        return _SAMPLING_PAD_W
+    w = 1 << max(int(vocab) - 1, 0).bit_length()  # next pow2 >= vocab
+    return max(w, _SAMPLING_MIN_MULTICORE_W)
+
+
 _SAMPLING_NEG = -1e4
 # ttnn.topk requires k to be a multiple of 32; 64 is the smallest value that covers
 # the demo's top_k=50. Ranks in [top_k, 64) are masked off by the noise tile.
@@ -781,10 +823,11 @@ class _DeviceSampler:
         different slot, or they would share one Gumbel draw.
         """
         vocab = int(logits_tt.shape[-1])
-        if vocab < _SAMPLING_PAD_W:
+        target_w = _sampling_topk_width(vocab, int(logits_tt.shape[-2]))
+        if vocab < target_w:
             padded = ttnn.pad(
                 logits_tt,
-                [(0, 0), (0, 0), (0, 0), (0, _SAMPLING_PAD_W - vocab)],
+                [(0, 0), (0, 0), (0, 0), (0, target_w - vocab)],
                 value=_SAMPLING_NEG,
             )
         else:
