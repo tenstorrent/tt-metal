@@ -657,3 +657,59 @@ adapter's host-sampling branch (re-register seed-manager state after a
 host-sampled request) or upstream in the shared sampler's seeded/unseeded device
 handoff. Track as its own item; stage-7 evidence is collected on a fresh server
 per stage and this is recorded under the stage README's known limitations.
+
+### VS-009 addendum: the contamination is greedy determinism, not seeding
+
+Instrumented boot (seed-manager state + the device seed tensor logged at every
+prefill), comparing a fresh canary that PASSES against a poisoned canary that
+FAILS on the same server.
+
+**The seed path is provably innocent.** Every request seed derives an identical
+device seed, counter and salt in both runs:
+
+```
+ req_seed |    FRESH dev_seed(ctr,salt) | POISONED dev_seed(ctr,salt) | match
+        0 |        ('607536', '1', '0') |       ('607536', '1', '0')  | SAME
+      100 |        ('749808', '1', '0') |       ('749808', '1', '0')  | SAME
+      ...  (10 of 10 seeds identical)
+```
+
+**The failing assertion is about greedy requests, not seeded ones:**
+
+```
+AssertionError: Greedy requests should produce the same output across positions and runs.
+Got 3 unique results out of 24.
+Results: ['Squid\nSquid are marine moll', '1\n\nS = S\nS = S', 'Squid...', ...]
+```
+
+24 `temperature=0` requests, 3 distinct outputs. So the contamination breaks
+**greedy (argmax) determinism in a mixed batch**, and the seeded requests in the
+same test are incidental. This also explains the SmolLM2 cross-check, whose
+`test_topk` failed on the identical assertion.
+
+**It predates VS-008.** The same assertion text appears 12 times in the
+pre-VS-008 sampling log, and `test_seeding` / `test_top1_is_greedy` both failed
+in that run. VS-008 neither caused nor fixed it.
+
+**Also confirmed:** a host-sampled request never reaches
+`apply_prefill_sampling_state` at all (zero probe lines logged across the whole
+`min_tokens` test), so it bypasses per-slot sampling state entirely, and
+`_needs_skip` is left latched `True` because `_seed_active` keeps
+`get_new_values` on the seeded branch, which never pushes the SKIP sentinel.
+Neither of those changes the device seed, so they are not the failure mechanism,
+but both are real state-hygiene gaps.
+
+**Revised suspect.** Greedy rows losing argmax determinism points at the
+per-lane `k`/`p`/`temp` a running request holds when another request's prefill
+rewrites all 32 lanes (`TTSampling.reset_params` ignores `empty_slots` and
+rewrites every row). The adapter relies on the next `reset_batch` to repair
+that; any window where a greedy row decodes with another request's `k`/`temp`
+before the repair produces exactly this symptom. Confirming that needs per-lane
+`k`/`temp` logged at decode, not at prefill.
+
+**Fix shape this implies** (not yet implemented): place a prefill request's
+params only on the lane the token is actually read from, `(seq-1) % 32`, plus
+its slot, rather than broadcasting to all 32. That requires tracking the live
+per-lane params on the host so the untouched lanes can be preserved through
+`reset_params`' all-rows write. Strictly narrower than the current broadcast and
+removes the clobber window rather than racing the repair.
