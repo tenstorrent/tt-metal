@@ -50,11 +50,9 @@ void kernel_main() {
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
     constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
 
-    // For non-tile-aligned W: select the partial scaler tile (idx 1) on the last W-tile. Only the
-    // LAST block holds that tile, so the partial scaler is passed on the last block and ::none() on
-    // every earlier one.
-    constexpr auto partial_scaler =
-        HAS_PARTIAL_W ? ckl::ReducePartialScaler::with_partial() : ckl::ReducePartialScaler::none();
+    // For non-tile-aligned W, select partial-scaler handling on the last W tile. Only the LAST block
+    // has the partial edge, so Scaler is passed on the last block and None on every earlier one.
+    constexpr auto partial_mode = HAS_PARTIAL_W ? ckl::ReducePartialMode::Scaler : ckl::ReducePartialMode::None;
 
     // ---------- Pass 1: streaming mean ----------
     // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM into mean. One
@@ -66,7 +64,7 @@ void kernel_main() {
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::Accumulate::at(dfb::mean, b),
             ckl::NoOp{},
-            is_last ? partial_scaler : ckl::ReducePartialScaler::none());
+            is_last ? partial_mode : ckl::ReducePartialMode::None);
     }
 
     // ---------- Pass 2: streaming variance via (x - mean)^2 ----------
@@ -91,7 +89,7 @@ void kernel_main() {
         ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
 
         const bool is_last = (b + 1 == NUM_BLOCKS);
-        const auto block_scaler = is_last ? partial_scaler : ckl::ReducePartialScaler::none();
+        const auto block_partial_mode = is_last ? partial_mode : ckl::ReducePartialMode::None;
 
         if constexpr (COMPUTE_STD_DEV) {
             if (is_last) {
@@ -108,7 +106,7 @@ void kernel_main() {
                         sqrt_tile_init();
                         sqrt_tile(dst);
                     },
-                    block_scaler);
+                    block_partial_mode);
                 continue;
             }
         }
@@ -123,7 +121,7 @@ void kernel_main() {
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::Accumulate::at(dfb::variance, b),
             ckl::NoOp{},
-            block_scaler);
+            block_partial_mode);
     }
 
     DataflowBuffer dfb_mean(dfb::mean);

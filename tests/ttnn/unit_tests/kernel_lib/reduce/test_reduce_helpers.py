@@ -18,11 +18,14 @@ TILE = 32
 CB_INPUT = 0
 CB_SCALER = 1
 CB_ACCUMULATOR = 2
+CB_SECOND_INPUT = 3
 CB_OUTPUT = 16
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
 COMPUTE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce.cpp"
 SCALER_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_scaler.cpp"
+PLAN_SEQUENCE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_plan_sequence.cpp"
+PLAN_SEQUENCE_AUX_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_plan_sequence_aux.cpp"
 
 POLICIES = ("WaitAndPopPerTile", "BulkWaitBulkPop", "WaitUpfrontNoPop", "NoWaitNoPop")
 INDEXED_POLICIES = ("WaitUpfrontNoPop", "NoWaitNoPop")
@@ -353,6 +356,51 @@ def _float_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
+def _two_input_plan_compile_args(input_a, input_b, output) -> list[int]:
+    """Append the reduce payload after one kernel-owned argument."""
+    planner = ttnn.reduce_planner
+    hardware = planner.ReduceHardwareConfig(
+        arch=input_a.device().arch(),
+        fp32_dest_acc_en=False,
+        dst_full_sync_en=False,
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+    )
+    configs = [
+        (
+            cb_id,
+            planner.ReduceCallConfig(
+                input_spec=tensor.spec,
+                output_spec=output.spec,
+                reduce_math=planner.ReduceMath.SUM,
+                reduce_dim=planner.ReduceDimension.ROW,
+                scalar=1.0,
+                fp32_mode=planner.ReduceFp32Mode.FAST,
+                max_input_cb_bytes=0,
+            ),
+        )
+        for cb_id, tensor in ((CB_INPUT, input_a), (CB_SECOND_INPUT, input_b))
+    ]
+    plan = planner.make_reduce_sequence_plan(
+        reductions=configs,
+        cb_ids=planner.ReduceSequenceCbIds(
+            auxiliary_cb_id=CB_SCALER,
+            accumulator_cb_id=CB_ACCUMULATOR,
+            output_cb_id=CB_OUTPUT,
+        ),
+        hardware=hardware,
+    )
+    assert len(plan) == plan.call_count == len(plan.calls) == 2
+    assert plan.calls[0].plan.algorithm == planner.ReduceAlgorithm.ACCUMULATE_VIA_ADD
+    assert plan.calls[0].accumulation_mode == planner.ReduceAccumulationMode.INTERMEDIATE
+    assert plan.calls[1].accumulation_mode == planner.ReduceAccumulationMode.FINAL
+    compile_time_args = [17]
+    plan.append_to(compile_time_args)
+    assert compile_time_args[0] == 17
+    assert compile_time_args[1] == plan.call_count
+    assert compile_time_args[1:] == plan.compile_time_args
+    return compile_time_args
+
+
 def _defines(case: ReduceCase) -> list[tuple[str, str]]:
     defines = [
         ("REDUCE_OP", f"ckernel::PoolType::{case.pool}"),
@@ -552,6 +600,70 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     )
     actual = _meaningful_output(case, ttnn.to_torch(result))
     return actual, _golden(case, logical_chunks)
+
+
+def test_reduce_plan_sequence_two_input_cbs(device):
+    """A kernel explicitly places two serialized calls that reduce distinct input CBs into one accumulator."""
+    input_shape = (TILE, 4 * TILE)
+    output_shape = (TILE, TILE)
+    memory_config = _sharded_memory_config(input_shape)
+    input_a = ttnn.from_torch(
+        torch.ones(input_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    input_b = ttnn.from_torch(
+        torch.full(input_shape, 2.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(output_shape),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        _sharded_memory_config(output_shape),
+    )
+
+    compile_time_args = _two_input_plan_compile_args(input_a, input_b, output)
+    cbs = [
+        ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_a),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_SECOND_INPUT, input_b),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+        _scratch_cb(CB_SCALER, ttnn.bfloat16, 1),
+        _scratch_cb(CB_ACCUMULATOR, ttnn.bfloat16, 1),
+    ]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=_single_core(),
+            compile_time_args=compile_time_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=PLAN_SEQUENCE_KERNEL,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=_single_core(),
+            compile_time_args=compile_time_args,
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi3,
+                fp32_dest_acc_en=False,
+                dst_full_sync_en=False,
+            ),
+        ),
+    ]
+
+    result = ttnn.generic_op(
+        [input_a, input_b, output],
+        ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
+    )
+    actual = ttnn.to_torch(result)[:, 0].to(torch.float32)
+    torch.testing.assert_close(actual, torch.full_like(actual, 3.0 * input_shape[1]), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)

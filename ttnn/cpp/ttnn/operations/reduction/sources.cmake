@@ -58,6 +58,7 @@ set(TTNN_OP_REDUCTION_API_HEADERS
 # as a required co-owner.
 set(TTNN_OP_REDUCTION_NANOBIND_SRCS
     reduction_nanobind.cpp
+    reduce_planner_nanobind.cpp
     argmax/argmax_nanobind.cpp
     accumulation/cumprod/cumprod_nanobind.cpp
     accumulation/cumsum/cumsum_nanobind.cpp

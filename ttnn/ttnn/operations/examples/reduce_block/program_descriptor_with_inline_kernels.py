@@ -1,118 +1,73 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The accumulate + SFPU-finalize fast path, generalized to a 2-D tile block reduced along one dim.
+"""A small ProgramDescriptor example driven entirely by the host reduce planner.
 
-The committed `reduce_accumulate` example only reduces a block whose NON-reduced dimension is a single
-tile — `of(1, Wt)` (row) or `of(Ht, 1)` (col) — so it always collapses the whole input into ONE output
-tile. The reduce library, though, accepts a full `(Ht, Wt, NC)` block reduced along one dim and emits
-MULTIPLE output tiles. This module takes the fast path into exactly those shapes and benchmarks it against
-the library there.
+Both a standalone reduction and a cross-CB accumulating reduction use the same
+compute source. The example places its own iteration count first, then asks the
+reduce plan to append a call count followed by complete, independently decodable
+calls. It issues those calls back to back; a fused kernel may instead place
+unrelated work between them.
 
-The fast path does not collapse a 2-D block into one tile; instead it becomes a LOOP over output tiles,
-each an independent "accumulate its input subset into one DEST tile, then SFPU-finalize" — the same kernel
-the 1-D example uses, applied per output tile. The subset per output tile is the only per-dim difference:
-
-    REDUCE_ROW  (reduce width):  output (nc,h) = the Wt tiles contiguous from (nc*Ht+h)*Wt   -> Ht*NC tiles
-    REDUCE_COL  (reduce height): output (nc,w) = the Ht tiles strided by Wt from nc*Ht*Wt+w  -> Wt*NC tiles
-    REDUCE_SCALAR:               output (nc)   = all Ht*Wt tiles of batch nc                 -> NC tiles
-
-Because each output tile uses a single DEST register (accumulate, then finalize in place), the fast path
-handles an arbitrary block one DEST at a time — it never hits the DEST/chunk limit the library's REDUCE_COL
-path chunks around.
-
-Variants:
-  reduce_tile               — the reduce library, default datapath (ReduceAlgorithm::ReduceTile,
-                              FPU matmul-with-ones), AVG so the 1/N is per dim.
-  accumulate_via_add        — the reduce library with the opt-in ReduceAlgorithm::AccumulateViaAdd.
-  accumulate_via_add_inline — the per-output-tile accumulate + SFPU-finalize loop as a standalone
-                              hand-written kernel (init hoisted out of the kernel_iters loop).
-  dispatch                  — accumulate_via_add when the reduced tile count per output (row=Wt, col=Ht,
-                              scalar=Ht*Wt) >= the measured per-dim threshold, else reduce_tile.
-
-Input bf16, output fp32, everything sharded in L1 on one Tensix core. Correctness is the gate; perf (device
-kernel ns) and accuracy (vs the fp64 mean) are measured.
+The legacy ``variant``, ``policy``, and reload-shaped arguments remain accepted
+while callers migrate.  They no longer select compute implementations: shape,
+tensor specs, reduction semantics, hardware, and the input-CB L1 constraint are
+the inputs to the C++ planner.
 """
-
-import struct
 
 import ttnn
 
 TILE = 32
 
-# CB assignment (semantic names).
-CB_IN = 0  # input tiles, sharded L1 (resident): Ht*Wt*NC tiles, row-major, batch-major
-CB_SCALER = 1  # scalar/mask/zero auxiliary tiles
-CB_ACC = 2  # cross-call accumulate: running RAW partial-sum tile per output (accumulate path only)
-CB_OUT = 16  # output tiles, fp32, tensor-backed (count depends on dim)
+# CB assignment (semantic names). Each sequence input receives a distinct ID.
+CB_IN = 0
+CB_AUXILIARY = 1
+CB_ACCUMULATOR = 2
+CB_OUT = 16
 
-VARIANTS = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline", "dispatch")
-BASELINE = "reduce_tile"
-# reduce_tile               = the reduce library, default datapath (ReduceAlgorithm::ReduceTile:
-#                             FPU matmul-with-ones reduce_tile per input tile).
-# accumulate_via_add        = the reduce library with the opt-in ReduceAlgorithm::AccumulateViaAdd.
-# accumulate_via_add_inline = the same algorithm as a standalone hand-written kernel, with the one-time
-#                             init hoisted OUT of the kernel_iters loop (the init-hoisted reference).
-
-_DIM_ID = {"row": 0, "col": 1, "scalar": 2}
-DIMS = tuple(_DIM_ID)
-DTYPES = ("fp32", "bf16")  # accumulation (DEST / SFPU) dtype; input is always bf16
-
-# ReduceInputPolicy selector (both datapaths). bulk = BulkWaitBulkPop (resident block, per-output pop);
-# stream = WaitAndPopPerTile (stream reduce dim thru DST); wait_upfront = WaitUpfrontNoPop, no_wait =
-# NoWaitNoPop (both leave input resident + bulk-reserve the outputs). "stream" is the back-compat name for
-# the old `stream=True` flag.
-_POLICY_ID = {"bulk": 0, "stream": 1, "wait_upfront": 2, "no_wait": 3}
-POLICIES = tuple(_POLICY_ID)
-_NO_POP = ("wait_upfront", "no_wait")
-
-# AccumulateViaAdd cross-call reload strategy (later-chunk accumulator fold), for the accumulate bake-off.
-# fold = FoldViaAdd (acc as add_tiles SRCB operand; Default-acc only); copy_pairs = CopySeedPairs (copy_tile
-# reload + pairwise new + DEST-reuse leftover; safe for UnpackToDestFp32 acc); copy_uniform = CopySeedUniform
-# (copy_tile reload + DEST-reuse every new tile; safe, 1 tile/op).
-_RELOAD_ID = {"fold": 0, "copy_pairs": 1, "copy_uniform": 2, "copy_sfpu": 3, "copy_zero": 4}
-RELOADS = tuple(_RELOAD_ID)
-
-# ReduceWithinTile selector (AccumulateViaAdd only). collapse = the normal two-step reduce (cross-tile add,
-# then the SFPU folds the 32 lanes inside the tile); skip = drop that second step, for inputs already
-# collapsed on the reduce axis (a cross-core combine of per-core partials).
+# Automatic is the only advertised mode. The older labels remain accepted by
+# create_program_descriptor while benchmark callers migrate; they are aliases
+# and cannot override a planner decision.
+VARIANTS = ("automatic",)
+_LEGACY_VARIANTS = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline", "dispatch")
+BASELINE = "automatic"
+DIMS = ("row", "col", "scalar")
+DTYPES = ("fp32", "bf16")
+POLICIES = ("bulk", "stream", "wait_upfront", "no_wait")
+RELOADS = ("fold", "copy_pairs", "copy_uniform", "copy_sfpu", "copy_zero")
 WITHIN_TILE = ("collapse", "skip")
 
-# Fewest REDUCED tiles per output at which the fast path beats the library, per dim (from the 1-D sweep:
-# the REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles before fast pulls ahead).
-_DISPATCH_MIN = {"row": 4, "col": 8, "scalar": 8}
+_PLANNER = ttnn.reduce_planner
+_REDUCE_DIM = {
+    "row": _PLANNER.ReduceDimension.ROW,
+    "col": _PLANNER.ReduceDimension.COLUMN,
+    "scalar": _PLANNER.ReduceDimension.SCALAR,
+}
 
 
 def dispatch_min(dim):
-    return _DISPATCH_MIN[dim]
+    """Historical crossover, retained for report formatting only."""
+    return {"row": 4, "col": 8, "scalar": 8}[dim]
 
 
 def reduced_count(dim, Ht, Wt):
-    """Tiles that collapse into ONE output tile (the reduce length, in tiles), per dim."""
     if dim == "row":
         return Wt
     if dim == "col":
         return Ht
-    return Ht * Wt  # scalar
+    return Ht * Wt
 
 
-# =============================================================================
-# Shape helpers — how a (Ht, Wt, NC) block maps to input/output tensors.
-# Input is a [NC*Ht*32, Wt*32] tensor: batch nc occupies tile-rows [nc*Ht, (nc+1)*Ht), so the row-major
-# tile order (nc*Ht + h)*Wt + w matches the library's batch-major of(Ht, Wt, NC) traversal — and the fast
-# path indexes the same order.
-# =============================================================================
 def input_shape(Ht, Wt, NC=1):
     return (NC * Ht * TILE, Wt * TILE)
 
 
 def output_shape(dim, Ht, Wt, NC=1):
-    """Output tensor [H, W]. Output tiles are stacked so tile order matches both paths."""
-    if dim == "row":  # Ht*NC tiles stacked vertically; per-row means in col 0
+    if dim == "row":
         return (NC * Ht * TILE, TILE)
-    if dim == "col":  # Wt*NC tiles laid horizontally; per-col means in row 0
+    if dim == "col":
         return (TILE, NC * Wt * TILE)
-    if dim == "scalar":  # NC tiles; one mean per batch at each tile's [0, 0]
+    if dim == "scalar":
         return (NC * TILE, TILE)
     raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
 
@@ -122,571 +77,245 @@ def out_tile_count(dim, Ht, Wt, NC=1):
         return NC * Ht
     if dim == "col":
         return NC * Wt
-    return NC  # scalar
+    return NC
 
 
 def elements_reduced(dim, Ht, Wt):
-    """Input elements that collapse into one output value (for the 1/N mean scaler)."""
     if dim == "row":
         return Wt * TILE
     if dim == "col":
         return Ht * TILE
-    return Ht * Wt * TILE * TILE  # scalar
+    return Ht * Wt * TILE * TILE
 
 
-# =============================================================================
-# Fast kernel — per-output-tile accumulate (dim-specific subset) + SFPU finalize.
-# Partial (non-tile-aligned) reduce dims (ROW/COL only): the last reduce-dim tile is folded in with a
-# DEST-ACCUMULATING masked broadcast-mul (mask 0/1 in the scaler CB), so the invalid positions contribute
-# 0. The bulk stays pure add_tiles (fidelity-flat, 2 tiles/op); only the one partial tile is a mul.
-# CT args: [Ht, Wt, NC, dim, kernel_iters, dst_fp32, scaler_bits, out_tiles, partial_elems]
-#   partial_elems = valid reduce-dim elements in the LAST tile (0 = tile-aligned; the scaler CB is unused).
-# =============================================================================
-_FAST_BLOCK_KERNEL = r"""
-#include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/bcast.h"
-#include "api/compute/pack.h"
-#include "api/dataflow/circular_buffer.h"
-
-void kernel_main() {
-    constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t dim = get_compile_time_arg_val(3);          // 0 row, 1 col, 2 scalar
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(4);
-    constexpr uint32_t dst_fp32 = get_compile_time_arg_val(5);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(6);  // float bits of 1/N (mean scaler)
-    constexpr uint32_t out_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t partial_elems = get_compile_time_arg_val(8);  // valid elems in last tile (0 = aligned)
-    constexpr uint32_t in_tiles = Ht * Wt * NC;
-    constexpr bool has_partial = (partial_elems != 0u);
-
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    using ckernel::BroadcastType;
-    using ckernel::EltwiseBinaryType;
-    constexpr DataFormat dst_fmt = (dst_fp32 != 0) ? DataFormat::Float32 : DataFormat::Float16_b;
-
-    // per-dim accumulation geometry (compile-time). full_cnt tiles go through the pure add path; the last
-    // reduce-dim tile is masked (partial) or just the last add (aligned).
-    constexpr uint32_t cnt = (dim == 0) ? Wt : (dim == 1) ? Ht : (Ht * Wt);
-    constexpr uint32_t stride = (dim == 1) ? Wt : 1u;
-    constexpr uint32_t full_cnt = has_partial ? (cnt - 1u) : cnt;   // tiles summed via add_tiles
-    constexpr BroadcastType MASK_BCAST = (dim == 1) ? BroadcastType::COL : BroadcastType::ROW;
-
-    binary_op_init_common(cb_in, cb_in, cb_out);
-    sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // SFPU reduce macro persists across FPU ops (replay)
-    if constexpr (has_partial) {
-        cb_wait_front(cb_scaler, 1);             // 0/1 mask tile (row0 for ROW, col0 for COL)
-    }
-
-    cb_reserve_back(cb_in, in_tiles);
-    cb_push_back(cb_in, in_tiles);
-
-    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-        cb_wait_front(cb_in, in_tiles);
-
-        for (uint32_t o = 0; o < out_tiles; ++o) {
-            uint32_t start;
-            if constexpr (dim == 0) {
-                start = o * Wt;                              // row: Wt contiguous tiles
-            } else if constexpr (dim == 1) {
-                start = (o / Wt) * (Ht * Wt) + (o % Wt);     // col: Ht tiles strided by Wt, in batch o/Wt
-            } else {
-                start = o * (Ht * Wt);                       // scalar: whole HxW block of batch o
-            }
-
-            tile_regs_acquire();
-
-            // ---- pure add accumulate of the full_cnt full tiles, parity resolved at the seed. ----
-            // acc_to_dest=true throughout: a freshly-acquired DEST reads 0 on its first write, so the first add
-            // is the plain sum (no overwrite-seed), and full_cnt==0 (a single partial tile) simply skips the
-            // loop and leaves DEST=0 for the masked fold below — matching the library. Odd count: unary-copy seed.
-            uint32_t k = 0;
-            if constexpr (full_cnt & 1u) {
-                copy_tile_init(cb_in);
-                copy_tile(cb_in, start, 0);                  // odd: DEST = cb_in[start]
-                k = 1;
-            }
-            add_tiles_init(cb_in, cb_in, true);
-            for (; k < full_cnt; k += 2) {
-                add_tiles(cb_in, cb_in, start + k * stride, start + (k + 1) * stride, 0);
-            }
-
-            // ---- partial: fold the LAST reduce-dim tile in, masked, ACCUMULATING into DEST. ----
-            // The mul_tiles_bcast_* shorthands overwrite (clear_fp32_dst_acc=true); to accumulate we call
-            // the LLK directly with acc_to_dest=1 at init and clear_fp32_dst_acc=false at the op.
-            if constexpr (has_partial) {
-                const uint32_t last = start + full_cnt * stride;
-                MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, MASK_BCAST, MATH_FIDELITY>(
-                    cb_in, cb_scaler, 1 /* acc_to_dest */)));
-                UNPACK((llk_unpack_AB_init<MASK_BCAST>(cb_in, cb_scaler)));
-                UNPACK((llk_unpack_AB<MASK_BCAST>(cb_in, cb_scaler, last, 0)));
-                MATH((llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, MASK_BCAST, DST_ACCUM_MODE,
-                                              MATH_FIDELITY>(0, false /* clear_fp32_dst_acc */)));
-            }
-
-            // ---- within-tile finalize on the SFPU, then the 1/N mean scaler. ----
-            if constexpr (dim == 0) {
-                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
-            } else if constexpr (dim == 1) {
-                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
-            } else {
-                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
-                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
-            }
-            mul_unary_tile(0, scaler_bits);                  // DEST *= 1/N_true (mean)
-
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_out, 1);
-            pack_tile(0, cb_out, 0);                         // output tile o -> page o (matches tensor)
-            cb_push_back(cb_out, 1);
-            tile_regs_release();
-        }
-
-        if (iter + 1 < kernel_iters) {
-            cb_wait_front(cb_out, out_tiles);
-            cb_pop_front(cb_out, out_tiles);
-        }
-    }
-    cb_pop_front(cb_in, in_tiles);
-}
-"""
-
-
-# =============================================================================
-# Helper kernel — the reduce library over the general (Ht, Wt, NC) block, AVG pool. The `algo` CT arg
-# selects the library datapath: 0 = ReduceTile (default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
-# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths. Both routes use reduce<AVG>;
-# AccumulateViaAdd receives its logical element count as the compile-time `reduce_factor`.
-#
-# The per-iter reduce dispatch is hoisted into a TEMPLATE (do_reduce_block) so `if constexpr (algo)` GENUINELY
-# discards the dead branch. kernel_main is not a template, so an `if constexpr (algo)` there would still
-# fully-CHECK (instantiate) the dead branch — a reduce_tile build (algo=0) would then instantiate the
-# AccumulateViaAdd branch with e.g. POLICY=WaitUpfrontNoPop or dim=col+stream and trip the fast-path
-# static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
-# instantiated, so each build compiles only its own algo's reduce().
-# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
-#           n_reduced, avg_post_op, skip_within]
-# =============================================================================
-_HELPER_BLOCK_KERNEL = r"""
+# The only compute source in this module. Each ReduceCallArgs is data only: this
+# kernel owns startup, CB lifetime, and call placement.
+_PLANNED_REDUCE_KERNEL = r"""
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/reduce.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace {
-constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
+constexpr uint32_t kernel_iters = get_compile_time_arg_val(0);
+constexpr uint32_t reduce_args_offset = 1;
+constexpr uint32_t num_calls = get_compile_time_arg_val(reduce_args_offset);
+constexpr uint32_t first_call_args_offset =
+    reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+static_assert(num_calls > 0, "A reduction plan must contain at least one call");
+static_assert(kernel_iters > 0, "The kernel iteration count must be positive");
 
-// Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
-// exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
-template <
-    uint32_t algo,
-    uint32_t dim,
-    uint32_t policy_id,
-    uint32_t n_reduced,
-    uint32_t avg_post_op,
-    uint32_t skip_within>
-ALWI void do_reduce_block(
-    [[maybe_unused]] uint32_t iter,
-    compute_kernel_lib::ReduceInputBlockShape shape,
-    compute_kernel_lib::ReduceInputMemoryLayout ml,
-    compute_kernel_lib::ReducePartialScaler ps,
-    [[maybe_unused]] uint32_t recfg) {
-    using namespace compute_kernel_lib;
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    constexpr ReduceAlgorithm ALG =
-        (algo == 1u) ? ReduceAlgorithm::AccumulateViaAdd : ReduceAlgorithm::ReduceTile;
-    constexpr ReduceInputPolicy POLICY = (policy_id == 1u)   ? ReduceInputPolicy::WaitAndPopPerTile
-                                         : (policy_id == 2u) ? ReduceInputPolicy::WaitUpfrontNoPop
-                                         : (policy_id == 3u) ? ReduceInputPolicy::NoWaitNoPop
-                                                             : ReduceInputPolicy::BulkWaitBulkPop;
-    constexpr ReduceDim RDIM = (dim == 0u)   ? ReduceDim::REDUCE_ROW
-                               : (dim == 1u) ? ReduceDim::REDUCE_COL
-                                             : ReduceDim::REDUCE_SCALAR;
-    using RECFG = ReduceDataFormatReconfigMode;
-    // skip_within==1 -> ReduceWithinTile::Skip: the input tiles are ALREADY collapsed on the reduce axis
-    // (a cross-core combine of per-core partials), so the finalize's sfpu_reduce is dropped. AVG still applies
-    // the caller's compile-time reduce_factor to the raw cross-tile sum.
-    constexpr ReduceWithinTile WT = (skip_within == 1u) ? ReduceWithinTile::Skip : ReduceWithinTile::Collapse;
-    if constexpr (algo == 1u) {
-        // AccumulateViaAdd. recfg==1 exercises RECFG::NONE after the first call (reusing the first call's
-        // config). The optional x2 post op proves AVG normalization and the caller post op are separate stages.
-        const bool none_now = (recfg == 1u) && (iter > 0u);
-        if constexpr (avg_post_op == 1u) {
-            auto post_op = [](uint32_t dst) {
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst, 0x40000000u);  // x2, after the AVG normalization
-            };
-            if (none_now)
-                reduce<
-                    PoolType::AVG,
-                    RDIM,
-                    cb_in,
-                    cb_scaler,
-                    cb_out,
-                    POLICY,
-                    RECFG::NONE,
-                    ReduceFp32Mode::Fast,
-                    ALG,
-                    WT,
-                    n_reduced>(
-                    shape, ml, NoAccumulation{}, post_op, ps);
-            else
-                reduce<
-                    PoolType::AVG,
-                    RDIM,
-                    cb_in,
-                    cb_scaler,
-                    cb_out,
-                    POLICY,
-                    RECFG::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Fast,
-                    ALG,
-                    WT,
-                    n_reduced>(
-                    shape, ml, NoAccumulation{}, post_op, ps);
-        } else {
-            if (none_now)
-                reduce<
-                    PoolType::AVG,
-                    RDIM,
-                    cb_in,
-                    cb_scaler,
-                    cb_out,
-                    POLICY,
-                    RECFG::NONE,
-                    ReduceFp32Mode::Fast,
-                    ALG,
-                    WT,
-                    n_reduced>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
-            else
-                reduce<
-                    PoolType::AVG,
-                    RDIM,
-                    cb_in,
-                    cb_scaler,
-                    cb_out,
-                    POLICY,
-                    RECFG::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Fast,
-                    ALG,
-                    WT,
-                    n_reduced>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
-        }
+template <uint32_t CALL_INDEX>
+using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, CALL_INDEX>;
+
+using LastCall = CallAt<num_calls - 1>;
+
+template <typename Call>
+constexpr uint32_t input_tile_count() {
+    constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
+    return Call::rows * row_pitch * Call::batches;
+}
+
+template <typename Call>
+constexpr uint32_t output_tile_count() {
+    if constexpr (Call::reduce_dim == ckernel::ReduceDim::REDUCE_ROW) {
+        return Call::rows * Call::batches;
+    } else if constexpr (Call::reduce_dim == ckernel::ReduceDim::REDUCE_COL) {
+        return Call::columns * Call::batches;
     } else {
-        // ReduceTile: AVG via the reader-computed 1/N scaler.
-        reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
-            shape, ml, NoAccumulation{}, NoOp{}, ps);
+        static_assert(Call::reduce_dim == ckernel::ReduceDim::REDUCE_SCALAR, "Unknown reduction dimension");
+        return Call::batches;
+    }
+}
+
+template <typename Call>
+ALWI void arm_input() {
+    DataflowBuffer input(Call::input_cb_id);
+    input.reserve_back(input_tile_count<Call>());
+    input.push_back(input_tile_count<Call>());
+}
+
+template <uint32_t CALL_INDEX = 0>
+ALWI void arm_persistent_inputs() {
+    if constexpr (CALL_INDEX < num_calls) {
+        using Call = CallAt<CALL_INDEX>;
+        if constexpr (
+            Call::input_policy == compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop ||
+            Call::input_policy == compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
+            arm_input<Call>();
+        }
+        arm_persistent_inputs<CALL_INDEX + 1>();
+    }
+}
+
+template <typename Call>
+ALWI void issue_call() {
+    static_assert(Call::path == ttnn::kernel_lib::ReducePath::Tiled,
+                  "This tiled example cannot execute a dense row-major plan");
+
+    if constexpr (
+        Call::input_policy != compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop &&
+        Call::input_policy != compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
+        arm_input<Call>();
+    }
+
+    DataflowBuffer auxiliary(Call::auxiliary_cb_id);
+    auxiliary.wait_front(Call::auxiliary_tile_count);
+
+    constexpr auto shape =
+        compute_kernel_lib::ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
+    constexpr auto layout =
+        Call::row_stride == 0
+            ? compute_kernel_lib::ReduceInputMemoryLayout::contiguous()
+            : compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
+    constexpr auto chunk =
+        compute_kernel_lib::ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
+
+    auto post_scale = [](uint32_t dst_index) {
+        if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
+            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
+            compute_kernel_lib::detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
+        }
+    };
+
+    if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        compute_kernel_lib::reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+                shape,
+                layout,
+                compute_kernel_lib::NoAccumulation{},
+                post_scale,
+                Call::partial_mode,
+                chunk);
+    } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
+        compute_kernel_lib::reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+                shape,
+                layout,
+                compute_kernel_lib::Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index)
+                    .with_reload(Call::reload_mode),
+                post_scale,
+                Call::partial_mode,
+                chunk);
+    } else {
+        static_assert(
+            Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
+            "Unknown reduction accumulation mode");
+        compute_kernel_lib::reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+                shape,
+                layout,
+                compute_kernel_lib::Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index)
+                    .with_reload(Call::reload_mode),
+                compute_kernel_lib::NoOp{},
+                Call::partial_mode,
+                chunk);
+    }
+
+    auxiliary.pop_front(Call::auxiliary_tile_count);
+}
+
+// This walk belongs to the example kernel, not the reduce library. A fused
+// consumer can instead issue CallAt<I> at arbitrary points in its own control
+// flow and interleave unrelated work between calls.
+template <uint32_t CALL_INDEX = 0>
+ALWI void issue_calls() {
+    if constexpr (CALL_INDEX < num_calls) {
+        issue_call<CallAt<CALL_INDEX>>();
+        issue_calls<CALL_INDEX + 1>();
     }
 }
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t dim = get_compile_time_arg_val(3);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(4);
-    constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t algo = get_compile_time_arg_val(6);  // 0 ReduceTile, 1 AccumulateViaAdd
-    constexpr uint32_t partial_elems = get_compile_time_arg_val(7);  // valid elems in last tile (0=aligned)
-    constexpr uint32_t policy_id = get_compile_time_arg_val(8);  // 0 Bulk, 1 WaitAndPop, 2 WaitUpfront, 3 NoWait
-    constexpr uint32_t recfg = get_compile_time_arg_val(9);  // 1 = ReduceDataFormatReconfigMode::NONE after 1st call
-    constexpr uint32_t row_stride = get_compile_time_arg_val(10);  // tile pitch per row (0=contiguous=Wt)
-    constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // AccumulateViaAdd AVG reduce_factor
-    constexpr uint32_t avg_post_op = get_compile_time_arg_val(12);  // 1 = multiply the finished AVG by 2
-    constexpr uint32_t skip_within = get_compile_time_arg_val(13);  // 1 = ReduceWithinTile::Skip (inputs pre-collapsed)
-    constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
-    constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
-    constexpr bool pops_input = (policy_id <= 1u);  // Bulk + WaitAndPop pop the input; no-pop policies do not
+    using First = CallAt<0>;
+    constexpr uint32_t startup_src_b =
+        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
+            ? First::input_cb_id
+            : First::auxiliary_cb_id;
+    compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
 
-    using namespace compute_kernel_lib;
-    // AccumulateViaAdd partial: one 0/1 mask tile at scaler-CB index 0.
-    const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
-    const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
-    const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
-                                      : ReduceInputMemoryLayout::contiguous();
-
-    // Boot init (once, never in the loop). The library reduce() does the light per-call reconfig, so
-    // compute_kernel_hw_startup is the same boot for both datapaths (the algo==1 form keeps SrcA=SrcB=cb_in
-    // explicit); the heavy hw_configure lives here.
-    if constexpr (algo == 1u) {
-        compute_kernel_hw_startup(cb_in, cb_in, cb_out);
-    } else {
-        compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
-    }
-
-    // No-pop policies (WaitUpfront / NoWait) never pop the input, so arm the resident block ONCE — re-arming
-    // it per iter with no matching pop would overflow the in_tiles-deep sharded CB (producer-blocked hang).
-    // Pop policies (Bulk / WaitAndPop) re-arm each iter, balanced by reduce()'s pop.
-    if constexpr (!pops_input) {
-        cb_reserve_back(cb_in, in_tiles);
-        cb_push_back(cb_in, in_tiles);
-    }
+    arm_persistent_inputs();
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-        if constexpr (pops_input) {
-            cb_reserve_back(cb_in, in_tiles);
-            cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
-        }
-        do_reduce_block<algo, dim, policy_id, n_reduced, avg_post_op, skip_within>(iter, SHAPE, ML, PS, recfg);
+        issue_calls();
         if (iter + 1 < kernel_iters) {
-            cb_wait_front(cb_out, out_tiles);
-            cb_pop_front(cb_out, out_tiles);
+            DataflowBuffer output(LastCall::output_cb_id);
+            output.wait_front(output_tile_count<LastCall>());
+            output.pop_front(output_tile_count<LastCall>());
         }
     }
 }
 """
 
 
-# =============================================================================
-# Accumulate kernel — the reduce library's cross-call Accumulate over AccumulateViaAdd. The reduce dim is
-# split into `num_chunks` chunks; each chunk is one reduce() call that folds the running RAW partial-sum tile
-# (in cb_acc) into the pairwise add and, only on the LAST chunk, finalizes (sfpu_reduce) into cb_out. Non-last
-# chunks point the output CB at cb_acc so the raw partial is written back for the next reload. AVG uses a
-# compile-time factor for the grand total and applies it only on the last finalize. To exercise the fold without
-# a chunked reader, each chunk re-arms and reduces the SAME resident block.
-# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, num_chunks, mean_n, partial_elems, row_stride, reload_id]
-# =============================================================================
-_ACCUM_KERNEL = r"""
+# The only dataflow source in this module. It sees a physical tile recipe, not
+# reduction algorithms, masks/scalers, call ordering, or accumulation policy.
+_AUXILIARY_KERNEL = r"""
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/reduce.h"
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 namespace {
-constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_acc = 2, cb_out = 16;
+constexpr uint32_t kernel_iters = get_compile_time_arg_val(0);
+constexpr uint32_t reduce_args_offset = 1;
+constexpr uint32_t num_calls = get_compile_time_arg_val(reduce_args_offset);
+constexpr uint32_t first_call_args_offset =
+    reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+static_assert(num_calls > 0, "A reduction plan must contain at least one call");
+static_assert(kernel_iters > 0, "The kernel iteration count must be positive");
 
-// One accumulate chunk (dim-templated to keep the per-dim reduce() calls in one place + thread the partial
-// scaler / memory layout cleanly). Non-last chunks write the RAW partial into cb_acc; the LAST chunk finalizes
-// into cb_out. AVG receives the GRAND-TOTAL compile-time reduce_factor, spanning every chunk.
-// A partial (ROW/COL) folds the masked last reduce-dim tile into EACH chunk's sum; row_stride reduces the
-// first Wt columns of a wider resident block.
-template <uint32_t dim, uint32_t mean_n>
-ALWI void do_accum_chunk(
-    uint32_t c, bool is_last,
-    compute_kernel_lib::ReduceInputBlockShape shape,
-    compute_kernel_lib::ReduceInputMemoryLayout ml,
-    compute_kernel_lib::ReducePartialScaler ps,
-    compute_kernel_lib::AccumulateReloadMode reload) {
-    using namespace compute_kernel_lib;
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    constexpr ReduceDim RDIM = (dim == 0u)   ? ReduceDim::REDUCE_ROW
-                               : (dim == 1u) ? ReduceDim::REDUCE_COL
-                                             : ReduceDim::REDUCE_SCALAR;
-    constexpr auto POLICY = ReduceInputPolicy::BulkWaitBulkPop;
-    constexpr auto RECFG = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
-    constexpr auto ALG = ReduceAlgorithm::AccumulateViaAdd;
-    if constexpr (mean_n > 0u) {
-        if (is_last)
-            reduce<
-                PoolType::AVG,
-                RDIM,
-                cb_in,
-                cb_scaler,
-                cb_out,
-                POLICY,
-                RECFG,
-                ReduceFp32Mode::Fast,
-                ALG,
-                ReduceWithinTile::Collapse,
-                mean_n>(
-                shape, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), NoOp{}, ps);
-        else
-            reduce<
-                PoolType::AVG,
-                RDIM,
-                cb_in,
-                cb_scaler,
-                cb_acc,
-                POLICY,
-                RECFG,
-                ReduceFp32Mode::Fast,
-                ALG,
-                ReduceWithinTile::Collapse,
-                mean_n>(
-                shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
-    } else {
-        if (is_last)
-            reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
-                shape, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), NoOp{}, ps);
-        else
-            reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
-                shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
+template <uint32_t CALL_INDEX>
+using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, CALL_INDEX>;
+
+template <uint32_t CALL_INDEX = 0>
+FORCE_INLINE void prepare_call_auxiliaries() {
+    if constexpr (CALL_INDEX < num_calls) {
+        using Call = CallAt<CALL_INDEX>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Call>();
+        prepare_call_auxiliaries<CALL_INDEX + 1>();
     }
 }
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t dim = get_compile_time_arg_val(3);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(4);
-    constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(6);
-    constexpr uint32_t mean_n = get_compile_time_arg_val(7);  // 0 = SUM; >0 = MEAN, divide the GRAND total by mean_n
-    constexpr uint32_t partial_elems = get_compile_time_arg_val(8);  // valid elems in last reduce-dim tile (0=aligned)
-    constexpr uint32_t row_stride = get_compile_time_arg_val(9);  // tile pitch per row (0=contiguous=Wt)
-    constexpr uint32_t reload_id = get_compile_time_arg_val(10);  // 0 FoldViaAdd, 1 CopySeedPairs, 2 CopySeedUniform
-    constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
-    constexpr uint32_t in_tiles = Ht * row_pitch * NC;
-
-    using namespace compute_kernel_lib;
-    constexpr AccumulateReloadMode RELOAD = (reload_id == 0u)   ? AccumulateReloadMode::FoldViaAdd
-                                            : (reload_id == 2u) ? AccumulateReloadMode::CopySeedUniform
-                                            : (reload_id == 3u) ? AccumulateReloadMode::CopySeedSfpuAdd
-                                            : (reload_id == 4u) ? AccumulateReloadMode::CopySeedZeroPair
-                                                                : AccumulateReloadMode::CopySeedPairs;
-    const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
-    const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
-    const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
-                                      : ReduceInputMemoryLayout::contiguous();
-
-    // AccumulateViaAdd is a binary-add datapath -> boot with SrcA = SrcB = cb_in (once, never in the loop);
-    // the reduce() helper only does light per-call (re)config. The packer format is re-adapted per call
-    // (RECFG=INPUT_AND_OUTPUT) as the output alternates cb_acc (non-last) / cb_out (last).
-    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
-
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-        for (uint32_t c = 0; c < num_chunks; ++c) {
-            cb_reserve_back(cb_in, in_tiles);
-            cb_push_back(cb_in, in_tiles);  // re-arm the resident block for this chunk
-            do_accum_chunk<dim, mean_n>(c, (c + 1u == num_chunks), SHAPE, ML, PS, RELOAD);
-        }
-        if (iter + 1 < kernel_iters) {
-            cb_wait_front(cb_out, out_tiles);
-            cb_pop_front(cb_out, out_tiles);
-        }
+        prepare_call_auxiliaries();
     }
 }
 """
 
 
-# =============================================================================
-# Scaler dataflow kernel (library paths only) — fills the AVG scaler tile for the dim + reduce factor.
-# CT args: [dim, reduce_factor]
-# =============================================================================
-_SCALER_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(1);
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    if constexpr (dim == 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_ROW,
-                                                                 reduce_factor>();
-    } else if constexpr (dim == 1) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_COL,
-                                                                 reduce_factor>();
-    } else {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_SCALAR,
-                                                                 reduce_factor>();
-    }
-}
-"""
-
-
-# =============================================================================
-# Mask dataflow kernel (accumulate_via_add_inline partial path) — fills a 0/1 mask tile: 1.0 in the first
-# `partial_elems` reduce-dim positions, 0 elsewhere. PoolType::SUM makes the scaler value 1.0, so the
-# partial-fill helper produces exactly a mask. ROW -> row-0 layout (consumed by mul_tiles_bcast_rows).
-# CT args: [dim, partial_elems]
-# =============================================================================
-_MASK_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t partial_elems = get_compile_time_arg_val(1);
-    using ckernel::ReduceDim;
-    {
-        DeviceZoneScopedN("mask_fill");  // time the 0/1 mask-tile fill on the DM (reader) core
-        if constexpr (dim == 0) {
-            dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ReduceDim::REDUCE_ROW>(partial_elems);
-        } else {
-            dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ReduceDim::REDUCE_COL>(partial_elems);
-        }
-    }
-}
-"""
-
-
-# Composite host-planned payload: mask at CB index 0 followed by zero at index 1. This is the partial-input
-# form used by CopySeedZeroPair, and deliberately exercises prepare_planned_reduce_aux's combined recipe.
-_MASK_ZERO_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#define REDUCE_AUX_MASK 1
-#define REDUCE_AUX_ZERO 1
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t partial_elems = get_compile_time_arg_val(1);
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    if constexpr (dim == 0) {
-        dataflow_kernel_lib::prepare_planned_reduce_aux<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            1.0f, partial_elems);
-    } else {
-        dataflow_kernel_lib::prepare_planned_reduce_aux<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_COL>(
-            1.0f, partial_elems);
-    }
-}
-"""
-
-
-# =============================================================================
-# Zero-tile dataflow kernel (CopySeedZeroPair accumulate) — fills the scaler CB with an all-zero tile that the
-# odd-leftover add_tiles pairs with. prepare_reduce_scaler zeroes the whole tile then skips the fill for a 0
-# value, so scaler_f=0 yields a genuine all-positions-zero tile.
-# =============================================================================
-_ZERO_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    // scaler_f=0 -> prepare_reduce_scaler zeroes the whole tile and skips the fill, yielding an all-zero tile.
-    // PoolType / ReduceDim are irrelevant for a zero fill.
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>(0.0f, 32);
-}
-"""
-
-
-# =============================================================================
-# Host-side layout + program descriptor
-# =============================================================================
 def _single_core():
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
@@ -706,36 +335,193 @@ def _dtype_of(name):
 
 
 def _scratch_cb(cb_id, data_format, num=1):
-    ts = ttnn.tile_size(data_format)
-    fmt = ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=data_format, page_size=ts)
-    return ttnn.CBDescriptor(total_size=ts * num, core_ranges=_single_core(), format_descriptors=[fmt])
+    page_size = ttnn.tile_size(data_format)
+    fmt = ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=data_format, page_size=page_size)
+    return ttnn.CBDescriptor(
+        total_size=page_size * num,
+        core_ranges=_single_core(),
+        format_descriptors=[fmt],
+    )
 
 
-def _resolve(variant, dim, Ht, Wt):
-    if variant == "dispatch":
-        return "accumulate_via_add" if reduced_count(dim, Ht, Wt) >= dispatch_min(dim) else "reduce_tile"
-    return variant
+def _planner_tensor_spec(tensor, logical_shape):
+    """Keep native dtype/layout/memory metadata while restoring the logical NC dimension."""
+    memory = tensor.memory_config()
+    return ttnn.TensorSpec(
+        ttnn.Shape(list(logical_shape)),
+        tensor.dtype,
+        tensor.layout,
+        memory.memory_layout,
+        memory.shard_spec,
+        memory.buffer_type,
+        tensor.spec.tile,
+    )
+
+
+def _logical_input_shape(dim, Ht, Wt, NC, partial_elems):
+    height = Ht * TILE
+    width = Wt * TILE
+    if partial_elems:
+        if dim == "row":
+            width = (Wt - 1) * TILE + partial_elems
+        elif dim == "col":
+            height = (Ht - 1) * TILE + partial_elems
+    return (NC, height, width)
+
+
+def _logical_output_shape(dim, Ht, Wt, NC):
+    if dim == "row":
+        return (NC, Ht * TILE, TILE)
+    if dim == "col":
+        return (NC, TILE, Wt * TILE)
+    return (NC, TILE, TILE)
 
 
 def _mean_n(dim, Ht, Wt, partial_elems):
-    """N_true = the compile-time reduce_factor for each AccumulateViaAdd AVG output.
-    partial_elems>0 -> the last reduce-dim tile holds that many valid elements, so N_true =
-    (reduced_tiles-1)*32 + partial_elems (ROW/COL only); else the tile-aligned count."""
-    if partial_elems > 0:
+    if partial_elems:
         return (reduced_count(dim, Ht, Wt) - 1) * TILE + partial_elems
     return elements_reduced(dim, Ht, Wt)
 
 
-def _mean_scaler_bits(dim, Ht, Wt, partial_elems):
-    """Float bits of 1/N_true for the mean (used by the inline kernel's own scaler CT arg)."""
-    return struct.unpack("<I", struct.pack("<f", 1.0 / _mean_n(dim, Ht, Wt, partial_elems)))[0]
+def _hardware(input_tensor, fp32_dest):
+    return _PLANNER.ReduceHardwareConfig(
+        arch=input_tensor.device().arch(),
+        fp32_dest_acc_en=fp32_dest,
+        dst_full_sync_en=False,
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+    )
+
+
+def _natural_input_cb_bytes(input_tensor, Ht, Wt, NC, row_stride=0):
+    physical_wt = row_stride or Wt
+    return NC * Ht * physical_wt * ttnn.tile_size(input_tensor.dtype)
+
+
+def _legacy_policy_cap(input_tensor, dim, Ht, Wt, NC, policy, row_stride=0):
+    """Translate old benchmark labels into the planner's supported L1 constraint."""
+    natural = _natural_input_cb_bytes(input_tensor, Ht, Wt, NC, row_stride)
+    if policy == "stream":
+        return 2 * ttnn.tile_size(input_tensor.dtype)
+    if policy == "no_wait":
+        memory_layout = input_tensor.memory_config().memory_layout
+        directly_aliasable = (dim == "row" and memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED) or (
+            dim == "col" and memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        )
+        if directly_aliasable:
+            return 0
+    return natural
+
+
+def _input_cb_ids(count):
+    ids = [cb_id for cb_id in range(64) if cb_id not in (CB_AUXILIARY, CB_ACCUMULATOR, CB_OUT)]
+    if count > len(ids):
+        raise ValueError(f"at most {len(ids)} input CBs fit in this example, got {count}")
+    return ids[:count]
+
+
+def _find_cb_requirement(call, role):
+    return next(requirement for requirement in call.plan.cb_requirements if requirement.role == role)
+
+
+def _make_sequence_plan(
+    input_tensor,
+    output_tensor,
+    *,
+    dim,
+    Ht,
+    Wt,
+    NC,
+    fp32_dest,
+    input_cb_ids,
+    reduce_math,
+    scalar,
+    partial_elems,
+    policy,
+    max_input_cb_bytes=None,
+):
+    input_spec = _planner_tensor_spec(input_tensor, _logical_input_shape(dim, Ht, Wt, NC, partial_elems))
+    output_spec = _planner_tensor_spec(output_tensor, _logical_output_shape(dim, Ht, Wt, NC))
+    cap = (
+        max_input_cb_bytes
+        if max_input_cb_bytes is not None
+        else _legacy_policy_cap(input_tensor, dim, Ht, Wt, NC, policy)
+    )
+    configs = [
+        (
+            cb_id,
+            _PLANNER.ReduceCallConfig(
+                input_spec=input_spec,
+                output_spec=output_spec,
+                reduce_math=reduce_math,
+                reduce_dim=_REDUCE_DIM[dim],
+                scalar=scalar,
+                fp32_mode=_PLANNER.ReduceFp32Mode.FAST,
+                max_input_cb_bytes=cap,
+            ),
+        )
+        for cb_id in input_cb_ids
+    ]
+    return _PLANNER.make_reduce_sequence_plan(
+        reductions=configs,
+        cb_ids=_PLANNER.ReduceSequenceCbIds(
+            auxiliary_cb_id=CB_AUXILIARY,
+            accumulator_cb_id=CB_ACCUMULATOR,
+            output_cb_id=CB_OUT,
+        ),
+        hardware=_hardware(input_tensor, fp32_dest),
+    )
+
+
+def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg=None):
+    compile_time_args = [kernel_iters]
+    sequence.append_to(compile_time_args)
+    reader = ttnn.KernelDescriptor(
+        kernel_source=_AUXILIARY_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=_single_core(),
+        compile_time_args=compile_time_args,
+        runtime_args=[],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=_PLANNED_REDUCE_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=_single_core(),
+        compile_time_args=compile_time_args,
+        config=compute_cfg or ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
+    )
+    return [reader, compute]
+
+
+def _planned_cbs(input_bindings, output_tensor, sequence, accumulation_dtype):
+    auxiliary_pages = max(
+        _find_cb_requirement(call, _PLANNER.ReduceCbRole.AUXILIARY).page_count for call in sequence.calls
+    )
+    cbs = [ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor) for cb_id, tensor in input_bindings]
+    cbs.extend(
+        [
+            ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
+            _scratch_cb(CB_AUXILIARY, input_bindings[0][1].dtype, auxiliary_pages),
+        ]
+    )
+    if len(sequence.calls) > 1:
+        cbs.append(_scratch_cb(CB_ACCUMULATOR, accumulation_dtype, out_tile_count_from_plan(sequence.calls[0])))
+    return cbs
+
+
+def out_tile_count_from_plan(call):
+    if call.plan.reduce_dim == _PLANNER.ReduceDimension.ROW:
+        return call.plan.Ht * call.plan.batches
+    if call.plan.reduce_dim == _PLANNER.ReduceDimension.COLUMN:
+        return call.plan.Wt * call.plan.batches
+    return call.plan.batches
 
 
 def create_program_descriptor(
     input_tensor,
     output_tensor,
     *,
-    variant,
+    variant="automatic",
     dim,
     Ht,
     Wt,
@@ -750,175 +536,60 @@ def create_program_descriptor(
     reconfig=None,
     row_stride=0,
     within_tile="collapse",
+    max_input_cb_bytes=None,
 ):
-    if variant not in VARIANTS:
-        raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
-    if dim not in _DIM_ID:
+    if variant not in VARIANTS + _LEGACY_VARIANTS:
+        raise ValueError(f"variant must be 'automatic', got {variant!r}")
+    if dim not in DIMS:
         raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
-    if min(Ht, Wt, NC) < 1 or kernel_iters < 1:
+    if accum not in DTYPES:
+        raise ValueError(f"accum must be one of {DTYPES}, got {accum!r}")
+    if min(Ht, Wt, NC, kernel_iters) < 1:
         raise ValueError("Ht, Wt, NC and kernel_iters must be positive")
     if input_tensor.dtype != ttnn.bfloat16 or input_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("input must be bfloat16 TILE_LAYOUT")
     if output_tensor.dtype != ttnn.float32 or output_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("output must be float32 TILE_LAYOUT")
-    if partial_elems and (partial_elems < 1 or partial_elems >= TILE):
-        raise ValueError(
-            f"partial_elems must be in [1, {TILE - 1}] (valid elems in the last tile), got {partial_elems}"
-        )
-    if stream:  # back-compat alias for the old boolean flag
+    if partial_elems and (not 1 <= partial_elems < TILE or dim == "scalar"):
+        raise ValueError("partial_elems must be in [1, 31] and is supported for row/col only")
+    if stream:
         policy = "stream"
-    if policy not in _POLICY_ID:
+    if policy not in POLICIES:
         raise ValueError(f"policy must be one of {POLICIES}, got {policy!r}")
-    # The library handles all four policies for both datapaths; the example's guards below capture the combos
-    # the reduce_block SETUP (one row-major resident shard, single core) can actually feed correctly.
-    if policy != "bulk":
-        # The inline hand-written kernel is BulkWaitBulkPop-only; policies apply only to the library paths.
-        if variant == "accumulate_via_add_inline":
-            raise ValueError("policy applies to the library variants only (inline is BulkWaitBulkPop)")
-        # A column stream would need tiles delivered in column-major order; the row-major resident shard
-        # cannot supply that (both datapaths would read the wrong tiles) — reject for reduce_tile too.
-        if policy == "stream" and dim == "col":
-            raise ValueError("stream is contiguous-only (row/scalar); col needs a column-ordered reader")
-        if policy == "stream" and partial_elems and dim != "row":
-            raise ValueError("streaming partial is ROW-only")
-        # No-pop policies keep the input resident and bulk-reserve the outputs; exercise them aligned +
-        # contiguous + no-accumulate here (the paths compose with partial/row_stride in the library, but the
-        # example wiring for those is proven on the bulk policy).
-        if policy in _NO_POP and (partial_elems or row_stride):
-            raise ValueError("no-pop policies are exercised aligned + contiguous in this example")
-    if avg_post_op and variant != "accumulate_via_add":
-        raise ValueError("avg_post_op is an accumulate_via_add validation lever")
-    if reconfig not in (None, "none_after_first"):
-        raise ValueError(f"reconfig must be None or 'none_after_first', got {reconfig!r}")
-    if reconfig and variant != "accumulate_via_add":
-        raise ValueError("reconfig (NONE-after-first) needs variant=accumulate_via_add")
-    if within_tile not in WITHIN_TILE:
-        raise ValueError(f"within_tile must be one of {WITHIN_TILE}, got {within_tile!r}")
-    if within_tile == "skip":
-        # ReduceWithinTile::Skip: the input tiles are already collapsed on the reduce axis, so the reduce is a
-        # pure cross-tile sum (the SFPU finalize is dropped). AVG applies its compile-time reduce_factor to the
-        # raw sum; partial is rejected by the library because there are no uncollapsed lanes left to mask.
-        if variant != "accumulate_via_add":
-            raise ValueError("within_tile='skip' is an accumulate_via_add lever")
-        if partial_elems:
-            raise ValueError("within_tile='skip' rejects partial (a lane mask has nothing to mask)")
-        if dim not in ("row", "col"):
-            raise ValueError("within_tile='skip' is exercised on row/col in this example")
     if row_stride:
-        # row_stride (a wider resident block, padded rows) is a library AccumulateViaAdd feature: reduce the
-        # first Wt columns of each row_stride-wide row. ROW/COL only, indexed (not streaming), no partial.
-        if variant != "accumulate_via_add":
-            raise ValueError("row_stride needs variant=accumulate_via_add")
-        if dim not in ("row", "col"):
-            raise ValueError("row_stride is supported for row/col only (scalar walks a 2-D block)")
-        if policy == "stream":
-            raise ValueError("row_stride is incompatible with stream (a pure contiguous stream)")
-        if partial_elems:
-            raise ValueError("row_stride + partial not supported")
-        if row_stride < Wt:
-            raise ValueError(f"row_stride ({row_stride}) must be >= Wt ({Wt})")
+        raise ValueError("row_stride is no longer a manual kernel lever; describe it in the tensor layout")
+    if within_tile != "collapse":
+        raise ValueError("within_tile is selected by the host planner")
+    if reconfig is not None:
+        raise ValueError("reconfiguration policy is selected by the host planner")
 
-    path = _resolve(variant, dim, Ht, Wt)
-    dim_id = _DIM_ID[dim]
     fp32_dest = accum == "fp32"
+    local_elements = _mean_n(dim, Ht, Wt, partial_elems)
+    scalar = (2.0 if avg_post_op else 1.0) / local_elements
+    sequence = _make_sequence_plan(
+        input_tensor,
+        output_tensor,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        fp32_dest=fp32_dest,
+        input_cb_ids=[CB_IN],
+        reduce_math=_PLANNER.ReduceMath.AVG,
+        scalar=scalar,
+        partial_elems=partial_elems,
+        policy=policy,
+        max_input_cb_bytes=max_input_cb_bytes,
+    )
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
-    out_tiles = out_tile_count(dim, Ht, Wt, NC)
-
-    cbs = [
-        ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
-        ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-    ]
-
-    if path == "accumulate_via_add_inline":
-        if partial_elems and dim not in ("row", "col"):
-            raise ValueError("partial (non-tile-aligned) reduce is supported for row/col only")
-        scaler_bits = _mean_scaler_bits(dim, Ht, Wt, partial_elems)
-        compute = ttnn.KernelDescriptor(
-            kernel_source=_FAST_BLOCK_KERNEL,
-            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-            core_ranges=_single_core(),
-            compile_time_args=[Ht, Wt, NC, dim_id, kernel_iters, int(fp32_dest), scaler_bits, out_tiles, partial_elems],
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
-        )
-        if not partial_elems:
-            return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
-        # partial: the last reduce-dim tile is folded in masked -> a 0/1 mask tile in the scaler CB.
-        cbs.append(_scratch_cb(CB_SCALER, ttnn.bfloat16))
-        mask = ttnn.KernelDescriptor(
-            kernel_source=_MASK_KERNEL,
-            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-            core_ranges=_single_core(),
-            compile_time_args=[dim_id, partial_elems],
-            runtime_args=[],
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-        return ttnn.ProgramDescriptor(kernels=[mask, compute], semaphores=[], cbs=cbs)
-
-    # Library paths: both call reduce<AVG>. ReduceTile consumes the reader-prepared scaler; AccumulateViaAdd
-    # applies the compile-time reduce_factor after its SFPU SUM. A partial AccumulateViaAdd reduce consumes a
-    # 0/1 mask tile from the scaler CB.
-    algo = 1 if path == "accumulate_via_add" else 0
-    use_mask = bool(partial_elems)
-    if partial_elems:
-        if path != "accumulate_via_add":
-            raise ValueError("partial (non-tile-aligned) reduce needs variant=accumulate_via_add")
-        if dim not in ("row", "col"):
-            raise ValueError("partial reduce is supported for row/col only")
-    cbs.append(_scratch_cb(CB_SCALER, ttnn.bfloat16 if use_mask else _dtype_of(accum)))
-    compute = ttnn.KernelDescriptor(
-        kernel_source=_HELPER_BLOCK_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[
-            Ht,
-            Wt,
-            NC,
-            dim_id,
-            kernel_iters,
-            out_tiles,
-            algo,
-            partial_elems,
-            _POLICY_ID[policy],
-            int(reconfig == "none_after_first"),
-            row_stride,
-            # Skip's inputs are pre-collapsed partials, so the mean divides by the number of CONTRIBUTORS
-            # (one per reduce-dim tile), not by the element count along the axis.
-            reduced_count(dim, Ht, Wt) if within_tile == "skip" else _mean_n(dim, Ht, Wt, partial_elems),
-            int(avg_post_op),
-            int(within_tile == "skip"),
-        ],
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
-    )
-    reader = ttnn.KernelDescriptor(
-        kernel_source=_MASK_KERNEL if use_mask else _SCALER_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[dim_id, partial_elems] if use_mask else [dim_id, elements_reduced(dim, Ht, Wt)],
-        runtime_args=[],
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    return ttnn.ProgramDescriptor(kernels=[reader, compute], semaphores=[], cbs=cbs)
+    kernels = _planned_kernels(sequence, kernel_iters=kernel_iters, fidelity=fidelity, fp32_dest=fp32_dest)
+    cbs = _planned_cbs([(CB_IN, input_tensor)], output_tensor, sequence, _dtype_of(accum))
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
-def run_op(
-    input_tensor,
-    *,
-    variant,
-    dim,
-    Ht,
-    Wt,
-    NC=1,
-    accum="fp32",
-    kernel_iters=1,
-    math_fidelity=None,
-    partial_elems=0,
-    stream=False,
-    policy="bulk",
-    avg_post_op=False,
-    reconfig=None,
-    row_stride=0,
-    within_tile="collapse",
-):
+def run_op(input_tensor, **kwargs):
+    dim, Ht, Wt = kwargs["dim"], kwargs["Ht"], kwargs["Wt"]
+    NC = kwargs.get("NC", 1)
     out_hw = output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(out_hw)),
@@ -927,33 +598,10 @@ def run_op(
         input_tensor.device(),
         create_sharded_memory_config(out_hw),
     )
-    descriptor = create_program_descriptor(
-        input_tensor,
-        output,
-        variant=variant,
-        dim=dim,
-        Ht=Ht,
-        Wt=Wt,
-        NC=NC,
-        accum=accum,
-        kernel_iters=kernel_iters,
-        math_fidelity=math_fidelity,
-        partial_elems=partial_elems,
-        stream=stream,
-        policy=policy,
-        avg_post_op=avg_post_op,
-        reconfig=reconfig,
-        row_stride=row_stride,
-        within_tile=within_tile,
-    )
+    descriptor = create_program_descriptor(input_tensor, output, **kwargs)
     return ttnn.generic_op([input_tensor, output], descriptor)
 
 
-# =============================================================================
-# Cross-call Accumulate (AccumulateViaAdd) — the reduce dim is split into `num_chunks` chunks, each folding a
-# running RAW partial-sum tile (cb_acc) into the pairwise add; the last chunk finalizes into cb_out. SUM leaves
-# the grand total unchanged; AVG applies one compile-time factor covering all chunks.
-# =============================================================================
 def create_accumulate_program_descriptor(
     input_tensor,
     output_tensor,
@@ -971,136 +619,68 @@ def create_accumulate_program_descriptor(
     row_stride=0,
     reload="copy_pairs",
     acc_unpack_to_dest=False,
+    max_input_cb_bytes=None,
 ):
-    if dim not in _DIM_ID:
+    if dim not in DIMS:
         raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
-    if reload not in _RELOAD_ID:
+    if reload not in RELOADS:
         raise ValueError(f"reload must be one of {RELOADS}, got {reload!r}")
-    if acc_unpack_to_dest and accum != "fp32":
-        raise ValueError("acc_unpack_to_dest (UnpackToDestFp32 accumulator) requires accum='fp32'")
-    if min(Ht, Wt, NC) < 1 or kernel_iters < 1 or num_chunks < 1:
+    # Compatibility-only label: reload policy is part of the returned plan.
+    if min(Ht, Wt, NC, kernel_iters, num_chunks) < 1:
         raise ValueError("Ht, Wt, NC, kernel_iters and num_chunks must be positive")
     if input_tensor.dtype != ttnn.bfloat16 or input_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("input must be bfloat16 TILE_LAYOUT")
     if output_tensor.dtype != ttnn.float32 or output_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("output must be float32 TILE_LAYOUT")
-    if partial_elems and (partial_elems < 1 or partial_elems >= TILE):
-        raise ValueError(f"partial_elems must be in [1, {TILE - 1}], got {partial_elems}")
-    if partial_elems and dim not in ("row", "col"):
-        raise ValueError("partial + accumulate is row/col only (scalar corner mask not encodable)")
+    if partial_elems and (not 1 <= partial_elems < TILE or dim == "scalar"):
+        raise ValueError("partial_elems must be in [1, 31] and is supported for row/col only")
     if row_stride:
-        if dim not in ("row", "col"):
-            raise ValueError("row_stride + accumulate is row/col only (scalar walks a 2-D block)")
-        if partial_elems:
-            raise ValueError("row_stride + partial not wired in the accumulate example")
-        if row_stride < Wt:
-            raise ValueError(f"row_stride ({row_stride}) must be >= Wt ({Wt})")
-    if reload == "fold" and acc_unpack_to_dest:
-        raise ValueError(
-            "reload='fold' (FoldViaAdd) reads the accumulator via SrcB, disabled for an "
-            "UnpackToDestFp32 CB; use a CopySeed* reload (copy_pairs/copy_uniform/copy_sfpu/copy_zero)"
-        )
+        raise ValueError("row_stride is no longer a manual kernel lever; describe it in the tensor layout")
+    if acc_unpack_to_dest and accum != "fp32":
+        raise ValueError("acc_unpack_to_dest requires accum='fp32'")
 
-    dim_id = _DIM_ID[dim]
     fp32_dest = accum == "fp32"
-    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
-    out_tiles = out_tile_count(dim, Ht, Wt, NC)
-    use_mask = bool(partial_elems)
-    use_zero = reload == "copy_zero"
-    # MEAN over the accumulated chunks: each chunk re-reduces the same block, so the GRAND-total element
-    # count is num_chunks * (elements reduced per chunk, incl. the partial count). This compile-time factor
-    # must span all chunks, not just the last block's count. 0 selects SUM.
-    mean_n = num_chunks * _mean_n(dim, Ht, Wt, partial_elems) if mean else 0
+    local_elements = _mean_n(dim, Ht, Wt, partial_elems)
+    reduce_math = _PLANNER.ReduceMath.AVG if mean else _PLANNER.ReduceMath.SUM
+    scalar = 1.0 / local_elements if mean else 1.0
+    input_cb_ids = _input_cb_ids(num_chunks)
+    sequence = _make_sequence_plan(
+        input_tensor,
+        output_tensor,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        fp32_dest=fp32_dest,
+        input_cb_ids=input_cb_ids,
+        reduce_math=reduce_math,
+        scalar=scalar,
+        partial_elems=partial_elems,
+        policy="bulk",
+        max_input_cb_bytes=max_input_cb_bytes,
+    )
 
-    cbs = [
-        ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
-        ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-        # Auxiliary CB: mask, zero, or [mask, zero] for partial CopySeedZeroPair.
-        _scratch_cb(
-            CB_SCALER,
-            ttnn.bfloat16 if (use_mask or use_zero) else _dtype_of(accum),
-            num=2 if (use_mask and use_zero) else 1,
-        ),
-        # Running RAW partial-sum tile per output, at the accumulation (DEST) dtype — fp32 when fp32_dest_acc
-        # is on, so the cross-chunk partial keeps full precision. The library reconfigures SRCA/SRCB around
-        # each accumulator read (copy_tile / add_tiles do NOT), so the accumulator CB may differ in format
-        # from the bf16 input (mirrors the standard reload_accumulator_if_needed).
-        _scratch_cb(CB_ACC, _dtype_of(accum), num=out_tiles),
-    ]
+    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     compute_cfg = ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest)
     if acc_unpack_to_dest:
-        # Tag the accumulator CB UnpackToDestFp32 -> lossless fp32 reload via copy_tile, and SrcA/B access
-        # DISABLED for it (so FoldViaAdd, which reads it via SrcB, is incorrect here; the CopySeed* reloads
-        # are the sanctioned access). Per-CB vector indexed by CB id; only CB_ACC is tagged.
-        modes = [ttnn.UnpackToDestMode.Default] * 64  # one entry per circular buffer (NUM_CIRCULAR_BUFFERS)
-        modes[CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        modes = [ttnn.UnpackToDestMode.Default] * 64
+        modes[CB_ACCUMULATOR] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute_cfg.unpack_to_dest_mode = modes
-    compute = ttnn.KernelDescriptor(
-        kernel_source=_ACCUM_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[
-            Ht,
-            Wt,
-            NC,
-            dim_id,
-            kernel_iters,
-            out_tiles,
-            num_chunks,
-            mean_n,
-            partial_elems,
-            row_stride,
-            _RELOAD_ID[reload],
-        ],
-        config=compute_cfg,
+    kernels = _planned_kernels(
+        sequence,
+        kernel_iters=kernel_iters,
+        fidelity=fidelity,
+        fp32_dest=fp32_dest,
+        compute_cfg=compute_cfg,
     )
-    kernels = [compute]
-    if use_mask:
-        # The partial fold consumes mask[0]. CopySeedZeroPair additionally consumes zero[1].
-        kernels.insert(
-            0,
-            ttnn.KernelDescriptor(
-                kernel_source=_MASK_ZERO_KERNEL if use_zero else _MASK_KERNEL,
-                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-                core_ranges=_single_core(),
-                compile_time_args=[dim_id, partial_elems],
-                runtime_args=[],
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-        )
-    elif use_zero:
-        # All-zero scaler tile the CopySeedZeroPair odd-leftover add_tiles pairs with.
-        kernels.insert(
-            0,
-            ttnn.KernelDescriptor(
-                kernel_source=_ZERO_KERNEL,
-                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-                core_ranges=_single_core(),
-                compile_time_args=[],
-                runtime_args=[],
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-        )
+    input_bindings = [(cb_id, input_tensor) for cb_id in input_cb_ids]
+    cbs = _planned_cbs(input_bindings, output_tensor, sequence, _dtype_of(accum))
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
-def run_accumulate(
-    input_tensor,
-    *,
-    dim,
-    Ht,
-    Wt,
-    NC=1,
-    accum="fp32",
-    kernel_iters=1,
-    num_chunks=2,
-    mean=False,
-    math_fidelity=None,
-    partial_elems=0,
-    row_stride=0,
-    reload="copy_pairs",
-    acc_unpack_to_dest=False,
-):
+def run_accumulate(input_tensor, **kwargs):
+    dim, Ht, Wt = kwargs["dim"], kwargs["Ht"], kwargs["Wt"]
+    NC = kwargs.get("NC", 1)
     out_hw = output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(out_hw)),
@@ -1109,21 +689,5 @@ def run_accumulate(
         input_tensor.device(),
         create_sharded_memory_config(out_hw),
     )
-    descriptor = create_accumulate_program_descriptor(
-        input_tensor,
-        output,
-        dim=dim,
-        Ht=Ht,
-        Wt=Wt,
-        NC=NC,
-        accum=accum,
-        kernel_iters=kernel_iters,
-        num_chunks=num_chunks,
-        mean=mean,
-        math_fidelity=math_fidelity,
-        partial_elems=partial_elems,
-        row_stride=row_stride,
-        reload=reload,
-        acc_unpack_to_dest=acc_unpack_to_dest,
-    )
+    descriptor = create_accumulate_program_descriptor(input_tensor, output, **kwargs)
     return ttnn.generic_op([input_tensor, output], descriptor)
