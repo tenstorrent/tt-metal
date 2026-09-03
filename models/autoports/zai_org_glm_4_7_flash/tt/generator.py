@@ -78,6 +78,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
+
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.model import DEFAULT_HF_MODEL_ID, GLM47FlashModel, resolve_checkpoint_dir
 
@@ -153,6 +155,10 @@ def _new_counters() -> Dict[str, int]:
         "host_argmax_calls": 0,
         "kv_cache_resets": 0,
         "trace_recaptures": 0,
+        # A sampler run that did *not* replay a captured trace. Non-zero means
+        # either an explicit request seed (eager by construction in
+        # models/common/sampling) or a sampling mode whose trace is missing.
+        "eager_sampling_steps": 0,
     }
 
 
@@ -205,6 +211,10 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         #: _maybe_recapture_after_compile.
         self._program_cache_entries_at_capture = None
         self._sampling_traced = False
+        #: Sampling modes whose trace this generator failed to capture, so
+        #: a mode that cannot be captured costs one eager step, not one per
+        #: step (see :meth:`_capture_new_sampling_mode`).
+        self._sampler_uncapturable = set()
         self._sampling_params = GREEDY
 
     # ------------------------------------------------------------------ construction helpers
@@ -214,8 +224,32 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         return self.model.max_seq_len
 
     def set_sampling_params(self, sampling_params: SamplingParams):
-        """Push sampling params to the device. Changing between greedy and
-        sampled params is fine; the sampling trace is keyed on the mode."""
+        """Push sampling params to the device.
+
+        Changing between greedy and sampled params is fine, and costs one
+        counted eager sampler step: ``SamplingGenerator`` keeps at most one
+        mode's trace, so the new mode has none, and
+        :meth:`decode_step_traced` samples it eagerly once and then captures
+        it off-trace. Across a request boundary the recapture usually happens
+        earlier still, at the prefill's program-cache check. Either way no
+        capture is ever begun with the decode trace live; see
+        :meth:`decode_step_traced`.
+
+        ``SamplingParams.seed`` is refused rather than ignored. This generator
+        drives ``SamplingGenerator.reset_sampling_params`` directly, and only
+        ``apply_prefill_state`` reaches ``seed_manager.reset_seed`` /
+        ``get_new_values``, so a request seed set here never becomes active:
+        ``has_active_request_seed()`` stays false and the draw is unseeded. A
+        caller who asks for a reproducible stream and silently does not get
+        one is worse off than one who gets an error (work log FM-023).
+        """
+        if sampling_params is not None and getattr(sampling_params, "seed", None) is not None:
+            raise ValueError(
+                "SamplingParams.seed is not supported by this generator: it applies params through "
+                "SamplingGenerator.reset_sampling_params, which does not touch the seed manager, so the "
+                "seed would be silently ignored. Leave seed=None, or extend the generator to drive "
+                "SamplingGenerator.apply_prefill_state at the request boundary."
+            )
         if self.sampling is None:
             self._sampling_params = sampling_params
             return
@@ -622,6 +656,44 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         self.counters["model_trace_replays"] += 1
 
+    def _capture_new_sampling_mode(self):
+        """After one eager step in a new mode, capture it so the rest replay.
+
+        Called only from :meth:`decode_step_traced`, only when the sampler
+        just ran eagerly. That eager run is what makes the capture possible:
+        it compiled this mode's programs with ``count_tokens=True``, which is
+        what the captured body needs and what
+        ``SamplingGenerator.precompile`` (``count_tokens=False``) does not
+        compile. Capturing before that step fails with "Cannot load new
+        binaries during trace capture".
+
+        The capture goes through :meth:`recapture_decode_traces`, which
+        releases the model decode trace first, so nothing is live while the
+        sampler pre-compiles. Capturing in place instead is the unsafe
+        allocation ``probe/trace_alloc_probe.py`` measures.
+
+        Mid-request is safe: the recapture warms every slot at position -1,
+        writes no KV, and restores the tokens and positions it found. It is
+        the same call ``_maybe_recapture_after_compile`` already makes between
+        the prefill and the first decode step.
+
+        One eager step per mode change, not per step. A mode the recapture
+        cannot capture is remembered and never retried, so a failure costs
+        throughput once and then stays eager and counted rather than
+        thrashing.
+        """
+        key, _slot = self._sampler_mode_key()
+        if key is None or key in self._sampler_uncapturable:
+            return
+        try:
+            self.recapture_decode_traces()
+        except RuntimeError as exc:  # pragma: no cover - device-dependent
+            self._sampler_uncapturable.add(key)
+            logger.warning(f"sampling mode {key} could not be captured, staying eager: {exc}")
+            return
+        if not self._sampler_trace_ready():
+            self._sampler_uncapturable.add(key)
+
     def _ensure_sampling_trace(self):
         """Capture the sampling trace if it is missing but usable.
 
@@ -643,18 +715,88 @@ class GLM47FlashGenerator(_ReadinessGenerator):
             return
         self.recapture_decode_traces()
 
+    def _sampler_seeded(self):
+        """True when an explicit request seed is active.
+
+        ``models/common/sampling`` runs a seeded draw eagerly every token by
+        construction, so that a trace replay cannot observe stale seed state.
+        Correct, but it means the sampler is *not* replaying a trace, and the
+        counters have to say so.
+        """
+        return self.sampling is not None and self.sampling.seed_manager.has_active_request_seed()
+
+    def _sampler_mode_key(self):
+        """``SamplingGenerator``'s trace key for the current sampling mode.
+
+        ``_trace_slot`` creates the (empty) slot as a side effect, which is
+        what ``SamplingGenerator.sample`` does too, so asking is free of
+        surprises. Returns ``(key, slot)``, or ``(None, None)`` with no
+        sampler.
+        """
+        if self.sampling is None:
+            return None, None
+        sampling = self.sampling
+        return sampling._trace_slot(
+            sampling._penalties_active,
+            getattr(sampling, "_log_probs_active", False),
+            sampling.tt_sampling.force_argmax_sampling,
+        )
+
+    def _sampler_trace_ready(self):
+        """True when the sampler has a captured trace for the *current* mode.
+
+        ``SamplingGenerator`` keys its trace on
+        ``(penalties, log_probs, force_argmax, bucket)``, so a
+        ``sampling_params`` change can select a mode that has no trace yet.
+        ``recapture_decode_traces`` also calls ``reset_trace``, which releases
+        every *other* mode's slot, so switching back to a mode that used to be
+        captured lands here too.
+        """
+        if self.sampling is None:
+            return True
+        if self._sampler_seeded():
+            return False
+        _key, slot = self._sampler_mode_key()
+        return slot["id"] is not None
+
     def decode_step_traced(self):
         """One traced token-out decode step. Returns nothing; the sampled token
-        is already in the persistent decode token tensor."""
+        is already in the persistent decode token tensor.
+
+        ``enable_trace`` is passed per step from :meth:`_sampler_trace_ready`
+        rather than from ``self._sampling_traced``, and that is load-bearing.
+        ``SamplingGenerator`` keys its trace on
+        ``(penalties, log_probs, force_argmax, bucket)`` and its
+        ``reset_trace`` clears every key, so at most one mode is captured at a
+        time and a ``sampling_params`` change selects a mode with no trace.
+        Passing ``enable_trace=True`` then makes ``SamplingGenerator.sample``
+        call ``capture_trace(..., skip_precompile=False)`` from inside the
+        decode loop, which *begins a capture while the model decode trace is
+        still registered*: the buffers its pre-compile allocates are exactly
+        the unsafe kind ``probe/trace_alloc_probe.py`` measures and the
+        tracker refuses to replay over.
+
+        So the step samples eagerly, counts it as ``eager_sampling_steps``,
+        and then hands the new mode to :meth:`_capture_new_sampling_mode`,
+        which captures it off-trace so the rest of the loop replays. One
+        eager step per mode change, and never a capture under a live trace
+        (work log FM-023). Skipping that second half is how a mode change
+        would leave the sampler eager for the process lifetime: correct
+        tokens, silently slower, no error, which is exactly the failure
+        :meth:`_ensure_sampling_trace` exists to prevent.
+        """
         self._ensure_sampling_trace()
         self.replay_decode_trace()
         if self.host_sampling or self.sampling is None:
             self._host_sample_into_tokens(self._decode_logits)
             return
-        self.sampling.sample(
-            logits=self._decode_logits, tt_out_tok=self._tokens_dev, enable_trace=self._sampling_traced
-        )
-        self.counters["sampling_trace_replays"] += 1
+        replayed = self._sampling_traced and self._sampler_trace_ready()
+        self.sampling.sample(logits=self._decode_logits, tt_out_tok=self._tokens_dev, enable_trace=replayed)
+        # Counted by what actually happened: an eager sampler run is not a
+        # trace replay, and reporting it as one is how a silent fallback hides.
+        self.counters["sampling_trace_replays" if replayed else "eager_sampling_steps"] += 1
+        if not replayed and not self._sampler_seeded():
+            self._capture_new_sampling_mode()
 
     def _host_sample_into_tokens(self, logits):
         """Explicit host-sampling compatibility mode (never the measured path)."""

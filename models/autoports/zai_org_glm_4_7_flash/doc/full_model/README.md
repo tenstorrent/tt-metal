@@ -14,16 +14,16 @@ optimized-decoder deployment policy, unchanged.
 
 | | value | how measured |
 |---|---|---|
-| **TTFT, prompt 128, prefill + first token** | **334.0 ms** (383.2 tok/s prefill) | warmed shape, `perf.json`, `tests/test_full_model_perf.py`. Prefill + the untraced prefill sampler + the one-word token readback. The request-boundary cache reset is **excluded**: it is drained before the clock starts and reported separately at 28.3 ms, so the request-boundary-inclusive figure is **362.7 ms** |
+| **TTFT, prompt 128, prefill + first token** | **334.2 ms** (383.0 tok/s prefill) | warmed shape, `perf.json`, `tests/test_full_model_perf.py`. Prefill + the untraced prefill sampler + the one-word token readback. The request-boundary cache reset is **excluded**: it is drained before the clock starts and reported separately at 28.3 ms, so the request-boundary-inclusive figure is **362.5 ms** |
 | **TTFT, prompt 154, request-boundary inclusive** (AIME reference) | **590.8 ms** | `logs/run_teacher_forcing.log`, the first request in a fresh process. This row **includes** the reset, because that is what the shared harness measures, so it is not directly comparable with the row above; `first_use_ttft.json` splits it (28.3 ms reset + 555.4 ms prefill and first token = 583.7 ms) and shows **0 new programs compiled** on either the first or the second request, because every terminal program family for a single-chunk prompt is warmed before capture |
-| **Traced decode, batch 1 (model trace only, logits out)** | **21.760 ms/token = 45.96 t/s/u** | model decode trace only (no sampling, no token feedback) |
-| **Traced decode, batch 1 (token-out)** | **23.007 ms/token = 43.47 t/s/u** | model trace + sampling trace + the one caller-visible token read |
+| **Traced decode, batch 1 (model trace only, logits out)** | **21.758 ms/token = 45.96 t/s/u** | model decode trace only (no sampling, no token feedback) |
+| **Traced decode, batch 1 (token-out)** | **22.994 ms/token = 43.49 t/s/u** | model trace + sampling trace + the one caller-visible token read |
 | Token-out decode as the readiness harness drives it | 44.07 t/s/u | `run_teacher_forcing`, `generate(..., enable_trace=True)` |
-| End to end, prompt 128 / generate 128 | 3.240 s (39.51 tok/s) | includes cache reset, prefill, 127 traced steps |
+| End to end, prompt 128 / generate 128 | 3.241 s (39.49 tok/s) | includes cache reset, prefill, 127 traced steps |
 
-The two decode numbers differ by the sampler (1.122 ms) plus the token
-readback (0.125 ms); 21.760 + 1.121 + 0.125 = 23.006, and `perf.json` records
-the measured token-out step at 23.007. Both paths replay the
+The two decode numbers differ by the sampler (1.124 ms) plus the token
+readback (0.112 ms); 21.758 + 1.124 + 0.112 = 22.994, which is exactly the
+token-out step `perf.json` records. Both paths replay the
 same captured model trace. Every number in this table comes from the single
 committed `perf.json` (and, for the two harness rows, from
 `logs/run_teacher_forcing.log`) produced by the sweep in work log FM-016.
@@ -273,7 +273,7 @@ Both on-device greedy strategies were **measured** on this chip on a real
 | force-argmax (untilize + `ttnn.argmax`) | **1.084 ms** | 1.060 ms | 32/32 |
 
 Force-argmax is 0.024 ms faster, i.e. 2% of the sampler and **0.1% of the
-23.01 ms token-out step**. It is not selected, for two reasons that outweigh
+22.99 ms token-out step**. It is not selected, for two reasons that outweigh
 that margin: it is greedy-only, so any top-k/top-p request flips
 `force_argmax_sampling` and `reset_sampling_params` then calls `reset_trace()`
 (`models/common/sampling/generator.py:270-272`), releasing and recapturing
@@ -341,9 +341,43 @@ trace. `_maybe_recapture_after_compile` compares
 `mesh_device.num_program_cache_entries()` against its value at capture time, so
 the trigger is exact rather than a guess, and it is wired into every prefill
 entry point. It costs **178.6 ms** once per new prefill shape
-(`first_use_ttft.json` at prompt 4300; `perf.json` measures 176.8 at prompt
+(`first_use_ttft.json` at prompt 4300; `perf.json` measures 175.8 at prompt
 3000) and is timed apart from both TTFT and the decode rate. Verified with `TT_METAL_TRACE_ALLOC_TRACKING=1`
 in `trace_alloc.json`; work log FM-016.
+
+A `sampling_params` change is the other way a capture could happen at the
+wrong moment, and it needs its own rule. `SamplingGenerator` keys its trace on
+`(penalties, log_probs, force_argmax, bucket)` and its `reset_trace` clears
+every key, so **at most one sampling mode is captured at a time** and any
+change - in either direction, including back to greedy - selects a mode with
+no trace. Asking `sample` to trace that mode would start a capture with the
+model decode trace still live. Asking it to sample eagerly forever would be a
+silent permanent slowdown. So the step samples eagerly **once**, counts it as
+`eager_sampling_steps`, and then captures the new mode through
+`recapture_decode_traces`, which releases the model trace first. That one
+eager step is load-bearing: it compiles the mode's programs with
+`count_tokens=True`, which the captured body needs and
+`SamplingGenerator.precompile` (`count_tokens=False`) does not compile, so
+capturing before it fails with `Cannot load new binaries during trace
+capture`. Measured on the 47-layer model, four steps per direction:
+`eager_sampling_steps 1, sampling_trace_replays 3, trace_recaptures 1` each
+way, with the greedy tokens bit-identical across the round trip
+(`test_sampling_mode_change_never_captures_under_a_live_trace`); re-run with
+`TT_METAL_TRACE_ALLOC_TRACKING=1`, where every post-recapture replay is
+accepted. The shipped measured path never enters it:
+`perf.json` reports `eager_sampling_steps 0` over the 128-token generation.
+A mode the recapture cannot capture is remembered and never retried, so a
+failure costs one eager step rather than one per step.
+
+`SamplingParams.seed` is **refused**, not honoured and not ignored.
+`set_sampling_params` raises `ValueError` for a non-`None` seed, because this
+generator applies params through `reset_sampling_params`, which never reaches
+`seed_manager.reset_seed`; only `apply_prefill_state` does. A seed set here
+would leave `has_active_request_seed()` false and the draw unseeded, which a
+caller asking for a reproducible stream cannot detect
+(`test_request_seed_is_refused_rather_than_silently_ignored`). Wiring
+`apply_prefill_state` into the request boundary is stage-07 work; work log
+FM-023.
 
 Because the trace advances the position itself, the loop also has to know where
 the context ends: the paged cache and page table only represent
@@ -360,10 +394,10 @@ guard cannot be stepped around
 
 ```
 layer-stack lower bound   46 x 0.491 (moe) + 1 x 0.447 (dense) = 23.033 ms/token
-traced model decode                                              21.760 ms/token
-  + sampling trace                                              + 1.121 ms
-  + token readback                                              + 0.125 ms
-  = token-out decode                                              23.007 ms/token
+traced model decode                                              21.758 ms/token
+  + sampling trace                                              + 1.124 ms
+  + token readback                                              + 0.112 ms
+  = token-out decode                                              22.994 ms/token
 ```
 
 The full model runs **below** the naive layer-stack lower bound. That is
@@ -391,7 +425,7 @@ top of the stack figure and are small:
   cache) are not. The two un-profiled measurements agree with each other, so
   read the profiled pair as device-op attribution and the un-profiled ones as
   latency.
-* **Sampler** 1.121 ms wall clock, **4.9%** of the token-out step. Its device
+* **Sampler** 1.124 ms wall clock, **4.9%** of the token-out step. Its device
   footprint is the whole difference between the two profiled windows, which is
   the honest way to state it: **1046.1 us/step**, 38.0% of the 2-layer
   token-out window (2754.4 minus 1708.3 us/step). Of that, 861.0 us is in
@@ -404,7 +438,7 @@ top of the stack figure and are small:
   appears only in this window (19.8 MB at ~490 GB/s, i.e. the logged
   `migrating L1 input (9912320 B) to DRAM`), plus `BinaryNg` +36.7,
   `Typecast` +32.6 and small Reduce/Untilize/Concat/Unary deltas. 1046.1 us is
-  also the figure consistent with the 1.121 ms wall clock; an earlier revision
+  also the figure consistent with the 1.124 ms wall clock; an earlier revision
   of this report quoted the 861 us subtotal as the whole footprint, which left
   the rest unexplained. Two stage-07 levers follow from it: the per-step
   `ManualSeed` is pure waste in a greedy (`k=1, p=0, temp=1`) trace, and the
@@ -442,8 +476,8 @@ is measured *before* them with no profiler flushes in the loop, and the
 per-window `op_to_op_gap` in the summary is dominated by those flushes - it is
 instrumentation, not the real dispatch gap.
 
-Prefill is the weak side, and it degrades with depth: 383.2 tok/s at prompt 128
-(334.0 ms), 432.8 tok/s at prompt 3000 (6935.3 ms, physical 3072), and 90.6 tok/s
+Prefill is the weak side, and it degrades with depth: 383.0 tok/s at prompt 128
+(334.2 ms), 433.0 tok/s at prompt 3000 (6932.6 ms, physical 3072), and 90.6 tok/s
 at the full 202733-token context (2236.6 s). Decode degrades far more gently -
 1.81 -> 6.66 ms per traced step from position 128 to 202751 on the 2-layer probe
 (`decode_position_scaling.json`), and 136.3 ms/token measured at full context on
@@ -623,12 +657,12 @@ early collapse, no doubled tokens, no control-token leakage.
 
 | suite | result |
 |---|---|
-| `tests/test_full_model.py` (batch 1, all 47 layers) | **45 passed** (258 s, `logs/pytest_full_model_only.log`) |
-| `tests/test_full_model_perf.py` | **2 passed** (217 s) |
+| `tests/test_full_model.py` (batch 1, all 47 layers) | **47 passed** (251 s, `logs/fm023/pytest_full_model_only.log`) |
+| `tests/test_full_model_perf.py` | **2 passed** (216 s, `logs/fm023/pytest_full_model_perf.log`) |
 | `tests/test_full_model_batch.py` (`GLM47_FM_BATCH=32`, `GLM47_FM_BATCH_SEQ=8192`, echoed into the log) | **10 passed** (307 s) |
 | `tests/test_prefill_padding.py` (bucket-padding non-leakage, the supported-context boundary, the inactive-slot cache proof) | **13 passed** (46 s, `logs/pytest_prefill_padding.log`) |
 | `tests/test_full_context.py` (202733-token prefill, decode to 202751, needle read) | **3 passed** (40 min), periodic continuation 9/9, needle top-1 correct |
-| `test_full_model.py` + `test_prefill_padding.py` in one session (`logs/pytest_full_model.log`) | **58 passed** (302 s) |
+| `test_full_model.py` + `test_prefill_padding.py` in one session (`logs/fm023/pytest_full_model_and_prefill_padding.log`) | **60 passed** (294 s) |
 | `tests/test_full_model_profile.py` under Tracy | **2 passed** |
 | `run_prefill_check` / `run_teacher_forcing` / `run_autoregressive` | pass, above bar |
 | `check_degenerate_output.py` | clean (exit 0) |
@@ -636,7 +670,15 @@ early collapse, no doubled tokens, no control-token leakage.
 
 Every row above comes from one sweep, `tests/run_evidence_sweep.sh` (committed,
 so the ordering and flags are reproducible rather than reconstructable), run
-against a committed source tree with no stage source changes in it. That is
+against a committed source tree with no stage source changes in it - with three
+exceptions, all from FM-023, which added two tests to
+`tests/test_full_model.py` after that sweep: the three rows citing
+`logs/fm023/` were re-run afterwards, on the same device, one suite at a time.
+Their sweep-run counterparts are still in `logs/` (`pytest_full_model_only.log`
+at 45 passed, `pytest_full_model.log` at 58) and are the pre-FM-023 record.
+`logs/fm023/` also holds the same sampling tests re-run under
+`TT_METAL_TRACE_ALLOC_TRACKING=1`, which is the unsafe-allocation gate for the
+mid-loop recapture FM-023 added. That is
 recorded rather than asserted, and the recording is deliberately not just
 `git status`: `.git/info/exclude` lists `models/autoports/`, so a plain
 `git status` over this directory reports no untracked file at all.
@@ -753,7 +795,7 @@ run logs corroborate the contents.
 6. **The sampler always processes 32 logits rows**, even at batch 1: `ttnn.sampling`
    takes one row per user and `TTSampling` floors its batch to a full tile, so
    the four 38720-wide `ttnn.topk` calls (664.5 us/step) do 32x the work a
-   single active user needs. That is the concrete stage-07 lever on the 1.121 ms
+   single active user needs. That is the concrete stage-07 lever on the 1.124 ms
    sampler cost, and it needs a `TTSampling` change rather than a model-side one.
 7. **Batch 32 is tested at 8192 tokens/user**, not at the full context. The
    limit is physical: 174 GiB of cache would be needed. Recorded in
@@ -775,15 +817,15 @@ run logs corroborate the contents.
 10. **Prefill call-to-call spread is small, but read it from the artifact.**
    With the timer bracketed by `ttnn.synchronize_device`, `compile_cost.json`
    records `repeat_spread_pct` of 0.0-0.1% at both prompt 128 and prompt 3000,
-   and `perf.json`'s back-to-back 3000-token pair (6935.3 / 6931.7 ms) differs
-   by 0.05%. That is tight enough to compare single calls, which the
+   and `perf.json`'s back-to-back 3000-token pair (6932.6 / 6928.0 ms) differs
+   by 0.07%. That is tight enough to compare single calls, which the
    cold-versus-warm rows above rely on. It was not true of the earlier
    unsynchronized probe, so treat any prefill figure from before FM-015 as
    host-enqueue time rather than prefill time. The decode numbers are averages
    over 64 replays and are stable to <1%. Prefill cost *is* prompt-content
    dependent, though, because MoE routing is: at the same prompt length and the
-   same physical shape, this report's prompt prefills in 333.1 ms and
-   `measure_cold_compile.py`'s in 313.8 ms, 6.2% apart
+   same physical shape, this report's prompt prefills in 332.8 ms and
+   `measure_cold_compile.py`'s in 313.7 ms, 6.1% apart
    (`perf.json: ttft_breakdown_ms`). Compare prefill numbers across probes only
    at the same prompt text.
 
@@ -791,13 +833,15 @@ run logs corroborate the contents.
 
 Recorded rather than fixed. Every item here is a freshness, provenance,
 coverage or documentation-polish issue, not a correctness defect: the
-functional gates in the Tests table are green, and nine independent
+functional gates in the Tests table are green, and ten independent
 `$stage-review` rounds have been run against this stage (work log FM-011,
-FM-012, FM-015 through FM-022). Rounds 1 through 7 each found at least one
+FM-012, FM-015 through FM-023). Rounds 1 through 7 each found at least one
 correctness defect, each of which was fixed with a regression test; round 8
-found none. The stage's review budget caps further rounds, because each
-evidence sweep costs 90 minutes of hardware and the remaining findings do not
-change what the model does.
+found none; round 10 found one, the mid-loop sampling-mode capture, which is
+fixed with two regression tests and recorded in FM-023 along with the silently
+ignored request seed that diagnosing it turned up. The stage's review budget
+caps further rounds, because each evidence sweep costs 90 minutes of hardware
+and the remaining findings do not change what the model does.
 
 * **The figure check cannot tell "quoted as history" from "stale".**
   `tests/check_report_numbers.py` requires every measurement in this report,
@@ -815,12 +859,41 @@ change what the model does.
   measurement. The periodic-continuation gate is 9/9 in that one run and the
   needle read is one sample. Nothing here is averaged across sweeps except the
   decode figures, which are 64 replays inside one run.
-* **One artifact is not from the recorded sweep.**
+* **Most artifacts carry the pre-FM-023 `tt/generator.py` hash.** FM-023
+  changed that file after the sweep, so every stamped artifact's
+  `source_manifest` went stale and `logs/sweep_provenance.log` is a
+  pre-change record. Four artifacts were regenerated, the ones the change
+  could plausibly move: `trace_alloc.json` (verdict still `clean`),
+  `accuracy.json` and `capacity.json` (**bit-identical values**, only the
+  hashes moved) and `perf.json` (run-to-run noise, and the report quotes the
+  fresh values). The rest were not, because re-running them is the 90-minute
+  sweep the review budget rules out; none of them exercises a
+  `sampling_params` change, which is the only path FM-023 alters, and
+  `perf.json`'s `eager_sampling_steps 0` is the direct evidence that the
+  measured path is unchanged. The three re-run pytest logs live in
+  `logs/fm023/` and the Tests table names them.
+* **Two artifacts are not from the recorded sweep.**
   `logs/trace_alloc_full_model.log` was re-run on its own after the sweep,
   because a stray signal from a previous session's cleanup terminated the
-  sweep's own run of it (work log FM-022). The log says so at the bottom.
-  Everything else in `doc/full_model/` is from the single run recorded in
-  `logs/sweep_provenance.log`.
+  sweep's own run of it (work log FM-022); the log says so at the bottom. And
+  `trace_alloc.json` with its `logs/trace_alloc_probe.log` is the FM-023
+  re-run described above. Everything else in `doc/full_model/` is from the
+  single run recorded in `logs/sweep_provenance.log`.
+* **A request seed can be refused but not honoured.**
+  `set_sampling_params` raises on `SamplingParams.seed` rather than dropping
+  it silently, which is the honest half. Actually honouring it means driving
+  `SamplingGenerator.apply_prefill_state` at the request boundary, so the
+  seed manager is reset and `has_active_request_seed()` becomes true, and
+  that is a serving-integration change this stage does not make. Until then a
+  caller wanting reproducibility gets it from greedy params, not from a seed
+  (work log FM-023).
+* **The mid-loop mode-change cost is counted, not timed.** Changing
+  `sampling_params` inside a decode loop spends one eager sampler step plus
+  one `recapture_decode_traces` on a single token. The counters say it
+  happened (`eager_sampling_steps 1`, `trace_recaptures 1`) and the recapture
+  is measured elsewhere at 175.8-178.6 ms per shape, but no artifact times
+  that particular token, so the latency spike is stated as its parts rather
+  than measured end to end.
 * **The shared readiness harness now opens devices differently for every
   model.** `models/common/readiness_check/mesh_device.py` gained
   `--trace-region-size` / `--l1-small-size` with defaults of 90 MB and 32 KiB,
@@ -879,7 +952,7 @@ change what the model does.
 
 ```
 tt/model.py, tt/generator.py                     implementation
-tests/test_full_model.py                         batch-1 correctness suite (45 tests)
+tests/test_full_model.py                         batch-1 correctness suite (47 tests)
 tests/test_full_model_batch.py                   batch-32 suite (own pytest session)
 tests/test_full_model_perf.py                    wall-clock perf + capacity
 tests/test_full_model_profile.py                 reduced Tracy variant
@@ -920,6 +993,7 @@ doc/full_model/tracy/                            tt-perf-report txt/csv(.gz)/png
 doc/full_model/qualitative/                      prompt format, HF control, side by side
 doc/full_model/degenerate_check.json             degeneracy verdict
 doc/full_model/logs/                             every run above, incl. watcher/*.log.gz
+doc/full_model/logs/fm023/                       the three suites re-run after FM-023, plus the tracker gate
 doc/full_model/logs/sweep_provenance.log         HEAD, tracked + untracked files, sha256 of every stage source file, at both ends
 doc/full_model/logs/sweep_run.log                the sweep's own stdout: every step's exit code and watcher fault count
 tests/run_evidence_sweep.sh                      the sweep itself

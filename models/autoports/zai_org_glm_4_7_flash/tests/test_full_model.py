@@ -664,6 +664,113 @@ def test_lazy_trace_capture_in_decode_forward_preserves_the_prompt(gen):
     assert lazy == control, (control, lazy)
 
 
+def test_sampling_mode_change_never_captures_under_a_live_trace(gen):
+    """A `sampling_params` change costs one eager step, then replays again.
+
+    `SamplingGenerator` keys its trace on
+    `(penalties, log_probs, force_argmax, bucket)` and `reset_trace` clears
+    every key, so **at most one mode is captured at a time** and any change
+    selects a mode with no trace. Capturing it from inside the decode loop
+    would call `capture_trace` with the model decode trace still registered,
+    which allocates exactly the buffers `probe/trace_alloc_probe.py` shows the
+    tracker refusing to replay over. Leaving it eager instead would be silent
+    permanent slowdown.
+
+    So the change costs one counted eager step and one off-trace recapture,
+    after which the new mode replays; and the mode round trip must not move
+    the greedy tokens (work log FM-023).
+    """
+    ids = _prompt_ids(gen, 64)
+    penalized = SamplingParams(temperature=1.0, top_k=1, top_p=0.0, presence_penalty=0.5)
+
+    def live_slots():
+        return sum(1 for slot in gen.sampling._trace_states.values() if slot["id"] is not None)
+
+    def steps(n):
+        gen.reset_counters()
+        out = []
+        for _ in range(n):
+            gen.decode_step_traced()
+            out.append(gen.read_decode_tokens(1)[0])
+        c = dict(gen.counters)
+        # Whatever the split, every step sampled on device and the model trace
+        # replayed: no host argmax, no full-logits readback, no untraced model.
+        assert c["eager_sampling_steps"] + c["sampling_trace_replays"] == n, c
+        assert c["model_trace_replays"] == n, c
+        assert c["full_logits_readbacks"] == 0, c
+        assert c["host_argmax_calls"] == 0, c
+        return out, c
+
+    def request(params, n):
+        gen.reset()
+        gen.set_sampling_params(params)
+        first = gen._prefill_and_sample_first(ids)
+        gen.set_decode_positions([len(ids)])
+        out, c = steps(n)
+        return [first] + out, c
+
+    # 1. Greedy, as the shipped path runs it.
+    greedy, c = request(GREEDY, 4)
+    assert c["eager_sampling_steps"] <= 1, c
+    assert gen._sampler_trace_ready(), "greedy must end the request replaying its captured trace"
+    assert live_slots() == 1, "exactly one sampling mode is captured at a time"
+
+    # 2. Mid-loop change, with the model decode trace live. The new mode has
+    #    no slot (only one mode is ever captured), so this is the hazard case.
+    gen.set_sampling_params(penalized)
+    assert not gen._sampler_trace_ready(), "the premise: the new mode has no captured trace"
+    _, c = steps(4)
+    assert c["eager_sampling_steps"] == 1, c
+    assert c["sampling_trace_replays"] == 3, c
+    assert c["trace_recaptures"] == 1, c
+    assert gen._sampler_trace_ready(), "the new mode must be captured after its one eager step"
+    assert live_slots() == 1
+
+    # 3. Mid-loop back to greedy: its slot was released by step 2's recapture,
+    #    so the same one-eager-step-then-replay applies in reverse.
+    gen.set_sampling_params(GREEDY)
+    assert not gen._sampler_trace_ready()
+    _, c = steps(4)
+    assert c["eager_sampling_steps"] == 1, c
+    assert c["sampling_trace_replays"] == 3, c
+    assert c["trace_recaptures"] == 1, c
+    assert gen._sampler_trace_ready()
+
+    # 4. The round trip left the greedy path bit-identical.
+    again, c = request(GREEDY, 4)
+    assert again == greedy, (greedy, again)
+    assert c["eager_sampling_steps"] <= 1, c
+    assert gen._sampler_trace_ready()
+    gen.reset()
+
+
+def test_request_seed_is_refused_rather_than_silently_ignored(gen, expect_error):
+    """`SamplingParams(seed=...)` must raise here, not be quietly dropped.
+
+    This generator applies params through
+    `SamplingGenerator.reset_sampling_params`, which sets `_penalties_active`
+    and nothing else; only `apply_prefill_state` reaches
+    `seed_manager.reset_seed` / `get_new_values`. So a request seed set through
+    `set_sampling_params` never becomes active, `has_active_request_seed()`
+    stays false, and the draw is unseeded. A caller who asks for a
+    reproducible stream and does not get one has no way to tell, which is why
+    this is an error and not a warning (work log FM-023).
+    """
+    with expect_error(ValueError, "seed"):
+        gen.set_sampling_params(SamplingParams(temperature=0.8, top_k=20, top_p=0.9, seed=1234))
+    # refused, and refused *before* any state changed: greedy still replays.
+    gen.reset()
+    gen.set_sampling_params(GREEDY)
+    gen.reset_counters()
+    gen._prefill_and_sample_first(_prompt_ids(gen, 64))
+    gen.set_decode_positions([64])
+    gen.decode_step_traced()
+    gen.read_decode_tokens(1)
+    assert gen.counters["sampling_trace_replays"] == 1, dict(gen.counters)
+    assert gen.sampling is None or not gen.sampling.seed_manager.has_active_request_seed()
+    gen.reset()
+
+
 def test_generate_rejects_swallowed_sampling_kwargs(gen, expect_error):
     """`generate(..., top_k=20)` used to run greedy and say nothing."""
     with expect_error(TypeError, "sampling_params"):

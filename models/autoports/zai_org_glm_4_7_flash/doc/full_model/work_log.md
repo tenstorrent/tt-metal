@@ -1524,6 +1524,91 @@ remaining freshness, provenance and documentation-polish findings are recorded
 as limitations rather than chased with more sweeps, because each sweep is 90
 minutes of hardware and the functional gates have been green since FM-014.
 
+## FM-023: a `sampling_params` change mid-decode, and a seed that was going nowhere
+
+Review round 10 (the stage's last, under the review budget) raised one code
+finding worth the name: `decode_step_traced` passed `enable_trace=True` to
+`SamplingGenerator.sample` on every step, and a `sampling_params` change can
+select a sampling mode with no captured trace. `SamplingGenerator` keys its
+trace on `(penalties, log_probs, force_argmax, bucket)`, and `reset_trace`
+clears **every** key, so at most one mode is captured at a time: any change
+selects an empty slot, in both directions. With `enable_trace=True` and an
+empty slot, `sample` calls `capture_trace(..., skip_precompile=False)` from
+inside the decode loop, which begins a capture with the model decode trace
+still registered. That is exactly the unsafe-allocation window
+`probe/trace_alloc_probe.py` measures, and with
+`TT_METAL_TRACE_ALLOC_TRACKING=1` the tracker refuses to replay over what it
+allocates.
+
+Three things were tried before the shipped one, and the two that failed are
+worth recording because each looked right:
+
+1. **Recapture instead of capturing in place, before the eager step.** Fails
+   with `TT_FATAL: Cannot load new binaries during trace capture`.
+   `capture_decode_trace`'s warm pass calls `SamplingGenerator.precompile`,
+   which runs `_run_sampling(count_tokens=False)`, so the penalty-counting
+   programs the captured body needs are still uncached when the capture
+   starts.
+2. **Sample eagerly for any uncaptured mode and leave it there.** Correct
+   tokens and safe traces, and it was measured working, but it is a permanent
+   fallback: the mode stays eager for the process lifetime, which is precisely
+   the silent-slowdown failure `_ensure_sampling_trace` was written to close.
+   The first version of this fix stopped here; the counter it added
+   (`eager_sampling_steps`) is what made the next step visible.
+3. **Shipped: sample eagerly for that one step, then capture the mode
+   off-trace.** The eager step is what makes the capture possible, because it
+   compiles the mode's programs with `count_tokens=True`, which is what the
+   captured body needs and what `precompile` does not compile. So
+   `decode_step_traced` samples eagerly, counts it, and calls
+   `_capture_new_sampling_mode`, which goes through `recapture_decode_traces`
+   (model trace released first, warm pass at position -1, tokens and
+   positions restored) and leaves the new mode captured. One eager step per
+   mode change, then replays. A mode the recapture cannot capture is recorded
+   in `_sampler_uncapturable` and never retried, so a failure costs one eager
+   step and then stays eager and counted rather than thrashing.
+
+Measured on the full 47-layer model in
+`test_sampling_mode_change_never_captures_under_a_live_trace`: greedy to
+penalties-on **inside** the loop is `eager_sampling_steps 1`,
+`sampling_trace_replays 3`, `trace_recaptures 1` over four steps, and the same
+in reverse; the greedy tokens are bit-identical before and after the round
+trip; and every step still replays the model trace with no host argmax and no
+full-logits readback. The whole sampling-and-trace group of tests was re-run
+with `TT_METAL_TRACE_ALLOC_TRACKING=1` (10 passed), so the tracker accepted
+every replay after those mid-loop recaptures: nothing unsafe survives. The
+shipped measured path is unaffected, and `perf.json` now says so directly:
+`eager_sampling_steps 0` alongside `sampling_trace_replays 127`.
+
+**The seed was the real find.** Diagnosing the above turned up that
+`SamplingParams(seed=...)` was being accepted and silently ignored. This
+generator applies params through `SamplingGenerator.reset_sampling_params`,
+which sets `_penalties_active` and nothing else; only `apply_prefill_state`
+reaches `seed_manager.reset_seed` / `get_new_values`. So a request seed set
+through `set_sampling_params` never became active,
+`seed_manager.has_active_request_seed()` stayed false, and the draw was
+unseeded with nothing to tell the caller. A caller who asks for a reproducible
+stream and does not get one cannot detect that from the output, so
+`set_sampling_params` now raises `ValueError` naming the reason and the fix
+(`test_request_seed_is_refused_rather_than_silently_ignored`). Honouring the
+seed properly means driving `apply_prefill_state` at the request boundary,
+which is a stage-07 serving-integration change, not a full-model one.
+
+**What was re-measured, and what was not.** `tt/generator.py` changed, so the
+`source_manifest` in every stamped artifact went stale. Under the review
+budget the 90-minute sweep was not re-run. Four artifacts were regenerated,
+chosen because they are the ones this change could move:
+`trace_alloc.json` (the unsafe-allocation verdict itself: still `clean`, still
+reproducing the untreated hazard with the hook bypassed), `accuracy.json`
+(**bit-identical values**, so the change does not touch accuracy),
+`capacity.json` (identical) and `perf.json`. The perf deltas are run-to-run
+noise and the report now quotes the fresh values: token-out 23.007 -> 22.994
+ms/token (43.47 -> 43.49 t/s/u), model-only 21.760 -> 21.758, end to end 3.240
+-> 3.241 s, TTFT 334.0 -> 334.2 ms. The FM-018 figures are kept where the work
+log quotes them as that round's record, with `check_report_numbers.py`
+exceptions naming them as superseded. The remaining artifacts carry the
+pre-change `tt/generator.py` hash; that is recorded as a limitation in the
+README rather than fixed.
+
 ## FM-011b: checkpoint
 
 Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
