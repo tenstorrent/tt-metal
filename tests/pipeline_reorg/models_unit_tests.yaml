@@ -1417,11 +1417,10 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
-    # No vbench here: the generative-quality gate belongs to the single-galaxy e2e leg, which runs
-    # test_pipeline_wan.py with it enabled. It cost 447s of this leg's 2225s pipeline step (20%),
-    # and needs a dataset that is not mounted on every sc1 runner. The pipeline is still exercised
-    # end to end and the CLIP score check still runs; only the vbench metrics are skipped.
-    export WAN_SKIP_VBENCH=1
+    # test_pipeline_wan.py is deliberately absent: it cost 2225s of this leg's 6371s of test time
+    # (35%) to do 457s of denoising -- the rest was JIT compiles, vbench and weight loading -- and
+    # the single-galaxy e2e leg runs it with the quality gate enabled. No vbench env is needed here
+    # because nothing left in this leg calls it; the remaining tests are component-level.
     # Run every leg, accumulate failures, fail the job if any leg failed (LTX-2.3 bh_sc1 pattern).
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || rc=1; }
@@ -1429,7 +1428,6 @@
     run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
     run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
     run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
-    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
     run --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "bh_glx"
     run --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "bh_glx"
     exit $rc
@@ -1437,7 +1435,7 @@
   model_family: Wan
   skus:
     bh_sc1:
-      timeout: 150
+      timeout: 110
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
