@@ -137,23 +137,45 @@ class Gemma4Attention:
         # ttnn.copy'd in at stash time and cloned out (transient, same-call) at
         # consume time.
         # GEMMA4_TAIL_POOL_SLOTS bounds concurrent chunked-prefill requests per
-        # sliding layer (evict-oldest beyond it). The pool is boot-DRAM-resident
-        # on every sliding layer, so memory-starved parts (WH T3K: 12 GB/chip
-        # cannot boot 31B with 8 slots) can shrink it; 0 disables the pool and
-        # falls back to the legacy runtime stash, which is NOT trace-safe under
-        # interleaved replay (the G8 clobber) — use only for bring-up.
+        # sliding layer (evict-oldest beyond it, spilling to the legacy stash).
+        # The pool is boot-DRAM-resident on every sliding layer; 0 disables it
+        # and falls back to the legacy runtime stash, which is NOT trace-safe
+        # under interleaved replay (the G8 clobber) — use only for bring-up.
         self._tail_pool = None
         self._tail_pool_map = {}
-        _pool_slots = max(0, int(os.environ.get("GEMMA4_TAIL_POOL_SLOTS", "8")))
-        if config.is_sliding and config.sliding_window and _pool_slots == 0 and layer_idx == 0:
-            logger.warning(
-                "GEMMA4_TAIL_POOL_SLOTS=0: cross-chunk sliding tails use the "
-                "runtime clone stash, which is NOT trace-safe under interleaved "
-                "replay (#30187 class) — bring-up only, do not serve with this."
-            )
+        tp = max(1, int(getattr(mesh_config, "tp", 1)))
+        nkv_local = 1 if self.weights.kv_replicated else max(1, config.num_key_value_heads // tp)
+        _pool_env = os.environ.get("GEMMA4_TAIL_POOL_SLOTS")
+        if _pool_env is not None:
+            _pool_slots = max(0, int(_pool_env))
+        else:
+            # Footprint-aware default: the per-chip tail shard grows as
+            # kv_heads/tp, so a flat 8 slots costs 31B/tp=4 (QB2) ~1.6 GB/chip
+            # — enough to exhaust that cell's serving DRAM margin (vLLM CI OOM
+            # at the first conc32 burst with 33.6/33.7 GB allocated) — and OOMs
+            # 31B/tp=8 boot on 12 GB/chip WH. Budget a per-layer pool size by
+            # DRAM class and derive slots from the K+V bf16 tail footprint:
+            # BH: 12B/tp>=4 and 31B/tp=8 -> 8, 31B/tp=4 -> 4, 12B/tp=1 -> 2;
+            # WH: 12B/T3K -> 8, 31B/T3K -> 4 (all previously validated points).
+            from models.common.utility_functions import is_blackhole
+
+            per_slot_layer_bytes = 2 * nkv_local * int(config.sliding_window or 0) * int(config.head_dim) * 2
+            per_layer_budget = (16 if is_blackhole() else 8) * 1024 * 1024
+            _pool_slots = int(min(8, max(2, per_layer_budget // max(1, per_slot_layer_bytes))))
+        if config.is_sliding and config.sliding_window and layer_idx == 0:
+            if _pool_slots == 0:
+                logger.warning(
+                    "GEMMA4_TAIL_POOL_SLOTS=0: cross-chunk sliding tails use the "
+                    "runtime clone stash, which is NOT trace-safe under interleaved "
+                    "replay (#30187 class) — bring-up only, do not serve with this."
+                )
+            else:
+                logger.info(
+                    f"gemma4 sliding-tail pool: {_pool_slots} slots/layer "
+                    f"({'env' if _pool_env is not None else 'footprint default'}, "
+                    f"nkv_local={nkv_local}, tp={tp})"
+                )
         if config.is_sliding and config.sliding_window and _pool_slots:
-            tp = max(1, int(getattr(mesh_config, "tp", 1)))
-            nkv_local = 1 if self.weights.kv_replicated else max(1, config.num_key_value_heads // tp)
             shape = [1, nkv_local, int(config.sliding_window), int(config.head_dim)]
             self._tail_pool = [
                 (
