@@ -41,9 +41,12 @@
 //
 // tests/ttnn/unit_tests/operations/reduce/test_argmax_path_crossover_bench.py
 // re-measures those curves (V_SWEEP / H_SWEEP / CORE_SWEEP are the knobs).
-// Every swept shape lands within 8% of its own optimum, worst at H == 32,
-// which the automatic route sends to the SFPU anyway
-// (V == 32768, H == 32: 63 cores / 84.6 us against an optimum of 44 / 78.6).
+// Every swept shape lands within 10% of its own optimum. Worst is V == 8192,
+// H == 1: 10 cores / 6.1 us against an optimum of 9 / 5.5. The H == 32 row is
+// close behind (V == 32768: 63 cores / 84.8 us against 42 / 78.3) and the
+// automatic route sends it to the SFPU anyway. The full 15-shape table is in
+// the PR description; re-measure it by sweeping V_SWEEP / H_SWEEP / CORE_SWEEP
+// in the benchmark named above.
 // The curves turn back upward well before the grid fills (V == 32768, H == 1:
 // 11.3 us on 24 cores, 50.7 us on 111), so "use the whole grid" is not a safe
 // default for either path.
