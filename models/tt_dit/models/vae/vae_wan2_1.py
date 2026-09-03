@@ -49,6 +49,17 @@ if TYPE_CHECKING:
 CACHE_T = 2
 
 
+def _wan_vae_padded_conv() -> bool:
+    """LTX copy-free padded conv chain. OPT-IN: VAE_PADDED_CONV=1.
+
+    conv1 scatter-repacks into a padded [H+2,W+2] buffer (interior copy overlapped with
+    fabric) and writes a padded output (`output_pad_h/w`). conv2 then only fills the
+    border (`halo_scatter` border_only) — no second full interior copy. Distinct from
+    `WAN_VAE_HALO_CONV` (compact halo sidecar), which was slower on this shape.
+    """
+    return os.environ.get("VAE_PADDED_CONV") == "1"
+
+
 def _halo_conv_enabled() -> bool:
     """Compact-halo conv3d path (no full-pad interior copy), same scheme as vae_ltx.
 
@@ -126,12 +137,24 @@ def _clear_feat_cache(cache_list) -> None:
         cache_list[i] = None
 
 
-def _cached_conv(conv, x, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=False):
+def _cached_conv(
+    conv,
+    x,
+    logical_h,
+    feat_cache,
+    feat_idx,
+    logical_w,
+    deallocate_input=False,
+    *,
+    cf_input_padded=False,
+    cf_output_padded=False,
+):
+    extra = dict(cf_input_padded=cf_input_padded, cf_output_padded=cf_output_padded)
     if feat_cache is None:
-        return conv(x, logical_h, logical_w=logical_w, deallocate_input=deallocate_input)
+        return conv(x, logical_h, logical_w=logical_w, deallocate_input=deallocate_input, **extra)
     idx = feat_idx[0]
     cache_x = _capture_feat_cache(x, feat_cache, idx)  # clones BEFORE the conv may free x
-    out = conv(x, logical_h, feat_cache[idx], logical_w=logical_w, deallocate_input=deallocate_input)
+    out = conv(x, logical_h, feat_cache[idx], logical_w=logical_w, deallocate_input=deallocate_input, **extra)
     _store_feat_cache(feat_cache, idx, cache_x)
     feat_idx[0] += 1
     return out
@@ -154,6 +177,34 @@ def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
             mesh_axis=parallel_config.width_parallel.mesh_axis,
             shard_dim=3,
             dtype=dtype,
+        )
+    return cache[key]
+
+
+def _get_pad_offset(cache, x_BTHWC, parallel_config, mesh_device, sub_h=0, sub_w=0):
+    """Per-device [h_start, w_start] for conv3d's in-kernel logical-pad mask.
+
+    sub_h/sub_w: strip the padded border so offsets stay INTERIOR-based (copy-free path).
+    """
+    hf = parallel_config.height_parallel.factor
+    wf = parallel_config.width_parallel.factor
+    h_dev, w_dev = x_BTHWC.shape[2] - 2 * sub_h, x_BTHWC.shape[3] - 2 * sub_w
+    key = (hf, wf, h_dev, w_dev)
+    if key not in cache:
+        off = torch.zeros(hf, wf, 2, dtype=torch.int32)
+        for hi in range(hf):
+            for wi in range(wf):
+                off[hi, wi, 0] = hi * h_dev
+                off[hi, wi, 1] = wi * w_dev
+        cache[key] = typed_tensor_2dshard(
+            off,
+            mesh_device,
+            shard_mapping={
+                parallel_config.height_parallel.mesh_axis: 0,
+                parallel_config.width_parallel.mesh_axis: 1,
+            },
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
         )
     return cache[key]
 
@@ -498,6 +549,7 @@ class WanCausalConv3d(Module):
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+        self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -516,6 +568,8 @@ class WanCausalConv3d(Module):
         cache_x_BTHWC: ttnn.Tensor | None = None,
         logical_w: int = 0,
         deallocate_input: bool = False,
+        cf_input_padded: bool = False,
+        cf_output_padded: bool = False,
     ) -> ttnn.Tensor:
         """
         x_BTHWC: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
@@ -523,6 +577,8 @@ class WanCausalConv3d(Module):
         deallocate_input: the conv owns `x_BTHWC` and frees it at its last use, BEFORE the
             conv output allocates — one full activation less at the DRAM peak vs the caller
             freeing after the call returns.
+        cf_input_padded: x is already [H+2p,W+2p] (previous conv's padded output); halo is
+            border-only. cf_output_padded: write a padded output so the next conv can do that.
 
         returns: (B, T, H, W, C) fractured on H and W, ROW_MAJOR layout
         """
@@ -552,10 +608,12 @@ class WanCausalConv3d(Module):
         # workaround zeros width-padding columns before the halo exchange.
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        use_padded = _wan_vae_padded_conv() and h_pad_needed and w_pad_needed
 
-        # Width pre-conv masking: zero padding columns so neighbor_pad doesn't propagate non-zero padding.
+        # Width pre-conv masking: skip on the padded-chain path (conv3d in-kernel mask).
         if (
-            logical_w > 0
+            not use_padded
+            and logical_w > 0
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         ):
@@ -576,13 +634,15 @@ class WanCausalConv3d(Module):
             and h_pad_needed
             and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
         )
-        use_halo = _halo_conv_enabled() and h_pad_needed and w_pad_needed and not h_mask_active
+        use_halo = (
+            _halo_conv_enabled() and h_pad_needed and w_pad_needed and not h_mask_active and not use_padded
+        )
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
         # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on
-        # (or when the halo path skips neighbor_pad entirely).
-        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed and not use_halo
+        # (or when the halo / padded-chain path skips neighbor_pad entirely).
+        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed and not use_halo and not use_padded
         if t_front_padding > 0 and not fuse_t_front_pad:
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
@@ -612,6 +672,69 @@ class WanCausalConv3d(Module):
                     self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            if use_padded:
+                # LTX persist-pad: scatter into a padded buffer, then plain conv3d (spatial pad=0).
+                pHe, pWe = self.external_padding[1], self.external_padding[2]
+                hf = self.parallel_config.height_parallel.factor
+                wf = self.parallel_config.width_parallel.factor
+                ih = x_BTHWC.shape[2] - (2 * pHe if cf_input_padded else 0)
+                iw = x_BTHWC.shape[3] - (2 * pWe if cf_input_padded else 0)
+                cf_h_needed = logical_h > 0 and hf > 1 and ih * hf > logical_h
+                cf_w_needed = logical_w > 0 and wf > 1 and iw * wf > logical_w
+                pp_logical_h = (logical_h + pHe) if cf_h_needed else 0
+                pp_logical_w = (logical_w + pWe) if cf_w_needed else 0
+                pp_pad_offset = None
+                if pp_logical_h or pp_logical_w:
+                    pp_pad_offset = _get_pad_offset(
+                        self._pad_offset_cache,
+                        x_BTHWC,
+                        self.parallel_config,
+                        self.mesh_device,
+                        sub_h=(pHe if cf_input_padded else 0),
+                        sub_w=(pWe if cf_input_padded else 0),
+                    )
+                padded = self.ccl_manager.neighbor_pad_halo_scatter(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    padding_mode="zeros",
+                    input_pad_h=(pHe if cf_input_padded else 0),
+                    input_pad_w=(pWe if cf_input_padded else 0),
+                    border_only=cf_input_padded,
+                )
+                x_out = ttnn.experimental.conv3d(
+                    input_tensor=padded,
+                    weight_tensor=self.weight.data,
+                    bias_tensor=self.bias.data,
+                    device=self.mesh_device,
+                    config=self.conv_config,
+                    output_channels=self.out_channels,
+                    kernel_size=self.kernel_size,
+                    stride=self.stride,
+                    padding=(self.internal_padding[0], 0, 0),
+                    padding_mode="zeros",
+                    dtype=self.dtype,
+                    compute_kernel_config=self.compute_kernel_config,
+                    logical_h_mask=pp_logical_h,
+                    logical_w_mask=pp_logical_w,
+                    pad_offset_tensor=pp_pad_offset,
+                    output_pad_h=(pHe if cf_output_padded else 0),
+                    output_pad_w=(pWe if cf_output_padded else 0),
+                )
+                # border_only scatter writes in place into `x_BTHWC` (owned). Repack scatter
+                # writes a CCL ping-pong buffer — never deallocate that.
+                if cf_input_padded:
+                    if padded is not x_in or deallocate_input:
+                        ttnn.deallocate(padded)
+                else:
+                    if x_BTHWC is not padded and (deallocate_input or x_BTHWC is not x_in):
+                        ttnn.deallocate(x_BTHWC)
+                return x_out
 
             if use_halo:
                 # Compact halo -> conv3d reads borders from halo_buffer; no full padded copy.
@@ -799,15 +922,30 @@ class WanResidualBlock(Module):
 
         # deallocate_input=True: the conv frees its input at its last use, before the conv
         # output allocates — one full activation less at the DRAM peak.
+        padded = _wan_vae_padded_conv()
         x_conv_BTHWC = _cached_conv(
-            self.conv1, x_rm_BTHWC, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=True
+            self.conv1,
+            x_rm_BTHWC,
+            logical_h,
+            feat_cache,
+            feat_idx,
+            logical_w,
+            deallocate_input=True,
+            cf_output_padded=padded,
         )
 
         x_norm2_BTHWC = self.norm2(x_conv_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         ttnn.deallocate(x_conv_BTHWC)
 
         x_conv_BTHWC = _cached_conv(
-            self.conv2, x_norm2_BTHWC, logical_h, feat_cache, feat_idx, logical_w, deallocate_input=True
+            self.conv2,
+            x_norm2_BTHWC,
+            logical_h,
+            feat_cache,
+            feat_idx,
+            logical_w,
+            deallocate_input=True,
+            cf_input_padded=padded,
         )
 
         x_conv_tile_BTHWC = _to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
