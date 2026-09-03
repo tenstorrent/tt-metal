@@ -513,7 +513,11 @@ def main() -> None:
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     single_rank = num_ranks == 1
-    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
+    # Composite Hugging Face configs (including Gemma 4) keep the language
+    # model dimensions under ``text_config`` rather than on the top-level
+    # config object.
+    text_config = getattr(hf_config, "text_config", hf_config)
+    d2d_activation_width = text_config.hidden_size * (2 if DFLASH_ENABLED else 1)
 
     ttnn.distributed_context_barrier()
 
