@@ -954,9 +954,15 @@ def _sweep_state_record(outcome, name, detail=""):
 def _sweep_state_load():
     """Return (finished, begun) from the state file.
 
-    A phase with a BEGIN and no outcome is one whose process died while it ran: the device took the
-    run down, so the phase is charged as HANG rather than retried, which is what stops a phase that
-    reliably wedges the device from restarting the sweep forever.
+    A phase with a BEGIN and no outcome is one whose process died while it ran, and it is charged as
+    HANG rather than retried, which is what stops a phase that reliably wedges the device from
+    restarting the sweep forever.
+
+    Charged, not diagnosed: this says the process did not survive the phase, not that the phase is
+    what killed it. A run capped below what the sweep needs kills whichever phase held the clock when
+    it ran out, and that phase then looks guilty across every attempt while the innocent cause sits
+    in the runner's configuration. The marker on the sweep is what keeps that from being the usual
+    reading of a HANG here.
     """
     path = _sweep_state_path()
     finished, begun = {}, set()
@@ -975,6 +981,17 @@ def _sweep_state_load():
     return finished, begun
 
 
+# pytest.ini caps every test at 300s, which is calibrated for a test that launches an op once. This
+# one is 56 phases sharing a process on purpose, and 300s buys about eight of them: pytest-timeout
+# then kills the process mid-phase, the phase that happened to be running is charged for a death it
+# did not cause, and the driver resets a perfectly healthy machine before resuming. Left alone, the
+# sweep can never finish -- which is the opposite of what putting every phase in one process was for.
+#
+# Sizing: 56 phases at the ~35s the slowest model takes is ~33 minutes, and the first phase of a
+# process also pays JIT builds. Two hours leaves room for that and for models added later. Being
+# generous costs nothing in hang protection, which is not this timeout's job anyway -- a wedged
+# device is caught by TT_METAL_OPERATION_TIMEOUT_SECONDS at the dispatch layer, in 5 seconds.
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     _cmb_sweep_dimensions(),
