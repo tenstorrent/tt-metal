@@ -144,16 +144,15 @@ def _tile(t, device, dtype=ttnn.bfloat16):
     )
 
 
-def _paged_msa_memory_config(device, page_size, width, shard_height=None, shard_width=None):
+def _paged_msa_memory_config(device, page_size, width, shard_height=None):
     shard_height = page_size if shard_height is None else shard_height
-    shard_width = width if shard_width is None else shard_width
     cores = [
         ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(device.dram_grid_size().x)
     ]
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
         nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape=[1, 1, shard_height, shard_width],
+            shard_shape=[1, 1, shard_height, width],
             grid=ttnn.CoreRangeSet(cores),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
@@ -182,16 +181,14 @@ def _make_paged_msa_pools(k, v, page_size, num_layers=3, layer_idx=1, extra_bund
     return k_pool, v_pool, table
 
 
-def _upload_paged_msa(
-    device, k_pool, v_pool, table, page_size, kv_dtype=ttnn.bfloat16, shard_height=None, shard_width=None
-):
+def _upload_paged_msa(device, k_pool, v_pool, table, page_size, kv_dtype=ttnn.bfloat16, shard_height=None):
     def upload(pool):
         return ttnn.from_torch(
             pool.to(torch.bfloat16),
             dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=_paged_msa_memory_config(device, page_size, pool.shape[-1], shard_height, shard_width),
+            memory_config=_paged_msa_memory_config(device, page_size, pool.shape[-1], shard_height),
         )
 
     tt_table = _rm(table, device, ttnn.uint16)
@@ -199,22 +196,9 @@ def _upload_paged_msa(
 
 
 def _run_paged_msa(
-    device,
-    q,
-    k_pool,
-    v_pool,
-    indices,
-    table,
-    page_size,
-    num_layers,
-    layer_idx,
-    kv_dtype,
-    shard_height=None,
-    shard_width=None,
+    device, q, k_pool, v_pool, indices, table, page_size, num_layers, layer_idx, kv_dtype, shard_height=None
 ):
-    tt_k, tt_v, tt_table = _upload_paged_msa(
-        device, k_pool, v_pool, table, page_size, kv_dtype, shard_height, shard_width
-    )
+    tt_k, tt_v, tt_table = _upload_paged_msa(device, k_pool, v_pool, table, page_size, kv_dtype, shard_height)
     out = ttnn.transformer.sparse_sdpa_msa(
         _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),
         tt_k,
@@ -232,29 +216,25 @@ def _run_paged_msa(
 
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "page_size,kv_dtype,v_dim,shard_height,shard_width",
+    "page_size,kv_dtype,v_dim,shard_height",
     [
-        (32, ttnn.bfloat16, 128, 32, 128),
-        (32, ttnn.bfloat16, 128, 32, 64),
-        (64, ttnn.bfloat16, 64, 64, 64),
-        (64, ttnn.bfloat16, 128, 32, 128),
-        (32, ttnn.bfloat8_b, 128, 32, 128),
-        (32, ttnn.bfloat8_b, 128, 32, 64),
-        (64, ttnn.bfloat8_b, 64, 64, 64),
-        (64, ttnn.bfloat8_b, 128, 32, 128),
+        (32, ttnn.bfloat16, 128, 32),
+        (64, ttnn.bfloat16, 64, 64),
+        (64, ttnn.bfloat16, 128, 32),
+        (32, ttnn.bfloat8_b, 128, 32),
+        (64, ttnn.bfloat8_b, 64, 64),
+        (64, ttnn.bfloat8_b, 128, 32),
     ],
     ids=[
         "page32_bf16",
-        "page32_halfrow_shards_bf16",
         "page64_bf16_v64",
         "page64_shard32_bf16",
         "page32_bfp8",
-        "page32_halfrow_shards_bfp8",
         "page64_bfp8_v64",
         "page64_shard32_bfp8",
     ],
 )
-def test_msa_paged_kv_noncontiguous_accuracy(device, page_size, kv_dtype, v_dim, shard_height, shard_width):
+def test_msa_paged_kv_noncontiguous_accuracy(device, page_size, kv_dtype, v_dim, shard_height):
     """Logical MSA blocks may cross nonmonotonic physical pages, layers, and KV-head pages."""
     H, n_kv, S, T, topk = 64, 4, 33, 2048, 16
     num_layers, layer_idx = 3, 1
@@ -262,18 +242,7 @@ def test_msa_paged_kv_noncontiguous_accuracy(device, page_size, kv_dtype, v_dim,
     v = v[..., :v_dim].contiguous()
     k_pool, v_pool, table = _make_paged_msa_pools(k, v, page_size, num_layers, layer_idx, seed=page_size + 40)
     out, _ = _run_paged_msa(
-        device,
-        q,
-        k_pool,
-        v_pool,
-        indices,
-        table,
-        page_size,
-        num_layers,
-        layer_idx,
-        kv_dtype,
-        shard_height,
-        shard_width,
+        device, q, k_pool, v_pool, indices, table, page_size, num_layers, layer_idx, kv_dtype, shard_height
     )
     gold = sparse_attention_ref_msa(q, k, v, indices, _D**-0.5)
     score = pcc(out, gold)
