@@ -43,9 +43,7 @@ rules below.
 
 - **Scalar precision for integer dtypes.** Do not route an integer scalar through
   `float`. `static_cast<float>` loses bits above 2^24, so integer binary ops must use
-  integer arithmetic or an int64 intermediate. Any fast, native, or short-circuit
-  scalar path must still honor an explicitly-requested `output_dtype` and
-  `memory_config` rather than falling back to defaults.
+  integer arithmetic or an int64 intermediate.
 
 ## 🟡 IMPORTANT
 
@@ -67,6 +65,15 @@ rules below.
   (e.g. `[4,1,32,32]` and `[1,4,32,32]`) can collide. When a PR changes shape
   handling, broadcast handling, or `compute_program_hash`, check that everything a
   runtime arg is derived from is in the key — including the output shape.
+
+- **Fast-path guard conditions.** Several eltwise tensor-scalar entry points
+  short-circuit into a unary SFPU helper that takes fewer parameters than the general
+  `binary_ng` path. The guard must exclude every call the helper cannot represent.
+  `remainder` in `binary/device/binary_composite_op.cpp` is the worked example: it
+  falls through to `binary_ng` when `output_dtype` is set, when `sub_device_id` is set,
+  when any activation list is non-empty, or when the input is INT32. When a PR adds a
+  fast path, or adds a parameter to an op that already has one, check the guard covers
+  the new parameter and that a test exercises the op with that parameter set.
 
 - **Binary dtype guards must inspect both operands.** A guard keyed on dtype in a
   binary op has to evaluate both inputs. Reuse `is_floating_point(DataType)` from
@@ -113,7 +120,8 @@ rules below.
 
 - [ ] PR description links a Sanity run and an L2-nightly (`eltwise` category) run
 - [ ] New dtypes are wired into `pack_scalar_runtime_arg` with an inline example comment
-- [ ] Integer scalars are not routed through `float`; fast paths honor `output_dtype`/`memory_config`
+- [ ] Integer scalars are not routed through `float`
+- [ ] Fast-path guards exclude every call the short-circuit helper cannot represent
 - [ ] TS variant exercised alongside TT for binary/ternary test changes
 - [ ] Program-cache tests assert `num_program_cache_entries()`, not just numerics
 - [ ] Everything a runtime arg derives from — including output shape — is in `compute_program_hash`
