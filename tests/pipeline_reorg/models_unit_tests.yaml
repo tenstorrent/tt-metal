@@ -1124,45 +1124,44 @@
 # matches the machine, so this command and the QuietBox one are identical apart from the
 # multihost launcher and the env below.
 - name: TT-DiT Flux.2-dev multihost unit tests
-  # PROBE BRANCH ONLY -- this cmd is an isolation matrix, not a CI leg.
+  # PROBE BRANCH ONLY -- a bisect matrix, not a CI leg.
   cmd: |
     unset TT_METAL_WATCHER
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     rc=0
-    # Declare the diagnostic flags off, and forward them explicitly with -x: a bare env prefix
-    # reaches mpirun's own environment, but relying on the rank inheriting it is an assumption
-    # this run is too expensive to make. Echoed per invocation so the log proves what was set.
-    export FLUX2_DEBUG_UNFUSE_FF=0
-    export FLUX2_DEBUG_UNFUSE_ATTN_OUT=0
+    XF=models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
+    # A cache dir per LAYER COUNT, not one shared dir. The converted-weight cache key is
+    # model/subfolder/TP..._SP..._mesh..._dtype[_FSDP] with no layer counts in it, so the
+    # layer-skip variants collide: run 33789514904 wrote a 1-double/1-single cache from
+    # single_blocks and every later all_blocks invocation died on "Unable to load the tensor".
+    # Within a dir the TP/SP/FSDP differences give distinct keys, so only layer count needs
+    # separating.
     run() {
-      echo "    flags: UNFUSE_FF=$FLUX2_DEBUG_UNFUSE_FF UNFUSE_ATTN_OUT=$FLUX2_DEBUG_UNFUSE_ATTN_OUT"
-      mpirun -np 1 --bind-to none --tag-output \
-        -x FLUX2_DEBUG_UNFUSE_FF -x FLUX2_DEBUG_UNFUSE_ATTN_OUT \
+      local dir="$1"; shift
+      echo "    cache=$dir  args: $*"
+      TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit-$dir" \
+        mpirun -np 1 --bind-to none --tag-output -x TT_DIT_CACHE_DIR \
         --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1
     }
-    XF=models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer
-    # single_blocks at 4x8 Ring is a ~1 min readout that still carries the fingerprint: with the
-    # fix it sits at RMSE/sigma 7.0% against 0.9% for the VAE and 1.6% for the encoder. Sweep the
-    # two Ring-only fused addcmul paths against it, cheaply, before spending a long all_blocks run.
-    echo "=== [1/6] single_blocks baseline (both fused) ==="
-    run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
-    echo "=== [2/6] single_blocks, FF unfused ==="
-    FLUX2_DEBUG_UNFUSE_FF=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
-    echo "=== [3/6] single_blocks, attention out-proj unfused ==="
-    FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
-    echo "=== [4/6] single_blocks, both unfused ==="
-    FLUX2_DEBUG_UNFUSE_FF=1 FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 400 "$XF" -k "single_blocks and bh_4x8_ring"
-    # Confirm at scale: all_blocks is where the failure is visible as a PCC miss (75.80% vs 99.6%).
-    echo "=== [5/6] all_blocks, both unfused ==="
-    FLUX2_DEBUG_UNFUSE_FF=1 FLUX2_DEBUG_UNFUSE_ATTN_OUT=1 run --timeout 800 "$XF" -k "all_blocks and bh_4x8_ring"
-    echo "=== [6/6] all_blocks, FF unfused only ==="
-    FLUX2_DEBUG_UNFUSE_FF=1 run --timeout 800 "$XF" -k "all_blocks and bh_4x8_ring"
+    # Bisect against the known baseline: (4,8) Linear sp0/tp1 fsdp=False 8k = PCC 75.5340%.
+    # Topology is already exonerated, so every row here holds Linear and varies one factor.
+    echo "=== [1/5] all_blocks, is_fsdp=True (vs False in the baseline) ==="
+    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_fsdp"
+    echo "=== [2/5] all_blocks, no 8k fabric router config ==="
+    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_no8k"
+    echo "=== [3/5] all_blocks, axes swapped -> sp=8 tp=4 (vs sp=4 tp=8) ==="
+    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_tp4"
+    # Which block type carries the error. single_blocks keeps 1 double + 1 single and passes,
+    # which says nothing; these two split it.
+    echo "=== [4/5] double_only: all 8 double blocks + 1 single ==="
+    run dbl --timeout 800 "$XF" -k "double_only and bh_4x8_lin_base"
+    echo "=== [5/5] single_only: 1 double + all 48 single blocks ==="
+    run sgl --timeout 800 "$XF" -k "single_only and bh_4x8_lin_base"
     exit $rc
   model: flux.2-dev
   model_family: Flux

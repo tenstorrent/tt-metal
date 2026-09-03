@@ -41,6 +41,9 @@ ring_params_8k_flux2_req_exact = {**ring_params_8k_flux2, **_REQ_EXACT}
 # Lets one run separate "the residual all_blocks error is Ring-specific" from "it is a property
 # of sp=4/tp=8 at this scale".
 line_params_8k_flux2_req_exact = {**line_params_8k_flux2, **_REQ_EXACT}
+# PROBE: no 8k fabric router config, to test whether the 8192-byte payload matters. Otherwise
+# identical to line_params_8k_flux2_req_exact.
+line_params_flux2_req_exact = {**line_params_flux2, **_REQ_EXACT}
 
 
 class ModelLocationGenerator(Protocol):
@@ -70,13 +73,25 @@ class ModelLocationGenerator(Protocol):
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2_req_exact],
         [(4, 8), 0, 1, ttnn.Topology.Linear, 2, False, line_params_8k_flux2_req_exact],
+        # PROBE bisect. Topology is already exonerated (Ring 75.7989% vs Linear 75.5340% on
+        # all_blocks), so these hold topology at Linear and vary one factor each against that
+        # 75.5340% baseline. All are 32-device meshes so they run on a galaxy alongside it.
+        [(4, 8), 0, 1, ttnn.Topology.Linear, 2, True, line_params_8k_flux2_req_exact],
+        [(4, 8), 0, 1, ttnn.Topology.Linear, 2, False, line_params_flux2_req_exact],
+        # Axes swapped: sp=8, tp=4 on the same mesh, to separate tp=8 from the mesh size itself.
+        [(4, 8), 1, 0, ttnn.Topology.Linear, 2, False, line_params_8k_flux2_req_exact],
     ],
     ids=[
         "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
-        "bh_4x8_linear",
+        # Suffixes are chosen so none is a substring of another: a -k on any one of these must
+        # not drag in its siblings.
+        "bh_4x8_lin_base",
+        "bh_4x8_lin_fsdp",
+        "bh_4x8_lin_no8k",
+        "bh_4x8_lin_tp4",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -91,6 +106,12 @@ class ModelLocationGenerator(Protocol):
     [
         pytest.param(0, 0, id="all_blocks"),
         pytest.param(7, 47, id="single_blocks"),
+        # PROBE. single_blocks keeps 1 double + 1 single, so its passing says nothing about which
+        # block type carries the error. num_layers=8, num_single_layers=48, and the test deletes
+        # from the END, so these keep all 8 doubles with 1 single, and 1 double with all 48
+        # singles, respectively.
+        pytest.param(0, 47, id="double_only"),
+        pytest.param(7, 0, id="single_only"),
     ],
 )
 def test_transformer(
