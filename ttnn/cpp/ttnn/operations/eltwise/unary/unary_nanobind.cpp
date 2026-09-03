@@ -1741,7 +1741,8 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
         mod,
-        R"doc(Performs the element-wise Mish activation function of the :attr:`input_tensor`.)doc",
+        R"doc(Performs the element-wise Mish activation function on the :attr:`input_tensor`.
+        Mish is a smooth, non-monotonic self-regularizing activation function that allows small negative outputs to pass through.)doc",
         R"doc(\mathrm{{output\_tensor}}_i &= \mathrm{{input\_tensor}}_i \cdot \tanh(\mathrm{{softplus}}(\mathrm{{input\_tensor}}_i)) \\
             &= \mathrm{{input\_tensor}}_i \cdot \tanh\left(\ln(1 + e^{{\mathrm{{input\_tensor}}_i}})\right))doc",
         "",
