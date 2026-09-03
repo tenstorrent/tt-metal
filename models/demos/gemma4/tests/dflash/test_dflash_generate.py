@@ -25,7 +25,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.generate import dflash_generate
-from models.demos.gemma4.tt.dflash.lm_head import load_gemma4_lm_head_weight, load_target_lm_head_state_dict
+from models.demos.gemma4.tt.dflash.lm_head import load_gemma4_lm_head_weight
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -61,7 +61,6 @@ def test_dflash_generate_t3k(mesh_device, device_params, model_path):
     ccl_manager = CCLManager(mesh_device)
     weights = load_gemma4_dflash_weights(mesh_device, config, mesh_config)
     lm_head_weight = load_gemma4_lm_head_weight(mesh_device, mesh_config)
-    embed_weight_torch = load_target_lm_head_state_dict(model_path)
 
     page_params = {"page_block_size": 64, "page_max_num_blocks": MAX_SEQ_LEN // 64}
     paged_attention_config = PagedAttentionConfig(
@@ -91,7 +90,6 @@ def test_dflash_generate_t3k(mesh_device, device_params, model_path):
         ccl_manager,
         tt_kv_cache,
         page_table,
-        embed_weight_torch,
         input_ids_padded,
         ctx_len,
         max_new_tokens,

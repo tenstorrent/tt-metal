@@ -34,7 +34,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.generate import dflash_generate
-from models.demos.gemma4.tt.dflash.lm_head import load_gemma4_lm_head_weight, load_target_lm_head_state_dict
+from models.demos.gemma4.tt.dflash.lm_head import load_gemma4_lm_head_weight
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -142,7 +142,6 @@ def _run_dflash(prompt, max_generated_tokens, mesh_device):
     ccl_manager = CCLManager(mesh_device)
     weights = load_gemma4_dflash_weights(mesh_device, config, mesh_config)
     lm_head_weight = load_gemma4_lm_head_weight(mesh_device, mesh_config)
-    embed_weight_torch = load_target_lm_head_state_dict(model_path)
 
     model, tt_kv_cache, page_table = _make_target_model(mesh_device, model_path)
     input_ids_padded = torch.nn.functional.pad(input_ids.squeeze(0), (0, MAX_SEQ_LEN - ctx_len), value=0)
@@ -159,7 +158,6 @@ def _run_dflash(prompt, max_generated_tokens, mesh_device):
         ccl_manager,
         tt_kv_cache,
         page_table,
-        embed_weight_torch,
         input_ids_padded,
         ctx_len,
         max_generated_tokens,
