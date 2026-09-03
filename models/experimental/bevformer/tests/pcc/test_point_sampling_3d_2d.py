@@ -5,7 +5,6 @@
 import torch
 import ttnn
 import pytest
-import numpy as np
 
 from models.experimental.bevformer.reference.point_sampling_3d_2d import (
     generate_reference_points,
@@ -19,6 +18,8 @@ from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import (
 
 from models.experimental.bevformer.config.encoder_config import (
     get_preset_config,
+    img_metas_for_dataset,
+    lidar2img_for_dataset,
 )
 
 from models.experimental.bevformer.tests.test_utils import (
@@ -34,62 +35,6 @@ ENABLE_LOGGING = True
 
 # Default Test Configuration                                                  #
 PRINT_DETAILED_COMPARISON_FLAG = False
-
-
-# Helper functions for testing
-def create_sample_camera_matrices(num_cams):
-    """Create sample camera transformation matrices for testing."""
-    torch.manual_seed(42)  # For reproducible tests
-
-    # Create different camera matrices
-    lidar2img_matrices = []
-
-    for cam_idx in range(num_cams):
-        # Camera intrinsic matrix
-        fx, fy = 800.0, 450.0  # More reasonable focal lengths
-        cx, cy = 800.0, 450.0  # Principal point at image center
-
-        # Camera extrinsic parameters (rotation + translation)
-        # Different pose for each camera around the vehicle
-        angle = cam_idx * 60.0 * np.pi / 180.0  # 60 degrees apart
-
-        # Create a viewing transformation that looks towards center from outside
-        # Position camera at distance from origin
-        cam_x = 3.0 * np.cos(angle)  # 3 meters from center
-        cam_y = 3.0 * np.sin(angle)
-        cam_z = 1.5  # 1.5m height
-
-        # Camera looks towards the origin (simplified)
-        # Create rotation to look towards center
-        look_dir = np.array([-cam_x, -cam_y, -cam_z])
-        look_dir /= np.linalg.norm(look_dir)
-
-        # Simplified rotation matrix (just use identity for testing)
-        R = np.eye(3, dtype=np.float32)
-
-        # Translation vector
-        t = np.array([cam_x, cam_y, cam_z], dtype=np.float32)
-
-        # Create extrinsic matrix [R|t] in homogeneous coordinates
-        extrinsic = np.eye(4, dtype=np.float32)
-        extrinsic[:3, :3] = R
-        extrinsic[:3, 3] = t
-
-        # Create intrinsic matrix in homogeneous coordinates
-        intrinsic = np.array(
-            [[fx, 0.0, cx, 0.0], [0.0, fy, cy, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=np.float32
-        )
-
-        # Combine intrinsic and extrinsic: K * [R|t]
-        camera_matrix = intrinsic @ extrinsic
-
-        # Scale down the result to get more reasonable coordinate ranges
-        # This helps ensure projected coordinates are in a manageable range
-        camera_matrix[:2, :] *= 0.001  # Scale down x,y projections
-
-        lidar2img_matrices.append(torch.from_numpy(camera_matrix))
-
-    return torch.stack(lidar2img_matrices)
 
 
 # Test functions
@@ -221,21 +166,16 @@ def test_point_sampling_3d_to_2d(
     pc_range = dataset_config.pc_range
     z_cfg = dataset_config.z_cfg
     num_cams = dataset_config.num_cams
-    img_shape = (dataset_config.input_size[1], dataset_config.input_size[0])  # (height, width)
     eps = 1e-5
 
     # --------------------------------------------------------------------------- #
     # Generate Inputs                                                             #
     # --------------------------------------------------------------------------- #
 
-    # Create camera matrices for testing
-    lidar2img = create_sample_camera_matrices(num_cams)
-    lidar2img = lidar2img.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # Add batch dimension
-
-    # Create img_metas for each batch item
-    img_metas = []
-    for batch_idx in range(batch_size):
-        img_metas.append({"img_shape": [img_shape] * num_cams})
+    # The deterministic rig keeps bev_mask a property of the geometry rather than
+    # of an RNG draw, so this test's projections match the encoder's.
+    lidar2img = lidar2img_for_dataset(dataset_config).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+    img_metas = img_metas_for_dataset(dataset_config, batch_size)
 
     # Generate reference points with batch dimension
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
