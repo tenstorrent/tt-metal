@@ -166,7 +166,7 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 |---|---|---|
 | `Runtime-args update (get_dynamic_runtime_args)` == `yes`, or a **smuggled RTA pointer** | The op is *broken*, not merely unported (it reads as such in `Op Classification`). Neither ports as-is. | **TTNN**, who fix the op first |
 | Any entry in **`Known op issues`** | A free-text column reserved for problems that must be cleared before a port. Usually an ops-team fix; occasionally a Metal 2.0 feature. | Read the cell and route to whoever it names |
-| **`TensorParameter relaxation`** != `none` | The op needs a relaxation of the strict `TensorSpec` match, which this recipe does not handle yet. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
+| **`TensorParameter relaxation`** neither `none` nor `… (see analysis)` | The op needs a relaxation whose analysis is still queued or in flight. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
 | `Concept` == `legacy device-op` | Not on the `ProgramDescriptor` API yet — the **expected** outcome for a legacy op, not an alarm. | **TTNN / PD-migration team**; unblocks when that op's PD migration lands |
 | `Concept` == `WorkloadDescriptor` and **not** secretly SPMD | Genuine multi-program; neither single-program concept covers it. Whether a mesh-workload concept now does is the sheet's call, not this table's — [TTNN porting shape](#ttnn-porting-shape) has the lookup. | Framework work, tracked separately |
 
@@ -232,15 +232,30 @@ The supported target set is narrow today and will grow; the plain `ProgramSpecFa
 
 ### TensorParameter relaxations
 
-The sheet's `TensorParameter relaxation` column records, per factory, whether the op needs a relaxation of the strict `TensorSpec` match. Today it is a **gate conjunct**: only **`none`** clears, and the port never applies a relaxation.
+The sheet's `TensorParameter relaxation` column records, per factory, whether the op needs a relaxation of the strict `TensorSpec` match.
 
-That is a deliberate scope choice, not an oversight. Ops needing a real relaxation — and ops whose custom hash *looks* like a relaxation but is simply wrong — are being analysed, and where necessary fixed, by the **ops team before any port**. The porter is therefore never asked to decide whether a relaxation is needed, nor to reconcile one against a custom hash.
+| cell | action |
+| --- | --- |
+| `none` | clears — the port applies no relaxation |
+| `dynamic (see analysis)` | clears — **read the analysis doc**, carry its declaration into the brief |
+| `legality (see analysis)` | clears — same |
+| anything else | **GATE** → ops team |
 
-**Read the cell; do not re-derive it.** Any value other than `none` blocks the port and routes to the **ops team**. Report the value verbatim — the vocabulary distinguishes work that is queued from work that is already scheduled, and reproducing it exactly is what lets the reader tell those apart. Do not attempt to judge whether the op "really" needs the relaxation: that analysis is the reason the column exists.
+Any other cell means an analysis or an op fix is pending.
+
+**Read the cell; do not re-derive it.** Report the value verbatim — the vocabulary distinguishes work that is queued from work that is already scheduled, and reproducing it exactly is what lets the reader tell those apart. Do not attempt to judge whether the op "really" needs the relaxation: that analysis is the reason the column exists.
+
+**The analysis doc.** Path is by convention, from the sheet's `Op` cell with `/` → `_`:
+`analyses/relaxations/<op>.md` — so `eltwise/binary_ng` → [`analyses/relaxations/eltwise_binary_ng.md`](../../analyses/relaxations/eltwise_binary_ng.md).
+
+**If the cell says `see analysis` and no such doc exists, STOP.** Do not proceed strict, and do not derive a
+relaxation yourself. Report the missing doc and route it to the readiness-sheet owner.
+
+**Unlike the [triage docs](#offset-base-pointers), your own read is not the fallback here** — deriving a relaxation is exactly what you are forbidden to do. The doc is authoritative, and it carries its own validity check: a short list of invariants. **Run it. If it fails, report the relaxation verdict as UNCONFIRMED**; do not substitute your own reading.
 
 **Relaxation candidates (FYI-U).** A custom hash sometimes reveals which tensor properties the op *actually* depends on — a candidate for a future relaxation. Record any such candidate for the team's relaxation roadmap; it is **fallible** (many custom hashes are themselves wrong) and never reaches the porter brief.
 
-**Finding role: GATE** (routed to the ops team); the relaxation-candidate note is **FYI-U**.
+**Finding role: GATE** (routed to the ops team) on a non-clearing value; **PORT WORK** (brief, Construct) when the cell names an analysis doc; the relaxation-candidate note is **FYI-U**.
 
 ### Offset base pointers
 
@@ -567,7 +582,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept` (+ op-owned tensors, if any) |
 | *Port work* — Offset base pointer | none / **GATE** → ops team (Type 1 raw · Type 2 accessor-fed, flag early) |
 | *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
-| *TTNN Readiness* — TensorParameter relaxation | `none` (clears) / `<value>` → **GATE** → ops team |
+| *TTNN Readiness* — TensorParameter relaxation | `none` (clears) / `<…> (see analysis)` (clears → read the doc) / `<value>` → **GATE** → ops team |
 | *Port work* — TensorAccessor 3rd arg | none — no accessor passes a 3rd arg (the usual outcome) / drop (Class 1/2) / **flag → GATE** (Class 3/4/Special) |
 | *Port work* — CB endpoints | legal / self-loop / 1P+1C / multi-binding flag / dead-CB drop / conditional DFB |
 
@@ -579,7 +594,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 ## Gate detail
 
-- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `get_dynamic_runtime_args`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **relaxation** failure (the column is not `none`) → the ops team, quoting the cell verbatim. An **unattributed** `no` (no blocking column explains it, primary cross-check clean) → say so plainly, quote the cell, and route it to the readiness-sheet owner *as a question*; do not allege a defect. A **spreadsheet-broken** conflict — primary-column mismatch, violated invariant, missing row, or phantom / missing factory row — → the readiness-sheet owner to reconcile.>
+- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `get_dynamic_runtime_args`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **relaxation** failure (the column is neither `none` nor a `see analysis` pointer) → the ops team, quoting the cell verbatim. An **unattributed** `no` (no blocking column explains it, primary cross-check clean) → say so plainly, quote the cell, and route it to the readiness-sheet owner *as a question*; do not allege a defect. A **spreadsheet-broken** conflict — primary-column mismatch, violated invariant, missing row, or phantom / missing factory row — → the readiness-sheet owner to reconcile.>
 - **Device 2.0 (every kernel used):** <GREEN — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team (note whether the incompleteness is isolated CB-index holdovers — 1-line mechanical, idioms intact — or broad Device 1.0 requiring a full migration, so the team can size it; table below). Name the kernel file and, for a borrowed/donor kernel, its owning family.>
 
   | File | Line | Call | Wrapper in scope |
@@ -601,7 +616,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 ## Port-work summary  *(mirrors the brief)*
 
 - **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → `get_bank_base_address` bridge) / clean (borrowed-DFB).
-- **TensorParameter relaxation:** `<relaxation>` on `<binding>` (confirm the custom hash matches) | none.
+- **TensorParameter relaxation:** `<the analysis doc's per-slot declaration, transcribed — flags, and the condition each applies under>` | none.
 - **TensorAccessor 3rd arg:** drop the redundant page-size arg @ `<sites>` (Class 1 also sets `dynamic_tensor_shape`) | none.
 - **CB endpoints:** self-loop `<CB, config>` / 1P+1C assign `<CB, config>` / multi-binding advanced-option flag `<CB, config>` / dead-CB drop `<CB @ file:line>` / conditional DFB `<CB — dead under X, live under Y>` | all legal.
 
@@ -616,7 +631,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (noticed in a custom hash while auditing): **FALLIBLE — candidates to verify**, default strict; the ops team owns the real analysis.
-- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (a non-`none` relaxation, `get_dynamic_runtime_args`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors, the custom hash, the `override_runtime_arguments`, the pybound `create_descriptor`, and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
+- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (a relaxation that neither clears nor points at an analysis, `get_dynamic_runtime_args`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors, the custom hash, the `override_runtime_arguments`, the pybound `create_descriptor`, and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
@@ -655,7 +670,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 - **Current concept:** <`descriptor` | `WorkloadDescriptor` (secretly SPMD — collapses to single-program)>
 - **Op-owned tensors:** <none | `<factory + site>` — carried natively by the target concept>
 - **Target concept:** `ProgramSpecFactoryConcept`<, with op-owned tensors, if any>
-- **Gate-cleared, confirmed absent** (each would have blocked the brief): a non-`none` `TensorParameter relaxation` · `get_dynamic_runtime_args` (deprecated hook). A custom hash, an `override_runtime_arguments`, and a pybound `create_descriptor` are **not** in this list: none of them gate, and any may be present on a cleared op.
+- **Gate-cleared, confirmed absent** (each would have blocked the brief): a `TensorParameter relaxation` that is neither `none` nor an analysis pointer · `get_dynamic_runtime_args` (deprecated hook). A custom hash, an `override_runtime_arguments`, and a pybound `create_descriptor` are **not** in this list: none of them gate, and any may be present on a cleared op.
 
 ## Construct — to do
 
@@ -664,7 +679,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 - `<name>` — **Case 1** (via `TensorAccessor`) → express as `TensorParameter` / `TensorBinding`; kernel uses `TensorAccessor(tensor::name)`.
 - `<name>` — **Case 2** (raw pointer) → bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged.
 
-**TensorParameter relaxation:** <none — the only value that reaches a brief>
+**TensorParameter relaxation:** <`none`, or the cell's `see analysis` pointer plus the doc's per-slot declaration — the only two values that reach a brief>
 
 **TensorAccessor 3rd arg:** <drop the redundant page-size arg @ `<sites>`; Class 1 sites also set `dynamic_tensor_shape` | none>
 
