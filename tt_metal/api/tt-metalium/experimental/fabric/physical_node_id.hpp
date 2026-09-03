@@ -61,6 +61,20 @@ std::string canonical_host_for_node_id(std::string_view host_id, bool hosts_uniq
 // does not fit in 16 bits.
 PhysicalNodeId make_physical_node_id(std::string_view host_id, TrayID tray, ASICLocation loc, bool hosts_unique = true);
 
+// Declared here rather than alongside ASICDescriptor so there is one place that builds a node id.
+// Forward declared to keep the physical system descriptor out of this header.
+struct ASICDescriptor;
+
+// The id of the ASIC a descriptor describes, built from the three address components the descriptor
+// already carries. Both the factory-system-descriptor builder and live discovery fill host_name,
+// tray_id and asic_location, so this is the single seam through which a descriptor becomes a
+// solver key -- pass every descriptor through it instead of reading unique_id, which is 1..N file
+// order on the factory path and a UMD chip id on the live path.
+//
+// hosts_unique comes from PhysicalSystemDescriptor::get_all_hostnames_unique(); it decides whether a
+// trailing "_<rank>" on host_name is discovery's uniqueness suffix and must be stripped.
+PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor, bool hosts_unique = true);
+
 // host_id is the NUL-trimmed canonical string stored in the id.
 struct PhysicalNodeFields {
     std::string host_id;

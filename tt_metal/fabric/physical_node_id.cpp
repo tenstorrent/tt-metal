@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
@@ -79,6 +80,10 @@ PhysicalNodeId make_physical_node_id(std::string_view host_id, TrayID tray, ASIC
     id.tray = tray;
     id.loc = loc;
     return id;
+}
+
+PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor, bool hosts_unique) {
+    return make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location, hosts_unique);
 }
 
 PhysicalNodeFields decode_physical_node_id(const PhysicalNodeId& id) {

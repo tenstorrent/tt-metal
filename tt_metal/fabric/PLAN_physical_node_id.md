@@ -137,7 +137,7 @@ Do **not** instantiate the solver on a `tuple<string, TrayID, ASICLocation>` in 
 
 **New:** `tt_metal/api/tt-metalium/experimental/fabric/physical_node_id.hpp` + `tt_metal/fabric/physical_node_id.cpp` (canonicalization + `make` / `decode` / hash). Add the header to `TT_METAL_PUBLIC_API`.
 
-**`physical_descriptor_builder.cpp`:** drop `next_id++`. Every ASIC's graph key is `make_physical_node_id(hostname_of(host_id), TrayID{tray}, ASICLocation{loc})`. Duplicate `(host_id, tray, loc)` is fatal while filling `key_to_unique_id`.
+**`physical_descriptor_builder.cpp`:** `next_id++` **stays** — see §A. What changes is that its output stops being identity: every consumer reaches a descriptor through `node_id_from_asic_descriptor`, never through `unique_id`. Duplicate `(host_id, tray, loc)` needs no new check: `asic_keys` is a `std::set` of exactly that tuple, and duplicate hostnames are already rejected, so the key → label map is injective by construction.
 
 **`physical_system_discovery.cpp`:** when creating `ASICDescriptor`, set the graph key from position (`host_for_node_id`, §8) and keep the UMD chip unique id on `unique_id`, which is where discovery already puts it (§F field-name note). Cross-host gather still carries UMD ids on the wire if they do today — translate to packed ids on ingest using the peer's **resolved** host_id + tray + loc from the payload, not by hashing the UMD id.
 
@@ -288,7 +288,18 @@ Broadcast (`topology_mapper.cpp` ~799): the record identity is host_id + tray + 
 
 ---
 
-### A. Builder — stop synthesizing `1..N` (or ignore those labels at the mapper)
+### A. Builder — ignore the `1..N` labels at the mapper (they cannot be replaced)
+
+**Resolved:** of the two options this section offered, only the second is expressible. The builder keeps synthesizing `1..N`; the mapper ignores it. §I already draws the end state that way (`unique_id = 1..N (ignored)`).
+
+The first option — writing the packed id into the PSD — cannot be done. `ASICDescriptor::unique_id` is an `AsicID`, a strong `uint64`, and so is the `asic_id` the PSD proto keys `asic_descriptors` by. `PhysicalNodeId` is a 72-byte POD, and it is 72 bytes *on purpose*: §2 rejects packing the host id into 64 bits, which is exactly what storing it in `unique_id` would require. So the `store *id as unique_id` line below is dead — there is no `*id`.
+
+That leaves the builder's `1..N` in place and moves the whole job to the mapper's re-keying (§C, §E, §F), which is the next slice. The FSD-side slice is therefore not a builder rewrite but the **seam** the re-keying goes through, plus the tests that pin the invariant it has to preserve:
+
+- `node_id_from_asic_descriptor(descriptor, hosts_unique)` — declared in `physical_node_id.hpp` against a forward-declared `ASICDescriptor` so the utility header does not pull in the PSD. This is the one place a descriptor becomes a solver key.
+- `PhysicalDescriptorBuilder.DescriptorsCarryPositionAddressesNotFileOrderLabels` — a builder PSD still labels its ASICs `{1,2,3}`, and every descriptor packs to the FSD hostname with its tray and loc. Note the id holds the *canonical* host string: an FSD spelling a host `hostA` yields `hosta`, since the builder copies hostnames verbatim and `make_physical_node_id` canonicalizes.
+- `PhysicalDescriptorBuilder.FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds` — the load-bearing one. The same three ASICs labelled `1..N` and labelled with UMD-like chip ids (disjoint id spaces, asserted) produce **equal** `PhysicalNodeId`-keyed adjacency maps. That equality is what §D consumes.
+- `PhysicalDescriptorBuilder.IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack` — 16 ASICs across 4 hosts of a real in-repo FSD pack without collision and decode back to their address.
 
 Today (`physical_descriptor_builder.cpp` ~271–328):
 
@@ -726,7 +737,7 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 
 1. UMD `host_id` field ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) — separate PR.
 2. Utility + tests (no callers). Mock golden uses `desc.get_host_id()`, not the filename.
-3. Builder switches off `1..N`. Offline test: FSD-only ids are the POD of the FSD hostname.
+3. `node_id_from_asic_descriptor` seam + offline tests: an FSD-built descriptor packs to the POD of its FSD hostname, and an FSD-labelled and a UMD-labelled descriptor set agree on those ids. The builder keeps `1..N` — §A.
 4. Mapper re-keys adjacency through the utility. FSD vs live agree when live uses `host_for_node_id` (§8.2).
 5. Discovery writes packed graph keys and keeps UMD on `umd_unique_id`.
 6. **TODO:** fill `host_id:` on **all** tt-cluster-descriptors YAMLs (UMD plan §7); delete the aisle-token fallback when FSD-paired files are done.
