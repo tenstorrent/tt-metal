@@ -8,7 +8,7 @@
 //
 // Used by both DRAM-sender transports -- GlobalCircularBuffer
 // (CreateGlobalCircularBufferForTensorPrefetcher) and PrefetcherPipe
-// (CreatePrefetcherPipesForTensorPrefetcher) -- so the two agree on sender placement, the
+// (BuildTensorPrefetcherSenderMapping) -- so the two agree on sender placement, the
 // dual-sender receiver split, and slab numbering. The Tensor prefetcher's receiver-contiguous
 // contract depends on all three matching what the consumer op computes independently.
 
@@ -123,7 +123,7 @@ inline void validate_dram_senders_across_mesh(
 // Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
 // ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
 // within a bank (dual senders share a bank). Returns one value per sender in mapping order. Single
-// source for both the L1 state-block stamping and the experimental slab-index accessors.
+// source for both the request-header stamping and the experimental slab-index accessors.
 inline std::vector<uint32_t> recv_index_bases_per_sender(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
     std::vector<uint32_t> bases(mapping.size(), 0);
