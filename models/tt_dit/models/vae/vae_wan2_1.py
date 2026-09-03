@@ -49,6 +49,27 @@ if TYPE_CHECKING:
 CACHE_T = 2
 
 
+def _halo_conv_enabled() -> bool:
+    """Compact-halo conv3d path (no full-pad interior copy), same scheme as vae_ltx.
+
+    The spatial halo is exchanged into a small [Htop|Hbot|Wleft|Wright] buffer and
+    conv3d reads it directly (halo_buffer=...), instead of materializing a full
+    neighbor-padded copy of the activation. Cuts the per-conv DRAM transient by one
+    full activation (the OOM site at large t_chunk_size) and skips the interior copy.
+
+    OPT-IN (default OFF): the underlying `neighbor_pad_halo` fabric op WEDGED the galaxy
+    at 1080p seg=32 (chunk shapes T=32/64/128 that seg<=24 never exercised) — a fabric
+    barrier hang in the H-mux path, py-spy pinned inside `neighbor_pad_halo_only`. The
+    op's H-worker count is chosen by a byte heuristic with no clamp to available frames
+    (unlike the W-worker count, which IS clamped at manager/program_factory), so the
+    H->W barrier can wait on a worker that owns no rows. Until that op is proven at every
+    decode chunk shape, this path is behind WAN_VAE_HALO_CONV=1. The rest of the memory
+    work (eager `deallocate_input` frees, in-place residual add, resample intermediate
+    frees) is independent of this op and stays on unconditionally.
+    """
+    return os.environ.get("WAN_VAE_HALO_CONV") == "1"
+
+
 def _is_feat_tensor(t) -> bool:
     return t is not None and not isinstance(t, str)
 
@@ -555,17 +576,21 @@ class WanCausalConv3d(Module):
             and h_pad_needed
             and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
         )
+        use_halo = _halo_conv_enabled() and h_pad_needed and w_pad_needed and not h_mask_active
 
         # T-front causal zero padding: fuse into neighbor_pad when h_pad_needed (avoids a
         # separate reshape+pad+reshape and an intermediate tensor allocation).
-        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on.
-        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed
+        # Fall back to standalone ttnn.pad when there is no H halo exchange to piggyback on
+        # (or when the halo path skips neighbor_pad entirely).
+        fuse_t_front_pad = t_front_padding > 0 and h_pad_needed and not use_halo
         if t_front_padding > 0 and not fuse_t_front_pad:
             B, T, H, W, C = x_BTHWC.shape
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = _adopt(ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C)), x_BTHWC)
 
+        halo_buffer = None
+        conv_padding = self.internal_padding
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -588,14 +613,9 @@ class WanCausalConv3d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            fused_logical_h = (
-                logical_h
-                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
-                else 0
-            )
-            # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
-            x_BTHWC = _adopt(
-                self.ccl_manager.neighbor_pad(
+            if use_halo:
+                # Compact halo -> conv3d reads borders from halo_buffer; no full padded copy.
+                halo_buffer = self.ccl_manager.neighbor_pad_halo_only(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
@@ -603,12 +623,33 @@ class WanCausalConv3d(Module):
                     axes=axes,
                     neighbor_sems=neighbor_sems,
                     num_links=links,
-                    use_persistent_buffer=False,
-                    logical_h=fused_logical_h,
-                    t_front_pad=t_front_padding if fuse_t_front_pad else 0,
-                ),
-                x_BTHWC,
-            )
+                    padding_mode="zeros",
+                )
+                conv_padding = (self.internal_padding[0], self.external_padding[1], self.external_padding[2])
+            else:
+                fused_logical_h = (
+                    logical_h
+                    if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                    else 0
+                )
+                # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
+                # Persistent NP skips the fabric startup barrier (program_factory:529).
+                x_BTHWC = _adopt(
+                    self.ccl_manager.neighbor_pad(
+                        x_BTHWC,
+                        dims=dims,
+                        pad_left=pad_left,
+                        pad_right=pad_right,
+                        padding_mode="zeros",
+                        axes=axes,
+                        neighbor_sems=neighbor_sems,
+                        num_links=links,
+                        use_persistent_buffer=False,
+                        logical_h=fused_logical_h,
+                        t_front_pad=t_front_padding if fuse_t_front_pad else 0,
+                    ),
+                    x_BTHWC,
+                )
 
         x_conv_in = x_BTHWC
         x_BTHWC = ttnn.experimental.conv3d(
@@ -620,11 +661,13 @@ class WanCausalConv3d(Module):
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.internal_padding,
+            padding=conv_padding,
             padding_mode="zeros",
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
+            halo_buffer=halo_buffer,
         )
+        # halo_buffer is a pooled ping-pong buffer owned by the CCLManager — never freed here.
         if x_conv_in is not x_in or deallocate_input:
             ttnn.deallocate(x_conv_in)
 
@@ -993,7 +1036,10 @@ class WanConv2d(Module):
             and h_pad_needed
             and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
         )
+        use_halo = _halo_conv_enabled() and h_pad_needed and w_pad_needed and not h_mask_active
 
+        halo_buffer = None
+        conv_padding = self.internal_padding
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -1016,14 +1062,9 @@ class WanConv2d(Module):
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            fused_logical_h = (
-                logical_h
-                if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
-                else 0
-            )
-            # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
-            x_BTHWC = _adopt(
-                self.ccl_manager.neighbor_pad(
+            if use_halo:
+                # Compact halo -> conv3d reads borders from halo_buffer; no full padded copy.
+                halo_buffer = self.ccl_manager.neighbor_pad_halo_only(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
@@ -1031,11 +1072,32 @@ class WanConv2d(Module):
                     axes=axes,
                     neighbor_sems=neighbor_sems,
                     num_links=links,
-                    use_persistent_buffer=False,
-                    logical_h=fused_logical_h,
-                ),
-                x_BTHWC,
-            )
+                    padding_mode="zeros",
+                )
+                conv_padding = (self.internal_padding[0], self.external_padding[1], self.external_padding[2])
+            else:
+                fused_logical_h = (
+                    logical_h
+                    if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                    else 0
+                )
+                # Non-persistent + barrier: one output instead of a DRAM ping-pong pair.
+                # Persistent NP skips the fabric startup barrier (program_factory:529).
+                x_BTHWC = _adopt(
+                    self.ccl_manager.neighbor_pad(
+                        x_BTHWC,
+                        dims=dims,
+                        pad_left=pad_left,
+                        pad_right=pad_right,
+                        padding_mode="zeros",
+                        axes=axes,
+                        neighbor_sems=neighbor_sems,
+                        num_links=links,
+                        use_persistent_buffer=False,
+                        logical_h=fused_logical_h,
+                    ),
+                    x_BTHWC,
+                )
 
         x_conv_in = x_BTHWC
         x_BTHWC = ttnn.experimental.conv3d(
@@ -1047,11 +1109,13 @@ class WanConv2d(Module):
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.internal_padding,
+            padding=conv_padding,
             padding_mode="zeros",
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
+            halo_buffer=halo_buffer,
         )
+        # halo_buffer is a pooled ping-pong buffer owned by the CCLManager — never freed here.
         if x_conv_in is not x_in or deallocate_input:
             ttnn.deallocate(x_conv_in)
 
