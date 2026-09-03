@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 
 class TtSWAState:
@@ -207,8 +208,25 @@ class TtSWA(LightweightModule):
         self._slab_rope = self.ops.build_rope_table(int(max_seq_len) + chunk, 1, layer_type="main")
         self._slab_index = self.ops.rope_index_base(seq_local)
         return TtSWAState(
-            carry=self.ops.from_torch(torch.zeros(batch, 1, sw, self.head_dim)),
+            carry=self._alloc_carry(batch, sw),
             max_seq_len=max_seq_len,
+        )
+
+    def _alloc_carry(self, batch: int, rows: int):
+        """``[batch, 1, rows, head_dim]``, ND-sharded so the migration address table can name it.
+
+        ``seq_len`` is pre-multiplied by sp_factor to cancel the division init_kvpe_cache does for its
+        own SP-sharded cache: the carry is replicated, so every chip holds all ``rows``."""
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=self.head_dim,
+            mesh_device=self.device,
+            seq_len=rows * self.sp_factor,
+            mesh_shape=list(self.device.shape),
+            sp_axis=self.sp_axis,
+            num_kvpe_cache_layers=1,
+            num_users=batch,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
         )
 
     def _build_masks(self, seq_local: int):
@@ -305,7 +323,9 @@ class TtSWA(LightweightModule):
 
         # [carry | chunk] is the global key sequence this chunk can see; each chip takes the 128 rows
         # that precede its own block out of it.
-        hist = ttnn.concat([carry, gathered], dim=2)
+        # The carry is ND-sharded so the migration table can name it, and concat refuses a mix of
+        # sharded and interleaved inputs.
+        hist = ttnn.concat([ttnn.to_memory_config(carry, ttnn.DRAM_MEMORY_CONFIG), gathered], dim=2)
         start, end = self._halo_bounds
         halo = ttnn.slice(hist, start, end, slice_dim=2, num_devices=self._halo_num_devices)
         kv = ttnn.concat([halo, sliding_kv], dim=2)
@@ -504,5 +524,6 @@ class TtSWA(LightweightModule):
         )
 
         state.kv_actual += real_len
-        state.carry = next_carry
+        # In place, not a rebind: the migration table is built once from this tensor's address.
+        ttnn.kv_cache.fill_cache_for_user_(state.carry, next_carry, 0, update_idx=0)
         return self._o_proj(attn)
