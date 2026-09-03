@@ -17,6 +17,7 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Prepare a fused, cancellation-resistant LayerNorm subtraction.
  *
@@ -24,7 +25,16 @@ namespace ckernel {
  * anchor - mean in its second face column. The operation computes
  * (input - anchor) + (anchor - mean) without rounding the mean to the
  * input magnitude first.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name          | Description                                      | Type     | Valid Range | Required |
+ * |------------|---------------|--------------------------------------------------|----------|-------------|----------|
+ * | Function   | input_cb      | Circular buffer containing input tiles           | uint32_t | 0-31        | True     |
+ * | Function   | split_mean_cb | Circular buffer containing split-mean statistics | uint32_t | 0-31        | True     |
+ * | Function   | call_line     | Source line reported by state validation          | uint32_t | -           | False    |
  */
+// clang-format on
 ALWI void sub_bcast_cols_compensated_init(
     std::uint32_t input_cb, std::uint32_t split_mean_cb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(input_cb, split_mean_cb, call_line);
@@ -32,16 +42,23 @@ ALWI void sub_bcast_cols_compensated_init(
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(input_cb, split_mean_cb)));
 }
 
+// clang-format off
 /**
- * @brief Subtracts a split mean from consecutive input tiles without cancelling the retained row anchor.
+ * Subtract a split mean from consecutive input tiles without cancelling the
+ * retained row anchor. Call `sub_bcast_cols_compensated_init` first. The
+ * destination range must fit in the acquired DST bank.
  *
- * @param input_cb Circular buffer containing the input tiles.
- * @param split_mean_cb Circular buffer containing the anchor and anchor-minus-mean statistics tile.
- * @param input_tile Index of the first input tile.
- * @param dst_tile Index of the first destination tile.
- * @param tile_count Number of consecutive tiles to process.
- * @note Call @ref sub_bcast_cols_compensated_init first. The destination range must fit in the acquired DEST bank.
+ * Return value: None
+ *
+ * | Param Type | Name          | Description                                                    | Type     | Valid Range | Required |
+ * |------------|---------------|----------------------------------------------------------------|----------|-------------|----------|
+ * | Function   | input_cb      | Circular buffer containing input tiles                         | uint32_t | 0-31        | True     |
+ * | Function   | split_mean_cb | Circular buffer containing anchor and anchor-minus-mean values | uint32_t | 0-31        | True     |
+ * | Function   | input_tile    | Index of the first input tile                                  | uint32_t | -           | True     |
+ * | Function   | dst_tile      | Index of the first destination tile                            | uint32_t | -           | True     |
+ * | Function   | tile_count    | Number of consecutive tiles to process                         | uint32_t | -           | True     |
  */
+// clang-format on
 ALWI void sub_bcast_cols_compensated(
     std::uint32_t input_cb,
     std::uint32_t split_mean_cb,
