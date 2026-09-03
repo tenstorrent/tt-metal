@@ -388,8 +388,9 @@ bank and pumps them to the host FIFO over a D2H socket.
   (`kSpoolFreshCycles`), so host staleness is bounded.
 - **Teardown** talks to a relay through its stop word: 1 = quiesce (every wait holds while the last frames
   drain, up to 1 s), 2 = kill switch (abandon waits, free the NIU). The relay publishes `0xD09E****` in its
-  done word once its last page is out. Producers are disarmed (`PROFILER_TERMINATE`) on every path where a
-  relay does not come up, so a missing relay can never wedge the workload (§N+24).
+  done word once its last page is out. Producers boot unarmed and are armed (`PROFILER_ARMED`) only on the
+  cores a relay drains, once every relay is up; a path where a relay does not come up leaves them unarmed, so a
+  missing relay can never wedge the workload (§N+24).
 - **Not instrumented itself.** The relay opts out of the producer instrumentation (no drainer serves a DRAM
   core, so the ring would be write-only dead weight — §N+72); the DRISC code region is 11,264 B and every
   feature has had to be fitted into it (§N+43, §N+64).

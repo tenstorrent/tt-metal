@@ -245,9 +245,9 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     // The relay can only free words up to the published tail, so waiting on unpublished words deadlocks.
     publish_tail();
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
-        invalidate_l1_cache();  // re-read the relay-updated head (and the terminate flag)
-        if (profiler_control_buffer[PROFILER_TERMINATE]) {
-            return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
+        invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
+        if (!profiler_control_buffer[PROFILER_ARMED]) {
+            return;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
         }
     }
     g_head_cache = profiler_control_buffer[HEAD_INDEX];
