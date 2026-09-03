@@ -122,7 +122,7 @@ def tp_all_reduce(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tenso
     return ttnn.all_reduce(tensor, **kwargs)
 
 
-def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tensor:
+def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None, out_width: int = None) -> ttnn.Tensor:
     """All-reduce across exactly 2 chips using one CCL op instead of two.
 
     ``ttnn.all_reduce`` lowers to reduce_scatter + all_gather, and on N300 both are
@@ -136,6 +136,13 @@ def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn
         all_gather onto its composite all-broadcast fallback (78 us vs 34 us).
       * Leave ``num_links`` on auto. Forcing 2 links doubled the gather to 69 us: the
         payload is far too small to amortise a second link's setup.
+
+    ``out_width`` narrows the two slices so a DRAM-shard N-pad is dropped HERE instead
+    of by a separate unpad slice before the call. A DRAM-sharded matmul pads N up to a
+    multiple of TILE*dram_cores (1024 -> 1152 for the CP's o_proj and MLP down), and the
+    padded columns are zero because the weight was zero-padded, so discarding them costs
+    nothing and is exact. The slices happen either way, so this removes one op per call
+    per layer -- 150 per CP frame -- for free.
     """
     rows, cols = get_mesh_shape(device)
     cluster_axis = 1 if rows == 1 else 0
@@ -143,9 +150,14 @@ def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn
     shape = list(tensor.shape)
     w = shape[-1]
 
+    ow = w if out_width is None else int(out_width)
+    assert ow <= w, f"out_width {ow} exceeds tensor width {w}"
+
     gathered = ttnn.all_gather(tensor, dim=-1, cluster_axis=cluster_axis, memory_config=mc)
-    lo = ttnn.slice(gathered, [0, 0, 0, 0], shape[:-1] + [w], memory_config=mc)
-    hi = ttnn.slice(gathered, [0, 0, 0, w], shape[:-1] + [2 * w], memory_config=mc)
+    # Chip 0's partial occupies [0, w) and chip 1's [w, 2w); taking only the first ow
+    # columns of each drops the DRAM-shard pad as part of slices that already exist.
+    lo = ttnn.slice(gathered, [0, 0, 0, 0], shape[:-1] + [ow], memory_config=mc)
+    hi = ttnn.slice(gathered, [0, 0, 0, w], shape[:-1] + [w + ow], memory_config=mc)
     ttnn.deallocate(gathered)
     out = ttnn.add(lo, hi, memory_config=mc)
     ttnn.deallocate(lo)
