@@ -1,0 +1,129 @@
+{
+  "config_id": "C02_lmhead_bf4_hifi2",
+  "build_kwargs_requested": {
+    "expert_dtype": null,
+    "weight_dtype": null,
+    "cache_dtype": null,
+    "lm_head_dtype": "bf4",
+    "lm_head_fidelity": "hifi2",
+    "attn_fidelity": null,
+    "mlp_fidelity": null,
+    "expert_fidelity": null,
+    "router_fidelity": null,
+    "prefill_proj_fidelity": null,
+    "prefill_expert_fidelity": null,
+    "attn_weight_dtype": null,
+    "mlp_gateup_dtype": null,
+    "mlp_down_dtype": null,
+    "dense_mlp_dtype": null
+  },
+  "reference": "/home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt",
+  "mesh_device": "N150",
+  "build_s": 173.33545799900094,
+  "policy_snapshot": {
+    "expert_dtype": "DataType.BFLOAT4_B",
+    "weight_dtype": "DataType.BFLOAT8_B",
+    "cache_dtype": "DataType.BFLOAT8_B",
+    "embed_dtype": "DataType.BFLOAT16",
+    "lm_head_dtype": "DataType.BFLOAT4_B",
+    "lm_head_fidelity": "hifi2",
+    "ck_lm_head": {
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false
+    },
+    "decoder_cls": "SharedRopeDecoder",
+    "moe_layer": {
+      "attn_weight_dtype": "DataType.BFLOAT4_B",
+      "ck_attn": {
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false
+      },
+      "shared_gate_up_dtype": "DataType.BFLOAT4_B",
+      "shared_down_dtype": "DataType.BFLOAT4_B",
+      "expert_gate_up_dtype": "DataType.BFLOAT4_B",
+      "expert_down_dtype": "DataType.BFLOAT4_B",
+      "ck_mlp_shared": {
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false
+      },
+      "ck_expert": {
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false
+      },
+      "router_dtype": "DataType.FLOAT32",
+      "ck_router": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "fp32_dest_acc_en": true
+      }
+    },
+    "dense_layer": {
+      "attn_weight_dtype": "DataType.BFLOAT4_B",
+      "mlp_gate_dtype": "DataType.BFLOAT8_B",
+      "dense_down_dtype": "DataType.BFLOAT8_B",
+      "ck_mlp_dense": {
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": false
+      }
+    }
+  },
+  "prefill_check": {
+    "per_entry": [
+      {
+        "top1": 0.86,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 86,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "aggregate": {
+      "top1": 0.86,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 86,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  },
+  "teacher_forcing": {
+    "per_entry": [
+      {
+        "top1": 0.79,
+        "top5": 0.99,
+        "top100": 1.0,
+        "matches_top1": 79,
+        "matches_top5": 99,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 2.808884407999358,
+        "e2e_t/s/u": 35.601322615915514,
+        "ttft_ms": 590.2025189989217,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 2.2186576730000525,
+        "decode_t/s/u": 44.62157511038327
+      }
+    ],
+    "aggregate": {
+      "top1": 0.79,
+      "top5": 0.99,
+      "top100": 1.0,
+      "matches_top1": 79,
+      "matches_top5": 99,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 2.808884407999358,
+      "e2e_t/s/u": 35.601322615915514,
+      "ttft_ms": 590.2025189989217,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 2.2186576730000525,
+      "decode_t/s/u": 44.62157511038327
+    }
+  }
+}

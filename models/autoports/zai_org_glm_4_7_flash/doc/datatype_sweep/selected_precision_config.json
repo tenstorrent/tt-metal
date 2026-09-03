@@ -1,0 +1,152 @@
+{
+  "model": "zai-org/GLM-4.7-Flash",
+  "stage": "datatype-sweep",
+  "selected_config_id": "C00_baseline",
+  "hardware": "1x Blackhole p150-class chip (single chip, 32 GB DRAM, ~31.5 GiB allocatable)",
+  "mesh": "N150 (1x1)",
+  "summary": "Every candidate this stage evaluated is either slower, less accurate, or both, than the config already shipped by the optimized-decoder/optimized-full-model stages. This file therefore records that shipped config as the winner, not a new policy.",
+  "weight_groups": {
+    "attention_decode_dram_sharded_copies_and_absorbed_kv_b": {
+      "members": ["wqkv_a_ds", "wq_b_ds", "wo_ds", "w_uk", "w_uv_t"],
+      "dtype": "bfloat4_b",
+      "compute_fidelity": "LoFi",
+      "source": "OptimizedDecoder.attn_weight_dtype (class attr, default) / OptimizedDecoder.attn_fidelity (class attr, default \"lofi\")",
+      "swept_this_stage": "fidelity axis only (C06_attn_hifi2: HiFi2 ties on accuracy, -4.9% decode -> LoFi kept)"
+    },
+    "attention_prefill_flat_copies": {
+      "members": ["wqkv_a", "wq_b_heads", "wo (prefill interleaved copies)"],
+      "dtype": "bfloat8_b",
+      "compute_fidelity": "HiFi2+fp32acc",
+      "source": "weight_dtype (from_pretrained kwarg, default bfloat8_b) / OptimizedDecoder.prefill_proj_fidelity (class attr, default \"hifi2_fp32\")",
+      "swept_this_stage": "not re-swept: prefill dtype/fidelity is governed by the 202k long-context real-weight evidence in doc/context_contract.json's optimized_decoder section, a materially harder accuracy test than this stage's 154-token AIME prompt; TTFT/decode t/s/u (this stage's ranking metric) are dominated by decode, not the single short prefill in the readiness reference"
+    },
+    "shared_expert_gate_up": {
+      "dtype": "bfloat4_b",
+      "compute_fidelity": "LoFi (decode) / HiFi2+fp32acc (prefill)",
+      "source": "OptimizedDecoder.mlp_gateup_dtype (class attr, default) / OptimizedDecoder.mlp_fidelity, prefill_expert_fidelity (class attrs, default)",
+      "swept_this_stage": "fidelity axis, combined with dense-MLP fidelity (C08_mlp_hifi2: HiFi2 regresses top-1 -0.03 and decode -1.2% -> LoFi kept)"
+    },
+    "shared_expert_down": {
+      "dtype": "bfloat4_b",
+      "compute_fidelity": "LoFi (decode) / HiFi2+fp32acc (prefill)",
+      "source": "OptimizedDecoder.mlp_down_dtype (class attr, default) / OptimizedDecoder.mlp_fidelity (class attr, default)",
+      "swept_this_stage": "see shared_expert_gate_up"
+    },
+    "dense_mlp_gate_up_down": {
+      "layer_exception": "layer 0 only (the model's single dense decoder layer; 1 of 47)",
+      "dtype": "bfloat8_b",
+      "compute_fidelity": "LoFi (decode) / HiFi2+fp32acc (prefill)",
+      "source": "OptimizedDecoder.dense_mlp_dtype (class attr, default None -> falls back to weight_dtype=bfloat8_b) / OptimizedDecoder.mlp_fidelity (class attr, default)",
+      "swept_this_stage": "dtype axis (C09_dense_mlp_bf4_lofi: bf4 is noise-level on decode t/s/u since it's 1 of 47 layers, no speed benefit regardless of the mixed accuracy signal -> bf8 kept); matches the decoder-level 202k rejection already on record (doc/optimized_decoder/README.md)"
+    },
+    "routed_experts_gate_up": {
+      "layers": "1..46 (all 46 MoE layers, uniform policy)",
+      "dtype": "bfloat4_b",
+      "compute_fidelity": "LoFi (decode) / HiFi2+fp32acc (prefill)",
+      "source": "expert_dtype (from_pretrained kwarg, default bfloat4_b) / OptimizedDecoder.expert_fidelity, prefill_expert_fidelity (class attrs, default)",
+      "swept_this_stage": "fidelity axis (C07_expert_hifi2: HiFi2 ties on accuracy, -0.45% decode -> LoFi kept); dtype axis mandated by capacity (doc/probe/README.md: bf8 experts alone are ~32 GB, does not fit one p150) and already evidenced at the per-expert-PCC level (0.980913-0.981341, uniform across all 64 experts, so no layer-position exception was tested or expected to help)"
+    },
+    "routed_experts_down": {
+      "layers": "1..46",
+      "dtype": "bfloat4_b",
+      "compute_fidelity": "LoFi (decode) / HiFi2+fp32acc (prefill)",
+      "source": "expert_dtype (from_pretrained kwarg, default) / OptimizedDecoder.expert_fidelity (class attr, default)",
+      "swept_this_stage": "see routed_experts_gate_up"
+    },
+    "router_gate": {
+      "dtype": "float32",
+      "compute_fidelity": "HiFi4+fp32acc (decode); prefill routing unchanged, still HiFi4+fp32acc via the inherited ck_hifi4 path",
+      "source": "hardcoded fp32 dtype (functional_decoder.py); OptimizedDecoder.router_fidelity (class attr, NEW this stage -- decode fidelity was hardcoded before, see README 'Plumbing added')",
+      "swept_this_stage": "fidelity axis (C05_router_hifi2: HiFi2 regresses top-1 -0.03 for a noise-level +0.16% decode change -> HiFi4+fp32acc kept; router numerics feed top-4-of-64 expert selection, a documented correctness-sensitive tensor)"
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b",
+      "compute_fidelity": "HiFi2",
+      "source": "lm_head_dtype (from_pretrained kwarg, default bfloat8_b); lm_head_fidelity (from_pretrained kwarg, NEW this stage -- fidelity was hardcoded before, see README 'Plumbing added')",
+      "swept_this_stage": "dtype axis (C01/C02: bf4 regresses top-1 -0.06 abs for a +1.36% decode gain -- rejected, see README) and fidelity axis at the shipped dtype (C03: LoFi regresses top-1 -0.02 for a noise-level +0.14% decode change -- rejected). HiFi2 kept."
+    },
+    "norms_activations_residual": {
+      "dtype": "bfloat16",
+      "compute_fidelity": "HiFi4+fp32acc (norm kernel)",
+      "swept_this_stage": "not swept -- see README 'Scoped out of this sweep': this is an architecture-wide convention set at the functional-decoder stage, not a per-tensor-group dtype knob; changing it touches every op's input/output contract and is outside a single sweep stage's safe scope"
+    }
+  },
+  "layer_exceptions": {
+    "layer_0_dense": "dense MLP uses dense_mlp_dtype (bfloat8_b), not the MoE-layer mlp_gateup/down bfloat4_b path. This is GLM-4.7-Flash's only architectural first/last-layer-style exception (layer 0 is the model's one dense layer, not a MoE layer) -- not a choice this sweep made or needed to make.",
+    "moe_layers_1_46": "uniform policy, no per-layer exception. doc/probe/README.md's per-expert PCC under bf4 is tightly clustered (0.980913-0.981341 across all 64 experts of the probed layer): the skill's general 'exclude first/last layer' heuristic does not apply here because the quantization error this model actually shows is uniform, not layer-position-dependent, and a uniform-bf4 policy is also the documented DeepSeek/Kimi-Galaxy convention this checkpoint's own probe cites."
+  },
+  "activation_residual_dtype": "bfloat16 throughout (embedding table, decoder residual stream in L1, MoE glue). Not a sweep candidate this stage -- see 'Scoped out' in README.",
+  "ccl_dtype": "N/A: single Blackhole p150 chip is the deployment target (goal explicitly puts multichip parallelism out of scope), so there are no collective/CCL ops in the measured path.",
+  "kv_cache_dtype": {
+    "selected": "bfloat8_b",
+    "supported_alternative": "bfloat16",
+    "source": "cache_dtype (from_pretrained kwarg, default bfloat8_b)",
+    "swept_this_stage": "C04_kvcache_bf16: identical teacher-forced accuracy (top1 0.850, top5 1.000, top100 1.000) but TTFT regresses 590.28->620.48 ms (+5.1%) and decode 44.02->43.91 t/s/u (-0.25%). bf8 kept; matches the already-committed 202k real-weight equivalence evidence in doc/context_contract.json.",
+    "context_contract_impact": "none -- selected dtype is unchanged from the optimized-decoder/full-model stages, so doc/context_contract.json's existing 202752-token capacity/budget figures for bf8 (and the bf16 alternative's 10.9 GiB projection) still apply unmodified. See this stage's context_contract.json 'datatype_sweep' provenance block."
+  },
+  "logits_sampling_dtype": {
+    "decode_logits_memory_config": "L1, bfloat16 tensor (see tt/model.py decode_logits_memory_config; DRAM alternative measured and rejected at the optimized-full-model stage, unchanged here)",
+    "sampling": "device-side split top-k=32 gather over 4 vocab chunks, then greedy select (k=1, p=0, temp=1); tt_out_tok device-resident feedback buffer",
+    "swept_this_stage": "no lower-precision sampling dtype candidate exists in the codebase to sweep; recorded here for completeness per the skill's required-fields list"
+  },
+  "construction": {
+    "entry_point": "models/autoports/zai_org_glm_4_7_flash/tt/generator.py::build_generator(model_dir, mesh_device, **kwargs)",
+    "is_model_default": true,
+    "from_pretrained_kwargs_matching_this_config": {
+      "expert_dtype": "bfloat4_b (default)",
+      "weight_dtype": "bfloat8_b (default)",
+      "cache_dtype": "bfloat8_b (default)",
+      "embed_dtype": "bfloat16 (default)",
+      "lm_head_dtype": "bfloat8_b (default)",
+      "lm_head_fidelity": "hifi2 (default, NEW constructor kwarg added this stage)",
+      "decoder_cls": "SharedRopeDecoder (default)"
+    },
+    "decoder_class_attrs_matching_this_config": {
+      "attn_fidelity": "lofi (default)",
+      "mlp_fidelity": "lofi (default)",
+      "expert_fidelity": "lofi (default)",
+      "router_fidelity": "hifi4_fp32 (default, NEW class attribute added this stage)",
+      "attn_weight_dtype": "bfloat4_b (default)",
+      "mlp_gateup_dtype": "bfloat4_b (default)",
+      "mlp_down_dtype": "bfloat4_b (default)",
+      "dense_mlp_dtype": "null -> falls back to weight_dtype=bfloat8_b (default)",
+      "prefill_proj_fidelity": "hifi2_fp32 (default)",
+      "prefill_expert_fidelity": "hifi2_fp32 (default)"
+    },
+    "plumbing_added_this_stage": [
+      "tt/model.py: GLM47FlashModel.from_pretrained gained lm_head_fidelity: str = \"hifi2\" (previously hardcoded MathFidelity.HiFi2); ck_lm_head is now built from FIDELITY[lm_head_fidelity]. Model instance also now exposes expert_dtype/weight_dtype/embed_dtype/lm_head_dtype/lm_head_fidelity/decoder_cls_name for the propagation check.",
+      "tt/optimized_decoder.py: OptimizedDecoder gained router_fidelity = \"hifi4_fp32\" class attribute (previously the router matmul's compute-kernel-config was hardcoded via the inherited ck_hifi4, which stays bound to true HiFi4+fp32acc for any other inherited functional-stage codepath that still reads it). from_state_dict now builds self.ck_router = _ck(dev, *FIDELITY[cls.router_fidelity]) and _router_scores_decode consumes self.ck_router instead of self.ck_hifi4."
+    ],
+    "proof_of_consumption": [
+      "doc/datatype_sweep/runs/C00_baseline.json's policy_snapshot block is introspected directly from the real ttnn tensors and ttnn.init_device_compute_kernel_config objects on the constructed model/decoder layers (moe.wqkv_a_ds.dtype, moe.ck_attn.math_fidelity, moe.gate_w.dtype, moe.ck_router.math_fidelity, model.lm_head_weight.dtype, model.ck_lm_head.math_fidelity, etc.) after a genuine build_generator(model_dir, mesh_device) call with zero overrides -- not the requested kwargs, the actually-built objects.",
+      "That snapshot matches every field in this file. tests/check_selected_precision_config.py re-derives the snapshot fresh (rebuilding nothing; it re-imports the class defaults) and asserts the match programmatically.",
+      "doc/optimized_full_model/README.md item 2 already independently re-verified (via a fresh Tracy CSV, not by re-reading old docs) that every dominant matmul in the *full model's* measured decode path carries this exact dtype/in0_block_w policy -- this stage's C00_baseline run reproduces that stage's accuracy/perf numbers bit-for-bit-equivalent (within run-to-run noise), which is additional evidence the plumbing changes did not alter the measured runtime path."
+    ],
+    "vllm_adapter_note": "No vLLM adapter exists yet for this autoport (vLLM integration is explicitly out of scope for this goal). Any future vLLM adapter must call build_generator() (or GLM47FlashModel.from_pretrained()) with no dtype/fidelity overrides, or with overrides that reproduce the from_pretrained_kwargs_matching_this_config / decoder_class_attrs_matching_this_config values above, to inherit this selected policy. This is a requirement the vLLM stage must satisfy, not something this stage can prove ahead of that adapter existing."
+  },
+  "accuracy_bar": {
+    "top1": "informational only, not gated -- see README 'Accuracy bar' for why",
+    "top5": ">= 0.98",
+    "top100": "= 1.00",
+    "provenance": "doc/full_model/README.md and doc/optimized_full_model/README.md both state this exact bar across many committed review rounds"
+  },
+  "measured_result": {
+    "reference": "models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt (AIME24, chat template, 100 generated tokens)",
+    "prefill_check": {"top1": 0.88, "top5": 1.0, "top100": 1.0},
+    "teacher_forcing": {"top1": 0.85, "top5": 1.0, "top100": 1.0, "ttft_ms": 590.28, "decode_t_s_u": 44.02},
+    "post_selection_token_out_no_readback": {
+      "source": "doc/datatype_sweep/postselection_perf.json (tests/test_full_model_perf.py, normal default construction path, zero overrides)",
+      "decode_ms_per_token_traced_model_plus_sampling_no_readback": 22.879,
+      "decode_ms_per_token_traced_model_only_no_sampling": 21.758,
+      "decode_ms_per_token_token_out_incl_readback": 23.013,
+      "ttft_ms_prompt_128_warmed": 334.1
+    }
+  },
+  "evidence": {
+    "sweep_results": "doc/datatype_sweep/sweep_results.json, sweep_results.csv",
+    "runs": "doc/datatype_sweep/runs/*.json",
+    "qualitative": "doc/datatype_sweep/qualitative/ (fresh this stage, --skip-hf, bit-identical greedy prefix agreement to doc/optimized_full_model/qualitative/: 8/128, 16/128, 45/128, 14/128, 32/128, 15/128 -- proves the plumbing changes did not alter generation)",
+    "context_contract": "doc/context_contract.json 'datatype_sweep' provenance block",
+    "non_aligned_prompt_check": "tests/test_prefill_padding.py (13 passed, fresh this stage, post-plumbing-edit) and tests/test_full_model.py (47 passed, fresh this stage, includes test_host_logits_paths_compile_nothing_at_an_unaligned_length and test_single_chunk_prompt_shape_does_not_recapture)"
+  }
+}

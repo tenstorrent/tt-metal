@@ -275,5 +275,32 @@
    },
    "artifact": "doc/full_model/full_context.json, doc/full_model/logs/pytest_full_context.log"
   }
+ },
+ "datatype_sweep": {
+  "supported_context": 202752,
+  "max_valid_position": 202751,
+  "capability_reduction": "none",
+  "selected_kv_cache_dtype": "bfloat8_b",
+  "kv_cache_dtype_recompute": {
+   "reason": "$datatype-sweep requires recomputing this contract for every selected KV-cache dtype candidate that could change capacity. The selected dtype (bfloat8_b) is unchanged from the optimized_decoder/full_model stages, so the existing full_model.dram_budget_gib figures (kv_cache_batch1_202752_bf8: 5.431 GiB) already reflect it -- there is nothing to recompute for the winning candidate.",
+   "tested_alternative_bfloat16": {
+    "decision": "REJECTED (doc/datatype_sweep/sweep_results.json C04_kvcache_bf16)",
+    "would_still_fit": true,
+    "projected_cache_gib_at_202752": 10.9,
+    "projected_resident_total_gib_estimate": "17.498 (weights+scratch) + 10.9 (bf16 cache) + 0.092 (sampler buffers) = 28.49, vs 31.5 GiB measured allocatable -- fits with ~3.0 GiB headroom, less than bf8's 8.15 GiB but still a hard pass, not a capacity-forced rejection",
+    "why_rejected": "not a capacity problem -- bf16 fits. Rejected on measured evidence: identical teacher-forced accuracy to bf8 (top1 0.850, top5 1.000, top100 1.000) but TTFT +5.1% (590.28->620.48 ms) and decode -0.25% (44.02->43.91 t/s/u) from the doubled cache read/write traffic. See doc/datatype_sweep/README.md."
+   },
+   "conclusion": "capability is preserved either way (both candidates fit and support the full 202752-token advertised context); bf8 is selected for speed, not because bf16 would have required reducing advertised capability."
+  },
+  "non_aligned_prompt_check": {
+   "rerun_this_stage": true,
+   "reason": "the selected config makes zero KV-cache dtype/layout/trace-buffer/chunking change from the optimized_decoder/full_model stages, so $datatype-sweep's 'rerun if changed' condition is not triggered -- rerun anyway as fresh evidence after this stage's plumbing edits (tt/model.py, tt/optimized_decoder.py).",
+   "evidence": "tests/test_prefill_padding.py (13 passed) and tests/test_full_model.py (47 passed, including test_host_logits_paths_compile_nothing_at_an_unaligned_length and test_single_chunk_prompt_shape_does_not_recapture), both fresh this stage post-edit"
+  },
+  "provenance": {
+   "stage": "datatype-sweep",
+   "evidence": "doc/datatype_sweep/README.md, doc/datatype_sweep/sweep_results.json, doc/datatype_sweep/selected_precision_config.json",
+   "date": "2026-09-03"
+  }
  }
 }

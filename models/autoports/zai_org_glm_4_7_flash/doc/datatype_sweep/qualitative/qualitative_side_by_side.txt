@@ -1,0 +1,132 @@
+====================================================================================================
+[0] Write a haiku about machine learning.
+    (greedy prefix agreement: 8/128 tokens)
+---------------------------------------- HF ----------------------------------------
+1.  **Analyze the Request:**
+    *   **Topic:** Machine Learning.
+    *   **Format:** Haiku (5-7-5 syllables).
+
+2.  **Brainstorming Keywords & Concepts:**
+    *   *Data:* Numbers, patterns, learning, training, input, output.
+    *   *Process:* Algorithms, neural networks, thinking, growing, evolving.
+    *   *Result:* Intelligence, prediction, future, understanding, magic.
+
+3.  **Drafting - Attempt 1 (Focus on data):**
+    *   Line 1: Data feeds the mind (5
+---------------------------------------- TT ----------------------------------------
+1.  **Analyze the Request:** The user wants a haiku about "machine learning".
+
+2.  **Understand the Subject (Machine Learning):**
+    *   *Core concept:* Computers learning from data without explicit programming.
+    *   *Key elements:* Data, patterns, algorithms, improvement, future, code, learning.
+    *   *Tone:* Can be technical, poetic, futuristic, or observational.
+
+3.  **Understand the Form (Haiku):**
+    *   *Structure:* 3 lines.
+    *   *Syllable count:* 5 syllables, 7 syllables
+
+====================================================================================================
+[1] Explain the difference between supervised and unsupervised learning in simple terms.
+    (greedy prefix agreement: 16/128 tokens)
+---------------------------------------- HF ----------------------------------------
+1.  **Analyze the Request:**
+    *   **Topic:** Difference between supervised and unsupervised learning.
+    *   **Constraint:** "In simple terms."
+    *   **Goal:** Provide a clear, relatable explanation that avoids heavy jargon or complex math.
+
+2.  **Deconstruct the Concepts:**
+    *   *Supervised Learning:* The computer learns from labeled data. It has a teacher. It makes predictions based on known outcomes. Examples: Spam filters, house price prediction.
+    *   *Unsupervised Learning:* The computer finds patterns in unlabeled data. No teacher. It explores
+---------------------------------------- TT ----------------------------------------
+1.  **Analyze the Request:**
+    *   **Topic:** Supervised vs. Unsupervised Learning.
+    *   **Constraint:** Explain in *simple terms*.
+    *   **Goal:** Clear, accessible explanation distinguishing the two concepts.
+
+2.  **Deconstruct the Concepts:**
+    *   *Supervised Learning:* Needs a teacher. Has labels. Input data + Output data. Goal: Map input to output. Examples: Classification (cat/dog), Regression (predict price).
+    *   *Unsupervised Learning:* No teacher. No labels. Just raw data. Goal: Find patterns,
+
+====================================================================================================
+[2] Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered
+    (greedy prefix agreement: 45/128 tokens)
+---------------------------------------- HF ----------------------------------------
+1.  **Analyze the Request:**
+    *   **Prompt:** "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered..."
+    *   **Tone:** Fairy tale, whimsical, adventurous.
+    *   **Character:** Curious young inventor.
+    *   **Setting:** Faraway kingdom.
+    *   **Plot Point:** "Discovered" (needs a hook).
+
+2.  **Brainstorming Ideas for "Discovered":**
+    *   *Idea 1 (Magical):* A hidden door, a map, a
+---------------------------------------- TT ----------------------------------------
+1.  **Analyze the Request:**
+    *   **Prompt:** "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered..."
+    *   **Genre:** Fairy tale/Fantasy.
+    *   **Character:** A curious young inventor.
+    *   **Action:** Discovered something.
+    *   **Tone:** Open, but usually implies wonder, adventure, or a problem-solution arc.
+
+2.  **Brainstorming "Discovered" Ideas:**
+    *   *Idea 1 (Magical Object):* A glowing stone,
+
+====================================================================================================
+[3] What are the three laws of thermodynamics?
+    (greedy prefix agreement: 14/128 tokens)
+---------------------------------------- HF ----------------------------------------
+1.  **Analyze the Request:** The user is asking for the "three laws of thermodynamics." This is a standard physics question.
+
+2.  **Identify the Core Concepts:**
+    *   **Zeroth Law:** Thermal equilibrium, temperature definition.
+    *   **First Law:** Conservation of energy, heat vs. work.
+    *   **Second Law:** Entropy, direction of processes, heat engines.
+    *   **Third Law:** Absolute zero, entropy at zero temperature.
+
+3.  **Drafting the Content - Law by Law:**
+
+    *   **The Zeroth Law:**
+        *
+---------------------------------------- TT ----------------------------------------
+1.  **Analyze the Request:** The user is asking for "the three laws of thermodynamics." This is a standard, factual request in physics.
+
+2.  **Identify the Subject:** Thermodynamics is the branch of physics concerned with heat, work, and energy. The laws are fundamental principles governing energy transformations.
+
+3.  **Retrieve Knowledge:**
+    *   *First Law:* Conservation of energy. Energy cannot be created or destroyed, only transformed.
+    *   *Second Law:* Entropy. The total entropy of an isolated system can never decrease over time. It increases for spontaneous processes. Heat flows from hot
+
+====================================================================================================
+[4] Translate the following to French: "Hello, how are you today?"
+    (greedy prefix agreement: 32/128 tokens)
+---------------------------------------- HF ----------------------------------------
+1.  **Analyze the Request:** The user wants to translate the English sentence "Hello, how are you today?" into French.
+
+2.  **Identify the Key Components:**
+    *   "Hello": Formal/Informal greeting.
+    *   "how are you": Inquiry about well-being.
+    *   "today": Specific time frame (optional but included in the source).
+
+3.  **Determine the French Equivalents:**
+    *   "Hello": "Bonjour" (Standard), "Salut" (Informal).
+    *   "How are you": "Comment allez-vous?" (
+---------------------------------------- TT ----------------------------------------
+1.  **Analyze the Request:** The user wants to translate the English sentence "Hello, how are you today?" into French.
+
+2.  **Analyze the Source Sentence:**
+    *   "Hello": A greeting.
+    *   "how are you": A standard inquiry about well-being.
+    *   "today": A time marker.
+
+3.  **Determine the Target Language:** French.
+
+4.  **Translate Component by Component:**
+    *   "Hello": "Bonjour" is the standard, polite greeting. "Salut" is informal. "Coucou" is very informal. "Bonjour
+
+====================================================================================================
+[5] Write a Python function to calculate the Fibonacci sequence.
+    (greedy prefix agreement: 15/128 tokens)
+---------------------------------------- HF ----------------------------------------
+We need to write a Python function to calculate the Fibonacci sequence. The user didn't specify the exact requirements: maybe they want a function that returns the sequence up to a certain number of terms, or returns the nth Fibonacci number? Usually "calculate the Fibonacci sequence" could mean generate the sequence up to a given limit or number of terms. We need to decide. The instruction: "Write a Python function to calculate the Fibonacci sequence." It's ambiguous. We can provide a function that returns a list of Fibonacci numbers up to a given number of terms, or up to a maximum value. We can also provide a function that returns the nth
+---------------------------------------- TT ----------------------------------------
+We need to write a Python function to calculate the Fibonacci sequence. The user likely expects a function that returns the Fibonacci numbers, perhaps up to a certain number, or generate the sequence. The instruction is simple: "Write a Python function to calculate the Fibonacci sequence." So we need to produce a function that can generate Fibonacci numbers. There are many ways: iterative, recursive, generator, etc. We should choose a clear and efficient method. Usually, a function that takes an integer n and returns a list of the first n Fibonacci numbers. Or maybe a generator that yields them. We'll provide a function that returns a list. Also include

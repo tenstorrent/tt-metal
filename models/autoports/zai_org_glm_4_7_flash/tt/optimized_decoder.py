@@ -152,6 +152,12 @@ class OptimizedDecoder(FusedDecoder):
     attn_fidelity = "lofi"  # wqkv_a, wq_b, w_uk, w_uv, wo
     mlp_fidelity = "lofi"  # shared expert + dense MLP
     expert_fidelity = "lofi"  # routed experts (bf4)
+    # Router/gate decode fidelity ($datatype-sweep policy field; the router
+    # matmul stays fp32-weight regardless of this knob). Default matches the
+    # value FunctionalDecoder.__init__ hard-coded before this attribute
+    # existed (ck_hifi4 == FIDELITY["hifi4_fp32"]), so leaving this unset
+    # reproduces the exact pre-existing behavior.
+    router_fidelity = "hifi4_fp32"
     # Attention weight dtype (None -> weight_dtype). Applies to the decode
     # DRAM-sharded copies AND the absorbed w_uk/w_uv (which prefill shares).
     # Default bfloat4_b per the OPT-007 real-weight trial: real-checkpoint
@@ -232,7 +238,10 @@ class OptimizedDecoder(FusedDecoder):
         self.ck_prefill_proj = _ck(dev, *FIDELITY[cls.prefill_proj_fidelity])
         self.ck_prefill_expert = _ck(dev, *FIDELITY[cls.prefill_expert_fidelity])
         self.ck_norm = _ck(dev, ttnn.MathFidelity.HiFi4, True)  # norms always HiFi4+fp32acc
-        # router keeps ck_hifi4 (fp32 acc) from the functional stage.
+        # Router decode fidelity is now a policy field (datatype-sweep); ck_hifi4
+        # itself stays bound to true HiFi4+fp32acc for any inherited functional-
+        # stage codepath that still reads it directly (e.g. prefill routing).
+        self.ck_router = _ck(dev, *FIDELITY[cls.router_fidelity])
         # The inherited _moe_prefill consumes ck_hifi2 for the sparse expert
         # matmuls; repoint it at the prefill expert fidelity policy.
         self.ck_hifi2 = self.ck_prefill_expert
@@ -715,7 +724,7 @@ class OptimizedDecoder(FusedDecoder):
             self.gate_w,
             program_config=self.router_pc,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.ck_hifi4,
+            compute_kernel_config=self.ck_router,
             dtype=ttnn.float32,
         )
         scores = ttnn.sigmoid_accurate(logits)

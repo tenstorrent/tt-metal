@@ -32,6 +32,17 @@ token embedding table            bfloat16 (ROW_MAJOR, ttnn.embedding)
 LM head                          bfloat8_b, HiFi2
 ===============================  ==================================
 
+Every dtype in this table is a ``from_pretrained`` keyword default
+(``expert_dtype``, ``weight_dtype``, ``cache_dtype``, ``lm_head_dtype``); LM
+head and router fidelity are ``lm_head_fidelity`` (this classmethod) and
+``OptimizedDecoder.router_fidelity`` (class attribute), added for
+``$datatype-sweep`` (doc/datatype_sweep/). Attention/MLP/expert dtypes and
+fidelities below the model level are ``OptimizedDecoder``/``SharedRopeDecoder``
+class attributes (``attn_weight_dtype``, ``attn_fidelity``, ``mlp_gateup_dtype``,
+``mlp_down_dtype``, ``dense_mlp_dtype``, ``mlp_fidelity``, ``expert_fidelity``);
+see that module's docstring. The values shown are the winning datatype-sweep
+config, unless doc/datatype_sweep/README.md says otherwise.
+
 Model-level additions over the decoder stage
 ============================================
 
@@ -92,7 +103,12 @@ from pathlib import Path
 
 import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tt.functional_decoder import TILE, PagedCacheConfig, _ck
-from models.autoports.zai_org_glm_4_7_flash.tt.optimized_decoder import OptimizedDecoder, _mcast_2d_pc, _rect_grid
+from models.autoports.zai_org_glm_4_7_flash.tt.optimized_decoder import (
+    FIDELITY,
+    OptimizedDecoder,
+    _mcast_2d_pc,
+    _rect_grid,
+)
 from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest  # noqa: F401
 
 DEFAULT_HF_MODEL_ID = "zai-org/GLM-4.7-Flash"
@@ -308,6 +324,7 @@ class GLM47FlashModel:
         lm_head_cores: int = 110,
         decode_logits_in_dram: bool = False,
         lm_head_in0_block_w: int = 4,
+        lm_head_fidelity: str = "hifi2",
         share_rope: bool = True,
         progress=None,
     ):
@@ -334,6 +351,15 @@ class GLM47FlashModel:
         self.max_seq_len = int(max_seq_len or cfg.max_position_embeddings)
         self.max_batch_size = max_batch_size
         self.cache_dtype = cache_dtype
+        # Recorded for the datatype-sweep propagation check (selected_precision_config.json
+        # consumption proof): the constructed model exposes exactly the dtype/fidelity
+        # policy it was built with, not just the constructor defaults.
+        self.expert_dtype = expert_dtype
+        self.weight_dtype = weight_dtype
+        self.embed_dtype = embed_dtype
+        self.lm_head_dtype = lm_head_dtype
+        self.lm_head_fidelity = lm_head_fidelity
+        self.decoder_cls_name = decoder_cls.__name__
         self.prefill_chunk_size = prefill_chunk_size
         self.prefill_buckets = tuple(sorted(int(b) for b in prefill_buckets)) if prefill_buckets else ()
         self.pad_token_id = int(getattr(cfg, "pad_token_id", 0) or 0)
@@ -427,7 +453,7 @@ class GLM47FlashModel:
         # ---- terminal-path configs ----
         dev = mesh_device
         self.ck_norm = _ck(dev, ttnn.MathFidelity.HiFi4, True)
-        self.ck_lm_head = _ck(dev, ttnn.MathFidelity.HiFi2, False)
+        self.ck_lm_head = _ck(dev, *FIDELITY[lm_head_fidelity])
         # Sampler-ready logits are 9.9 MB at 32 rows. In L1, TTSampling's
         # ttnn.split logs "L1 budget exceeded (need ~9945088 B, have 1248256 B
         # for 4 chunks); DRAM downgrade" and migrates the tensor before slicing,
