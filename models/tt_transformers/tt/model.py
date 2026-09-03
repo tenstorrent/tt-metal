@@ -160,6 +160,20 @@ class Transformer(LightweightModule):
         padded_vocab_size = getattr(self.args, "padded_vocab_size", None) or self.args.vocab_size
         if list(self.mesh_device.shape) != [1, 1]:
             vocab_fits_on_device = padded_vocab_size // self.args.num_devices <= TOPK_MAX_WIDTH
+            if not vocab_fits_on_device:
+                # No top-k route at this shard width -- but greedy decode never needs one.
+                # The force-argmax path skips ttnn.topk entirely (all_gather + ttnn.argmax),
+                # and argmax has no TOPK_MAX_WIDTH ceiling: it untilizes in tile-aligned
+                # chunks instead. Build the sampler when the model config permits that path,
+                # so greedy decode stays on device rather than paying a full logits readback
+                # to host every token (5.07 of 32.75 ms/token on Qwen3-8B @ 32k on N300).
+                # Non-greedy requests at this width still have no device route and raise in
+                # TTSampling.forward rather than silently taking the 22.46 ms topk path.
+                vocab_fits_on_device = bool(
+                    (getattr(self.args, "model_config", None) or {})
+                    .get("SAMPLING_AG_CONFIG", {})
+                    .get("allow_force_argmax", False)
+                )
         else:
             vocab_fits_on_device = TTSampling.num_single_device_vocab_splits(padded_vocab_size) is not None
         self._supports_on_device_sampling = prefetcher is None and vocab_fits_on_device

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import os
 import sys
 
 import torch
@@ -200,6 +201,10 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
+        # The rounded-up value above is the tile-padded row count the device tensors
+        # carry; this is how many of those rows are real users. They differ whenever
+        # the batch is not a multiple of 32 -- at batch 1, 31 of 32 rows are padding.
+        self._real_batch_rows = max(1, int(raw_batch))
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
@@ -792,6 +797,41 @@ class TTSampling(LightweightModule):
                 x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
+
+            # The cross-chip gather below moves the whole tile-padded logits block. At
+            # batch sizes under 32 most of those rows are padding that is gathered and
+            # then discarded: at batch 1 that is 9.7 MB moved to use 0.3 MB of it. A
+            # tiled tensor cannot be cut below one 32-row tile, but an untilized one can,
+            # and untilizing the local shard first is cheap (measured 0.066 ms on
+            # 32x75968). So convert and slice here, and let the gather carry only the
+            # real users. Opt-in while it is being evaluated; the default order is
+            # unchanged. Skipped when a padded vocab tail still needs trimming after the
+            # gather, or on the sub-core-grid path, where op placement is constrained.
+            pre_sliced = False
+            if (
+                os.environ.get("TT_SAMPLING_SLICE_BEFORE_GATHER", "0") == "1"
+                # Decode only. In prefill the 32 rows are sequence positions, not users:
+                # the caller picks row (last_token_idx % 32) to get the token for the last
+                # prompt position, so cutting to row 0 removes the row it needs (it fails
+                # loudly -- "index 31 is out of bounds for dimension 0 with size 1").
+                # Decode is exactly the case that passes a preallocated output tensor.
+                and tt_out_tok is not None
+                and num_devices > 1
+                and self._real_batch_rows < int(x.shape[-2])
+                and self.padded_vocab_size == self.vocab_size
+                and self._force_argmax_sub_core_grids is None
+                and not slice_valid_vocab
+            ):
+                # Prefill hands this path logits that are already row-major, while decode
+                # hands it tiled ones; untilizing row-major data is a hard error, so convert
+                # only when there is something to convert.
+                x_flat = ttnn.untilize(x, use_multicore=True) if x.layout == ttnn.TILE_LAYOUT else x
+                x = ttnn.slice(
+                    x_flat,
+                    [0, 0, 0, 0],
+                    [1, 1, self._real_batch_rows, int(x_flat.shape[-1])],
+                )
+                pre_sliced = True
             if num_devices > 1:
                 cluster_axis = self._get_sampling_cluster_axis()
                 num_links, topology = self._get_force_argmax_all_gather_config(cluster_axis)
@@ -839,9 +879,14 @@ class TTSampling(LightweightModule):
                     num_buffers_per_channel=2,
                     subdevice_id=ag_sub_device_id,
                 )
-            if slice_valid_vocab:
-                x = self._slice_valid_vocab_for_argmax(x)
-            num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
+            if pre_sliced:
+                # already row-major and already cut to the real users
+                x_untilized = x
+                num_untilize_chunks = 0
+            else:
+                if slice_valid_vocab:
+                    x = self._slice_valid_vocab_for_argmax(x)
+                num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
             # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
             # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
             # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
@@ -849,7 +894,12 @@ class TTSampling(LightweightModule):
             # worker sub-device. A single untilize of that width compiles there
             # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
             # it stays for unpinned Wormhole grids).
-            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
+            if pre_sliced:
+                # x was untilized and cut to the real users before the gather, so it is
+                # already row-major: converting again is a hard error ("Can only untilize
+                # tile major data"). x_untilized was set above; leave it alone.
+                pass
+            elif num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
                 # Untilizing the full row in one program needs a static circular-buffer
                 # region proportional to the row width; past ~150K elements it clashes
                 # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
@@ -881,18 +931,77 @@ class TTSampling(LightweightModule):
                     ttnn.deallocate(chunk)
             else:
                 x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
-            tt_out_tok = ttnn.argmax(
-                x_untilized,
-                dim=-1,
-                output_tensor=tt_out_tok,
-                keepdim=False,
-                sub_core_grids=self._force_argmax_sub_core_grids,
-            )
+            # argmax's cost scales with rows, and a tile is 32 rows tall, so at small
+            # batches almost all of that scan is padding: measured 2.526 ms over 32 rows
+            # of a 151936-wide vocab against 0.089 ms over one. A tiled tensor cannot be
+            # cut below one tile, but x_untilized is row-major, so slice the real users
+            # out here and scan only those, writing straight into the caller's output
+            # tensor, which argmax zero-fills beyond the rows it produced.
+            rows = int(x_untilized.shape[-2])
+            if pre_sliced or self._real_batch_rows < rows:
+                if pre_sliced:
+                    # cut to the real users before the gather; nothing left to trim
+                    x_real = x_untilized
+                else:
+                    x_real = ttnn.slice(
+                        x_untilized, [0, 0, 0, 0], [1, 1, self._real_batch_rows, int(x_untilized.shape[-1])]
+                    )
+                # Write straight into the caller's tensor. Building the result with
+                # pad/reshape/copy instead gave correct values in eager execution but zeros
+                # under trace replay -- each of those steps allocates a fresh intermediate and
+                # the captured stream did not carry the final copy through, leaving the output
+                # holding its initial zeros (every generated token came back as 0). argmax
+                # accepts an output tensor taller than its input: it fills the rows it produced
+                # and zeroes the rest. Verified standalone -- a 1-row scan into a 32-row output
+                # pre-filled with 999 yields [3928, 0, 0, 0], 3928 being the reference answer.
+                if tt_out_tok is not None:
+                    tt_out_tok = ttnn.argmax(
+                        x_real,
+                        dim=-1,
+                        output_tensor=tt_out_tok,
+                        keepdim=False,
+                        sub_core_grids=self._force_argmax_sub_core_grids,
+                    )
+                else:
+                    # No tensor to write through (eager pre-compile passes). Scan the full
+                    # tensor so the result keeps the row count callers expect; this path is
+                    # rare and off the per-token critical path, so its cost does not matter.
+                    tt_out_tok = ttnn.argmax(
+                        x_untilized if not pre_sliced else x_real,
+                        dim=-1,
+                        keepdim=False,
+                        sub_core_grids=self._force_argmax_sub_core_grids,
+                    )
+            else:
+                tt_out_tok = ttnn.argmax(
+                    x_untilized,
+                    dim=-1,
+                    output_tensor=tt_out_tok,
+                    keepdim=False,
+                    sub_core_grids=self._force_argmax_sub_core_grids,
+                )
             # Argmax fast-path does not compute logprobs (it never runs a softmax over
             # the vocab). On single-chip, on-device logprobs are unsupported anyway
             # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
+
+        # Reaching here means a non-greedy request wants the top-k pipeline. A model whose
+        # per-device vocab shard exceeds what ttnn.topk takes in one call has no top-k route:
+        # multi-step reduction (same-device chunking) is single-device only, so nothing here
+        # can cut the shard down. Such a model is only constructed when the greedy
+        # force-argmax path above is available, so fail loudly rather than run ttnn.topk far
+        # outside its intended width -- measured 22.46 ms/token on a 75968-wide shard against
+        # 1.38 ms for argmax and 5.07 ms for host sampling (Qwen3-8B, N300, 32 rows).
+        if not self.multi_step_reduction:
+            shard_width = self.padded_vocab_size // self._get_num_sampling_shards()
+            if shard_width > TOPK_MAX_WIDTH:
+                raise ValueError(
+                    f"No on-device top-k route: per-device vocab shard is {shard_width}, above the "
+                    f"{TOPK_MAX_WIDTH} ttnn.topk takes in one call, and same-device chunking is "
+                    "single-device only. This model was built for the greedy argmax fast path; use "
+                    "greedy decoding (temperature=0), or sample on host for non-greedy requests."
+                )
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)

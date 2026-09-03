@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -1164,9 +1165,18 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                # Single-chip only: the argmax fast-path speeds up greedy decode on P150
-                # (~22 -> ~38 t/s/u), but multi-chip meshes are faster on the top-k path.
-                "allow_force_argmax": self.num_devices == 1,
+                # Single-chip: the argmax fast-path speeds up greedy decode on P150
+                # (~22 -> ~38 t/s/u), and multi-chip meshes are normally faster on the
+                # top-k path -- but only where top-k has a route at all. ttnn.topk caps a
+                # single call at TOPK_MAX_WIDTH (65536); a vocab whose per-device shard
+                # exceeds that has no top-k route and otherwise falls all the way back to
+                # host sampling, which costs a full logits readback every token.
+                # Measured on Qwen3-8B (151936 vocab -> 75968/device on N300, 32 rows,
+                # 32k context): argmax 1.38 ms/token, topk at that width 22.46 ms, host
+                # round trip 5.07 ms of a 32.75 ms token. Greedy only: a non-greedy
+                # request at this width still has no device route (see TTSampling.forward).
+                "allow_force_argmax": self.num_devices == 1
+                or (self.padded_vocab_size // self.num_devices > TOPK_MAX_WIDTH),
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
