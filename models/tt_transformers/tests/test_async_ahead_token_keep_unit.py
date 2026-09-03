@@ -67,6 +67,9 @@ class _KeepProbe(Generator):
         self.decoded_with = None
         if capabilities is not None:
             self.model_capabilities = capabilities
+        # Staged as a previous decode would have left them: a captured trace and the
+        # token/position buffers it wrote.
+        self.trace_ids_decode = {True: {0: 0}}
         self.trace_inputs_decode = {
             True: [
                 [
