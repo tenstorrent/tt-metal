@@ -513,7 +513,11 @@ inline void _process_col_normalize_two_tiles_row_band_(
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
-    std::uint32_t dst_index_data, std::uint32_t dst_index_second_data, std::uint32_t, std::uint32_t dst_index_mean, std::uint32_t dst_index_inv_std)
+    std::uint32_t dst_index_data,
+    std::uint32_t dst_index_second_data,
+    std::uint32_t /*dst_index_out*/,
+    std::uint32_t dst_index_mean,
+    std::uint32_t dst_index_inv_std)
 {
     const std::uint32_t first_data_base  = dst_index_data * DEST_TILE_SIZE_RAW;
     const std::uint32_t second_data_base = dst_index_second_data * DEST_TILE_SIZE_RAW;
