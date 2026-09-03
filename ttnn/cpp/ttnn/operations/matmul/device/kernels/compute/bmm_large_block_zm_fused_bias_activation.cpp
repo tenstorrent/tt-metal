@@ -556,7 +556,11 @@ void kernel_main() {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
+                            ActivationApplyHelper<
+                                activation_type,
+                                activation_param0,
+                                activation_param1,
+                                activation_param2>::apply(i);
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
