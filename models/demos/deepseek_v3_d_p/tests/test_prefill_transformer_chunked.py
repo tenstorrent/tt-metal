@@ -193,18 +193,24 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944).
+    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
+    # then re-cut to the medians below.
+    #
+    # The shift from the previous cut is a ramp, not a level change: -2.2% at chunks 0-3, tapering
+    # through -1.8/-1.3/-0.8/-0.3% to 0.0% at chunks 8 and 10. A uniform per-chunk saving would move
+    # every chunk equally, so this is a fixed cost coming off the front of each chunk and being
+    # progressively swamped by the depth ramp (chunk c attends to KV[0:c*CHUNK]).
     (61, 11, 10): [
-        0.497,
-        0.501,
-        0.539,
-        0.567,
-        0.598,
-        0.629,
-        0.659,
-        0.697,
+        0.486,
+        0.490,
+        0.527,
+        0.555,
+        0.587,
+        0.621,
+        0.654,
+        0.695,
         0.749,
-        0.788,
+        0.785,
         0.824,
     ],
 }
