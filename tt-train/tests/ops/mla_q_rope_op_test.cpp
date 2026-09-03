@@ -16,7 +16,9 @@
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 #include "ttnn/types.hpp"
 
@@ -50,22 +52,28 @@ ttnn::Tensor slice_head_dim(
         tensor, ttsl::SmallVector<uint32_t>{0, 0, 0, start_w}, ttsl::SmallVector<uint32_t>{B, H, S, end_w}, step);
 }
 
+// Reference: packed q_pre -> head-split -> slice/rope/concat on rope suffix.
 ttnn::Tensor reference_q_rope(
-    const ttnn::Tensor& q_in,
+    const ttnn::Tensor& q_pre,
     const ttml::ops::RotaryEmbeddingParams& params,
+    uint32_t n_heads,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim) {
-    const auto shape = q_in.logical_shape();
+    const auto shape = q_pre.logical_shape();
     const uint32_t B = shape[0];
-    const uint32_t H = shape[1];
     const uint32_t S = shape[2];
     const uint32_t qk_head = qk_nope_dim + qk_rope_dim;
 
+    auto q_in = ttnn::transpose(ttnn::reshape(q_pre, ttnn::Shape({B, S, n_heads, qk_head})), 1, 2);
+
     ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     auto q_nope = ttnn::slice(
-        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, 0}, ttsl::SmallVector<uint32_t>{B, H, S, qk_nope_dim}, step);
+        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, 0}, ttsl::SmallVector<uint32_t>{B, n_heads, S, qk_nope_dim}, step);
     auto q_pe = ttnn::slice(
-        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
+        q_in,
+        ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim},
+        ttsl::SmallVector<uint32_t>{B, n_heads, S, qk_head},
+        step);
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
         q_pe,
@@ -121,14 +129,60 @@ TEST_P(MLA_QRopeParamTest, FusedMatchesReference) {
     ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": mla_q_rope requires qk_rope_dim <= 128";
 
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/7U);
+    auto q_pre = make_bf16_4d(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, /*seed=*/7U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
 
     const auto fused = ttml::metal::mla_q_rope(
-        q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
-    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_pre,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/true);
+    const auto ref = reference_q_rope(q_pre, params, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim);
 
+    ASSERT_EQ(fused.logical_shape(), ttnn::Shape({shape.batch, shape.n_heads, shape.seq_len, qk_head}))
+        << shape.name << " output shape";
     expect_q_rope_matches_reference(fused, ref, shape, /*label_prefix=*/"");
+}
+
+TEST_P(MLA_QRopeParamTest, BackwardPacksGrad) {
+    // packed_input=false: head-major dL/dout -> packed dq_pre (identity on nope; used by autograd).
+    const MLA_QRopeShape shape = GetParam();
+    ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": mla_q_rope requires qk_rope_dim <= 128";
+
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    auto dL_dout = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/11U);
+    auto params = build_params(shape.seq_len, shape.qk_rope_dim);
+
+    const auto packed = ttml::metal::mla_q_rope(
+        dL_dout,
+        params.neg_cos_cache,
+        params.neg_sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/false);
+
+    ASSERT_EQ(packed.logical_shape(), ttnn::Shape({shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head}))
+        << shape.name << " packed grad shape";
+
+    // Round-trip identity on the nope slice: reverse-pack then re-split should match dL_dout[..., :nope].
+    const auto re_split = ttml::metal::mla_q_rope(
+        packed,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        shape.qk_nope_dim,
+        shape.qk_rope_dim,
+        /*packed_input=*/true);
+
+    const auto actual_nope = ttml::core::to_xtensor(
+        slice_head_dim(re_split, shape.batch, shape.n_heads, shape.seq_len, 0U, shape.qk_nope_dim));
+    const auto expected_nope = ttml::core::to_xtensor(
+        slice_head_dim(dL_dout, shape.batch, shape.n_heads, shape.seq_len, 0U, shape.qk_nope_dim));
+    EXPECT_TRUE(xt::allclose(actual_nope, expected_nope, 0.0, 0.0)) << shape.name << " bw/nope round-trip";
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -180,7 +234,7 @@ protected:
 
 // Buffer placement is a compile-time property: TensorAccessorArgs bake it into the
 // kernel binary, so the program cache must key on every input's memory config. Runs
-// the op with q_in interleaved in DRAM and again with q_in in L1 at identical shapes,
+// the op with q_pre interleaved in DRAM and again with q_pre in L1 at identical shapes,
 // asserting the second run compiles a distinct program and still matches the
 // reference — a cache key blind to placement reuses the DRAM program for the L1
 // buffer and reads through the wrong accessor tables.
@@ -191,23 +245,23 @@ TEST_F(MLA_QRopeCacheTest, DistinctProgramPerInputPlacement) {
     const MLA_QRopeShape shape{
         .name = "cache_small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32};
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/11U);
+    auto q_pre = make_bf16_4d(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, /*seed=*/11U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
-    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto ref = reference_q_rope(q_pre, params, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim);
 
     const auto entries_start = device->num_program_cache_entries();
     const auto fused_dram = ttml::metal::mla_q_rope(
-        q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_pre, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
     const auto entries_after_dram = device->num_program_cache_entries();
     // Guard against a vacuous test: the first call must actually populate the cache,
     // else the delta check below would pass trivially with the cache disabled.
     ASSERT_GT(entries_after_dram, entries_start) << "program cache not populated by the DRAM-placement run";
     expect_q_rope_matches_reference(fused_dram, ref, shape, /*label_prefix=*/"dram: ");
 
-    auto q_in_l1 = ttnn::to_memory_config(q_in, ttnn::L1_MEMORY_CONFIG);
+    auto q_pre_l1 = ttnn::to_memory_config(q_pre, ttnn::L1_MEMORY_CONFIG);
     const auto entries_before_l1 = device->num_program_cache_entries();
     const auto fused_l1 = ttml::metal::mla_q_rope(
-        q_in_l1, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+        q_pre_l1, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
     const auto entries_after_l1 = device->num_program_cache_entries();
     EXPECT_GT(entries_after_l1, entries_before_l1)
         << "mla_q_rope reused the DRAM-placement program for an L1 input (stale cache key)";

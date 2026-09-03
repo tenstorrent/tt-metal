@@ -9,15 +9,12 @@
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
-    const uint32_t q_pre_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t kv_up_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t k_pe_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t num_blocks = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t q_pre_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t kv_up_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t k_pe_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    constexpr uint32_t cb_q = tt::CBIndex::c_0;
     constexpr uint32_t cb_knope = tt::CBIndex::c_1;
     constexpr uint32_t cb_v = tt::CBIndex::c_2;
     constexpr uint32_t cb_kpe = tt::CBIndex::c_3;
@@ -27,13 +24,10 @@ void kernel_main() {
     constexpr uint32_t Tr = get_compile_time_arg_val(2);  // qk_rope_dim / TILE_W (k_pe tiles/block)
     constexpr uint32_t n_heads = get_compile_time_arg_val(3);
     constexpr uint32_t block_size = get_compile_time_arg_val(4);  // tiles streamed per chunk
-    constexpr uint32_t Th = Tn + Tr;                              // q tiles per head (computed, matches writer)
 
-    constexpr auto q_args = TensorAccessorArgs<5>();
-    constexpr auto kv_up_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto kv_up_args = TensorAccessorArgs<5>();
     constexpr auto kpe_args = TensorAccessorArgs<kv_up_args.next_compile_time_args_offset()>();
 
-    const auto q_addr_gen = TensorAccessor(q_args, q_pre_addr);
     const auto kv_up_addr_gen = TensorAccessor(kv_up_args, kv_up_addr);
     const auto kpe_addr_gen = TensorAccessor(kpe_args, k_pe_addr);
 
@@ -49,10 +43,6 @@ void kernel_main() {
         k_pe_tile_id += Tr;
 
         for (uint32_t h = 0U; h < n_heads; ++h) {
-            // Q (q_nope ∥ q_rope) for head h.
-            read_full_row_tiles(cb_q, q_addr_gen, Th, block_size, tile_bytes, q_pre_tile_id);
-            q_pre_tile_id += Th;
-
             // kv_up head layout is [k_nope (Tn) | v (Tv)]; demux into two streams.
             read_full_row_tiles(cb_knope, kv_up_addr_gen, Tn, block_size, tile_bytes, kv_up_tile_id);
             read_full_row_tiles(cb_v, kv_up_addr_gen, Tv, block_size, tile_bytes, kv_up_tile_id + Tn);

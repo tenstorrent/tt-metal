@@ -14,8 +14,9 @@ ttnn::Tensor mla_q_rope(
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
-    return ttnn::prim::ttml_mla_q_rope(q_in, cos_cache, sin_cache, trans_mat, qk_nope_dim, qk_rope_dim);
+    uint32_t qk_rope_dim,
+    bool packed_input) {
+    return ttnn::prim::ttml_mla_q_rope(q_in, cos_cache, sin_cache, trans_mat, qk_nope_dim, qk_rope_dim, packed_input);
 }
 
 }  // namespace ttml::metal
