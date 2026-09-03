@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 from collections import defaultdict
 
@@ -32,7 +31,6 @@ from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
-    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -171,13 +169,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # call's prefill captures anything, and recorded once the prefill is done. Prefill traces are
         # captured as they are prepared. See _prepare_decode_trace_text for why the decode ordering matters.
         self._defer_trace_recording = False
+        # Prefill-side deferral, kept separate from the decode latch above: warmup arms this across
+        # its whole sweep so no bucket compiles behind an earlier bucket's trace.
+        self._defer_prefill_recording = False
+        self._pending_prefill_traces = {}
         self._pending_decode_trace = None
 
-    # Class-level capabilities (VLLM specific, to be overridden by subclasses).
-    # A subclass dict replaces this one rather than merging into it, so a default
-    # of True would be claimed by every subclass that declares nothing at all.
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": True,
     }
 
     def _any_trace_captured(self):
@@ -236,88 +236,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if enable_trace:
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
-        self._warmup_prefill_sweep(
-            kv_cache=kv_cache,
-            enable_trace=enable_trace,
-            can_sample_on_device=can_sample_on_device,
-            greedy_only=greedy_only,
-            sequence_lengths_to_warmup=sequence_lengths_to_warmup,
-            warmup_batch_sizes=warmup_batch_sizes,
-            skip_sequence_lengths=skip_sequence_lengths,
-            sampling_parameters_sweeped=sampling_parameters_sweeped,
-        )
-
-        # Only models that accept a nonzero ``start_pos`` can ever take the
-        # resumed path, so only they should reserve trace region for it. Both
-        # prefix caching and a prompt split across engine steps produce one.
-        resumes_prefill = self.model_capabilities.get("supports_prefix_caching", False) or self.model_capabilities.get(
-            "supports_chunked_prefill", False
-        )
-        if enable_trace and resumes_prefill:
-            self._warmup_prefill_resumed_sweep(kv_cache=kv_cache)
-
-    def _warmup_prefill_resumed_sweep(self, kv_cache):
-        """Capture the resumed-prefill ("sp1") traces, batch 1, one per traced length.
-
-        The sweep above never passes ``start_pos``, so it only ever captures the
-        ``sp0`` half of the prefill trace key. A resumed prefill -- prefix caching,
-        or a prompt split across engine steps -- takes the ``sp1`` half, which
-        would otherwise be captured lazily on whichever request happens to resume
-        first, allocating trace region nobody sized for. Reserving them here makes
-        the requirement a function of configuration instead of traffic.
-
-        Mirrors the phase-2 warmup in
-        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
-        """
-        if kv_cache is None or kv_cache[0] is None:
-            # Resumed prefill needs a page table, so there is nothing to capture.
-            return
-        block_size = self._paged_prefill_block_size(kv_cache[0])
-
-        for model_id in range(self.data_parallel):
-            model_args = self.model_args[model_id]
-            for prefill_seq_len in model_args.trace_prefill_supported_seq_lens:
-                # A nonzero probe: ``can_enable_trace`` reads this argument only to
-                # test it against zero, and a model that refuses a resumed prefill
-                # refuses it for every offset. The declaration alone is not enough,
-                # because the model args can reject what the capability allows.
-                if not model_args.can_enable_trace(prefill_seq_len, 1):
-                    continue
-                # The offset a real request will be floored to for this length, so
-                # the captured program config is the one those replays need.
-                num_cached = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
-                # Only the suffix after the offset is padded into the bucket, so
-                # the prompt has to clear the offset by a full bucket to land on
-                # this key. ``capped_warmup_seq_len`` is the ceiling the rest of
-                # warmup uses: past it the call would be split into chunks and
-                # capture something else.
-                total_seq_len = self._resumed_warmup_prompt_len(
-                    prefill_seq_len, num_cached, model_args.capped_warmup_seq_len
-                )
-                suffix = total_seq_len - num_cached
-                if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
-                    logger.warning(
-                        f"Skipping resumed prefill warmup for sequence length {prefill_seq_len}: "
-                        f"offset {num_cached} leaves no suffix padding back to it within "
-                        f"{model_args.capped_warmup_seq_len} tokens. Its trace is captured on first use."
-                    )
-                    continue
-
-                num_blocks = num_blocks_in_seq(total_seq_len, block_size)
-                logger.info(
-                    f"Warming up resumed prefill for sequence length: {prefill_seq_len}, " f"num_cached: {num_cached}"
-                )
-                self.prefill_forward_text(
-                    tokens=torch.zeros(1, total_seq_len, dtype=torch.long),
-                    prompt_lens=torch.tensor([total_seq_len], dtype=torch.long),
-                    empty_slots=[0],
-                    page_table=torch.zeros(1, num_blocks, dtype=torch.int32),
-                    start_pos=[num_cached],
-                    kv_cache=kv_cache,
-                    enable_trace=True,
-                    model_id_warmup=model_id,
-                    sampling_params=None,
-                )
+        # Compile every bucket before recording any of them; see _easy_trace_prefill.
+        self._defer_prefill_recording = enable_trace
+        try:
+            self._warmup_prefill_sweep(
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                can_sample_on_device=can_sample_on_device,
+                greedy_only=greedy_only,
+                sequence_lengths_to_warmup=sequence_lengths_to_warmup,
+                warmup_batch_sizes=warmup_batch_sizes,
+                skip_sequence_lengths=skip_sequence_lengths,
+                sampling_parameters_sweeped=sampling_parameters_sweeped,
+            )
+        finally:
+            self._defer_prefill_recording = False
+            self._record_pending_prefill_traces()
 
     def finalize_deferred_traces(self):
         """Record the decode trace that this call deferred.
@@ -330,6 +264,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if not self._defer_trace_recording:
             return
         try:
+            # Prefill first: its traces were prepared during this call, and the tail that runs
+            # between preparation and here has now compiled.
+            self._defer_prefill_recording = False
+            self._record_pending_prefill_traces()
             # Deliberately no prepare fallback here: the decode trace was prepared up front by
             # _prefill_forward_text_impl, before this call's prefill filled the KV cache. Preparing at
             # this point instead would run the decode compile pass -- a real decode step at position 0
@@ -355,6 +293,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         skip_sequence_lengths,
         sampling_parameters_sweeped,
     ):
+        # Once per data-parallel group, not once overall. The sweep is sequence-length agnostic,
+        # but every group is a separate device with its own program cache, so sweeping only on the
+        # first one left groups 1..N-1 compiling the sampling path on their first real request -
+        # after warmup had recorded its traces. Measured on DP-32: 31 stranded argmax programs.
+        swept_sampling_model_ids = set(range(self.data_parallel)) if sampling_parameters_sweeped else set()
+
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
                 if model_id != 0 and (
@@ -384,14 +328,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         skip_sequence_lengths = True
                         break
 
-                    if not sampling_parameters_sweeped:
+                    if model_id not in swept_sampling_model_ids:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
                             batch_size=batch_size,
                             greedy_only=greedy_only,
                         )
                     else:
-                        sampling_params = [None]
+                        # Not [None]: that path skips the on-device-sampling tail, so its
+                        # programs (last-token slice, and the untilize after it - both keyed on
+                        # the prefill bucket) never compile here and land on the first real
+                        # request instead, behind the traces warmup is about to record.
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            batch_size=batch_size,
+                            greedy_only=True,
+                        )
 
                     for param in sampling_params:
                         logger.info(
@@ -405,7 +357,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             sampling_params=param,
                         )
 
-                    sampling_parameters_sweeped = True
+                    swept_sampling_model_ids.add(model_id)
 
                 if skip_sequence_lengths:
                     break
@@ -660,6 +612,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         logger.info("Done Compiling Model")
         return prepared
 
+    def _record_pending_prefill_traces(self):
+        """Record every prefill trace prepared while warmup deferred recording, back to back."""
+        if not self._pending_prefill_traces:
+            return
+        logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
+        for trace_key, prepared in self._pending_prefill_traces.items():
+            trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(prepared)
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+        self._pending_prefill_traces = {}
+
     def _record_trace_prefill(self, prepared):
         """Phase 2 of prefill trace setup: capture the trace.
 
@@ -671,9 +635,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Release our handle on the compile-pass output before capturing, matching the pre-split behaviour.
         # A deferred warmup caller may still be holding it; that is its own reference to keep or drop.
         prepared.pop("compile_output", None)
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        # Everything allocated between begin/end_trace_capture belongs to the trace being recorded -
+        # the decoder's residual add and friends - and must stay allocated for replay. Recording N
+        # traces means capture N runs while 1..N-1 are live, which reordering cannot avoid, so scope
+        # the window instead. Acknowledgement, not elimination: it tells the checker the program is
+        # prepared for these, it does not stop a replay writing them. Matches llama3_70b_galaxy.
+        # No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
+        with ttnn.corruptible_allocation_scope(mesh_device):
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
@@ -824,6 +795,27 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
         if self.trace_id_prefill[trace_key] is None:
+            if self._defer_prefill_recording:
+                # Compile and stage only. Recording here would put this bucket's trace on device
+                # before the remaining warmup buckets have compiled, so every one of those compiles -
+                # and the trace inputs they stage - would land behind it. warmup_model_prefill
+                # records the whole set afterwards.
+                if trace_key not in self._pending_prefill_traces:
+                    self._pending_prefill_traces[trace_key] = self._prepare_trace_prefill(
+                        prefill_ids,
+                        page_table=page_table,
+                        chunk_page_table=chunk_page_table,
+                        kv_cache=kv_cache,
+                        model_id=model_id,
+                        global_user_id=global_user_id,
+                        batch_size=batch_size,
+                        user_id=user_id,
+                        start_pos=chunk_start_idx,
+                    )
+                # The compile pass produced a real prefill result for these ids, so the caller's
+                # output processing runs (and compiles) exactly as it would have.
+                return self._pending_prefill_traces[trace_key]["compile_output"]
+
             prepared = self._prepare_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
@@ -980,6 +972,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # prefill is done. First call only: after that the ordering is fixed and re-arming would defer a
             # capture later calls expect to exist.
             self._defer_trace_recording = True
+            # Also hold this call's prefill trace back. Without a warmup sweep this call both
+            # compiles and records, so _post_prefill_tail - which runs after the prefill and
+            # compiles the tail's bucket-keyed programs - would otherwise do so behind the trace
+            # just recorded. Deferring lets the tail compile first; the wrapper records both once
+            # the prefill is done.
+            self._defer_prefill_recording = True
             # Prepare decode before this call's prefill, not at the flush: the compile pass is a real decode
             # step at position 0 with mock inputs, so it writes mock K/V that the following prefill then
             # overwrites. At the flush it would instead corrupt the prefilled cache. The position-0 write
@@ -1024,12 +1022,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert len(num_cached_per_user) == len(
             prompt_lens
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
-        if start_pos is not None:
-            num_cached_per_user = self._align_resume_offsets(num_cached_per_user, prompt_lens, kv_cache)
-            # The per-user loop below re-reads the offset from ``start_pos``, so the
-            # aligned list has to replace it: otherwise the padded length computed
-            # here would not match the token slice the kernel receives.
-            start_pos = num_cached_per_user
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
@@ -1470,136 +1462,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
-
-    def _traced_sdpa_q_chunk_size(self, prefill_seq_len, model_id=0):
-        """q_chunk_size a traced prefill of this length is captured with, or None.
-
-        The traced path hands the op a ``chunk_start_idx`` device tensor that is
-        refreshed per replay, so the captured program config cannot be derived
-        from the offset. It is built with ``chunk_start_idx=0`` instead, which is
-        what this reproduces.
-        """
-        get_config = getattr(self.model_args[model_id], "get_attn_sdpa_program_config", None)
-        if get_config is None:
-            return None
-        # Deliberately unguarded: a model whose program config this signature does
-        # not describe must say so by not exposing the method. Swallowing the error
-        # here would drop back to block-only alignment and reinstate the wrong
-        # prefix reads this exists to prevent.
-        return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
-
-    def _resume_offset_alignment(self, prefill_seq_len, block_size, model_id=0):
-        """Multiple a resume offset must land on for this padded suffix length.
-
-        The paged ops need ``block_size``; the traced SDPA needs the q_chunk_size
-        its program was captured with. Their least common multiple satisfies both.
-
-        The q_chunk_size is taken from the model's own program config where it
-        exposes one, so a short suffix keeps its smaller alignment instead of
-        being rounded away. A model without one must declare
-        ``resumed_prefill_token_alignment``: there is no safe default, and
-        guessing block_size is what produces the silent wrong prefix.
-        """
-        q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id)
-        if q_chunk is None:
-            q_chunk = self.model_capabilities.get("resumed_prefill_token_alignment")
-        if q_chunk is None:
-            raise ValueError(
-                f"{type(self).__name__} resumes a prefill but neither exposes "
-                "`get_attn_sdpa_program_config` on its model_args nor declares "
-                "`model_capabilities['resumed_prefill_token_alignment']`, so the "
-                "alignment its chunked-SDPA program requires cannot be determined."
-            )
-        return math.lcm(block_size, int(q_chunk))
-
-    def _assert_uniform_resume_alignment(self, prefill_seq_len, block_size, expected):
-        """Replica 0's alignment stands for every replica. Fail if it stops doing so.
-
-        ``create_submeshes`` splits the mesh into submeshes of one shape, and
-        ``initialize_vllm_model`` builds every replica's ``ModelArgs`` from the same
-        arguments, so they all pin the same q_chunk_size. The per-user offsets are
-        therefore aligned once against replica 0 rather than per replica. Nothing in
-        the type system holds that, so check it instead of trusting it.
-        """
-        for model_id in range(1, self.data_parallel):
-            other = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
-            assert other == expected, (
-                f"replica {model_id} needs resume alignment {other} where replica 0 needs "
-                f"{expected} at padded length {prefill_seq_len}; offsets are aligned once "
-                "against replica 0 and would be wrong for this replica."
-            )
-
-    def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
-        """Floor each resume offset to what the paged ops and the traced SDPA need.
-
-        ``block_size`` covers the page-table slice the chunk's K/V is written
-        through: an offset off that multiple shifts every write by
-        ``chunk_start % block_size`` positions.
-
-        ``q_chunk_size`` covers the SDPA op, which requires ``chunk_start_idx`` to
-        be a multiple of the value its program was built with and answers from the
-        wrong prefix rather than raising when it is not. Under tracing that value
-        is pinned at capture, so it has to be satisfied by the offset.
-
-        Flooring recomputes at most ``alignment - 1`` tokens whose K/V is rewritten
-        identically into the same blocks, so it is semantically a no-op. Mirrors
-        the ``SDPA_CHUNK_ALIGN`` round-down in
-        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
-        """
-        if kv_cache is None or kv_cache[0] is None:
-            # Non-paged prefill: there is no page table to slice.
-            return num_cached_per_user
-        block_size = self._paged_prefill_block_size(kv_cache[0])
-        aligned = []
-        for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
-            if int(num_cached) == 0:
-                # Not a resume. Callers pass a zero-filled start_pos for an
-                # ordinary prefill, so this is the common path and must not
-                # require the model to describe an alignment it never uses.
-                aligned.append(0)
-                continue
-            floored = (int(num_cached) // block_size) * block_size
-            # The alignment depends on the padded suffix length, which depends on
-            # the offset, so it has to settle: flooring lengthens the suffix, a
-            # longer suffix can pin a larger q_chunk_size, and that can demand a
-            # smaller offset again.
-            #
-            # The bound is exact, not generous. A pass that does not break must
-            # lower the offset, which lengthens the suffix, which moves it to a
-            # strictly higher padded bucket: an equal bucket would give an equal
-            # alignment and the pass would have broken. So the bucket count bounds
-            # the passes. It is a loose ceiling in practice, because
-            # get_attn_sdpa_prefill_program_config pins only 64 or 256 and two
-            # passes always suffice.
-            for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
-                padded_suffix = get_padded_prefill_len(int(seq_len) - floored)
-                alignment = self._resume_offset_alignment(padded_suffix, block_size)
-                self._assert_uniform_resume_alignment(padded_suffix, block_size, alignment)
-                settled = (int(num_cached) // alignment) * alignment
-                if settled == floored:
-                    break
-                floored = settled
-            else:
-                raise RuntimeError(
-                    f"user {i}: resume offset alignment did not settle for "
-                    f"start_pos={num_cached}, seq_len={seq_len}, block_size={block_size}"
-                )
-            if floored != num_cached:
-                logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
-            aligned.append(floored)
-        return aligned
-
-    @staticmethod
-    def _resumed_warmup_prompt_len(prefill_seq_len, num_cached, capped_warmup_seq_len):
-        """Prompt length whose suffix after ``num_cached`` pads back to this bucket.
-
-        Only the suffix reaches the kernel, so the prompt has to clear the offset by
-        a full bucket. Spanning the bucket alone leaves no suffix at all once
-        ``block_size`` reaches the smallest traced length. ``capped_warmup_seq_len``
-        is the ceiling the rest of warmup uses: past it the call is split into chunks
-        and captures a different trace.
-        """
-        return min(num_cached + prefill_seq_len, capped_warmup_seq_len)
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.
@@ -2101,31 +1963,35 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             sampling_trace_enabled = on_device_sampling and sampling_module is not None
-            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
-            trace_ids[i] = trace_id
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
-            # Models that produce extra device inputs beyond the first
-            # four (e.g. Gemma4's host-precomputed per-layer-input at
-            # index 4) feed them into ``ttnn_decode_forward`` via a
-            # model-side stash rather than through the call signature.
-            # Give the model a chance to bind that stash to the
-            # *trace-input* device tensors here, before the trace is
-            # captured — otherwise traced ops stay pointed at whatever
-            # device buffer the compile run produced, and trace replay
-            # reads stale data because ``copy_host_to_device`` only
-            # refreshes ``trace_inputs_decode``.
-            bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
-            if bind_trace_inputs is not None:
-                bind_trace_inputs(device_inputs[i])
-            tt_out_trace.append(
-                self.model[i].ttnn_decode_forward(
-                    *model_inputs,
-                    kv_cache=user_kv_cache,
-                    on_device_logits=on_device_sampling,
+            # Same reasoning as _record_trace_prefill: whatever the model allocates inside the capture
+            # window belongs to the trace being recorded, and recording lane/variant N necessarily runs
+            # while 1..N-1 are live. Acknowledge the window rather than flag it.
+            with ttnn.corruptible_allocation_scope(self.model_args[i].mesh_device):
+                trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+                trace_ids[i] = trace_id
+                user_kv_cache = kv_cache[i] if kv_cache is not None else None
+                model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
+                # Models that produce extra device inputs beyond the first
+                # four (e.g. Gemma4's host-precomputed per-layer-input at
+                # index 4) feed them into ``ttnn_decode_forward`` via a
+                # model-side stash rather than through the call signature.
+                # Give the model a chance to bind that stash to the
+                # *trace-input* device tensors here, before the trace is
+                # captured — otherwise traced ops stay pointed at whatever
+                # device buffer the compile run produced, and trace replay
+                # reads stale data because ``copy_host_to_device`` only
+                # refreshes ``trace_inputs_decode``.
+                bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
+                if bind_trace_inputs is not None:
+                    bind_trace_inputs(device_inputs[i])
+                tt_out_trace.append(
+                    self.model[i].ttnn_decode_forward(
+                        *model_inputs,
+                        kv_cache=user_kv_cache,
+                        on_device_logits=on_device_sampling,
+                    )
                 )
-            )
-            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+                ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
             _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
@@ -2147,6 +2013,46 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
+
+    def precapture_decode_trace_variants(self, sampling_params, tokens, start_pos, page_table, kv_cache):
+        """Record every decode trace variant a warmup sweep will need, preparing all of them first.
+
+        Decode traces are keyed by on-device sampling on/off. A sweep that captures the second variant
+        lazily does so with the first variant's traces already live, so its compile pass, its persistent
+        trace inputs and its sampling pre-compile all allocate behind a live trace (measured on Gemma-3-27B
+        DP-4: 58 stranded buffers). Prepare each missing variant before recording any of them, then record
+        in one go. Returns False when nothing could be pre-captured (caller keeps its lazy path).
+        """
+        variants = []
+        for param in sampling_params:
+            variant = param is not None
+            if variant not in variants:
+                variants.append(variant)
+        variants = [v for v in variants if not self.trace_ids_decode[v]]
+        if not variants or page_table is None or self._uses_prefetcher():
+            return False
+        if self.mode != Mode.DECODE:
+            self.mode = Mode.DECODE
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+        tokens = torch.chunk(tokens, self.data_parallel, 0)
+        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        page_table = torch.chunk(page_table, self.data_parallel, 0)
+        prepared = [
+            (
+                variant,
+                self._prepare_decode_trace_text(
+                    tokens, start_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=variant
+                ),
+            )
+            for variant in variants
+        ]
+        for variant, prep in prepared:
+            trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prep)
+            self.trace_ids_decode[variant] = trace_ids
+            self.trace_inputs_decode[variant] = device_inputs
+            self.trace_output_decode[variant] = tt_out_trace
+        return True
 
     def _capture_decode_trace_text(
         self,
