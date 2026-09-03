@@ -191,3 +191,12 @@ per scenario, method selected by a compile-time arg; phases wrapped in `CF_PHASE
 CSV-based per-zone reader live in
 `../../../../../tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py`. Committed reports:
 `report.md` (whole-kernel A/B) and `microbench_report.md` (per-phase zone breakdown).
+
+### Reduce-helper interface note
+
+The `reduce_recip` microbenchmark intentionally uses the retained low-level explicit
+`reduce<...>(shape, ..., post_reduce_op)` overload because its subject is the post-reduce callback itself. Its
+manually supplied SUM scaler is benchmark scaffolding, not the planner-backed auxiliary interface for new
+operations. See [`../reduce_block/README.md`](../reduce_block/README.md#planner-backed-reduce-helper-flow) for
+the end-to-end planned flow: a compute suffix of `[call_count][calls...]`, a separate single aggregate
+auxiliary descriptor, kernel-controlled `reduce<Call>()` scheduling, and one dataflow-side preparation per unit.

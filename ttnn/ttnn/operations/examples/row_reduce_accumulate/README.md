@@ -146,3 +146,13 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 ## Code
 `program_descriptor_with_inline_kernels.py` — one compute kernel (`method` compile-time arg selects the path),
 plus a tiny dataflow kernel that fills the reduce scaler (`1/(W·32)`) and the zero tile.
+
+### Reduce-helper interface note
+
+This bake-off intentionally uses the retained low-level explicit `reduce<...>(shape, ...)` overload so each
+accumulation/finalization method can be selected directly. Its manually managed scaler and zero tiles are
+benchmark inputs, not the planner-backed auxiliary interface recommended for a new operation. See
+[`../reduce_block/README.md`](../reduce_block/README.md#planner-backed-reduce-helper-flow) for the complete flow:
+the host appends `[call_count][calls...]` separately from one aggregate auxiliary descriptor, the compute kernel
+invokes each self-contained `reduce<Call>()` when it chooses, and the dataflow kernel prepares the shared recipe
+once without inspecting the call list.
