@@ -238,7 +238,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     bool is_equal = false;
 
     if (test_config.write_kernel) {
-        distributed::EnqueueReadMeshBuffer(cq, packed_output, output_buffer, /*blocking=*/true);
+        distributed::ReadShard(
+            cq, packed_output, output_buffer, distributed::MeshCoordinate(coord_data), /*blocking=*/true);
         is_equal = (packed_output == packed_golden);
         if (!is_equal) {
             log_error(tt::LogTest, "Equality Check failed");

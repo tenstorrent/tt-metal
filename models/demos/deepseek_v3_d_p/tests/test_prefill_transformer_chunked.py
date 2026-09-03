@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
+    normalized_hadamard_matrix,
     reset_fused_ring_host_timing,
     resolve_has_indexer,
 )
@@ -56,6 +57,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
@@ -69,7 +71,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-CHUNK = 5 * 1024  # 5120 tokens per chunk
+CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Larger KV cache for the no-PCC perf sweep only (up to 100k ISL = 20 chunks). Kept separate from
 # SEQ_CACHE so the PCC tests and the _PADDED_FULL_55K split (which assert against 55*1024) are untouched.
@@ -127,6 +129,48 @@ assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK
 _PADDED_MID_15K = [2592, 1568, 5120, 800, 3360, 1920]  # sum == 15 * 1024
 assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_MID_15K)
 
+
+def _padded_cache_len(splits):
+    """Slab-aligned cache for the splits' REAL tokens -- deliberately NOT the padded window, so the
+    last chunk pads off the end of the cache and update_padded_kv_cache has to clamp the write. Sizing
+    to max(kv_actual + CHUNK) would house that pad tail and never exercise it.
+
+    Returns (seq_len_cache, overruns), overruns being the (chunk index, kv_actual) of every chunk
+    padding past the cache.
+    """
+    seq_len_cache = max(CHUNK * 2, ((sum(splits) + CHUNK - 1) // CHUNK) * CHUNK)
+    ka, overruns = 0, []
+    for c, v in enumerate(splits):
+        if ka + CHUNK > seq_len_cache:
+            overruns.append((c, ka))
+        ka += v
+    return seq_len_cache, overruns
+
+
+def _assert_splits_overrun():
+    """Checked at import so a splits edit that loses the overrun fails at collection, not after loading
+    61 layers of weights."""
+    for name, splits in (("_PADDED_FULL_55K", _PADDED_FULL_55K), ("_PADDED_MID_15K", _PADDED_MID_15K)):
+        cache, overruns = _padded_cache_len(splits)
+        assert overruns, (
+            f"{name} never pads past its {cache}-token cache, so it no longer covers the clamped tail "
+            f"write; keep a final chunk whose start + {CHUNK} exceeds the cache"
+        )
+
+
+_assert_splits_overrun()
+
+
+def _pad_overrun_summary(seq_len_cache, overruns):
+    """One log line naming the clamped chunks, so a CI log shows the coverage ran."""
+    worst = max(ka for _, ka in overruns) + CHUNK
+    return (
+        f"pad tail past the cache: {len(overruns)} chunk(s) {[c for c, _ in overruns]} pad past the "
+        f"{seq_len_cache}-token cache (worst window ends {worst}, +{worst - seq_len_cache}); their real "
+        f"tokens fit and update_padded_kv_cache clamps the rest"
+    )
+
+
 # Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
 # transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
 LAYER_PCC_THRESHOLD = 0.88
@@ -149,26 +193,27 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). Re-centered 2026-08-24 (issue #54220): the op got 2-6% FASTER and 7/11 chunks
-    # fell out the bottom of the old band -- the baseline was stale, not the margin too tight. Likely
-    # source is #53968 (active-ERISC __global_pointer$ link fix); a branch that is 08-23 main with
-    # #53968 reverted (run 32666670314) still measures the pre-shift level.
+    # (55k / code_debug). Re-centered 2026-08-29: 2D matmul program configs on the shared expert and
+    # the latent projections took 2-5% off every chunk and 7/11 fell out the bottom of the old band --
+    # the baseline was stale, not the margin too tight. The saving is device-side, so it lands here and
+    # nowhere else: the untraced twin is host-dispatch bound at ~1.04 s/chunk and did not move, passing
+    # its own gate in the same run.
     #
-    # These are the per-chunk medians of run 32722605093/job 97446035784 (main) verbatim -- the current
-    # level, measured on main, is the baseline. Run 32731794058/job 97448128368 independently agrees to
-    # <=0.010 s on every chunk, so it also sits well inside the +/- 3% band around these numbers.
+    # Per-chunk medians of run 33251442925/job 99098593625 verbatim. ONE run, where the superseded
+    # value carried a second run agreeing to <=0.010 s -- traced replay has the device as its only
+    # noise source and per-chunk stddev here is 0.000-0.003 s, but cross-check the next green run.
     (61, 11, 10): [
-        0.547,
-        0.550,
-        0.596,
-        0.624,
-        0.660,
-        0.691,
-        0.705,
-        0.744,
-        0.798,
-        0.835,
-        0.875,
+        0.519,
+        0.521,
+        0.569,
+        0.597,
+        0.631,
+        0.665,
+        0.683,
+        0.725,
+        0.777,
+        0.816,
+        0.855,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -320,11 +365,13 @@ def _record_indexer_k_cache_pcc(
         return
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
     rope = config.index_head_dim // 2  # [rope | nope]
+    index_hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
     idx_min_pcc = {}
     for i in layers:
         # Compact index cache (GLM-5.2 cross-layer reuse): layer i's slot is its full-indexer rank, not i
         # (rank == i for glm_5_1, where every layer is full). Matches the indexer's own write addressing.
         dev_cache = unrotate_cache_layer(cache_full[full_indexer_rank(config, i)], p, total_len)
+        dev_cache = (dev_cache.float() @ index_hadamard).to(torch.bfloat16)
         g = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, total_len)
         pcc_rope, pcc_nope = cache_half_pccs(g, dev_cache, rope, pe_interleave=False)
         idx_min_pcc[i] = min(pcc_nope, pcc_rope)
@@ -412,9 +459,10 @@ def _preload_indexer_k_prefix_from_trace(
     golden (glm_5_1: all; glm_5_2: 0-2 + every 4th); layer i is written to its compacted slot
     full_indexer_rank(config, i), and the cache is strided by the full-layer count over the built
     layers. The golden
-    index_head_dim key is [rope | nope] already in the device's interleaved basis (GLM), so it is written
-    verbatim -- no re-interleave (unlike KVPE's k_pe half-split -> interleaved). Rows past the trace are
-    random (timing-representative). Mirrors _preload_kvpe_prefix_from_trace otherwise."""
+    index_head_dim key is [rope | nope] already in the device's interleaved RoPE basis (GLM). Apply the
+    decode-compatible Hadamard before writing it; no RoPE re-interleave is needed (unlike KVPE's k_pe
+    half-split -> interleaved). Rows past the trace are random (timing-representative). Mirrors
+    _preload_kvpe_prefix_from_trace otherwise."""
     full_layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
     if not full_layers:
         logger.info(f"no indexer_k golden in trace {trace_dir}; leaving the indexer prefix zero")
@@ -427,12 +475,14 @@ def _preload_indexer_k_prefix_from_trace(
         f"({real_len} real from trace, {rand_len} random beyond the trace)"
     )
     cache_host = torch.zeros(num_slots, 1, seq_len_cache, index_head_dim, dtype=torch.bfloat16)
+    index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
     gen = torch.Generator().manual_seed(2345)  # deterministic random tail (distinct from the KVPE seed)
     for i in full_layers:
         idx_prior = torch.randn(preload_isl, index_head_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
             real = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, real_len)
             idx_prior[:real_len] = real.to(torch.bfloat16)
+        idx_prior = (idx_prior.float() @ index_hadamard).to(torch.bfloat16)
         slot = full_indexer_rank(config, i)
         cache_host[slot, 0] = blockcyclic_cache_host(idx_prior, sp, CHUNK, seq_len_cache, index_head_dim)[0, 0]
     cache_shard_dims = [None, None]
@@ -485,13 +535,8 @@ def run_chunked_transformer_padded(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
-    # Slab-aligned cache covering the largest rotated write (kv_actual + CHUNK), >= 2 slabs.
-    max_window = CHUNK * 2
-    ka = 0
-    for v in splits:
-        max_window = max(max_window, ka + CHUNK)
-        ka += v
-    seq_len_cache = ((max_window + CHUNK - 1) // CHUNK) * CHUNK
+    # Real-token cache, pad tail off the end (see _padded_cache_len).
+    seq_len_cache, pad_overruns = _padded_cache_len(splits)
 
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -501,6 +546,7 @@ def run_chunked_transformer_padded(
         f"chunked-padded transformer: num_layers={num_layers} mesh={mesh_shape} splits={splits} "
         f"total_len={total_len} cache={seq_len_cache} chunk={CHUNK}"
     )
+    logger.info(_pad_overrun_summary(seq_len_cache, pad_overruns))
 
     token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
 
@@ -1011,7 +1057,7 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_padded(
@@ -1755,7 +1801,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1847,7 +1893,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked(
@@ -2079,12 +2125,8 @@ def run_chunked_transformer_padded_trace(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
-    # Slab-aligned cache covering the largest rotated write (mirror run_chunked_transformer_padded).
-    max_window, ka = CHUNK * 2, 0
-    for v in splits:
-        max_window = max(max_window, ka + CHUNK)
-        ka += v
-    seq_len_cache = ((max_window + CHUNK - 1) // CHUNK) * CHUNK
+    # Real-token cache, pad tail off the end (mirror run_chunked_transformer_padded).
+    seq_len_cache, pad_overruns = _padded_cache_len(splits)
 
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_len_cache
@@ -2092,6 +2134,7 @@ def run_chunked_transformer_padded_trace(
         f"chunked-padded TRACE: num_layers={num_layers} mesh={mesh_shape} splits={splits} "
         f"total_len={total_len} cache={seq_len_cache} chunk={CHUNK}"
     )
+    logger.info(_pad_overrun_summary(seq_len_cache, pad_overruns))
     token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
 
     effective_cache_path = weight_cache_path / f"{sp}x{tp}"

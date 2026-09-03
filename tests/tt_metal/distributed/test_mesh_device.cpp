@@ -62,8 +62,7 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
     const auto system_shape = sys.shape();
     ASSERT_EQ(system_shape.dims(), 2);
-    EXPECT_EQ(system_shape[0], 2);
-    EXPECT_EQ(system_shape[1], 4);
+    EXPECT_GE(system_shape.mesh_size(), mesh_device_->shape().mesh_size());
 }
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {

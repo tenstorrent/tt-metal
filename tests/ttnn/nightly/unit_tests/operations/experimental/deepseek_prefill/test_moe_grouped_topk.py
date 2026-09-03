@@ -23,9 +23,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     score_activation,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
-TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
+TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, PREFILL_CHUNK_TOKENS_PER_CHIP)]
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 

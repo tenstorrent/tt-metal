@@ -54,7 +54,6 @@ class DilatedConv1d(_AlignedOutConv1d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -69,7 +68,6 @@ class DilatedConv1d(_AlignedOutConv1d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
 
@@ -87,9 +85,7 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -112,7 +108,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -130,7 +125,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -151,7 +145,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -171,7 +164,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -236,9 +228,7 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
@@ -293,7 +283,6 @@ class Vocoder(Module):
             parallel_config=None if self._conv_pre_unsharded else parallel_config,
             ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
         self.ups = ModuleList(
@@ -309,7 +298,6 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -330,9 +318,7 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
-                        prefer_mac=prefer_mac,
                         split_mode=split_mode,
-                        tap_matmul=tap_matmul,
                     )
                 )
 
@@ -351,7 +337,6 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -368,7 +353,6 @@ class Vocoder(Module):
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -446,8 +430,9 @@ class Vocoder(Module):
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
-            tile_h = 32
-            align = tile_h * factor
+            # `factor` alone, not `32 * factor`: partitioning happens in ROW_MAJOR, which needs no
+            # tile-aligned split offset. See audio_ops.py's `_partition_t` header.
+            align = factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:
                 t_pad = align - rem
@@ -466,9 +451,7 @@ class Vocoder(Module):
 
         if sharded and not pre_unsharded:
             # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
@@ -497,9 +480,7 @@ class Vocoder(Module):
         x_dev = self.conv_pre(x_dev)
 
         if sharded and pre_unsharded:
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally

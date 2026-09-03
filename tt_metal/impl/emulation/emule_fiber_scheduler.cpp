@@ -45,8 +45,6 @@ extern thread_local uint8_t my_logical_y_;
 
 namespace tt::tt_metal::emule_fiber {
 
-namespace {
-
 enum class FiberState : uint8_t { Ready, Running, Parked, QuiescenceDeferred, Done };
 
 struct Fiber {
@@ -83,6 +81,8 @@ struct Fiber {
         }
     }
 };
+
+namespace {
 
 // Per-worker state. Fibers are pinned (Fiber::home), so a fiber always runs on the
 // same worker — these are read/written only by that worker.
@@ -398,9 +398,14 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                 }
                 last_parked_sig_ = sig;
                 last_parked_sig_valid_ = true;
-                // Yield-spin HostWait trigger: all waits host-fed, or peer-parked but N releases moved nothing.
+                // Yield-spin HostWait trigger: a host-fed root may have downstream peer work, but
+                // quiescence-deferred fibers are runnable internal work and must get at least one
+                // release first. Otherwise a next-page H2D poll can suspend the run while the
+                // current page's deferred producer is still waiting to publish to a d2d consumer.
+                const bool internal_work_needs_repoll =
+                    !quiescence_deferred_.empty() || any_parked_non_socket();
                 if (persistent_ && any_waiting_on_host() &&
-                    (!any_parked_non_socket() || barren_releases_ >= barren_release_limit)) {
+                    (!internal_work_needs_repoll || barren_releases_ >= barren_release_limit)) {
                     host_wait_ = true;
                     abort_flag_ = true;
                     cv_.notify_all();

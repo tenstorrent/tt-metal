@@ -21,6 +21,7 @@ from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_conf
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
+    is_global_rank_zero,
     line_params_req_exact_devices,
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
@@ -215,7 +216,7 @@ def test_pipeline_performance(
     # Skip 4U.
     if galaxy_type == "4U":
         # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
-        if is_ci_env:
+        if is_ci_env and is_global_rank_zero():
             with benchmark_profiler("run", iteration=0):
                 pass
 
@@ -409,8 +410,9 @@ def test_pipeline_performance(
         "total": statistics.mean(total_times),
     }
 
-    if is_ci_env:
-        # In CI, dump a performance report
+    if is_ci_env and is_global_rank_zero():
+        # In CI, dump a performance report from rank 0 only: all ranks time the same
+        # collective run, and concurrent saves race on the shared output file.
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
             for step_name in ["encoder", "denoising", "vae", "run"]:

@@ -213,7 +213,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
-    const tt::umd::semver_t& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
+    const tt::umd::SemVer& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
     const std::optional<tt::umd::FirmwareBundleVersion>& get_firmware_bundle_version() const {
         return firmware_bundle_version_;
     }
@@ -236,7 +236,7 @@ public:
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
-    tt::umd::semver_t& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
+    tt::umd::SemVer& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
     std::optional<tt::umd::FirmwareBundleVersion>& get_firmware_bundle_version() { return firmware_bundle_version_; }
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>>&
     get_pcie_devices_per_tray() {
@@ -259,7 +259,7 @@ private:
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
-    tt::umd::semver_t ethernet_firmware_version_;
+    tt::umd::SemVer ethernet_firmware_version_;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, ASICLocation>> pcie_id_to_asic_location_;

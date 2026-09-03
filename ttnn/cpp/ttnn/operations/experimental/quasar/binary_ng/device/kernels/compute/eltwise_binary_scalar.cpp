@@ -23,7 +23,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_post_lhs.get_id(), cb_post_rhs.get_id(), cb_out.get_id());
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

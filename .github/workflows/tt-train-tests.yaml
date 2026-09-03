@@ -63,6 +63,15 @@ on:
           Max allowed timeout (minutes) for any individual test SKU entry in the
           tests yaml. Verified during load-test-matrix via verify_time_budget.py.
           Empty skips the per-test ceiling check.
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 permissions:
   contents: read
@@ -190,11 +199,14 @@ jobs:
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
-        run: |
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash -c '${{ matrix.test-group.cmd }}'
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash -c '${{ matrix.test-group.cmd }}'
 
       - name: Upload loss plot
         id: upload-loss-plot
@@ -255,6 +267,24 @@ jobs:
         with:
           path: /work/generated/test_reports
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status }}
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

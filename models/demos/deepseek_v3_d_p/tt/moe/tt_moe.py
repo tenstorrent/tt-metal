@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -73,16 +73,24 @@ class TtMoe(LightweightModule):
         experts_per_chip: int,
         use_latent_moe: bool = False,
         latent_use_norm: bool = True,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
 
         ``use_latent_moe`` must be passed for Kimi-K3, otherwise a cache missing the latent
         projections would be reported complete and __init__ would then fail loading them.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+        if not TtRoutedExpert.check_cache_complete(
+            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+        ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
             return False
@@ -198,7 +206,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,

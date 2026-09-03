@@ -160,6 +160,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
+    inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/cross_node_dfb_constants.h
@@ -168,6 +169,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
+    inc/hostdev/profiler_common.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h

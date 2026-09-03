@@ -212,6 +212,9 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     the root's gather_sem before the slow leaf finishes, exposing data races
     where a parent reads a child's incomplete histogram.
     """
+    # sp_dim stays at 4096 rather than moving to the 640-token prefill ISL: this test exists to
+    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=64
+    # here, 10 at 640). Shrinking it would narrow the race window this test is built to catch.
     sp_dim = 4096
     topk = 8
     n_routed_experts = 256

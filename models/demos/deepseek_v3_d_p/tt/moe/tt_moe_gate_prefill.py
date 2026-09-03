@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 class GateComputeMode(Enum):
@@ -57,7 +58,7 @@ class GateComputeMode(Enum):
 
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
-GATE_PRODUCTION_SP_DIM = 640
+GATE_PRODUCTION_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:

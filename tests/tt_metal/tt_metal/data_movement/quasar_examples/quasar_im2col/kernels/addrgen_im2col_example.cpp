@@ -87,8 +87,7 @@ void kernel_main() {
                 uint64_t dest_addr = peek_dest_addrgen_0();
                 pop_src_addrgen_0();
                 pop_dest_addrgen_0();
-                DPRINT << "  Source address: " << HEX() << (uint64_t)src_addr << " Destination address: " << HEX()
-                       << (uint64_t)dest_addr << ENDL();
+                DEVICE_PRINT("  Source address: 0x{:x} Destination address: 0x{:x}\n", src_addr, dest_addr);
             }
         }
     }

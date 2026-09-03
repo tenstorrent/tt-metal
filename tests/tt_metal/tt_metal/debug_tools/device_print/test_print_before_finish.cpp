@@ -32,14 +32,13 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
-
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    const auto device_id = mesh_device->get_device_ids()[0];
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     const std::vector<uint32_t> args = {delay_cycles, xy_start.x, xy_start.y};
     fixture->RunProgram(mesh_device, "tests/tt_metal/tt_metal/test_kernels/device_print/print_with_wait.cpp", args);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #include "llk_assert.h"
@@ -20,18 +21,29 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
+ * Paired init function for copy_tile / copy_block_matmul_partials. Must be preceded - exactly once,
+ * at the very top of the kernel - by compute_kernel_hw_startup(icb, ocb), which performs the one-time
+ * hardware configuration. copy_init() then reconfigures the unpacker/math pipeline for the copy op and
+ * is the function to call before copy_tile() (including when switching to copy from another op). It
+ * does not reconfigure the unpacker data types. Eltwise-unary / SFPU kernels use this same init:
+ * compute_kernel_hw_startup(icb, ocb) once, then copy_init(icb).
+ *
+ * Numerics: the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution flag
+ * disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST.
+ * Matmul and eltwise-binary re-establish the format-driven default themselves, so this preservation never
+ * leaks into them.
+ *
  * Return value: None
  *
- * | Argument    | Description                                       | Type     | Valid Range                                        | Required |
- * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
- * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
- * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set  | False    |
- * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
+ * | Argument                    | Description                                       | Type     | Valid Range                                                         | Required |
+ * |-----------------------------|---------------------------------------------------|----------|--------------------------------------------------------------------|----------|
+ * | cbid                        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                                            | True     |
+ * | transpose                   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set                  | False    |
+ * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face       | uint32_t | Any positive value will indicate transpose within 16x16 face is set | False    |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile_to_dst_init_short(
+ALWI void copy_init(
     uint32_t cbid,
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
@@ -49,43 +61,16 @@ ALWI void copy_tile_to_dst_init_short(
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
 #ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
+    // Src zero-substitution flag, chosen by source format: preserve (keep) bf16 -0.0 and 16b integer
+    // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
+    // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
+    // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
+    MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));
 #endif
 }
-/**
- * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
- * registers.
- */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
-    LLK_SAN_FUNCTION();
-    copy_tile_to_dst_init_short<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
-}
-
-// clang-format off
-/**
- * Return value: None
- *
- * | Argument       | Description                                                       | Type     | Valid Range                                       | Required |
- * |----------------|-------------------------------------------------------------------|----------|---------------------------------------------------|----------|
- * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31                                           | True     |
- * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
- * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
- */
-// clang-format on
-#ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
-    LLK_SAN_FUNCTION();
-    // This reconfig call checks if old operand has different data format to
-    // new operand idx, otherwise no reconfig call occurs
-    UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
-    MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_cbid, new_cbid)));
-    copy_tile_to_dst_init_short<is_fp32_dest_acc_en>(new_cbid, transpose);
-}
-#endif
 
 // clang-format off
 /**
@@ -124,7 +109,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
- * (`copy_tile_init` / `copy_tile_to_dst_init_short`). The DST register buffer must be in acquired
+ * (`copy_init`). The DST register buffer must be in acquired
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
@@ -155,6 +140,83 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
         start_dst_tile_index, ntiles, in_cb_id)));
 }
 
+// =====================================================================================================================
+// Deprecated API
+//
+// The functions below implement the old copy / eltwise-unary programming model. The new model is:
+//   compute_kernel_hw_startup(icb, ocb);  // once at the start of MAIN
+//   copy_init(icb);                       // before copy_tile
+// Generic data-format reconfiguration is done via reconfig_data_format_srca (from reconfig_data_format.h).
+// =====================================================================================================================
+
+// clang-format off
+/**
+ * Perform a init for the copy tile operation.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                      | Type     | Valid Range | Required |
+ * |----------|--------------------------------------------------|----------|-------------|----------|
+ * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+    uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
+    copy_init<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
+}
+
+// clang-format off
+/**
+ * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                       | Type     | Valid Range                                                         | Required |
+ * |-----------------------------|---------------------------------------------------|----------|--------------------------------------------------------------------|----------|
+ * | cbid                        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                                            | True     |
+ * | transpose                   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set                  | False    |
+ * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face       | uint32_t | Any positive value will indicate transpose within 16x16 face is set | False    |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
+    uint32_t cbid,
+    uint32_t transpose = 0,
+    uint32_t transpose_within_16x16_face = false,
+    uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
+    copy_init<is_fp32_dest_acc_en>(cbid, transpose, transpose_within_16x16_face, call_line);
+}
+
+// clang-format off
+/**
+ * Reconfigures SrcA to the new operand's data format and re-inits the copy op.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                       | Type     | Valid Range                                       | Required |
+ * |----------------|-------------------------------------------------------------------|----------|---------------------------------------------------|----------|
+ * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31                                           | True     |
+ * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
+ * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
+ */
+// clang-format on
+#ifndef ARCH_QUASAR
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated(
+    "Call reconfig_data_format_srca(old, new) then copy_init(new, transpose). This will be removed after "
+    "20-09-2026.")]] ALWI void
+copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+    LLK_SAN_FUNCTION();
+    // This reconfig call checks if old operand has different data format to
+    // new operand idx, otherwise no reconfig call occurs
+    reconfig_data_format_srca(old_cbid, new_cbid);
+    copy_init<is_fp32_dest_acc_en>(new_cbid, transpose);
+}
+#endif
+
 // clang-format off
 /**
  * @deprecated Use `copy_block()`, which is functionally equivalent (same block unpack/datacopy paths).
@@ -171,11 +233,10 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
  * */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
 copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
-    copy_block<is_fp32_dest_acc_en>(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
+    copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 
 }  // namespace ckernel

@@ -29,6 +29,7 @@
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class MetalContext;
 class Program;
 class Semaphore;
 class SystemMemoryManager;
@@ -66,18 +67,21 @@ struct ExpectedNumWorkerUpdates {
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset);
 
 uint32_t configure_crta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset);
 
 uint32_t finalize_rt_args(
+    const MetalContext& metal_ctx,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
@@ -85,6 +89,7 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset);
 
 uint32_t finalize_sems(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     uint32_t sem_base_offset,
     const std::vector<Semaphore>& semaphores,
@@ -92,6 +97,7 @@ uint32_t finalize_sems(
     uint32_t& semaphore_size);
 
 uint32_t finalize_cbs(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
@@ -109,7 +115,10 @@ void finalize_dfb_masks(
 // Size the CrossNodeDFB dense kernel-config index from the workload-wide max slot count.
 // Each fixed entry is [absolute_config_buffer_addr, entry_size, relay_dfb_id].
 uint32_t finalize_cross_node_dfbs(
-    uint32_t programmable_core_type_index, ttsl::Span<detail::ProgramImpl*> programs, uint32_t base_offset);
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
 
 // Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
 // Each rectangle in `cores` can be covered by a single multicast.
