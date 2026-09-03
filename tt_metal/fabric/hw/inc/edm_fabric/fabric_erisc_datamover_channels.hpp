@@ -45,7 +45,18 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
 
 // Upper bound on how many slot addresses a channel tabulates. The table is a channel member and the
 // channels are locals of the router kernel, so this caps their contribution to its stack frame.
+//
+// Blackhole tabulates fewer than Wormhole. Its router runs against a 1912 B stack budget
+// (-Werror=stack-usage, bh_hal.cpp) that a 2D-torus config was already exceeding: the local-worker
+// injection channel absorbs whatever slots the uniform channel depth strands, so its depth -- and
+// with it the table -- grows as the configured packet payload shrinks. Capping the table at 8 keeps
+// that channel's frame contribution flat once it crosses the bound, instead of stepping up to a
+// full 16-entry table plus a stride word. Wormhole is unchanged.
+#ifdef ARCH_BLACKHOLE
+constexpr uint8_t MAX_TABULATED_SLOTS = 8;
+#else
 constexpr uint8_t MAX_TABULATED_SLOTS = 16;
+#endif
 
 template <uint8_t NUM_BUFFERS>
 inline constexpr uint8_t tabulated_slot_count = NUM_BUFFERS < MAX_TABULATED_SLOTS ? NUM_BUFFERS : MAX_TABULATED_SLOTS;
@@ -78,28 +89,18 @@ public:
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
         this->slot_stride.set(max_eth_payload_size_in_bytes);
-        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
-            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-                this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
+        for (uint8_t i = 0; i < TABULATED_SLOTS; i++) {
+            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
+        }
+        // Slots past the table have no stored address, so walk a cursor to zero every header.
+        size_t slot_addr = channel_base_address;
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
-                }
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
-        } else {
-            // Slots past the table have no stored address, so walk a cursor instead.
-            size_t slot_addr = channel_base_address;
-            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-                if (i < TABULATED_SLOTS) {
-                    this->buffer_addresses[i] = slot_addr;
-                }
-#pragma GCC unroll 1
-                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
-                }
-                slot_addr += max_eth_payload_size_in_bytes;
-            }
+            slot_addr += max_eth_payload_size_in_bytes;
         }
         if constexpr (NUM_BUFFERS) {
             cached_next_buffer_slot_addr = this->buffer_addresses[0];
@@ -214,28 +215,18 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
-            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-                this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+        for (uint8_t i = 0; i < TABULATED_SLOTS; i++) {
+            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+        }
+        // Slots past the table have no stored address, so walk a cursor to zero every header.
+        size_t slot_addr = channel_base_address;
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
-                }
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
-        } else {
-            // Slots past the table have no stored address, so walk a cursor instead.
-            size_t slot_addr = channel_base_address;
-            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-                if (i < TABULATED_SLOTS) {
-                    this->buffer_addresses[i] = slot_addr;
-                }
-#pragma GCC unroll 1
-                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
-                }
-                slot_addr += this->max_eth_payload_size_in_bytes;
-            }
+            slot_addr += this->max_eth_payload_size_in_bytes;
         }
 
         if constexpr (NUM_BUFFERS) {
