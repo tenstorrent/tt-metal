@@ -284,8 +284,8 @@ FORCE_INLINE void prefetcher_finalize_block(
 DRISC L1 total: 128 KB. The relevant slice for the prefetcher kernel:
 
 ```
-[UNRESERVED, UNRESERVED + kGcbZoneSize)   GCB pages_sent zone (1 KB)
-[UNRESERVED + kGcbZoneSize, END)          kernel_working_region    (~92 KB)
+[UNRESERVED, UNRESERVED + kSenderStateZoneSize)   sender-state zone     (1 KB)
+[UNRESERVED + kSenderStateZoneSize, END)          kernel_working_region (~92 KB)
 
   kernel_working_region:
     +--- noc_xy table   (2 * 4 * num_receivers bytes)
