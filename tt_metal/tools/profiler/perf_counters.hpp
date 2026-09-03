@@ -424,6 +424,8 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
         kernel_profiler::timeStampedData<
             PERF_COUNTER_PROFILER_ID,
             kernel_profiler::DoingDispatch::DISPATCH,
