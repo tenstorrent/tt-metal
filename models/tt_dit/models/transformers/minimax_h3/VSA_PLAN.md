@@ -4,8 +4,10 @@
 
 Fine-stage kernel: streaming leader/worker `vsa_sdpa` (v17) shipped as the model default
 (`MiniMaxH3VSAConfig.streaming`); design and ceiling in `VSA_STREAM_DESIGN.md`. Block-level at
-15 s / 768p the VSA block is 13% faster than dense (66.8 vs 76.7 ms); 10 s 4% faster (41.0 vs 42.8);
-5 s slower (22.5 vs 19.0: fixed VSA-only costs, chiefly the K/V all-gather). All gates green with the streaming kernel:
+15 s / 768p the VSA block is 15% faster than dense (63.7 vs 75.4 ms, slowest device; exact block period);
+10 s 5% faster (39.0 vs 41.2); 5 s 16% slower (20.3 vs 17.5: fixed VSA-only costs, chiefly the K/V
+all-gather). Component table in `VSA_STREAM_DESIGN.md` section 5; earlier figures in the journal below
+averaged two unequal halves of the profiled region and are superseded. All gates green with the streaming kernel:
 sparsity-0 == dense (PCC 99.9998%), striped/interleaved == identity, real-weights 15 s pipeline,
 traced block, cache-hit/trace regression suite. Table below is the 2026-08-31 v0 status.
 

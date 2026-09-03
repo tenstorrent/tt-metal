@@ -91,6 +91,58 @@ repeat, trace replay on 1 and 32 devices with fresh addresses, cache-hit loops),
 `test_vsa_transformer_minimax_h3.py` (sparsity 0 == dense; placements == identity),
 `test_vsa_pipeline_minimax_h3.py` (real weights, 15 s / 768p).
 
+## 3b. How this differs from the standard (compute-streaming) SDPA
+
+The dense path (`ring_joint_sdpa`, the `sdpa` compute kernel family) is a flash-attention loop:
+each core owns a *q chunk* (256 rows at 15 s), sweeps the keys in *k chunks* of 512, and per
+k chunk does one 256x512x128 QK matmul, one running-max/exp/sum pass over the 256x512 scores, one
+rescale of the 256x128 O accumulator, and one 256x512x128 PV matmul. K/V chunks arrive from DRAM
+(and, in the ring variant, from the neighbouring device) into a double-buffered CB; every core is
+independent. Everything is dense and regular, so the reader can prefetch blindly and the compute
+kernel is a fixed schedule.
+
+`vsa_sdpa` keeps the same online-softmax math but the work is *sparse and irregular*:
+
+| | dense ring SDPA | `vsa_sdpa` streaming |
+|---|---|---|
+| unit of K/V work | k chunk: 512 keys, used by all 256 rows of the q chunk | block: 64 keys, used only by the resident rows that *listed* it (~11% of rows at sparsity 0.9) |
+| K/V delivery | each core streams its own K/V from DRAM / ring neighbour | one leader per head streams from DRAM once per pass; workers pull only the blocks their rows list from the leader's L1 |
+| who decides what to compute | static schedule | per-row index lists -> per-block visit lists built at run time (bitmaps), windows closed dynamically |
+| softmax bookkeeping (max, corr = exp(dm), rescale O, sum) | once per 512 keys per row | once per *visit*; a visit is a row's listed blocks inside a 6-block window -> mostly 1 block (64 keys): ~8x more bookkeeping per key |
+| matmul shapes | QK 256x512x128, PV 256x512x128 | QK 64x(64..384)x128, PV 64x(64..384)x128 per visit; cross-visit DEST batching recovers some issue efficiency |
+| sync | CB push/pop between the core's own RISCs | multicast log ring, pull acks, progress posts, credits -- a protocol across ~9 cores per head |
+| exp | `exp_approx_mode=False` (model config) | op default `math_approx_mode=True` (see note below) |
+
+**Where the utilization goes (15 s, 16 ms, listed-math peak = 60% would be ~6.6 ms):** the dense
+kernel reaches ~70% because its exp/reduce work per key is amortised over 512 keys and every
+matmul is large; here, per 64-key visit the FPU work (~1 k cycles of HiFi2 tile matmuls) is matched
+by ~1.1 k cycles of SFPU exp *plus* ~0.9 k cycles of max/corr/rescale/sum reductions that dense pays
+once per 512 keys, and on top of that the delivery protocol floor (consume every visit with no math)
+is 7-11 ms of the 16. Measured phase timers put PACK at 93% busy (exp + packs), MATH 89%, UNPACK 87%:
+the three TRISCs are saturated on different things and alternate waits. Batching more blocks per visit
+would fix the ratio, but a row lists ~1 block in 9, so a 12-slot window holds ~1.3 of them; a window
+wide enough to average 6 selected blocks per row (~50 slots) does not fit L1 next to resident rows
+(the rows-for-depth sweep is monotonically worse). That is the structural reason this design plateaus
+at ~25%: block-sparse selection at 64 tokens buys a 9x reduction in math but makes every remaining
+unit of work 8x less amortised.
+
+**Exp mode note.** `vsa_sdpa`'s compute-kernel default is `math_approx_mode=True` (inherited from the
+op it was forked from) and the model does not override it, whereas the dense path passes
+`exp_approx_mode=False`. The floor measurements above were taken with the default. Switching to the
+exact exp is a one-line config change; it costs SFPU time on the pack thread (the current
+bottleneck) and has not been measured yet.
+
+## 3c. Determinism
+
+The dense block is run-to-run deterministic. `vsa_sdpa` is **not bit-deterministic**: a worker's
+window boundaries are closed by a starvation check as well as by the half filling, so the
+partition of a row's blocks into visits -- and therefore the order in which bf16 partial results
+are combined by the online softmax -- depends on arrival timing. Repeats agree to PCC 0.99998 (it
+was 0.999 before the kreq-marker fix, which was the larger source). A drafted change closes windows
+on fixed arrival bins instead (deadlock-free because fetch lag + bin width < stream depth), which
+makes the partition, and so the result, a pure function of the inputs; it is not applied. The
+coarse stage (pooling, scores, top-k) is deterministic.
+
 ## 4. Performance and its ceiling
 
 Standalone, 15 s heaviest shard, median over runs: **16.2 ms topk / 16.0 ms model order, 24-25%
@@ -111,20 +163,35 @@ Why the 60% target is out of reach for this design, losslessly:
   would amortise every per-visit cost 4x but changes the model's selection granularity.
 - Practical ceiling of this design: ~26-28%. With every remaining pack/unpack trim, ~30%.
 
-## 5. In the block (tracy, one transformer block, 768p, device 0, per forward)
+## 5. In the block (tracy, one transformer block period, 768p, sparsity 0.9, interleaved placement)
 
-| duration | dense block | VSA block | dense attention | `vsa_sdpa` (dev 0) | `vsa_sdpa` min/med/max over devices | VSA-only ops |
+Device 0 unless noted; "max" is the slowest device (the block waits for it). Measured as the ops
+between two consecutive attention ops (an exact block period).
+
+| duration | dense block (dev0 / max) | VSA block (dev0 / max) | dense attention | `vsa_sdpa` | VSA-only ops |
+|---|---|---|---|---|---|
+| 5 s  | 15.8 / 17.5 ms | 19.0 / 20.3 ms | 7.4 ms  | 3.3 ms  | 6.2 ms  |
+| 10 s | 39.5 / 41.2 ms | 37.4 / 39.0 ms | 24.7 ms | 9.0 ms  | 11.7 ms |
+| 15 s | 73.4 / 75.4 ms | 63.1 / 63.7 ms | 51.4 ms | 20.1 ms | 19.3 ms |
+
+Component breakdown (ms, device 0):
+
+| component | 5 s dense | 5 s VSA | 10 s dense | 10 s VSA | 15 s dense | 15 s VSA |
 |---|---|---|---|---|---|---|
-| 5 s  | 19.0 ms | 22.5 ms | 7.4 ms  | 3.3 ms  | 3.1 / 3.2 / 3.3 ms    | ~7 ms  |
-| 10 s | 42.8 ms | 41.0 ms | 24.7 ms | 9.0 ms  | 8.9 / 9.1 / 9.4 ms    | ~13 ms |
-| 15 s | 76.7 ms | 66.8 ms | 51.4 ms | 20.1 ms | 17.0 / 17.5 / 20.2 ms | ~21 ms |
+| attention core (ring SDPA / `vsa_sdpa`) | 7.44 | 3.26 | 24.70 | 9.01 | 51.43 | 20.10 |
+| full K/V all-gather (fine-stage input) | - | 3.02 | - | 5.43 | - | 8.11 |
+| coarse pooling q/k/v | - | 0.33 | - | 0.59 | - | 2.30 |
+| pooled K/V gather + assembly | - | 0.40 | - | 1.03 | - | 1.63 |
+| coarse scores + mask + softmax | - | 0.46 | - | 0.79 | - | 0.28 |
+| coarse output o_c (probs@V, tile->token) | - | 0.40 | - | 0.72 | - | 1.11 |
+| top-k selection + index assembly | - | 0.43 | - | 1.08 | - | 2.92 |
+| gate branch (gate proj, heads, blend) | - | 1.16 | - | 2.03 | - | 2.93 |
+| shared ops (norms, projections, MLP, adaLN) | 8.34 | 9.52 | 14.78 | 16.74 | 22.00 | 23.75 |
 
-(Interleaved placement throughout; sparsity 0.9.) VSA-only ops at 15 s: full
-K/V all-gather for the fine stage 2 x 4.0 ms (20 cores, ~9 GB/s; dense ring attention streams
-this traffic under its compute instead), the gate branch's extra all-gather-matmul 4.4 ms, coarse
-pooling 3 x 0.5 ms (was 3 x 2.9 ms before folding heads into M), transposes/topk/index assembly
-~3 ms. The remaining structural lever is the K/V gather: overlap it on a second command queue or
-stream remote blocks inside the kernel over the fabric.
+The shared ops are ~8% dearer under VSA because the sequence is padded to whole 64-token tiles
+(14464 vs 13632 rows per device at 15 s). The K/V all-gather runs on 20 cores at ~9 GB/s; dense ring
+attention moves the same bytes under its compute. The remaining structural lever is that gather:
+overlap it on a second command queue, or stream remote blocks inside the kernel over the fabric.
 
 **Load balance.** Under the identity placement the SP-rank-0 devices hold every exempt (dense-list)
 row: `vsa_sdpa` 24.3 ms there vs 15.9 ms median, and the block waits. `striped` spreads them over
