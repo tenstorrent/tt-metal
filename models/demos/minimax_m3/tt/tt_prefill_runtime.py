@@ -109,8 +109,8 @@ class TtPrefillRuntime:
         self._on_layer_complete = None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
-        # Per-chunk metal-trace pool (c -> {tid, in, out, cached_len}) + its persistent input buffers,
-        # populated by capture_chunk_trace / capture_prefill_trace_pool. None until captured.
+        # Per-chunk metal-trace pool (c -> {tid, in, out, cached_len}) + its persistent input buffers.
+        # None until capture_trace().
         self._trace_pool = None
         self._trace_in = None
 
@@ -332,6 +332,23 @@ class TtPrefillRuntime:
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        if self.config.use_trace and self._trace_pool is not None:
+            # Replay this chunk's captured bucket (selected by cache offset) instead of re-dispatching,
+            # after re-targeting the device-valued slot (num_users > 1) and refreshing the input in place.
+            # compile()'s warm sweep runs before capture, when the pool is empty, so it falls through to the
+            # eager path below — which is what warms the programs the capture then records.
+            assert skip_lm_head and get_last_token == -1, (
+                "use_trace captures the headless cache-fill forward; logits (skip_lm_head=False / "
+                "get_last_token>=0) are not on the traced path"
+            )
+            bucket = actual_start // self.config.chunk_size
+            assert bucket in self._trace_pool, f"no captured trace for cache offset {actual_start} (bucket {bucket})"
+            if kv_cache.num_users > 1:
+                kv_cache.set_read_user(slot_id)
+            self.update_chunk_input(bucket, activation=input_tensor)
+            ttnn.deallocate(input_tensor)
+            return self.replay_chunk(bucket)
+
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if self.config.is_first_rank:
@@ -404,17 +421,13 @@ class TtPrefillRuntime:
         self._layer_completion_sink = sink
 
     # --- Per-chunk metal-trace pool -------------------------------------------------------------------
-    # One trace per chunk INDEX, not one reusable trace: cached_len is a host scalar baked into each
-    # capture — it selects the RoPE start row, the KV-cache write offset, kv_len and the causal
-    # chunk_start, and (at cached_len==0) gates the no-cache op path — so a trace serves exactly its
-    # chunk index and slot. The win is amortization: capture pays the per-op host dispatch once, then a
-    # later prefill of the SAME slot replays each chunk as a single execute_trace. A single one-pass
-    # prefill sees no benefit (each chunk runs once); the pool pays off across repeated prefills.
+    # One trace per chunk index, not one reusable trace: cached_len is a host scalar baked into each
+    # capture (RoPE start row, KV write offset, kv_len, causal chunk_start, and the cached_len==0 no-cache
+    # gate), so each trace serves exactly its chunk index. Amortizes host dispatch across repeated prefills.
 
     def _trace_fwd(self, buf, cached_len: int, slot_id: int, kv_cache):
-        # The trace-clean body: embed (first rank) or a clone of the received activation (non-first —
-        # prefill_forward's first layer frees its input, so feed a clone and keep the persistent buffer),
-        # then the device-only forward. rot_mats_global=self.rope_indexed avoids the SP+trace host reshard.
+        # Non-first rank clones the input because prefill_forward's first layer frees its arg, and the
+        # persistent buffer must survive. rot_mats_global=self.rope_indexed avoids the SP+trace host reshard.
         x = self._embed_tokens(buf) if self.config.is_first_rank else ttnn.clone(buf)
         return self.model.prefill_forward(
             x,
@@ -468,10 +481,8 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(mesh)
         if warm is not None:
             warm.deallocate(True)
-        # The warm forward has set the device slot metadata (read begins + KV-write slot/kv_actual) to
-        # slot_id; freeze them so the captured forward only reads (a host copy inside the trace would be
-        # illegal). A later replay for another user updates the slot via kv_cache.set_read_user, outside
-        # the trace.
+        # The warm forward pre-set the device slot metadata to slot_id; freeze it so the captured forward
+        # only reads it — a host copy inside a trace is illegal (set_read_user re-targets it outside).
         kv_cache._slot_frozen = True
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         out = self._trace_fwd(buf, cached_len, slot_id, kv_cache)
@@ -509,6 +520,17 @@ class TtPrefillRuntime:
                 ttnn.release_trace(self.mesh_device, slot["tid"])
             self._trace_pool = None
         self._trace_in = None
+
+    def capture_trace(self, kv_cache) -> None:
+        """Runner hook (`prefill_runner.py`), called ONCE before the request loop when config.use_trace is
+        set: pre-capture the whole per-bucket pool so every later prefill_chunk replays instead of
+        dispatching. One trace per depth bucket up to the configured max (chunk boundaries 0..max_seq_len),
+        captured over slot 0; num_users > 1 makes the slot device-valued so the one pool serves any user via
+        set_read_user at replay. No-op if not use_trace or already captured."""
+        if not self.config.use_trace or self._trace_pool is not None:
+            return
+        n_buckets = self.config.max_seq_len // self.config.chunk_size
+        self.capture_prefill_trace_pool(kv_cache, slot_id=0, n_chunks=n_buckets)
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP
