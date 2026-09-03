@@ -257,7 +257,7 @@ class MiniMaxH3Pipeline:
         coresident: bool | None = None,
         task: str = "t2va",
         audio_split_mode: str = "full",
-        audio_t_factor: int = 4,
+        audio_t_factor: int = 8,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -301,24 +301,22 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio decode T-sharding: place the T-shard on whichever mesh axis has exactly
-        # `audio_t_factor` devices, preferring the TP axis then the SP axis. This lets a factor
-        # larger than the TP axis (e.g. 8 on a 4x8 mesh, which shards over the size-8 SP axis)
-        # actually shard instead of silently decoding unsharded. Default 4 (~3x faster decode at the
-        # same fidelity); factor 8 shards over an 8-wide axis when one exists. Falls back to
-        # unsharded when no axis matches (e.g. a single device), so the default is safe on any mesh.
-        # Pass audio_t_factor=1 to force unsharded.
+        # Audio decode T-sharding: pick the largest SUPPORTED factor (8, then 4) that is <= the
+        # requested `audio_t_factor` AND has a mesh axis of exactly that many devices (preferring the
+        # TP axis, then the SP axis). Falls back down the chain 8 -> 4 -> 1 (unsharded), so the
+        # default is safe on any mesh: factor 8 shards over an 8-wide axis (e.g. the SP axis on a 4x8
+        # mesh), dropping to 4 on a mesh with only a 4-wide axis, then to unsharded on a single
+        # device. Default 8 (~4x faster decode than unsharded); pass a lower audio_t_factor to cap
+        # the chain, or 1 to force unsharded. The resolved factor is logged in _prepare_audio_decoder
+        # before the decode runs.
         self._audio_t_axis = None
-        if audio_t_factor > 1:
-            self._audio_t_axis = next((ax for ax in (self.tp_axis, self.sp_axis) if shape[ax] == audio_t_factor), None)
-        if audio_t_factor > 1 and self._audio_t_axis is None:
-            logger.info(
-                f"audio_t_factor={audio_t_factor} matches no mesh axis of that size in {shape}; "
-                "decoding audio unsharded"
-            )
-            self.audio_t_factor = 1
-        else:
-            self.audio_t_factor = audio_t_factor
+        self.audio_t_factor = 1
+        for _factor in (8, 4):
+            if _factor <= audio_t_factor:
+                _axis = next((ax for ax in (self.tp_axis, self.sp_axis) if shape[ax] == _factor), None)
+                if _axis is not None:
+                    self.audio_t_factor, self._audio_t_axis = _factor, _axis
+                    break
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -387,7 +385,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
         audio_split_mode: str = "full",
-        audio_t_factor: int = 4,
+        audio_t_factor: int = 8,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -1224,7 +1222,13 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
-            # Unsharded by default; T-shard over the matched mesh axis when audio_t_factor > 1.
+            # Log the T-sharding factor resolved in __init__ (8 -> 4 -> 1 fallback) before decoding.
+            _shard_desc = (
+                f"factor {self.audio_t_factor} over mesh axis {self._audio_t_axis}"
+                if self.audio_t_factor > 1
+                else "unsharded (factor 1)"
+            )
+            logger.info(f"Audio decode T-sharding: {_shard_desc} (mesh {tuple(self.mesh_device.shape)})")
             audio_parallel_config = (
                 ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
                 if self.audio_t_factor > 1
