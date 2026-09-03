@@ -8,10 +8,29 @@
 
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_pack_common.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
+
+/**
+ * @brief Sets the L1 destination offset that carries untilize past each completed row of tiles.
+ *
+ * The Z counter walks tiles across a single row of tiles, but it does not advance between rows. To untilize more than
+ * one row of tiles, program this register to account for the offset of every row already completed. The offset is
+ * in units of datums, so it is the number of datums in a row of tiles.
+ *
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @param l1_base_idx: Offset of the current row of tiles, scaled to datums here.
+ * @note Call this once per row of tiles, before the @ref _llk_pack_untilize_ call that writes that row.
+ */
+inline void _llk_pack_untilize_set_dst_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_base_idx)
+{
+    const std::uint32_t dst_addr_offset_datums = l1_base_idx * tensor_shape.num_faces_c_dim;
+
+    cfg_rmw(THCON_PACKER0_REG0_UNTILIZE_DST_ADDR_OFFSET_RMW, dst_addr_offset_datums);
+}
 
 /**
  * @brief Builds the MOP for pack untilize of contiguous tiles; works only with Packer 0.
@@ -73,7 +92,8 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
  * @brief Packs out tiles and untilizes them; always uses Packer 0 for untilize.
  *
  * @param dest_idx: Index into the DEST register for a tile.
- * @param l1_tile_idx: Index into the L1 buffer for a tile.
+ * @param l1_tile_idx: Within-row column index into the L1 buffer. The L1 base is carried by
+ *        @ref _llk_pack_untilize_set_dst_offset_, which the caller must set for the tile row.
  * @note Call @ref _llk_pack_untilize_init_ with matching template args before this function.
  */
 inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_t l1_tile_idx)
@@ -86,6 +106,11 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
         (dest_register_offset == ckernel::trisc::DEST_REGISTER_HALF_SIZE) ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16_HALF >> 1;
     const std::uint32_t dest_reg_offset_idx = (dest_register_offset == 0) ? 0 : dest_bank1_offset_idx;
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, dest_reg_offset_idx + dest_idx);
+
+    // The value field of the TT_SET_DST_TILE_FACE_ROW_IDX instruction is 18 bits wide, but only values up to 11 bits are actually
+    // passed on when using FACE_SEL; anything larger is truncated and aliases back to an earlier tile.
+    LLK_ASSERT(l1_tile_idx < (1u << 11), "l1_tile_idx exceeds the 11 bits the dst face index can carry");
+
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, l1_tile_idx);
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

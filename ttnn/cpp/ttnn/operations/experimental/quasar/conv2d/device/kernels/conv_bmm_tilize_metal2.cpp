@@ -34,7 +34,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "api/debug/dprint.h"
 
 // In-place matmul-partials accumulate: re-accumulate each inner-K block into the SAME L1 region by
 // "rewinding" the partials buffer's producer/consumer position back to the start of the output block.
@@ -421,10 +420,8 @@ void kernel_main() {
     });
 #endif
 
-    DPRINT("enter nh={} nw={} n1w={}\n", in0_num_blocks_h, in0_num_blocks_w, in1_num_blocks_w);
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-    DPRINT("hwok\n");
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -444,13 +441,6 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
-                DPRINT("loop h={} k={}\n", in0_block_h_i, in0_block_w_i);
-                // TRISC1) so the LAST BS* line in that file before the 0x19 pins the stall point:
-                //   BSLOOP present but no "mmin0-ok" -> stuck in cb_mm_in0.wait_front (tilized act never
-                //     delivered by the mcast reader / tilize never completed for this K-block).
-                //   "mmin0-ok" but no "in1-ok"       -> stuck in cb_in1.wait_front (weights never delivered
-                //     by the DM3 weights mcast).
-                //   "in1-ok" (+ existing MMBLK/MMMV) then fault -> the matmul MVMULs read missing SrcA/SrcB.
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -496,10 +486,8 @@ void kernel_main() {
                     pack_init(tilized_in0_cb_id);
 #endif
                     if constexpr (!activation_reuse) {
-                        DPRINT("tilize in\n");
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
                             in0_num_subblocks_read);
-                        DPRINT("tilize ok\n");
                     }
 
 #ifdef SPLIT_READER
@@ -536,9 +524,7 @@ void kernel_main() {
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
-                DPRINT("wait mm_in0\n");
                 cb_mm_in0.wait_front(in0_block_num_tiles);
-                DPRINT("mm_in0 ok\n");
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -548,9 +534,7 @@ void kernel_main() {
                 }
 #endif
 
-                DPRINT("wait in1\n");
                 cb_in1.wait_front(in1_block_num_tiles);
-                DPRINT("in1 ok\n");
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -647,7 +631,7 @@ void kernel_main() {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-                DPRINT("matmul ok\n");
+
                 if (curr_matmul_out_cb == matmul_partials_cb) {
                     if constexpr (!partials_cb_uses_output) {
                         UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
@@ -749,7 +733,6 @@ void kernel_main() {
 #endif
 #ifdef FUSE_BIAS
             if constexpr (fuse_bias) {
-                DPRINT("bias\n");
                 if constexpr (pack_relu) {
                     pack_relu_config(ReluConfig::zero());
                 }
@@ -852,5 +835,4 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
-    DPRINT("done\n");
 }  // void kernel_main()
