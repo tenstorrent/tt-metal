@@ -224,7 +224,8 @@ ALWI void reduce_accumulate_via_add(
     ReducePartialMode partial_mode,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReduceInputChunk input_chunk) {
+    ReduceInputChunk input_chunk,
+    uint32_t auxiliary_tile_offset) {
     const uint32_t Ht = shape.rows, Wt = shape.cols, NC = shape.batches;
     // row_pitch = tile distance between consecutive rows of the resident block (>= Wt). row_stride > Wt lets
     // the reduce run over the first Wt columns of a WIDER resident tensor — the padding tiles [Wt, row_pitch)
@@ -269,9 +270,9 @@ ALWI void reduce_accumulate_via_add(
     // compile-time 1/reduce_factor below; no divisor is inferred from this call's tile geometry.
     ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Mask);
     const bool has_partial = partial_mode == ReducePartialMode::Mask;
-    // The auxiliary representation is private to the helper: Mask always occupies
-    // the first auxiliary tile, followed by an optional zero tile.
-    constexpr uint32_t mask_idx = 0;
+    // The auxiliary representation is private to the helper: Mask occupies the
+    // first tile in this call's planner-selected slice, followed by an optional zero.
+    const uint32_t mask_idx = auxiliary_tile_offset;
     const uint32_t full_cnt = has_partial ? (cnt - 1u) : cnt;  // tiles summed via pure add_tiles
 
     DataflowBuffer input_dfb(input_dfb_id), scaler_dfb(scaler_dfb_id), output_dfb(output_dfb_id);
@@ -339,9 +340,8 @@ ALWI void reduce_accumulate_via_add(
 
     // The auxiliary CB is never popped here. A partial consumes its mask/scaler representation; a
     // CopySeedZeroPair zero follows that representation, so mask and zero can coexist in the same CB.
-    // With AccumulateViaAdd's mask-only partial layout this is [mask@0, zero@1]; without a partial it is
-    // [zero@0].
-    const uint32_t zero_idx = has_partial ? 1u : 0u;
+    // With AccumulateViaAdd's mask-only partial layout this is [mask, zero]; without a partial it is [zero].
+    const uint32_t zero_idx = auxiliary_tile_offset + (has_partial ? 1u : 0u);
     uint32_t required_aux_tiles = has_partial ? mask_idx + 1u : 0u;
     if constexpr (has_accum) {
         // AccumulateReloadMode contracts for indexed input. Streamed/grouped paths normally use their safe
@@ -978,7 +978,8 @@ ALWI void reduce(
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
     ReducePartialMode partial_mode,
-    ReduceInputChunk input_chunk) {
+    ReduceInputChunk input_chunk,
+    uint32_t auxiliary_tile_offset) {
     // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
@@ -1093,7 +1094,13 @@ ALWI void reduce(
             PostReduceOp,
             within_tile,
             reduce_factor>(
-            input_block_shape, input_memory_layout, partial_mode, accumulate, post_reduce_op, input_chunk);
+            input_block_shape,
+            input_memory_layout,
+            partial_mode,
+            accumulate,
+            post_reduce_op,
+            input_chunk,
+            auxiliary_tile_offset);
         return;
     }
 
@@ -1175,11 +1182,12 @@ ALWI void reduce(
         ASSERT(partial_mode == ReducePartialMode::None);
     }
     const bool has_partial_scaler = partial_mode == ReducePartialMode::Scaler;
-    // The full scaler is tile 0 and the partial scaler is tile 1. That physical
-    // layout is owned here rather than exposed through the call interface.
+    // The full scaler is first in this call's planner-selected slice and the
+    // optional partial scaler follows it.
     const uint32_t scaler_tile_count = has_partial_scaler ? 2u : 1u;
-    const uint32_t partial_scaler_idx = has_partial_scaler ? 1u : 0u;
-    scaler_dfb.wait_front(scaler_tile_count);
+    const uint32_t full_scaler_idx = auxiliary_tile_offset;
+    const uint32_t partial_scaler_idx = auxiliary_tile_offset + (has_partial_scaler ? 1u : 0u);
+    scaler_dfb.wait_front(auxiliary_tile_offset + scaler_tile_count);
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
     }
@@ -1226,7 +1234,8 @@ ALWI void reduce(
                         remaining < input_chunk.reduce_axis_tiles ? remaining : input_chunk.reduce_axis_tiles;
                     input_dfb.wait_front(current_chunk);
                     for (uint32_t tile_idx = 0; tile_idx < current_chunk; ++tile_idx) {
-                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                        reduce_tile<reduce_type, reduce_dim>(
+                            input_dfb_id, scaler_dfb_id, tile_idx, full_scaler_idx, dst_idx);
                     }
                     input_dfb.pop_front(current_chunk);
                     consumed += current_chunk;
@@ -1237,15 +1246,18 @@ ALWI void reduce(
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
-                            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                            reduce_tile<reduce_type, reduce_dim>(
+                                input_dfb_id, scaler_dfb_id, 0, full_scaler_idx, dst_idx);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
                             // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * stride + wt;
-                            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                            reduce_tile<reduce_type, reduce_dim>(
+                                input_dfb_id, scaler_dfb_id, tile_idx, full_scaler_idx, dst_idx);
                         } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + wt;
-                            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                            reduce_tile<reduce_type, reduce_dim>(
+                                input_dfb_id, scaler_dfb_id, tile_idx, full_scaler_idx, dst_idx);
                         }
                     }
                 }
@@ -1323,7 +1335,8 @@ ALWI void reduce(
                                 detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                     input_dfb_id, local_wt, dst_idx, sfpu_work_dst, is_first_tile);
                             } else {
-                                const uint32_t scaler_idx = (global_wt == Wt - 1) ? partial_scaler_idx : 0;
+                                const uint32_t scaler_idx =
+                                    (global_wt == Wt - 1) ? partial_scaler_idx : full_scaler_idx;
                                 reduce_tile<reduce_type, reduce_dim>(
                                     input_dfb_id, scaler_dfb_id, local_wt, scaler_idx, dst_idx);
                             }
@@ -1350,7 +1363,7 @@ ALWI void reduce(
                             }
                         } else {
                             // Last W-tile picks up the partial scaler when one was prepared by the reader.
-                            const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler_idx : 0;
+                            const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler_idx : full_scaler_idx;
                             if constexpr (waits_per_tile(input_policy)) {
                                 // One-at-a-time: wait/pop per tile
                                 input_dfb.wait_front(onetile);
@@ -1465,7 +1478,7 @@ ALWI void reduce(
                         for (uint32_t local_ht = 0; local_ht < current_h; ++local_ht) {
                             const uint32_t ht = ht_base + local_ht;
                             uint32_t dst_idx = get_dst_index(accumulate);
-                            const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : 0;
+                            const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : full_scaler_idx;
                             for (uint32_t local_wt = 0; local_wt < current_chunk; ++local_wt) {
                                 const uint32_t tile_idx = local_ht * current_chunk + local_wt;
                                 if constexpr (is_sfpu) {
@@ -1488,7 +1501,8 @@ ALWI void reduce(
                         // Base dst_index: from accumulation config or 0 for multi-column output
                         uint32_t dst_idx = get_dst_index(accumulate);
                         // Last H-tile picks up the partial scaler when one was prepared by the reader.
-                        [[maybe_unused]] const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : 0;
+                        [[maybe_unused]] const uint32_t scaler_idx =
+                            (ht == Ht - 1) ? partial_scaler_idx : full_scaler_idx;
                         for (uint32_t i = wt; i < chunk_end; ++i) {
                             if constexpr (is_sfpu) {
                                 const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
@@ -1576,6 +1590,84 @@ ALWI void reduce(
         PACK((llk_pack_reduce_mask_clear()));
     } else {
         reduce_uninit();
+    }
+}
+
+template <typename Call>
+ALWI void reduce() {
+    static_assert(
+        Call::path == ttnn::kernel_lib::ReducePath::Tiled,
+        "The planned reduce<Call>() overload currently supports tiled calls only");
+
+    constexpr auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
+    constexpr auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
+                                                  : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
+    constexpr auto chunk = ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
+
+    auto post_scale = [](uint32_t dst_index) {
+        if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
+            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
+            detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
+        }
+    };
+
+    if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+            shape, layout, NoAccumulation{}, post_scale, Call::partial_mode, chunk, Call::auxiliary_tile_offset);
+    } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
+        reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+            shape,
+            layout,
+            Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
+            post_scale,
+            Call::partial_mode,
+            chunk,
+            Call::auxiliary_tile_offset);
+    } else {
+        static_assert(
+            Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
+            "Unknown planned reduction accumulation mode");
+        reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::reduce_factor>(
+            shape,
+            layout,
+            Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
+            NoOp{},
+            Call::partial_mode,
+            chunk,
+            Call::auxiliary_tile_offset);
     }
 }
 

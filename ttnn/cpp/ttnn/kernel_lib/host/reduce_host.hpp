@@ -71,6 +71,13 @@ struct ReduceAuxiliaryTileSpec {
     std::uint32_t num_valid_elements = 0;
 };
 
+// One shared auxiliary CB recipe for a complete planning unit. Calls refer to
+// contiguous slices of `tiles`; equal call recipes share the same slice.
+struct ReduceAuxiliaryPlan {
+    std::uint32_t cb_id = 0;
+    std::vector<ReduceAuxiliaryTileSpec> tiles;
+};
+
 // Dense row-major geometry. This replaces the former factory-local RmPlan.
 struct DenseRowMajorPlan {
     std::uint32_t H_logical = 0;
@@ -123,8 +130,9 @@ struct ReducePlan {
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
 };
 
-// Per-input configuration for one call in a cross-CB reduction sequence. TensorSpec owns the shape, data
+// Per-input configuration for one call in a cross-call reduction sequence. TensorSpec owns the shape, data
 // type, tile, and memory-layout information; the optional zero-byte cap retains its single-call alias meaning.
+// Multiple entries may name the same input CB when the kernel refills or reuses that CB between calls.
 struct ReduceCallConfig {
     tt::tt_metal::TensorSpec input_spec;
     tt::tt_metal::TensorSpec output_spec;
@@ -159,6 +167,7 @@ struct ReduceCallCbIds {
 struct ReduceCallPlan {
     std::uint32_t input_cb_id;
     std::uint32_t auxiliary_cb_id;
+    std::uint32_t auxiliary_tile_offset = 0;
     std::uint32_t output_cb_id;
     std::optional<std::uint32_t> accumulator_cb_id;
     ReduceAccumulationMode accumulation_mode = ReduceAccumulationMode::None;
@@ -168,12 +177,17 @@ struct ReduceCallPlan {
 
 struct ReduceSequencePlan {
     std::vector<ReduceCallPlan> calls;
+    ReduceAuxiliaryPlan auxiliary;
 
-    // Append the device wire-format suffix: call count followed by every
-    // complete call in execution order. Existing caller-owned kernel arguments
-    // remain untouched at the front of the vector.
+    // Append the compute-kernel suffix: call count followed by every call in
+    // execution order. Existing caller-owned arguments remain at the front.
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_compile_time_args() const;
+
+    // Append the independent dataflow-kernel suffix: one shared auxiliary CB
+    // description for this complete planning unit.
+    void append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const;
+    std::vector<std::uint32_t> get_auxiliary_compile_time_args() const;
 };
 
 // Host serializer for one independently decodable call. Its matching device
@@ -182,6 +196,19 @@ class ReduceCallArgs {
 public:
     explicit ReduceCallArgs(const ReduceCallPlan& call);
     ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids);
+
+    void append_to(std::vector<std::uint32_t>& compile_time_args) const;
+    std::vector<std::uint32_t> get_compile_time_args() const;
+
+private:
+    std::vector<std::uint32_t> compile_time_args_;
+};
+
+// Host serializer for one sequence-level auxiliary CB description. Its
+// matching device view is ttnn::kernel_lib::ReduceAuxiliaryArgs<CTA_OFFSET>.
+class ReduceAuxiliaryArgs {
+public:
+    explicit ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary);
 
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_compile_time_args() const;
