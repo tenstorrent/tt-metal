@@ -254,15 +254,21 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
+        uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
         if (this->arch_ == tt::ARCH::QUASAR) {
             // Quasar has no L1 counter unit; only FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) exist.
             constexpr uint32_t quasar_valid_groups = 0x27;
+            constexpr uint32_t tt1xx_all_groups = 0x2F;
+            if (perf_counter_mode == tt1xx_all_groups) {
+                // "all" from the tracy frontend is the tt-1xx mask; drop the L1 bank bit.
+                perf_counter_mode = quasar_valid_groups;
+            }
             TT_FATAL(
-                (rtoptions.get_profiler_perf_counter_mode() & ~quasar_valid_groups) == 0,
+                (perf_counter_mode & ~quasar_valid_groups) == 0,
                 "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid "
                 "bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
-                rtoptions.get_profiler_perf_counter_mode());
-            if (rtoptions.get_profiler_perf_counter_mode() == quasar_valid_groups) {
+                perf_counter_mode);
+            if (perf_counter_mode == quasar_valid_groups) {
                 // All four groups emit 85 records = 255 profiler slots, over the 250-slot L1 budget,
                 // and Quasar TRISCs cannot flush to DRAM mid-readout.
                 log_warning(
@@ -290,7 +296,7 @@ void JitBuildEnv::init(
                 }
             }
         }
-        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {

@@ -1051,9 +1051,8 @@ def _enrich_ops_from_device_logs(
                 assign_metric("NOC vs Compute Balance", per_op_stats.get("NOC vs Compute Balance", {}))
                 assign_metric("TDMA vs NOC L1 Share", per_op_stats.get("TDMA vs NOC L1 Share", {}))
 
-                # Catch-all: metrics computed above but not in the explicit list (Quasar thread 3,
-                # the class availability grid, stall reasons, l1_client rates, and any future
-                # additions). Skip names already assigned under either suffix convention.
+                # Assign anything the explicit list above missed (Quasar metrics, l1_client rates),
+                # skipping names already assigned under either suffix convention.
                 for metric_name, metric_dict in per_op_stats.items():
                     if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
                         continue
@@ -1389,8 +1388,7 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
-                # Quasar l1_client selections produce dynamically named columns; without them in
-                # fieldnames DictWriter raises on the first row that carries one.
+                # Dynamic l1_client columns must be in fieldnames or DictWriter raises.
                 allHeaders += sorted(
                     h for h in csv_row_headers if str(h).startswith("L1_CLIENT_") and h not in allHeaders
                 )

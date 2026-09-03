@@ -9,16 +9,11 @@
 #include <cstdint>
 #include <utility>
 
-// Quasar-specific perf counter tables, verified against the A0 tapeout RTL.
-// Included by perf_counters.hpp after the PerfCounterType enum is defined.
-//
-// Each NEO has its own FPU, TDMA_UNPACK, TDMA_PACK, and INSTRN_THREAD counter units. Every NEO's
-// math TRISC programs and reads its own NEO through the local-regs window (same addresses on all
-// four NEOs), like the wall clock in kernel_profiler.hpp. Quasar has no L1 tt_perf_cnt unit; the
-// l1_client CSR event counter is a different mechanism and is not driven from here.
+// Quasar counter tables, verified against the A0 tapeout RTL. Included by perf_counters.hpp after
+// the PerfCounterType enum; each NEO's math TRISC reaches its own units through the local-regs window.
 
-// quasar/tensix.h keeps the tt-1xx register names commented out because the Blackhole offsets are
-// wrong for Quasar. Alias them here from the generated tensix_neo_reg.h offsets instead.
+// The tt-1xx register names in quasar/tensix.h carry Blackhole offsets that are wrong here; alias
+// from the generated tensix_neo_reg.h offsets instead.
 #define RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0 \
     (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_OFFSET)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0 \
@@ -35,12 +30,8 @@
 #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU \
     (LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_OUT_L_FPU_REG_OFFSET)
 
-// l1_client event counter: a single 32-bit saturating clear-on-read CSR fed by a count-time mux,
-// selected as subport*8 + event via PROFILE_PERF_COUNTERS_L1_SEL. Subports: 0-3 TRISC, 4 THCON,
-// 5-24 unpacker read ports, 25-36 packer write ports. Events (A0 L1 RTL): 0 unused, 1 SBank pop,
-// 2/3 issue stall/work carries, 4/5 flex stall/work carries, 6 pending-request carry, 7 order
-// FIFO active. Carry events pulse once per lane count, and all depend on the per-subport
-// perf_cnt_enable in the client CSR config.
+// l1_client: one clear-on-read CSR behind a subport*8+event mux (subports 0-3 TRISC, 4 THCON,
+// 5-24 unpack, 25-36 pack; events 0 unused, 1 SBank pop, 2-6 stall/work/pending carries, 7 order FIFO active).
 #define RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL                                  \
     (LOCAL_REGS_BASE + (NEO_REGS_0__LOCAL_REGS_L1_CLIENT_GROUP_PERF_CTRL_REG_ADDR - \
                         NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_PERF_CNT_INSTRN_THREAD0_REG_ADDR))
@@ -53,8 +44,7 @@
 #define QUASAR_L1_CLIENT_NUM_SUBPORTS 37
 #define QUASAR_L1_CLIENT_NUM_EVENTS 8
 
-// FPU unit: bank 0 req = fpu op valid (grant tied), bank 1 req = sfpu op valid, bank 1 grant =
-// fpu-or-sfpu valid. Same wiring as Blackhole.
+// FPU unit: bank 0 grant is tied, bank 1 grant is fpu-or-sfpu valid; same wiring as Blackhole.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr std::size_t NUM_FPU_COUNTERS = 3;
@@ -74,8 +64,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},         {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr std::size_t NUM_UNPACK_COUNTERS = 22;
 
-// TDMA_PACK unit shares the 21-slice readout with TDMA_UNPACK: pack occupies slices 11-18,
-// slices 12-14 and 17 are tied off on A0 (TDMA_PACK_COUNT is 1). Live slices match Blackhole.
+// TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18, 12-14 and 17 tied on A0.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
@@ -84,13 +73,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
-// INSTRN_THREAD flat readout map (INSTRN_THREAD1[13:8]), THREAD_COUNT=4:
-//   0-31  per-thread instruction class at the ibuffer head, index = class*4 + thread, classes in
-//         order cfg, sync, thcon, xsearch, instissue, math, unpack, pack
-//   32-35 per-thread any-stall cycles
-//   36-50 stall reasons, OR-reduced across threads (per-thread reasons do not exist on Quasar)
-// Grant side (sel >= 256): every class bank of thread t shares the thread's ibuffer-dequeue grant,
-// so one grant read per thread (via the class-0 bank) gives total instructions.
+// INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35
+// per-thread any-stall, 36-50 thread-ORed stall reasons; grants (sel >= 256) = the thread's ibuffer dequeues.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

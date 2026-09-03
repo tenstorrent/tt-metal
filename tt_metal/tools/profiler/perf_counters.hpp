@@ -271,10 +271,8 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// Perf counter start/stop runs on the thread that wraps the compute kernel: TRISC1 on tt-1xx,
-// each NEO's math TRISC (COMPILE_FOR_TRISC % 4 == 1) on Quasar.
-// Readout: BRISC on tt-1xx (has NOC access for DRAM pushes); on Quasar each NEO's math TRISC reads
-// its own NEO's counters after stopping them (no BRISC-class core in the Quasar compute path).
+// Start/stop wraps the compute kernel: TRISC1 on tt-1xx, each NEO's math TRISC on Quasar.
+// Readout: BRISC on tt-1xx (NOC access for DRAM pushes); the math TRISC itself on Quasar.
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_TRISC) && ((COMPILE_FOR_TRISC % 4) == 1)
 #define PERF_COUNTER_WRAP_RISC 1
@@ -555,8 +553,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
 #if defined(ARCH_QUASAR)
-        // TRISCs cannot push to DRAM; timeStampedData drops the record when the L1 buffer is full.
-        // Flag the drop so the host's DROPPED_ZONES warning fires instead of silently thinning data.
+        // TRISCs cannot flush to DRAM; flag the drop so the host's DROPPED_ZONES warning fires.
         if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
                 kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
             kernel_profiler::mark_dropped_timestamps(myRiscID);
@@ -678,7 +675,6 @@ struct PerfCounterWrapper {
 #if defined(PROFILE_PERF_COUNTERS_L1_SEL)
         read_l1_client_event_counter(l1_client_start_cycles);
 #endif
-        // Self-readout: the math TRISC drains its own NEO's counters right after stopping them.
         kernel_profiler::read_perf_counters();
 #endif
     }

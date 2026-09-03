@@ -251,8 +251,7 @@ COUNTER_TYPE_NAMES = {
     212: "QUASAR_L1_CLIENT_EVENT",
 }
 
-# Quasar (A0) INSTRN extras: stall reasons are OR-reduced across the 4 threads, and the
-# instruction-class availability map covers 4 threads including the XSEARCH/INSTISSUE classes.
+# Quasar stall reasons are OR-reduced across the 4 threads.
 QUASAR_STALL_REASON_METRICS = {
     "Tile Counter Stall Pack Rate": "TILE_COUNTER_STALL_PACK",
     "Tile Counter Stall Unpack Rate": "TILE_COUNTER_STALL_UNPACK",
@@ -273,9 +272,8 @@ QUASAR_STALL_REASON_METRICS = {
 QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
 
 
-# Event-bit meanings verified against the A0 L1 RTL. Events 2-6 are counter carries: one pulse
-# per LANE_CNT (sub-bank count) stalls/works, or per CLIENT_ORDER_D pending requests, so multiply
-# by the lane count to estimate cycles. Events 1 and 7 are per-cycle indicators.
+# Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or
+# order depth), events 1 and 7 are per-cycle indicators.
 QUASAR_L1_CLIENT_EVENT_NAMES = (
     "UNUSED",
     "SBANK_POP",
@@ -975,9 +973,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     def _counter_column(counter_name, column):
         mask = perf_counter_df["counter type"] == counter_name
         series = perf_counter_df[mask].set_index(_SERIES_INDEX)[column]
-        # risc_type keeps each Quasar NEO reader distinct, and averaging repeated launches on the
-        # same reader keeps cross-counter arithmetic aligned 1:1 instead of going cartesian on
-        # duplicate index labels.
+        # risc_type keeps each NEO reader distinct; averaging repeated launches keeps cross-counter
+        # arithmetic aligned instead of cartesian on duplicate index labels.
         return series.groupby(level=list(range(series.index.nlevels))).mean()
 
     def get_counter_series(counter_name):
@@ -1099,8 +1096,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     def _avg_count(series):
         grouped = series.groupby(level=["run_host_id", "trace_id_count"])
         if device_arch == "quasar":
-            # 4 NEO records per core (one per launch each): average per record, or a multi-NEO
-            # multi-launch sum divided by core count overstates the per-core average ~4x.
+            # A multi-NEO multi-launch sum divided by core count overstates the average ~4x.
             return (grouped.sum() / grouped.count()).to_dict()
         return (grouped.sum() / total_compute_cores).to_dict()
 
