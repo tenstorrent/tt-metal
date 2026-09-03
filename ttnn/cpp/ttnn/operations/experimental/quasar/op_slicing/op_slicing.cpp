@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "op_slicing.hpp"
 #include <tuple>
 #include <ttnn/operations/core/core.hpp>
@@ -128,7 +129,7 @@ void run_sliced_op(
         }
         auto op_output_tensors = op_slice_attr->run_L1_op(input_tensor, {0, 0}, {output_height, output_width});
         for (uint32_t i = 0; i < num_output_tensors; i++) {
-            output_tensors[i].get() = ttnn::to_memory_config(
+            output_tensors[i].get() = ttnn::operations::experimental::quasar::to_memory_config(
                 op_output_tensors[i],
                 tt::tt_metal::MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
@@ -267,7 +268,7 @@ void run_sliced_op(
             if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
                 sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
                 output_layout == Layout::ROW_MAJOR) {
-                sliced_output_tensor = ttnn::to_memory_config(
+                sliced_output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
                     sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
             }
             if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
