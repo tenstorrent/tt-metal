@@ -366,7 +366,12 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         # (needs_host_reboot / device_unrecoverable / True for the tt-lang rung), and the supervisor
         # used to print one hardcoded remedy for all of them.
         "print('HALTKIND=' + ('' if r.get('halt') is True else str(r.get('halt') or '')))\n"
-        "print('HALTREASON=' + str(r.get('halt_reason') or r.get('error') or ''))"
+        "print('HALTREASON=' + str(r.get('halt_reason') or r.get('error') or ''))\n"
+        # WHICH STACKS STILL OWE THE BAND. The loop already re-invokes while can_stop is false, so
+        # the condition was enforced -- but nothing SAID why, so an agent wrapping up early looked
+        # exactly like one that had finished, and did for ten rounds of voxtral 2026-09-03.
+        "print('SHORT=' + '; '.join('%s %.1fms over' % (x.get('stage'), x.get('over_by_ms') or 0.0) "
+        "for x in (r.get('stages_short_of_achievable') or [])))"
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
@@ -382,17 +387,20 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         observe_root=repo_root,
     )
     if rc is None:
-        return {"can_stop": False, "halt": False, "reason": "", "kind": ""}
+        return {"can_stop": False, "halt": False, "reason": "", "kind": "", "short": ""}
     out = out or ""
-    reason = kind = ""
+    reason = kind = short = ""
     for line in out.splitlines():
         if line.startswith("HALTREASON="):
             reason = line[len("HALTREASON=") :]
         elif line.startswith("HALTKIND="):
             kind = line[len("HALTKIND=") :]
+        elif line.startswith("SHORT="):
+            short = line[len("SHORT=") :]
     return {
         "can_stop": "CANSTOP=True" in out,
         "halt": "HALT=True" in out,
+        "short": short,
         "reason": reason,
         "kind": kind,
     }
@@ -5186,6 +5194,13 @@ def optimize_pipeline(
         if st.get("can_stop"):
             can_stop = True
             break
+        # WHAT THE ROUND IS BEING SENT IN TO DO. Printed before it starts, so a reader can see the
+        # target the agent was given and compare it with what the round actually did -- the check
+        # that was missing when eight rounds ended early and each looked like a clean finish.
+        if st.get("short"):
+            print(
+                "  [optimize/cc] round %d starts with stacks still short of their band: %s" % (rounds + 1, st["short"])
+            )
         wedged = _run_round_with_watchdog(round_cmd, repo_root, devices, kernel_log, stall_sec)
         # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. A refused credential
         # produces a round that runs, writes a transcript and exits cleanly having done nothing,
