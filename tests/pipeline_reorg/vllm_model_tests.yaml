@@ -176,11 +176,7 @@
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   coherence-test: true
-  # 45 (was 20): warm-cache boots already run 17-19 min (nightlies flaked on
-  # the 20-min gate), and the precision-override fix changes the ttnn cache
-  # identity (bf16 -> bfp8 tensorbins), so the first post-fix boot rebuilds
-  # the cache cold. Matches the T3K row above.
-  server-timeout: 45
+  server-timeout: 20
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
