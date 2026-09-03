@@ -30,9 +30,7 @@ public:
         const Accessor& accessor, uint32_t start_page_id = 0, uint32_t stride = 1, uint8_t noc = noc_index) :
         accessor(accessor), current_page_id(start_page_id), stride_(stride), noc(noc) {
         if (current_page_id < accessor.dspec().tensor_volume()) {
-            // A run steps page ids by the accessor's stride, so the fast path only works when one
-            // iterator step is a whole number of run entries. 0 means it never is.
-            // initialize_from_page_id() re-derives contiguous_dim(); fusing would re-couple stride and count.
+            // Fast path only works if one step is a whole number of run entries; 0 means never.
             const uint32_t page_stride = accessor.contiguous_page_stride();
             run_steps_ = (stride_ % page_stride == 0) ? stride_ / page_stride : 0;
             initialize_from_page_id(start_page_id);
@@ -58,7 +56,7 @@ public:
             return *this;
         }
 
-        // Inside the run the address just walks forward, so no page lookup is needed.
+        // Inside a run the address just walks forward, no lookup needed.
         if (run_steps_ != 0 && run_steps_ < contiguous_pages_left_) {
             contiguous_pages_left_ -= run_steps_;
             current_noc_addr += accessor.get_aligned_page_size() * run_steps_;
@@ -124,18 +122,21 @@ private:
     uint64_t current_noc_addr = 0;  // current NOC address for this page
     uint32_t stride_ = 1;           // step size per operator++ (1 for contiguous, N for DM thread stride)
     uint8_t noc = noc_index;
-    // Run entries consumed by one operator++, 0 when a step never lands inside the run.
+    // Run entries consumed by one operator++, 0 when a step never lands inside a run.
     uint32_t run_steps_ = 0;
-    // Pages from current_page_id that are contiguous in memory, current page included.
+    // Pages from current_page_id contiguous in memory, current page included.
+    // Only valid when run_steps_ != 0; do not read it unguarded.
     uint32_t contiguous_pages_left_ = 0;
     mutable Page current_page{0, 0};
 
     void update_current_page() { current_page = Page(current_noc_addr, current_page_id); }
 
-    // Initialize all state from a page_id (used in constructor and operator+=)
     void initialize_from_page_id(uint32_t page_id) {
         current_noc_addr = accessor.get_noc_addr(page_id, 0, noc);
-        contiguous_pages_left_ = accessor.num_contiguous_pages(page_id);
+        // Dead when the fast path can never fire. The ctor sets run_steps_ before the first call.
+        if (run_steps_ != 0) {
+            contiguous_pages_left_ = accessor.num_contiguous_pages(page_id);
+        }
     }
 };
 

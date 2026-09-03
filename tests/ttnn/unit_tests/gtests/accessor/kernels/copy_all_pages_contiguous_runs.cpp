@@ -4,7 +4,7 @@
 
 /*
 Copies all pages from the input tensor to the output tensor one contiguous run at a time, using
-AbstractTensorAccessorWrapper::num_contiguous_pages. Works for both sharded and interleaved tensors.
+TensorAccessor::num_contiguous_pages. Works for both sharded and interleaved tensors.
 This kernel is expected to be executed on only one core (RISCV_0).
 */
 
@@ -27,13 +27,11 @@ void kernel_main() {
 
     const auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
     const auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
-    const auto tensor_accessors_tuple = std::make_tuple(tensor_accessor_src, tensor_accessor_dst);
-    const auto wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
 #if INTERLEAVED_LAYOUT
     const uint32_t tensor_volume = volume_arg;
 #else
-    // The buffer's page count includes shard padding, so take the volume from the dspec instead.
+    // Buffer page count includes shard padding; the dspec volume does not.
     const uint32_t tensor_volume = tensor_accessor_src.dspec().tensor_volume();
 #endif
 
@@ -42,18 +40,17 @@ void kernel_main() {
     const uint32_t l1_addr = get_write_ptr(cb_id);
 
     // Runs step page ids by page_stride, so one walk per residue class covers every page once.
-    // A run stops at the shard edge, so a class usually takes several runs, not one.
-    const uint32_t page_stride = wrappers[0].contiguous_page_stride();
+    const uint32_t page_stride = tensor_accessor_src.contiguous_page_stride();
     // Src and dst runs must live in the same residue class for a page-aligned copy.
-    ASSERT(page_stride == wrappers[1].contiguous_page_stride());
+    ASSERT(page_stride == tensor_accessor_dst.contiguous_page_stride());
 
     for (uint32_t base = 0; base < page_stride; ++base) {
         for (uint32_t page_id = base; page_id < tensor_volume;) {
-            const uint32_t src_pages = wrappers[0].num_contiguous_pages(page_id, tensor_volume);
-            const uint32_t dst_pages = wrappers[1].num_contiguous_pages(page_id, tensor_volume);
+            const uint32_t src_pages = tensor_accessor_src.num_contiguous_pages(page_id, tensor_volume);
+            const uint32_t dst_pages = tensor_accessor_dst.num_contiguous_pages(page_id, tensor_volume);
             const uint32_t run_pages = src_pages < dst_pages ? src_pages : dst_pages;
-            const uint64_t src_addr = wrappers[0].get_noc_addr(page_id);
-            const uint64_t dst_addr = wrappers[1].get_noc_addr(page_id);
+            const uint64_t src_addr = tensor_accessor_src.get_noc_addr(page_id);
+            const uint64_t dst_addr = tensor_accessor_dst.get_noc_addr(page_id);
 
             // Chunk by what the CB can hold: a run can be far larger than L1.
             for (uint32_t done = 0; done < run_pages;) {
