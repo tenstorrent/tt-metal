@@ -535,6 +535,11 @@ class Gemma4Model:
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
         self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
 
+        # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
+        # the dFlash drafter — see tt/dflash_drafter.py).
+        self._dflash_tap_layers = None
+        self._dflash_taps = []
+
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -1021,6 +1026,13 @@ class Gemma4Model:
             if keep_kv and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
 
+            # dFlash tap capture: stash the post-layer residual at the drafter's
+            # tap layers (dflash_capture_taps(True) arms it; pop_dflash_taps()
+            # drains). Cloned because the next layer consumes hidden_states.
+            # Untraced-path only (clone allocates) — see tt/dflash_drafter.py.
+            if self._dflash_tap_layers is not None and i in self._dflash_tap_layers:
+                self._dflash_taps.append(ttnn.clone(hidden_states))
+
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
             cos_pos.deallocate(True)
@@ -1228,6 +1240,16 @@ class Gemma4Model:
         sliding-attention layer — the EAGLE/MTP ``shared_kv_states`` contract.
         """
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
+
+    def dflash_capture_taps(self, layer_ids):
+        """Arm (list of layer indices) or disarm (None) dFlash tap capture."""
+        self._dflash_tap_layers = set(layer_ids) if layer_ids is not None else None
+        self._dflash_taps = []
+
+    def pop_dflash_taps(self):
+        """Drain captured taps: list of [1,1,rows,H] device tensors, tap order."""
+        taps, self._dflash_taps = self._dflash_taps, []
+        return taps
 
     def ttnn_verify_forward(
         self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
