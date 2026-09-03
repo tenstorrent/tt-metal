@@ -1,0 +1,50 @@
+name: Mirror Fork Branch via Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dispatch-mirror:
+    if: >
+      github.event.issue.pull_request &&
+      (github.event.comment.body == '/mirror' || startsWith(github.event.comment.body, '/mirror '))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Check requester is a member/collaborator
+        env:
+          ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          if [[ "$ASSOC" != "MEMBER" && "$ASSOC" != "OWNER" && "$ASSOC" != "COLLABORATOR" ]]; then
+            echo "Not authorized: $ASSOC"
+            exit 1
+          fi
+
+      - name: Resolve fork owner/branch and dispatch mirror workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          FORK_OWNER=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRepositoryOwner -q .headRepositoryOwner.login)
+          SRC_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName -q .headRefName)
+          if [ -z "$FORK_OWNER" ] || [ -z "$SRC_BRANCH" ]; then
+            echo "Could not resolve fork owner/branch for PR #$PR_NUMBER"
+            exit 1
+          fi
+          TARGET=$(echo "$COMMENT_BODY" | sed -n 's|^/mirror[[:space:]]*||p' | xargs)
+          echo "Dispatching mirror-fork-branch.yaml for ${FORK_OWNER}:${SRC_BRANCH} (target: ${TARGET:-default})"
+          gh workflow run mirror-fork-branch.yaml --repo "$REPO" \
+            --field source="${FORK_OWNER}:${SRC_BRANCH}" \
+            ${TARGET:+--field target_branch="$TARGET"}
+
+      - name: React to comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_URL: ${{ github.event.comment.url }}
+        run: |
+          gh api "$COMMENT_URL/reactions" -X POST -f content=rocket --silent || true
