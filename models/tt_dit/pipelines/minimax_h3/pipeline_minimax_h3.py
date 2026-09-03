@@ -918,6 +918,7 @@ class MiniMaxH3Pipeline:
             self._vsa_stage = MiniMaxH3VSACoarseStage(
                 geometry,
                 sparsity=self.vsa_config.sparsity,
+                padded_pooling=self.vsa_config.padded_pooling,
                 head_dim=self.transformer_config["attention_head_dim"],
                 mesh_device=self.mesh_device,
                 sp_axis=self.sp_axis,

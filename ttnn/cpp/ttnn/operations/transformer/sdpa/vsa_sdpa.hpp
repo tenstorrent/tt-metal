@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <optional>
+#include <vector>
 
 namespace ttnn::transformer {
 
@@ -40,6 +41,12 @@ ttnn::Tensor vsa_sdpa(
     uint32_t block_size = 64,
     uint32_t k_chunk_blocks = 1,
     bool streaming = true,  // streaming leader/worker kernel (v3+); false = v1 per-row gather
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // raw-selection mode (streaming only): see VsaSdpaParams
+    uint32_t list_len = 0,
+    std::vector<uint32_t> exempt_ids = {},
+    std::optional<ttnn::Tensor> dense_row_mask = std::nullopt,
+    uint32_t coarse_slots_shift = 0,
+    uint32_t coarse_real_per_shard = 0);
 
 }  // namespace ttnn::transformer

@@ -97,6 +97,11 @@ Tensor vsa_sdpa(
     uint32_t block_size,
     uint32_t k_chunk_blocks,
     bool streaming,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t list_len = 0,
+    std::vector<uint32_t> exempt_ids = {},
+    std::optional<Tensor> dense_row_mask = std::nullopt,
+    uint32_t coarse_slots_shift = 0,
+    uint32_t coarse_real_per_shard = 0);
 
 }  // namespace ttnn::prim

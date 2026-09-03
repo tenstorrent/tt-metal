@@ -550,7 +550,9 @@ class MiniMaxH3Attention(Module):
         # order (the geometry the bound stage was built from).
         if self.vsa_stage is not None:
             use_gate = not self.gate_compress_is_zero
-            o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate)
+            # streaming kernel: raw top-k rows + exempt ids + dense-row mask (assembly done on device)
+            raw = self.vsa_config.streaming
+            o_c, vsa_indices = self.vsa_stage(q_BHNE, k_BHNE, v_BHNE, compute_o_c=use_gate, raw_selection=raw)
 
             # R2: gathered K/V equal the concatenation of all shards' local K/V.
             if self.parallel_config.sequence_parallel.factor > 1:
@@ -567,6 +569,17 @@ class MiniMaxH3Attention(Module):
                 self.vsa_stage.block_counts_tensor(),
                 k_chunk_blocks=self.vsa_config.k_chunk_blocks,
                 streaming=self.vsa_config.streaming,
+                **(
+                    dict(
+                        list_len=self.vsa_stage.k,
+                        exempt_ids=self.vsa_stage.exempt_ids,
+                        dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                        coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                        coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                    )
+                    if raw
+                    else {}
+                ),
             )
             ttnn.deallocate(vsa_indices)
 

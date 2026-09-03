@@ -106,6 +106,7 @@ def _setup_tt_model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp,
         stage = MiniMaxH3VSACoarseStage(
             geometry,
             sparsity=vsa_config.sparsity,
+            padded_pooling=vsa_config.padded_pooling,
             head_dim=HEAD_DIM,
             mesh_device=mesh_device,
             sp_axis=sp_axis,

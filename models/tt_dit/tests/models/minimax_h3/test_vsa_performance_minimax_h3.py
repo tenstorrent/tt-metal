@@ -127,7 +127,12 @@ def test_minimax_h3_vsa_block_perf(
         sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
         cfg_parallel=None,
     )
-    vsa_config = MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=K_CHUNK_BLOCKS, placement=placement)
+    vsa_config = MiniMaxH3VSAConfig(
+        sparsity=SPARSITY,
+        k_chunk_blocks=K_CHUNK_BLOCKS,
+        placement=placement,
+        padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1",
+    )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,
         rotary_dim=2 * 3 * ROPE_FREQ_DIM,
@@ -141,6 +146,7 @@ def test_minimax_h3_vsa_block_perf(
     stage = MiniMaxH3VSACoarseStage(
         geometry,
         sparsity=SPARSITY,
+        padded_pooling=vsa_config.padded_pooling,
         head_dim=HEAD_DIM,
         mesh_device=mesh_device,
         sp_axis=sp_axis,

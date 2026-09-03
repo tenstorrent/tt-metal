@@ -129,8 +129,8 @@ unit of work 8x less amortised.
 **Exp mode.** `vsa_sdpa`'s compute-kernel default is now `math_approx_mode=False` (exact SFPU exp for
 both the probabilities and `corr = exp(dmax)`), matching the dense path's `exp_approx_mode=False`. It
 was inherited as `True` from the op this was forked from; the earlier floor measurements used the
-approximate exp. Cost of the exact exp, standalone 15 s median: 16.2 -> 16.7 ms topk order,
-16.0 -> 16.5 ms model order (+3%), util 24.5% -> 23.5-23.9%.
+approximate exp. Cost of the exact exp: see the standalone numbers below (the first measurement of it ran a stale
+library and is superseded).
 
 ## 3c. Determinism
 
@@ -195,7 +195,10 @@ Component breakdown (ms, device 0):
 | shared ops (norms, projections, MLP, adaLN) | 8.34 | 9.52 | 14.78 | 16.74 | 22.00 | 23.75 |
 
 The shared ops are ~8% dearer under VSA because the sequence is padded to whole 64-token tiles
-(14464 vs 13632 rows per device at 15 s). The K/V all-gather runs on 20 cores at ~9 GB/s; dense ring
+(14464 vs 13632 rows per device at 15 s). The K/V all-gather is link-bound: each device receives 7 x 51.8 MB = 363 MB per tensor at 15 s in
+4.16 ms = 87 GB/s over 2 ring links (~87% of 2 x 50 GB/s); the CCL knobs, persistent vs barrier
+semaphores and Linear vs Ring were swept (`test_vsa_kv_gather_perf.py`): Ring is 1.9x Linear, the
+generic `ttnn.all_gather` is 6% faster than the async op, nothing else moves it. Dense ring
 attention moves the same bytes under its compute. The remaining structural lever is that gather:
 overlap it on a second command queue, or stream remote blocks inside the kernel over the fabric.
 
@@ -206,6 +209,69 @@ pass / first workers). `interleaved` (default) also spaces them evenly within th
 min/median/max 17.0/17.5/20.2 ms at 15 s (identity: 15.4/15.9/24.3), 8.9/9.1/9.4 at 10 s (identity
 7.6 median / 13.5 max), 3.1/3.2/3.3 at 5 s (identity 2.4 / 5.8). The residual spread at 15 s is the
 +-1 exempt tile per shard (18 exempt tiles over 8 shards).
+
+### 5a. K/V all-gather: link-bound (2026-09-03)
+
+`test_vsa_kv_gather_perf.py` gathers the model K shard ([1,14,S_local,128] bf16, 51.8 MB at 15 s) along
+the 8-wide SP axis with every all_gather_async configuration (Ring/Linear, persistent vs barrier
+semaphores, chunks_per_sync / workers_per_link / buffers, the generic `ttnn.all_gather`):
+
+| config | 15 s ms | GB/s received per device | 10 s ms |
+|---|---|---|---|
+| Ring, persistent buffer (model path) | 4.16 | 87 | 2.64 |
+| Ring, tuned hyperparams (16/3/2) | 4.16 | 87 | 2.66 |
+| Ring, other knob settings | 4.2-4.9 | 74-85 | 2.7-3.1 |
+| Linear (any) | 7.7-9.0 | 40-47 | 4.9-5.5 |
+| `ttnn.all_gather` (generic) | 3.91 | 93 | 2.50 |
+| 4 links | n/a: the axis has 2 ethernet channels | | |
+
+A device receives 7 x 51.8 MB = 363 MB per gather; 87-93 GB/s over 2 links is ~90% of 2 x 50 GB/s.
+The serial time cannot be cut by tuning; only fewer bytes (excluded) or overlap (a second command
+queue during the coarse stage, ~8 ms hidden at 15 s) remain.
+
+### 5c. Coarse-stage cost reduction (2026-09-03)
+
+**Device-side index assembly (shipped, default).** The streaming kernel takes the coarse stage's top-k
+rows as they are (`list_len`, `exempt_ids`, per-device `dense_row_mask`), building the exempt prefix,
+dense-list rows and sentinel handling into its per-row bitmaps; the host graph loses the concat /
+tilize / int32 blend / typecast / untilize chain (~2.9 ms per block at 15 s). Output is bit-identical to
+the host-assembled path (`test_vsa_sdpa_raw_selection_matches_assembled`).
+
+**Padded pooled gathers (opt-in `MiniMaxH3VSAConfig.padded_pooling`).** The pooled K^T / V gathers were
+falling into all_gather's composite path (broadcast + concat, ~1.6 ms at 15 s) because 226 tiles per shard
+is not tile-aligned. With padding to 256 slots per shard the gathers are plain ring all-gathers; scores
+and top-k run in the padded per-shard numbering and the kernel maps ids back
+(`coarse_slots_shift`/`coarse_real_per_shard`). Pending its block-level A/B.
+
+## 5b. Planned kernel work (not started)
+
+**Distributed group window (v18 candidate).** Today a worker's window is its own 12-slot ring, so a
+row at 11% density sees ~1.3 of its blocks per window and visits are single-block: the softmax
+bookkeeping (max, corr, rescale, sum) is paid per 64 keys, ~8x more often than dense's 512-key
+chunks. Plan: every core in the head group reads a disjoint slice of the block sequence from DRAM
+(no single leader), publishes availability, and the group's aggregate L1 holds ~48-96 consecutive
+blocks. A core then gathers, per row, all of that row's listed blocks in the window (~5-11) from
+peer L1 into its local ring and runs ONE QK/max/exp/rescale/PV over them -- dense-sized chunks.
+Consequences: pulls become row-stationary (NoC traffic ~3x: ~164 vs ~55 MB per core per sweep,
+~3 ms at 50 GB/s, acceptable but shared); all of a core's rows stay resident for one sweep
+(accumulators ~500 KB) so a head needs one sweep instead of two passes (halves DRAM reads and
+publish traffic); double-buffered 12-block visits need ~768 KB of slots -- tight at depth 12,
+comfortable with 6-block slices; a window may slide only after every peer finished gathering from
+it (group barrier per window, ~20-40 per sweep); dense rows chunk their visits to the ring size.
+Expected 25% -> 35-45% util (exp per key unchanged; bookkeeping ~30% -> ~4% of visit cycles, better
+MOP efficiency). Risk: many-to-many peer-L1 traffic (v8b's push model regressed for related
+reasons) and the window barrier letting a slow core stall the group. First step: host-side check of
+the visit-size distribution the real selections give under 48- and 96-block group windows.
+
+**Intra-group load balance.** Rows are dealt chunk-cyclic with no cost weighting; an exempt
+(dense-list) row costs ~3x a sparse row (9x the blocks, ~3x cheaper per block thanks to full
+windows), and the leader's slot gate runs the whole group at the slowest core's pace, so one dense
+row is ~+12-15% on its core and therefore on the head; under identity placement shard-0 cores held
+2-3 of them. Plan: (1) per-core busy-time distribution from the probe-9 timers on an exempt-carrying
+shard; (2) cost-aware dealing on the host (listed-block counts are known from the coarse stage;
+dense rows weighted ~3x), which needs an explicit per-core row list in the reader/writer runtime
+args instead of `row_start/row_stride`; (3) splitting a dense row's blocks across cores with a
+partial-softmax merge belongs with the distributed-window redesign, not standalone.
 
 ## 6. Knobs and tools
 

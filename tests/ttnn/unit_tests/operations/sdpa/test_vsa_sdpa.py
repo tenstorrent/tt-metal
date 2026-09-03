@@ -95,9 +95,7 @@ def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0, str
     tt_q = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_k = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_v = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_idx = ttnn.from_torch(
-        indices.view(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
-    )
+    tt_idx = ttnn.from_torch(indices.view(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
     tt_counts = ttnn.from_torch(
         counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
     )
@@ -147,3 +145,71 @@ def test_vsa_sdpa_identical_across_m(device):
     for m in (2, 3, 5):
         ok, pcc = comp_pcc(outs[1].float(), outs[m].float(), 0.9998)
         assert ok, f"m={m} vs m=1: PCC {pcc}"
+
+
+@skip_for_wormhole_b0("vsa_sdpa is Blackhole-only")
+@pytest.mark.parametrize(("heads", "seq_len", "kv_len"), [(2, 1024, 4096), (14, 640, 4096)], ids=["h2", "h14"])
+def test_vsa_sdpa_raw_selection_matches_assembled(device, heads, seq_len, kv_len):
+    """Raw-selection mode (top-k rows + exempt ids + dense rows given to the op) must equal the host-assembled
+    index rows (exempt prefix, top-k, sentinel tail, dense-list blend) bit for bit -- the kernel is
+    deterministic -- and match the reference."""
+    torch.manual_seed(0)
+    dim = 128
+    n_q_tiles, n_blocks = seq_len // BLOCK, kv_len // BLOCK
+    k_sel = 32  # top-k width (multiple of 8 keeps the row DRAM-aligned)
+    exempt_ids = [0, 1, 5, n_blocks - 1]
+    dense_rows = [0, 3, n_q_tiles - 1]
+    w_full = ((max(n_blocks, len(exempt_ids) + k_sel) + 15) // 16) * 16
+    gen = torch.Generator().manual_seed(1)
+
+    q = torch.randn(1, heads, seq_len, dim, dtype=torch.bfloat16)
+    k = torch.randn(1, heads, kv_len, dim, dtype=torch.bfloat16)
+    v = torch.randn(1, heads, kv_len, dim, dtype=torch.bfloat16)
+    counts = build_counts(n_blocks, w_full, True, 2)
+    token_valid = (torch.arange(BLOCK)[None, :] < counts[:n_blocks, None].to(torch.long)).reshape(-1)
+    k[:, :, ~token_valid] = 0
+    v[:, :, ~token_valid] = 0
+
+    # top-k rows as the coarse stage emits them: k_sel candidate ids per row, unsorted; candidates exclude
+    # the exempt blocks (the coarse stage masks them out), so no id repeats within a row
+    candidates = torch.tensor([b for b in range(n_blocks) if b not in exempt_ids])
+    topk = torch.stack(
+        [
+            torch.stack(
+                [candidates[torch.randperm(candidates.numel(), generator=gen)[:k_sel]] for _ in range(n_q_tiles)]
+            )
+            for _ in range(heads)
+        ]
+    ).reshape(1, heads, n_q_tiles, k_sel)
+    # host-assembled rows: exempt prefix + top-k + sentinel tail; dense rows take every real block
+    assembled = torch.full((1, heads, n_q_tiles, w_full), SENTINEL, dtype=torch.int64)
+    real = torch.nonzero(counts[:n_blocks].to(torch.long) > 0).reshape(-1)
+    for h in range(heads):
+        for qt in range(n_q_tiles):
+            if qt in dense_rows:
+                assembled[0, h, qt, : real.numel()] = real
+            else:
+                row = torch.cat([torch.tensor(exempt_ids), topk[0, h, qt]])
+                assembled[0, h, qt, : row.numel()] = row
+
+    dev = lambda x, lay=ttnn.TILE_LAYOUT, dt=ttnn.bfloat16: ttnn.from_torch(x, device=device, layout=lay, dtype=dt)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    tt_counts = dev(counts.view(torch.int32).reshape(1, 1, 1, w_full), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+    tt_assembled = dev(assembled.to(torch.uint32).view(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+    tt_topk = dev(topk.to(torch.uint32).view(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+    words = max(8, (n_q_tiles + 31) // 32 // 8 * 8 + (8 if (n_q_tiles + 31) // 32 % 8 else 0))  # 32 B multiple
+    mask = torch.zeros(words, dtype=torch.int64)
+    for r in dense_rows:
+        mask[r // 32] |= 1 << (r % 32)
+    tt_mask = dev(mask.to(torch.uint32).view(torch.int32).reshape(1, 1, 1, words), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+
+    out_a = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_assembled, tt_counts))
+    out_b = ttnn.to_torch(
+        ttnn.transformer.vsa_sdpa(
+            tt_q, tt_k, tt_v, tt_topk, tt_counts, list_len=k_sel, exempt_ids=exempt_ids, dense_row_mask=tt_mask
+        )
+    )
+    assert torch.equal(out_a, out_b), "raw-selection path differs from host-assembled indices"
+    ref = fine_attention_ref(q.float(), k.float(), v.float(), assembled, counts)
+    ok, pcc = comp_pcc(ref, out_b.float(), 0.999)
+    assert ok, pcc

@@ -488,6 +488,15 @@ void bind_sdpa(nb::module_& mod) {
                 chunk. A row whose valid block count is not a multiple of m ends with a partial chunk.
                 Results are identical for every m; defaults to 1.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            list_len (int): raw-selection mode (streaming only): consume only the first list_len entries of
+                each indices row (the coarse stage's top-k output as-is). 0 = the whole width.
+            exempt_ids (list[int]): raw-selection mode: block ids every row attends in addition to its list.
+            dense_row_mask (ttnn.Tensor, optional): raw-selection mode: [1, 1, 1, words] uint32 ROW_MAJOR
+                bitmask over this device's q-tile rows; a set bit makes that row (every head) attend every
+                real block, ignoring its indices row. words*4 must be a multiple of 32.
+            coarse_slots_shift, coarse_real_per_shard (int): raw-selection mode: the indices use a padded
+                per-shard numbering (2**shift slots per SP shard, only coarse_real_per_shard real); the
+                kernel maps id b to b - (b >> shift) * (2**shift - real). 0 = ids are real.
 
         Returns:
             ttnn.Tensor: [1, H, S, d] TILE, dtype = q.
@@ -503,7 +512,12 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_size") = 64,
         nb::arg("k_chunk_blocks") = 1,
         nb::arg("streaming") = true,
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("list_len") = 0,
+        nb::arg("exempt_ids") = std::vector<uint32_t>{},
+        nb::arg("dense_row_mask") = nb::none(),
+        nb::arg("coarse_slots_shift") = 0,
+        nb::arg("coarse_real_per_shard") = 0);
 
     const auto* const chunked_doc =
         R"doc(

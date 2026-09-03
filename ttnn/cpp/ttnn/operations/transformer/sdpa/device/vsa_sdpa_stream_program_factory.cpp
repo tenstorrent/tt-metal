@@ -137,7 +137,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t v_head_stride = (T / tt::constants::TILE_HEIGHT) * vDHt;
     const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
     const uint32_t idx_row_bytes = W * t.indices.element_size();
-    const uint32_t counts_row_bytes = W * t.block_counts.element_size();
+    const uint32_t counts_row_bytes = t.block_counts.logical_shape()[3] * t.block_counts.element_size();
     // Residency vs. window trade (lever 1): fewer resident rows free L1 for a deeper stream ring
     // (bigger windows -> more blocks per visit -> amortized softmax rounds) at the cost of more
     // passes. Tuning knobs for the sweep; defaults are the committed values.
@@ -200,6 +200,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(idx), .data_format = df, .page_size = page_size}}},
         });
+        return idx;
     };
     cb(q_tile_bytes, rmax * q_tiles_per_row, q_df);           // cb_q_res
     cb(k_tile_bytes, stream_depth * k_tiles_per_block, k_df);  // cb_k_stream
@@ -227,6 +228,11 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(bitmap_bytes, 1, bf);                                   // cb_bitmap
     cb(16, log_depth, bf);                                     // cb_log
     cb(4 * 2 * kMaxWorkers, 1, bf);                            // cb_ackbox: [0,16) progress, [16,32) READY flags
+    // one page of the dense-row mask tensor (its whole row) when given; a 32 B placeholder otherwise
+    const uint32_t dense_bytes = t.dense_row_mask.has_value()
+                                     ? t.dense_row_mask->logical_shape()[3] * t.dense_row_mask->element_size()
+                                     : 32u;
+    const uint32_t cb_dense = cb(dense_bytes, 1, bf);          // cb_dense: raw-selection dense-row bitmask (one page)
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -406,6 +412,18 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         reader_rt.push_back(row_start);
         reader_rt.push_back(n_consumers * kRowChunk);  // chunk-cyclic big stride
         reader_rt.push_back(row_count);
+        // Raw-selection mode: list length, dense-row bitmask address (0 = none) and its CB, then the
+        // exempt block ids every row also attends (count first). Address patched on cache hits.
+        reader_rt.push_back(attrs.list_len);
+        reader_rt.push_back(t.dense_row_mask.has_value() ? t.dense_row_mask->buffer()->address() : 0u);
+        reader_rt.push_back(cb_dense);
+        reader_rt.push_back(dense_bytes);
+        reader_rt.push_back(attrs.coarse_slots_shift);
+        reader_rt.push_back(attrs.coarse_slots_shift ? (1u << attrs.coarse_slots_shift) - attrs.coarse_real_per_shard : 0u);
+        reader_rt.push_back(static_cast<uint32_t>(attrs.exempt_ids.size()));
+        for (uint32_t b : attrs.exempt_ids) {
+            reader_rt.push_back(b);
+        }
         if (sched.is_leader) {
             // The group's workers are consecutive logical core ids in a row-major grid: they span
             // at most ceil(n/grid.x)+1 row segments, each a height-1 multicast rectangle. The
@@ -509,17 +527,23 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     const uint32_t out_addr = tensor_return_value.buffer()->address();
     const uint32_t k_addr = t.k.buffer()->address();
     const uint32_t q_addr = t.q.buffer()->address();
+    constexpr uint32_t kDenseMaskArg = 14;  // reader: after the 13 common args and list_len
+    const uint32_t dense_addr = t.dense_row_mask.has_value() ? t.dense_row_mask->buffer()->address() : 0u;
     const auto patch = [&](const std::vector<uint32_t>& ids,
                            const tt::tt_metal::CoreCoord& core,
                            uint32_t a0,
                            uint32_t a1,
-                           uint32_t a2) {
+                           uint32_t a2,
+                           bool is_reader = false) {
         for (uint32_t id : ids) {
             auto& args = tt::tt_metal::GetRuntimeArgs(program, id, core);
             if (args.size() >= 3) {  // the instance placed on this core
                 args[0] = a0;
                 args[1] = a1;
                 args[2] = a2;
+                if (is_reader) {
+                    args[kDenseMaskArg] = dense_addr;
+                }
                 return;
             }
         }
@@ -527,7 +551,7 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     };
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        patch(reader_ids, core, v_addr, idx_addr, counts_addr);
+        patch(reader_ids, core, v_addr, idx_addr, counts_addr, /*is_reader=*/true);
         patch(writer_ids, core, out_addr, k_addr, q_addr);
     }
 }

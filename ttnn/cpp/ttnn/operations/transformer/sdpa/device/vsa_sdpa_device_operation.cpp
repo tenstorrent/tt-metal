@@ -66,12 +66,42 @@ void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
         H,
         n_q_tiles);
     const uint32_t W = is[3];
-    TT_FATAL(W >= n_kv_blocks, "indices width ({}) must be >= T/block_size ({})", W, n_kv_blocks);
+    const bool raw_selection = attrs.list_len != 0 || !attrs.exempt_ids.empty() || t.dense_row_mask.has_value() ||
+                               attrs.coarse_slots_shift != 0;
+    if (attrs.coarse_slots_shift != 0) {
+        TT_FATAL(
+            attrs.coarse_slots_shift < 16 && attrs.coarse_real_per_shard > 0 &&
+                attrs.coarse_real_per_shard <= (1u << attrs.coarse_slots_shift),
+            "bad coarse numbering: shift {} real/shard {}",
+            attrs.coarse_slots_shift,
+            attrs.coarse_real_per_shard);
+    }
+    if (raw_selection) {
+        TT_FATAL(attrs.streaming, "vsa_sdpa raw-selection inputs (list_len/exempt_ids/dense_rows) need streaming=True");
+        TT_FATAL(attrs.list_len <= W, "list_len ({}) exceeds the indices width ({})", attrs.list_len, W);
+        TT_FATAL(attrs.exempt_ids.size() <= 32, "at most 32 exempt block ids (got {})", attrs.exempt_ids.size());
+        for (uint32_t b : attrs.exempt_ids) {
+            TT_FATAL(b < n_kv_blocks, "exempt block id {} out of range ({} blocks)", b, n_kv_blocks);
+        }
+        if (t.dense_row_mask.has_value()) {
+            const auto& m = *t.dense_row_mask;
+            const auto ms = m.logical_shape();
+            TT_FATAL(m.dtype() == DataType::UINT32 && m.layout() == Layout::ROW_MAJOR, "dense_row_mask must be uint32 ROW_MAJOR");
+            TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM && !m.memory_config().is_sharded(), "dense_row_mask must be interleaved DRAM");
+            TT_FATAL(
+                ms.rank() == 4 && ms[0] == 1 && ms[1] == 1 && ms[2] == 1 && ms[3] * 4 >= (n_q_tiles + 31) / 32 * 4 && (ms[3] * 4) % 32 == 0,
+                "dense_row_mask must be [1,1,1,words] covering {} q tiles with words*4 a multiple of 32 (got {})",
+                n_q_tiles,
+                ms);
+        }
+    } else {
+        TT_FATAL(W >= n_kv_blocks, "indices width ({}) must be >= T/block_size ({})", W, n_kv_blocks);
+    }
     TT_FATAL(
-        cs.rank() == 4 && cs[0] == 1 && cs[1] == 1 && cs[2] == 1 && cs[3] == W,
-        "block_counts must be [1,1,1,W] matching the indices width (got {} for W {})",
+        cs.rank() == 4 && cs[0] == 1 && cs[1] == 1 && cs[2] == 1 && cs[3] >= n_kv_blocks,
+        "block_counts must be [1,1,1,Wc] with Wc >= T/block_size (got {} for {} blocks)",
         cs,
-        W);
+        n_kv_blocks);
 }
 }  // namespace
 
@@ -133,6 +163,11 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
         attrs.block_size,
         attrs.k_chunk_blocks,
         attrs.streaming,
+        attrs.list_len,
+        attrs.exempt_ids,
+        attrs.coarse_slots_shift,
+        attrs.coarse_real_per_shard,
+        t.dense_row_mask.has_value(),
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
@@ -227,7 +262,12 @@ Tensor vsa_sdpa(
     uint32_t block_size,
     uint32_t k_chunk_blocks,
     bool streaming,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t list_len,
+    std::vector<uint32_t> exempt_ids,
+    std::optional<Tensor> dense_row_mask,
+    uint32_t coarse_slots_shift,
+    uint32_t coarse_real_per_shard) {
     using OperationType = ttnn::prim::VsaSdpaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -235,6 +275,10 @@ Tensor vsa_sdpa(
             .block_size = block_size,
             .k_chunk_blocks = k_chunk_blocks,
             .streaming = streaming,
+            .list_len = list_len,
+            .exempt_ids = std::move(exempt_ids),
+            .coarse_slots_shift = coarse_slots_shift,
+            .coarse_real_per_shard = coarse_real_per_shard,
             .compute_kernel_config = compute_kernel_config,
         },
         OperationType::tensor_args_t{
@@ -243,6 +287,7 @@ Tensor vsa_sdpa(
             .v = v,
             .indices = indices,
             .block_counts = block_counts,
+            .dense_row_mask = std::move(dense_row_mask),
         });
 }
 

@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <optional>
+#include <vector>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -24,6 +27,18 @@ struct VsaSdpaParams {
     // the per-row re-gather that makes v1 DRAM-bound. Numerics: identical contract; online softmax
     // is order-independent, so ascending order is as exact as list order (bf16 rounding differs).
     bool streaming = false;
+    // Raw-selection mode (streaming only): `indices` rows are the coarse stage's top-k output as-is;
+    // the kernel consumes the first `list_len` entries of each row (0 = the whole width), adds the
+    // `exempt_ids` blocks to every row, and gives the q-tile rows flagged in the optional
+    // `dense_row_mask` input the full block list. Replaces the host-side prefix/sentinel/dense-blend
+    // assembly (~10 layout ops per block).
+    uint32_t list_len = 0;
+    std::vector<uint32_t> exempt_ids;
+    // Padded coarse numbering: the coarse stage may number blocks per SP shard in slots of
+    // 2^coarse_slots_shift (tile-aligned pooled gathers) while only coarse_real_per_shard of them are
+    // real; a listed id b maps to b - (b >> shift) * (2^shift - real). 0 = ids are already real.
+    uint32_t coarse_slots_shift = 0;
+    uint32_t coarse_real_per_shard = 0;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
@@ -31,8 +46,11 @@ struct VsaSdpaInputs {
     Tensor q;             // [1,H,S,d]   bf16 TILE, head-major (S multiple of 64)
     Tensor k;             // [1,H,T,d]   bf16|bfp8_b TILE (T multiple of block_size)
     Tensor v;             // [1,H,T,d]   bf16|bfp8_b TILE
-    Tensor indices;       // [1,H,S/64,W] uint32 block ids, ROW_MAJOR; 0xFFFFFFFF sentinel tail; W >= T/block_size
-    Tensor block_counts;  // [1,1,1,W]   uint32 valid tokens per block (entries past T/block_size unused)
+    Tensor indices;       // [1,H,S/64,W] uint32 block ids, ROW_MAJOR; 0xFFFFFFFF sentinel tail
+    Tensor block_counts;  // [1,1,1,Wc]  uint32 valid tokens per block, Wc >= T/block_size
+    // raw-selection mode: [1,1,1,words] uint32 ROW_MAJOR, bit q_tile set -> that q-tile row attends every
+    // real block (words*4 bytes must be a multiple of 32); per device, so a tensor rather than an attribute
+    std::optional<Tensor> dense_row_mask;
 };
 
 }  // namespace ttnn::prim

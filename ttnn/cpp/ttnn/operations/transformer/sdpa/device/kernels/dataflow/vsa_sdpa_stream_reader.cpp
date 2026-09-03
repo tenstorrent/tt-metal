@@ -107,6 +107,34 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(argi++);     // worker: first resident row
     const uint32_t row_stride = get_arg_val<uint32_t>(argi++);    // worker: row stride
     const uint32_t row_count = get_arg_val<uint32_t>(argi++);     // worker: total rows
+    // Raw-selection mode (see VsaSdpaParams): entries consumed per index row (0 = W), dense-row bits
+    // (resident row index -> bit), exempt block ids added to every row.
+    const uint32_t list_len_arg = get_arg_val<uint32_t>(argi++);
+    const uint32_t dense_mask_addr = get_arg_val<uint32_t>(argi++);  // 0 = no dense rows
+    const uint32_t cb_dense = get_arg_val<uint32_t>(argi++);
+    const uint32_t dense_bytes = get_arg_val<uint32_t>(argi++);
+    const uint32_t coarse_shift = get_arg_val<uint32_t>(argi++);  // padded coarse numbering (0 = real ids)
+    const uint32_t coarse_pad = get_arg_val<uint32_t>(argi++);    // pad slots per shard to subtract
+    const uint32_t n_exempt = get_arg_val<uint32_t>(argi++);
+    const uint32_t exempt_argi = argi;  // the ids stay in the runtime-arg block (no stack array)
+    argi += n_exempt;
+    const auto exempt_id = [&](uint32_t i) -> uint32_t { return get_arg_val<uint32_t>(exempt_argi + i); };
+    const uint32_t list_len = (list_len_arg == 0) ? W : list_len_arg;
+    const auto real_block = [&](uint32_t b) -> uint32_t {
+        return coarse_shift ? b - (b >> coarse_shift) * coarse_pad : b;
+    };
+    // dense-row bitmask (bit q_tile): one interleaved DRAM page, read once into its CB page
+    volatile tt_l1_ptr uint32_t* dense_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_dense));
+    if (dense_mask_addr != 0) {
+        // same layout family as block_counts (interleaved DRAM, row-major): reuse its accessor args
+        const auto dense_acc = TensorAccessor(counts_args, dense_mask_addr, dense_bytes);
+        noc_async_read(dense_acc.get_noc_addr(0), get_write_ptr(cb_dense), dense_bytes);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    }
+    const auto row_is_dense = [&](uint32_t q_tile) -> bool {
+        return dense_mask_addr != 0 && ((dense_words[q_tile >> 5] >> (q_tile & 31)) & 1u);
+    };
 
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
     constexpr uint32_t bitmap_words = (n_kv_blocks + 31) / 32;
@@ -155,6 +183,10 @@ void kernel_main() {
         // Multicast strips (height-1 rectangles covering the group's workers) follow in the
         // runtime args; log entries are published with one multicast write per strip.
         const uint32_t n_strips = get_arg_val<uint32_t>(argi++);
+#if defined(VSA_PROBE) && VSA_PROBE == 7  // TT_VSA_PROBE=7: print parsed args
+        DPRINT("VSA_ARGS leader head={} n_workers={} row_count={} list_len={} cb_dense={} dense_bytes={} n_exempt={} n_strips={} argi={}\n",
+            head, n_workers, row_count, list_len, cb_dense, dense_bytes, n_exempt, n_strips, argi);
+#endif
         uint32_t strip_sx[4], strip_sy[4], strip_ex[4], strip_ey[4], strip_n[4];
         for (uint32_t st = 0; st < n_strips; ++st) {
             strip_sx[st] = get_arg_val<uint32_t>(argi++);
@@ -451,16 +483,29 @@ void kernel_main() {
                 const uint32_t ri = pass_row_base + r;
                 const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride +
                                         (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
-                noc.async_read(
-                    idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
-                for (uint32_t e = 0; e < W; ++e) {
-                    const uint32_t bb = idx_ptr[e];
-                    if (bb == sentinel) {
-                        break;
+                if (row_is_dense(q_tile)) {
+                    for (uint32_t bb = 0; bb < n_kv_blocks; ++bb) {  // every real block (pads have count 0)
+                        if (counts_ptr[bb] != 0) {
+                            bm[bb >> 5] |= (1u << (bb & 31));
+                        }
                     }
-                    bm[bb >> 5] |= (1u << (bb & 31));
+                } else {
+                    noc.async_read(
+                        idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
+                    for (uint32_t e = 0; e < list_len; ++e) {
+                        const uint32_t raw = idx_ptr[e];
+                        if (raw == sentinel) {
+                            break;
+                        }
+                        const uint32_t bb = real_block(raw);
+                        bm[bb >> 5] |= (1u << (bb & 31));
+                    }
+                    for (uint32_t i = 0; i < n_exempt; ++i) {
+                        const uint32_t eb = exempt_id(i);
+                        bm[eb >> 5] |= (1u << (eb & 31));
+                    }
                 }
             }
             own_row_parity = 0;
@@ -747,16 +792,29 @@ void kernel_main() {
             // chunk-cyclic placement: 4-row chunks dealt round-robin (row_stride = workers * 4)
             const uint32_t ri = pass_row_base + r;
             const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+            if (row_is_dense(q_tile)) {
+                for (uint32_t b = 0; b < n_kv_blocks; ++b) {  // every real block (pads have count 0)
+                    if (counts_ptr[b] != 0) {
+                        bm[b >> 5] |= (1u << (b & 31));
+                    }
+                }
+                continue;
+            }
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
             invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
-            for (uint32_t e = 0; e < W; ++e) {
-                const uint32_t b = idx_ptr[e];
-                if (b == sentinel) {
+            for (uint32_t e = 0; e < list_len; ++e) {
+                const uint32_t raw = idx_ptr[e];
+                if (raw == sentinel) {
                     break;
                 }
+                const uint32_t b = real_block(raw);
                 ASSERT(b < n_kv_blocks);
                 bm[b >> 5] |= (1u << (b & 31));
+            }
+            for (uint32_t i = 0; i < n_exempt; ++i) {
+                const uint32_t eb = exempt_id(i);
+                bm[eb >> 5] |= (1u << (eb & 31));
             }
         }
         row_parity_bits = 0;

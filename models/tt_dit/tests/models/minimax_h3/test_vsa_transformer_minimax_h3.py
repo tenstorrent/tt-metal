@@ -10,6 +10,8 @@ same inputs -- ragged prefix tiles and pad tiles included, since both paths atte
 rows. R6d: striped placement equals identity placement on the final (unpacked) outputs.
 """
 
+import os
+
 import pytest
 import torch
 from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3RotaryPosEmbed
@@ -84,6 +86,7 @@ def _build_tt_model(inputs, mesh_device, is_fsdp, state, vsa_config, geometry, s
         stage = MiniMaxH3VSACoarseStage(
             geometry,
             sparsity=vsa_config.sparsity,
+            padded_pooling=vsa_config.padded_pooling,
             head_dim=ATTENTION_HEAD_DIM,
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -134,7 +137,13 @@ def test_vsa_transformer_sparsity0_matches_dense(
     del dense
 
     vsa_model = _build_tt_model(
-        inputs, mesh_device, is_fsdp, state, MiniMaxH3VSAConfig(sparsity=0.0), geometry, sp_axis
+        inputs,
+        mesh_device,
+        is_fsdp,
+        state,
+        MiniMaxH3VSAConfig(sparsity=0.0, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1"),
+        geometry,
+        sp_axis,
     )
     vsa_tt = {**inputs.tt, **_vsa_metadata(inputs, geometry, mesh_device, sp_axis)}
     vsa_video, vsa_audio = vsa_model.forward(**vsa_tt)
@@ -184,7 +193,7 @@ def test_vsa_transformer_striped_matches_identity(
         )
         model = _build_tt_model(
             inputs, mesh_device, is_fsdp, state,
-            MiniMaxH3VSAConfig(sparsity=0.75, placement=placement, k_chunk_blocks=2), geometry, sp_axis,
+            MiniMaxH3VSAConfig(sparsity=0.75, placement=placement, k_chunk_blocks=2, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1"), geometry, sp_axis,
         )  # fmt: skip
         assert not model.transformer_blocks[0].attn.gate_compress_is_zero
         vsa_tt = {**inputs.tt, **_vsa_metadata(inputs, geometry, mesh_device, sp_axis)}

@@ -286,8 +286,8 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
          9.1 ms were the three pooling matmuls on 20 cores)
     15s: dense 76.7 ms | VSA 72.2 ms  (attn 51.4 -> vsa_sdpa 24.3; +22.5 ms VSA-only ops; measured
          with the pooling fold already in: the same matmuls were 13.6 ms before it)
-  VSA-only ops at 15 s: 2 x ~4.0 ms K/V all-gather (20 cores, ~9 GB/s -- the elephant; dense ring
-  attention has no such step), 4.4 ms extra all-gather-matmul (gate projection), ~3 ms
+  VSA-only ops at 15 s: 2 x ~4.0 ms K/V all-gather (link-bound: 363 MB received per device per tensor, 87 GB/s over 2
+  links -- the elephant; dense ring attention has no such step), 4.4 ms extra all-gather-matmul (gate projection), ~3 ms
   repeat_interleave lowering (permute/concat/tilize -> replaced by a 0/1 matmul), 3 x 0.5 ms pooling
   (after the fold), transposes/topk/index assembly ~2 ms.
   Re-measured with pooling fold + 0/1 broadcast matmul (commit 183d3a84491):
@@ -316,6 +316,12 @@ handoff, not issue work. Practical ceiling of this design ~26-28%.
 - 2026-09-03: exact exp made the op default (`math_approx_mode=False`, as dense SDPA): +3% standalone.
   Deterministic arrival-bin windows applied: untraced repeat and traced replay bit-exact (PCC 1.0);
   standalone neutral to +6% (15s 17.1/16.0 ms; 10s 7.9; 5s 2.5). Details in VSA_STREAM_DESIGN.md 3b/3c.
+- 2026-09-03 coarse-stage work: (1) K/V all-gather is link-bound (87 GB/s over the axis's 2 eth
+  channels; 4 links unavailable; Linear 1.9x slower; generic ttnn.all_gather 6% faster) -- no serial
+  reduction possible, only overlap or fewer bytes. (2) raw-selection inputs to vsa_sdpa move the index
+  assembly into the kernel (bit-identical; sparsity0/traced block pass). (3) padded pooled gathers
+  behind MiniMaxH3VSAConfig.padded_pooling (stage oracle tests pass; block A/B pending). Build gotcha:
+  C++ changes need `cmake --install build` -- `--target ttnn` alone leaves ttnn/ttnn/_ttnn.so stale.
 - Run-to-run NONDETERMINISM (resolved above): untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
   the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
   rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:

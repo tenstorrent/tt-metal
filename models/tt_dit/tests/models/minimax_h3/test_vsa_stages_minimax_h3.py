@@ -48,27 +48,58 @@ def _from_device(mesh_device, x):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("placement", ["identity", "striped", "interleaved"])
-def test_coarse_stage_vs_oracle(mesh_device, placement, reset_seeds):
+@pytest.mark.parametrize("selection", ["assembled", "raw", "raw_padded"])
+def test_coarse_stage_vs_oracle(mesh_device, placement, selection, reset_seeds):
+    """``assembled``: host-assembled index rows. ``raw``: top-k rows as vsa_sdpa consumes them
+    (exempt ids + dense-row mask applied here the way the kernel does). ``raw_padded``: the same with
+    padded pooling (tile-aligned pooled gathers; ids in the padded per-shard numbering)."""
+    if selection == "assembled" and placement != "identity":
+        pass  # keep the full placement matrix on the assembled path too
     prefix_segments, grid = _TINY64
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=1, placement=placement)
     tq, tk, tv = _tiled_inputs(geometry)
 
     stage = MiniMaxH3VSACoarseStage(
-        geometry, sparsity=SPARSITY, head_dim=DIM, mesh_device=mesh_device, sp_axis=1, ccl_manager=None
+        geometry,
+        sparsity=SPARSITY,
+        padded_pooling=(selection == "raw_padded"),
+        head_dim=DIM,
+        mesh_device=mesh_device,
+        sp_axis=1,
+        ccl_manager=None,
     )
     tt_q, tt_k, tt_v = (_upload(mesh_device, t) for t in (tq, tk, tv))
 
     # (a) pooled values
     pooled_tt = _from_device(mesh_device, stage.pool(tt_k, scaled=False)).float()
+    pooled_tt = pooled_tt[:, :, : geometry.tiles_per_shard]  # padded pooling pads the tile axis
     from .vsa_oracle import pool_tiles
 
     pooled_ref = pool_tiles(tk, geometry)
     assert_quality(pooled_ref, pooled_tt, pcc=0.999)
 
     # (c+e) O_c and index rows
-    tt_oc, tt_idx = stage(tt_q, tt_k, tt_v)
+    raw = selection != "assembled"
+    tt_oc, tt_idx = stage(tt_q, tt_k, tt_v, raw_selection=raw)
     oc_tt = _from_device(mesh_device, tt_oc).float()
     idx_tt = _from_device(mesh_device, tt_idx).to(torch.int64)
+    if raw:
+        # decode the rows exactly as the kernel does: first k entries, padded-numbering remap, exempt
+        # ids added, dense rows (mask) take every real block
+        shift, real_per_shard = stage.coarse_slots_shift, geometry.tiles_per_shard
+        pad = (1 << shift) - real_per_shard if shift else 0
+        mask = _from_device(mesh_device, stage.dense_row_mask_tensor()).to(torch.int64).reshape(-1)
+        real_ids = set(torch.nonzero(geometry.valid_counts > 0).reshape(-1).tolist())
+        decoded = torch.full((1, HEADS, geometry.tiles_per_shard, geometry.n_tiles + 1), VSA_INDEX_SENTINEL)
+        for h in range(HEADS):
+            for row in range(geometry.tiles_per_shard):
+                if (int(mask[row // 32]) >> (row % 32)) & 1:
+                    ids = sorted(real_ids)
+                else:
+                    ids = [int(b) - ((int(b) >> shift) * pad if shift else 0) for b in idx_tt[0, h, row, : stage.k]]
+                    ids = sorted(set(ids) | set(stage.exempt_ids))
+                decoded[0, h, row, : len(ids)] = torch.tensor(ids)
+        idx_tt = decoded
 
     scores_ref = coarse_scores(tq, tk, geometry)
     oc_ref = coarse_output(scores_ref, tv, geometry, torch.float32)
