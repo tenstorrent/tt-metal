@@ -200,7 +200,7 @@ struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
     // One-hot per output port; bits 0..4 intentionally match eth_chan_directions so the action bit
     // for a direction is (1 << direction). Bit 5 requests local delivery at the current chip.
-    // Bits 6..7 are reserved and must be zero (kernel fail-stops otherwise).
+    // Bits 6..7 are reserved and remain zero in codec-generated maps.
     static constexpr uint8_t ACTION_EAST = 0b00000001;
     static constexpr uint8_t ACTION_WEST = 0b00000010;
     static constexpr uint8_t ACTION_NORTH = 0b00000100;
@@ -208,8 +208,6 @@ struct Routing2DCodec {
     static constexpr uint8_t ACTION_Z = 0b00010000;
     static constexpr uint8_t ACTION_LOCAL_DELIVER = 0b00100000;
     static constexpr uint8_t ACTION_ETH_MASK = 0b00011111;
-    static constexpr uint8_t ACTION_VALID_MASK = ACTION_ETH_MASK | ACTION_LOCAL_DELIVER;
-    static constexpr uint8_t ACTION_RESERVED_MASK = 0b11000000;
 
     static constexpr uint8_t action_bit(eth_chan_directions dir) { return static_cast<uint8_t>(1u << dir); }
 
@@ -408,7 +406,7 @@ struct Routing2DCodec {
         }
     }
 
-    // The four eth outputs available to a router facing MY_DIR, in packed dispatch key slot order:
+    // The four eth outputs available to a router facing MY_DIR, in compact dispatch slot order:
     // base order {E, W, N, S, Z} with the self direction removed, since there is no return path.
     template <eth_chan_directions MY_DIR>
     static constexpr std::array<eth_chan_directions, 4> fwd_dirs() {
@@ -445,38 +443,6 @@ struct Routing2DCodec {
         }
     }
 
-    // Valid when the reserved bits and the self-facing bit are clear and at least one output is
-    // selected. A selected direction with no wired sender is rejected by the kernel's dispatch instead.
-    template <eth_chan_directions MY_DIR>
-    static constexpr bool action_is_valid(std::uint8_t action) {
-        if (action & ACTION_RESERVED_MASK) {
-            return false;
-        }
-        if (action & action_bit(MY_DIR)) {
-            return false;
-        }
-        return action != 0;
-    }
-
-    // Packs the action's eth outputs through fwd_dirs<MY_DIR>() into the dense 4-bit dispatch key.
-    // LOCAL_DELIVER stays outside the key and is handled after the eth fanout.
-    //
-    // fwd_dirs<MY_DIR>() is {E, W, N, S, Z} with the self direction removed and the order kept, so
-    // slot i is direction i below MY_DIR and direction i+1 above it. The pack is therefore just a
-    // bit-compress: action bits under the self bit stay put, bits over it shift down by one.
-    //
-    // Spelled as a loop this compiled to a test-and-or chain per slot -- 12 instructions and 3
-    // data-dependent branches on the per-packet forward path -- because the compiler would not fold
-    // dirs[slot] to a constant. The closed form is 4 branchless instructions and is exactly
-    // equivalent, self bit included: neither form can observe it, since self is never in fwd_dirs.
-    template <eth_chan_directions MY_DIR>
-    static constexpr std::uint8_t pack_fwd_key(std::uint8_t action) {
-        constexpr unsigned self = static_cast<unsigned>(MY_DIR);
-        constexpr std::uint8_t below = static_cast<std::uint8_t>((1u << self) - 1u);
-        constexpr std::uint8_t above = static_cast<std::uint8_t>(ACTION_ETH_MASK & ~((1u << (self + 1u)) - 1u));
-        return static_cast<std::uint8_t>((action & below) | ((action & above) >> 1u));
-    }
-
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
     // Both halves matter: mesh-id inequality alone also matches packets merely transiting the chip.
     static inline bool action_is_intermesh_exit(
@@ -500,10 +466,6 @@ static_assert(
     "2D action-map bit mismatch for SOUTH");
 static_assert(
     Routing2DCodec::action_bit(eth_chan_directions::Z) == Routing2DCodec::ACTION_Z, "2D action-map bit mismatch for Z");
-static_assert(
-    (Routing2DCodec::ACTION_VALID_MASK | Routing2DCodec::ACTION_RESERVED_MASK) == 0xFF &&
-        (Routing2DCodec::ACTION_VALID_MASK & Routing2DCodec::ACTION_RESERVED_MASK) == 0,
-    "2D action-map byte valid/reserved masks must partition the byte");
 static_assert(
     Routing2DCodec::vectors_region_bytes(64, 4) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
         Routing2DCodec::mcast_tree_region_bytes(64, 4) == Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
@@ -685,32 +647,6 @@ static_assert(
     Routing2DCodec::fwd_dirs<eth_chan_directions::SOUTH>()[2] == eth_chan_directions::NORTH &&
         Routing2DCodec::fwd_dirs<eth_chan_directions::WEST>()[1] == eth_chan_directions::NORTH,
     "fwd_dirs<SOUTH>/<WEST> must exclude the self direction in slot order");
-
-// Packing example: at a NORTH-facing router, action S|Z|LOCAL_DELIVER packs to 0b1100
-// (LOCAL_DELIVER stays outside the key).
-static_assert(
-    Routing2DCodec::pack_fwd_key<eth_chan_directions::NORTH>(
-        Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_Z | Routing2DCodec::ACTION_LOCAL_DELIVER) == 0b1100,
-    "pack_fwd_key<NORTH>(S|Z|LOCAL_DELIVER) must be 0b1100");
-static_assert(
-    Routing2DCodec::pack_fwd_key<eth_chan_directions::EAST>(
-        Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_NORTH) == 0b0011,
-    "pack_fwd_key<EAST>(W|N) must select slots {W, N} -> 0b0011");
-
-// Invalid-action checks.
-static_assert(
-    Routing2DCodec::action_is_valid<eth_chan_directions::NORTH>(Routing2DCodec::ACTION_SOUTH) &&
-        Routing2DCodec::action_is_valid<eth_chan_directions::Z>(Routing2DCodec::ACTION_EAST),
-    "ordinary non-self outputs must be valid");
-static_assert(
-    !Routing2DCodec::action_is_valid<eth_chan_directions::NORTH>(Routing2DCodec::ACTION_NORTH) &&
-        !Routing2DCodec::action_is_valid<eth_chan_directions::Z>(Routing2DCodec::ACTION_Z) &&
-        !Routing2DCodec::action_is_valid<eth_chan_directions::EAST>(Routing2DCodec::ACTION_EAST),
-    "the self-facing bit must be invalid");
-static_assert(
-    !Routing2DCodec::action_is_valid<eth_chan_directions::WEST>(0) &&
-        !Routing2DCodec::action_is_valid<eth_chan_directions::SOUTH>(0x80),
-    "empty actions and reserved bits must be invalid");
 
 // Centralized routing encoding functions (stateless, buffer-based primitives)
 namespace routing_encoding {

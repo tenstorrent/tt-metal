@@ -87,11 +87,10 @@ void route_table_2d_t::calculate_chip_to_all_routing_fields(
     auto x_action = [&](uint32_t cur_x, uint32_t dst_x) { return probe(cur_x, dst_x); };
 
     const bool ok = Routing2DCodec::pack_route_vectors(action_vectors, y_size, x_size, y_action, x_action);
-    // TT_FATAL, not TT_ASSERT. This is the load-bearing one: TT_ASSERT is a no-op in Release, `data`
-    // is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing table. Every
-    // route buffer then widens to zeros, every router decodes action 0, action_is_valid() rejects it,
-    // and nothing forwards -- a silent cluster-wide hang with senders stuck at 0 packets, rather than
-    // a diagnosable error.
+    // TT_FATAL, not TT_ASSERT. This is the load-bearing one: TT_ASSERT is a no-op in Release,
+    // action_vectors is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing
+    // table. Every route buffer then widens to zeros and nothing forwards -- a silent cluster-wide
+    // hang rather than a diagnosable setup error.
     TT_FATAL(
         ok,
         "2D route table: mesh {} shape {}x{} is not representable in the destination-major 2D action-map format "
