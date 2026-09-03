@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    dispatch_buffer_used_tokens,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
@@ -54,6 +55,51 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 _PERF_ITERATIONS = 10
+
+
+def _upload_dispatch_buffer(
+    host_buffer,
+    capacity_tokens,
+    used_tokens,
+    pad_value,
+    *,
+    mesh_mapper,
+    layout,
+    dtype,
+    mesh_device,
+):
+    """Put a full-capacity dispatch buffer on device, copying only the tokens dispatch wrote.
+
+    The flat dispatch buffer is sized for the worst-case router -- one expert receiving the whole
+    dispatch group -- and a real router fills a few percent of it: under 4% for DeepSeek V3 at seq
+    640 with capacity factor 8, which is 35 GiB of host tensor whose every value outside that prefix
+    is the constant dispatch left there. `from_torch` on the whole thing spends nearly all of its
+    time converting and shipping that constant, and at 8x4 that one call was the single largest cost
+    in this test: ~30s of the ~40s a phase took.
+
+    So upload the prefix and let `ttnn.pad` write the constant back on device, which costs
+    milliseconds. The op gets a bit-identical input either way -- the tail dispatch leaves is
+    exactly `pad_value` -- and it still sees a full-capacity buffer, so nothing about what is
+    measured changes.
+
+    `used_tokens` is one number for the whole mesh, not one per chip, which keeps this a single
+    mesh-wide upload and a single mesh-wide op: a prefix that covers the busiest chip covers them all.
+    """
+    assert used_tokens <= capacity_tokens, f"{used_tokens=} is past the end of a {capacity_tokens}-token buffer"
+
+    prefix = ttnn.from_torch(
+        host_buffer[:, :, :used_tokens, :].contiguous(),
+        mesh_mapper=mesh_mapper,
+        layout=layout,
+        device=mesh_device,
+        dtype=dtype,
+    )
+    if used_tokens == capacity_tokens:
+        return prefix
+
+    full = ttnn.pad(prefix, [(0, 0), (0, 0), (0, capacity_tokens - used_tokens), (0, 0)], pad_value)
+    ttnn.deallocate(prefix)
+    return full
 
 
 def run_combine(
@@ -196,20 +242,33 @@ def run_combine(
     # Use different sharding: shard both dimensions
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
 
-    tt_dispatched_buffer = ttnn.from_torch(
+    # How much of the worst-case buffer this router actually filled. Both the buffer and its metadata
+    # share the dispatch buffer's token layout, so one prefix bounds both.
+    used_tokens = dispatch_buffer_used_tokens(expert_token_counts, expert_region_offsets)
+    logger.debug(f"{used_tokens=} of {max_dispatch_buffer_token_size=} dispatch buffer tokens")
+
+    tt_dispatched_buffer = _upload_dispatch_buffer(
         dispatched_buffer,
+        max_dispatch_buffer_token_size,
+        used_tokens,
+        # Dispatch zero-fills the buffer it writes into.
+        0.0,
         mesh_mapper=mesh_mapper,
         layout=dispatched_buffer_layout,
-        device=mesh_device,
         dtype=ttnn.bfloat16,
+        mesh_device=mesh_device,
     )
 
-    tt_dispatched_metadata = ttnn.from_torch(
+    tt_dispatched_metadata = _upload_dispatch_buffer(
         dispatched_metadata,
+        max_dispatch_buffer_token_size,
+        used_tokens,
+        # Metadata starts at -1, not 0: an unwritten slot has no origin chip, token or top-k slot.
+        -1,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
         dtype=ttnn.int32,
+        mesh_device=mesh_device,
     )
 
     tt_expert_token_counts = ttnn.from_torch(

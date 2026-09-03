@@ -317,6 +317,31 @@ class ExpertMapping:
         )
 
 
+def _tile_aligned(expert_token_counts: torch.Tensor) -> torch.Tensor:
+    """Each expert's token count rounded up to the region dispatch reserves for it.
+
+    Every nonempty expert starts at a TILE_SIZE boundary in the flat dispatch buffer, so the space an
+    expert occupies is its count rounded up, not its count.
+    """
+    return ((expert_token_counts + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def dispatch_buffer_used_tokens(expert_token_counts: torch.Tensor, expert_region_offsets: torch.Tensor) -> int:
+    """How many leading tokens of the flat per-chip dispatch buffer a router actually fills.
+
+    The buffer is sized by `compute_constants` for the theoretical worst case -- one expert receiving
+    the whole dispatch group -- while a real router fills a small fraction of it (under 4% for
+    DeepSeek V3 at seq 640 with capacity factor 8) and leaves the rest as dispatch wrote it. Each
+    expert's region ends at its start plus its aligned count, so the largest such end over every
+    expert of every group is the prefix beyond which no chip in the mesh holds anything.
+
+    One number for the whole mesh rather than one per chip: the callers of this either allocate or
+    upload a mesh-wide tensor, and a uniform prefix that covers the busiest chip covers all of them.
+    """
+    ends = expert_region_offsets + _tile_aligned(expert_token_counts)
+    return int(ends.max().item())
+
+
 def get_gate_outputs(
     indices: torch.Tensor,
     dispatch_group_size: int,
@@ -400,7 +425,7 @@ def get_gate_outputs(
     # Partial cumsum along expert dimension (dim=-1)
     # Split num_routed_experts into (num_chips, experts_per_chip), cumsum within each chip
     # Pad each expert's count to TILE_SIZE so each expert starts at a tile boundary in the dispatch buffer
-    aligned_token_counts = ((expert_token_counts + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    aligned_token_counts = _tile_aligned(expert_token_counts)
     global_expert_offsets = torch.reshape(
         aligned_token_counts,
         (num_dispatch_groups, dispatch_group_size, num_routed_experts // experts_per_chip, experts_per_chip),
