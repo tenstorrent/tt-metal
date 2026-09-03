@@ -5094,7 +5094,9 @@ def _fullpipe_ms_now():
 _FOLD_LEVER = (("fold", "structural-fold"), "PERF_MCP_MAX_FOLD_ATTEMPTS")
 _ORDER_LEVER = (("order", "structural-order"), "PERF_MCP_MAX_ORDER_ATTEMPTS")
 _CONV_LEVER = (("conv-prep", "structural-conv"), "PERF_MCP_MAX_CONV_ATTEMPTS")
-_GATE_LEVERS = (_FOLD_LEVER, _ORDER_LEVER, _CONV_LEVER)
+_SPLIT_LEVER = (("split", "structural-split"), "PERF_MCP_MAX_SPLIT_ATTEMPTS")
+_STOCK_LEVER = (("stock", "structural-stock"), "PERF_MCP_MAX_STOCK_ATTEMPTS")
+_GATE_LEVERS = (_FOLD_LEVER, _ORDER_LEVER, _CONV_LEVER, _SPLIT_LEVER, _STOCK_LEVER)
 _GATE_ATTEMPT_DEFAULT = "3"
 _GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds)
 
@@ -5102,6 +5104,26 @@ _GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds)
 def _gate_cap(cap_env: str) -> int:
     """How many recorded attempts retire a structural gate that was never won."""
     return int(os.environ.get(cap_env, _GATE_ATTEMPT_DEFAULT) or _GATE_ATTEMPT_DEFAULT)
+
+
+def _gate_retired(lever, attempts: list) -> bool:
+    """True when a structural gate has been answered and must stop asking.
+
+    There are exactly two ways out and they are the same two for every gate: a MEASURED win on the
+    gate's own lever, or its cap reached in recorded attempts. Wedged rows count towards the cap --
+    a lever that crashed the run was still spent on, and not counting it lets a reliably-crashing
+    transform block a run forever.
+
+    Written once because five gates need it and because the two sides of the cap have to be read the
+    same way: this is the same arithmetic _gate_rung_allowance hands the recorder, and the host
+    bucket deadlocked once when a cap of three met an allowance of two.
+    """
+    kinds, cap_env = lever
+    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in kinds]
+    if any(_ledger().is_win(a) for a in clean):
+        return True
+    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in kinds and a.get("wedged"))
+    return (len(clean) + wedged) >= _gate_cap(cap_env)
 
 
 def _gate_rung_allowance(rung: str) -> int | None:
@@ -5341,6 +5363,12 @@ def record_kernel_attempt(
         "note": note,
         "stages": stages,
         "kernel_detected_in_source": detected,
+        # WHICH LIBRARY GRADED THIS. A hand-written kernel only ever beat the stock op of its day, and
+        # without the version of that day there is no way to notice when ttnn has moved past it --
+        # see _stock_gate, which is the only reader. Stamped on every attempt rather than on kernel
+        # rungs alone so the field means "the ttnn this measurement was taken under", which is true of
+        # all of them, instead of something narrower that a later reader would have to special-case.
+        "ttnn_version": _ttnn_version(),
         "wedged": False,
         "evidence": ev,
         "diff": _capture_attempt_diff(),
@@ -5803,13 +5831,8 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds, _cap_env = _FOLD_LEVER
-    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
-    if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
-        return None
-    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= _gate_cap(_cap_env):
-        return None  # (3) capped
+    if _gate_retired(_FOLD_LEVER, attempts):
+        return None  # (2) measured win, or (3) capped
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
     return {
         "op": str(worst.get("op_code") or "repeated_op"),
@@ -5892,13 +5915,8 @@ def _order_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds, _cap_env = _ORDER_LEVER
-    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
-    if any(_ledger().is_win(a) for a in clean):  # (2)
-        return None
-    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= _gate_cap(_cap_env):
-        return None  # (3)
+    if _gate_retired(_ORDER_LEVER, attempts):
+        return None  # (2) measured win, or (3) capped
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
     _pair = str(worst.get("next_op") or worst.get("prev_op") or "the adjacent reshape")
     return {
@@ -5956,13 +5974,8 @@ def _conv_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in convs)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds, _cap_env = _CONV_LEVER
-    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
-    if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
-        return None
-    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= _gate_cap(_cap_env):
-        return None  # (3) capped
+    if _gate_retired(_CONV_LEVER, attempts):
+        return None  # (2) measured win, or (3) capped
     _codes = ", ".join(sorted({str(o.get("op_code") or "") for o in convs})[:4])
     return {
         "op": "conv_weights",
@@ -5986,6 +5999,152 @@ def _conv_gate(prof: dict, attempts: list) -> dict | None:
             "note='none: <evidence>' and the cap will release it."
         )
         % (_codes or "conv", gap),
+    }
+
+
+def _split_gate(prof: dict, attempts: list) -> dict | None:
+    """An op that folded another into itself, timed in a regime where that may no longer pay.
+
+    Fusion is decided ONCE, statically, and never revisited. It buys two things: a dispatch it does
+    not pay, and a round-trip through memory it does not make. A TRACED run has already removed the
+    first for everyone -- the program replays from a capture, so the split version would not be
+    paying that dispatch either -- and what is left of the bargain is one kernel doing two jobs,
+    which can be forced into a worse block config or a smaller grid than two kernels each shaped for
+    one thing. Whether the trade still holds is not decidable from the shapes, so this asks for a
+    measurement rather than asserting an answer -- the same honest position as _order_gate.
+
+    THE FUSION IS THE CAPTURE'S OWN WORD. tracy_tool.parse_fused_ops reads what the op DECLARED in
+    ATTRIBUTES, because an op name cannot carry it: a fused matmul and a plain one are both called
+    MatmulDeviceOperation and differ only in a program_config field.
+
+    ONLY WHERE THE PREMISE HOLDS, which is why applicability comes first and is strict:
+
+      1. The capture must say the timed path was TRACE-REPLAYED. On an untraced run the fusion is
+         still buying the dispatch it was chosen for, and asking to split it would be asking for a
+         measured regression -- the mistake _decode_gate's comment records, where an encoder-only
+         model was ordered to add a KV-cache and burned three rewrites.
+      2. A DISPATCH-BOUND op is excluded even then. Splitting it adds a dispatch to an op whose
+         floor is already the launch cost, so the answer is known without measuring.
+    """
+    if str(prof.get("decode_status") or "") != "traced":
+        return None  # (1) not applicable: nothing here was trace-replayed
+    cands = [
+        o
+        for o in (prof.get("open_ops") or [])
+        if (o.get("fused") or [])
+        and str(o.get("bound_by") or "").lower() != "dispatch"
+        and float(o.get("gap_ms") or 0.0) > 0
+    ]
+    if not cands:
+        return None  # (1) not applicable: nothing fused has open gap here
+    gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
+    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+        return None
+    if _gate_retired(_SPLIT_LEVER, attempts):
+        return None  # (2) measured win, or (3) capped
+    worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
+    return {
+        "op": str(worst.get("op_code") or "fused_op"),
+        "op_class": str(worst.get("bucket") or ""),
+        "gap_ms": round(gap, 4),
+        "bound_by": worst.get("bound_by"),
+        "grid": worst.get("grid"),
+        "weight_dtype": worst.get("weight_dtype"),
+        "next_rung": "structural-split",
+        "reason": (
+            "TRY IT SPLIT -- a structural lever, ahead of the kernel rungs. %r reports %s fused into "
+            "it, and this capture was trace-replayed. Fusion is paid for with a dispatch and a memory "
+            "round-trip it avoids; under trace the dispatch is already gone for the split version too, "
+            "so what the fused kernel is still buying is one less trip through memory -- against doing "
+            "two jobs in one kernel, which can force a worse block config or a smaller grid than two "
+            "kernels each shaped for one. Which way that lands is NOT decidable from the shapes: run "
+            "it with the activation applied as its own op, check_pcc, measure, and keep the faster. If "
+            "the op cannot be expressed unfused, or splitting it breaks PCC, that is a real answer -- "
+            "record_kernel_attempt(op=%r,'split',measured_ms,False,note='none: <why>') and this clears. "
+            "This gate clears ONLY on a MEASURED result."
+        )
+        % (
+            str(worst.get("op_code") or ""),
+            ", ".join(str(x) for x in (worst.get("fused") or [])[:3]) or "an activation",
+            str(worst.get("op_code") or "fused_op"),
+        ),
+    }
+
+
+def _ttnn_version() -> str:
+    """Which ttnn is in this process. One helper already answers it; do not grow a second."""
+    try:
+        from agent.ttlang import ttnn_version
+
+        return str(ttnn_version() or "")
+    except Exception:  # noqa: BLE001 -- an unknown version must read as unknown, never as a mismatch
+        return ""
+
+
+def _stock_gate(prof: dict, attempts: list) -> dict | None:
+    """A hand-written kernel that beat stock ttnn -- under a DIFFERENT ttnn than the one running now.
+
+    The ladder only pushes one way. Knobs, then structural, then author a tt-lang or C++ kernel; and
+    once a kernel wins it keeps its place permanently, because there is no rung that asks the
+    opposite question. ttnn ships faster ops over time, so a kernel written against an older one can
+    quietly become the slow path and no part of this tool would ever notice.
+
+    THE TRIGGER IS A CHANGED LIBRARY, NOT AGE, and that distinction is what makes the gate worth
+    having. Firing on every custom kernel would order a re-measurement of something this very run
+    already measured: the baseline a kernel has to beat IS the stock op it replaces, so within one
+    run the comparison has happened by construction. It fires only when the ttnn that graded the
+    kernel is not the ttnn loaded now -- the one case nobody covers.
+
+    Attempts recorded before this stamp existed carry no version at all. That reads as UNKNOWN and
+    fires nothing, rather than as a mismatch: absence of evidence is not evidence, and treating it
+    as one would open every historical kernel at once on the first run after this shipped.
+    """
+    now = _ttnn_version()
+    if not now:
+        return None  # (1) not applicable: this process cannot say what ttnn it is running
+    stale = [
+        a
+        for a in attempts
+        if (a.get("kernel_kind") or "").lower() in ("tt-lang", "cpp")
+        and str(a.get("ttnn_version") or "")
+        and str(a.get("ttnn_version")) != now
+        and _ledger().is_win(a)
+    ]
+    if not stale:
+        return None  # (1) not applicable: no banked kernel was graded against another ttnn
+    if _gate_retired(_STOCK_LEVER, attempts):
+        return None  # (2) measured win, or (3) capped
+    target = stale[0]
+    op_sig = str(target.get("op_signature") or "")
+    # Its gap if the roofline still lists it; a kernel at its floor is still worth re-checking
+    # against a newer library, so an absent gap does not disqualify it.
+    _open = {str(o.get("op_code") or ""): o for o in (prof.get("open_ops") or [])}
+    _o = _open.get(op_sig) or {}
+    return {
+        "op": op_sig or "custom_kernel",
+        "op_class": str(_o.get("bucket") or ""),
+        "gap_ms": round(float(_o.get("gap_ms") or 0.0), 4),
+        "bound_by": _o.get("bound_by"),
+        "grid": _o.get("grid"),
+        "weight_dtype": _o.get("weight_dtype"),
+        "next_rung": "structural-stock",
+        "reason": (
+            "RE-CHECK THE HAND-WRITTEN KERNEL AGAINST STOCK. %r runs a custom %s kernel that was "
+            "measured as a win against ttnn %s; this process is running ttnn %s. A kernel only ever "
+            "beat the stock op of its day, and nothing in this ladder asks the question again -- so a "
+            "library op that has since got faster stays unused indefinitely. Put the STOCK ttnn op "
+            "back for one measurement, check_pcc, and keep whichever is faster: if the custom kernel "
+            "still wins, record_kernel_attempt(op=%r,'stock',measured_ms,False,note='none: custom "
+            "still ahead by <x>') and this clears with the kernel left in place. This gate clears "
+            "ONLY on a MEASURED comparison -- it never removes a kernel on reasoning."
+        )
+        % (
+            op_sig,
+            str(target.get("kernel_kind") or ""),
+            str(target.get("ttnn_version") or "?"),
+            now,
+            op_sig,
+        ),
     }
 
 
@@ -6822,9 +6981,15 @@ def termination_check() -> dict:
     fold_block = _fold_gate(_gate_prof, attempts)
     if fold_block:
         blocking.append(fold_block)
-    order_block = _order_gate(_gate_prof, attempts)
-    if order_block:
-        blocking.append(order_block)
+        order_block = _order_gate(_gate_prof, attempts)
+        if order_block:
+            blocking.append(order_block)
+        split_block = _split_gate(_gate_prof, attempts)
+        if split_block:
+            blocking.append(split_block)
+        stock_block = _stock_gate(_gate_prof, attempts)
+        if stock_block:
+            blocking.append(stock_block)
     blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op

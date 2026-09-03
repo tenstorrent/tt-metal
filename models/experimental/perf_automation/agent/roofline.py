@@ -290,6 +290,9 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 # execution-order neighbours, preserved through bucketing -- see tracy_tool._neighbours
                 "prev_op": o.get("prev_op"),
                 "next_op": o.get("next_op"),
+                # What the op fused into itself, carried for the same reason prev_op/next_op are:
+                # the gate that needs it cannot re-read the capture.
+                "fused": o.get("fused"),
                 "at_floor": at_floor,
             }
         )

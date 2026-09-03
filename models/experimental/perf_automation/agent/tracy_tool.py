@@ -266,6 +266,37 @@ def parse_lever_state(attributes: str) -> dict[str, str]:
     return out
 
 
+# WHAT THE OP SAYS ABOUT ITSELF. An op name cannot tell a fused matmul from a plain one -- both are
+# MatmulDeviceOperation, and the fusion lives in the config -- but ttnn DECLARES it in ATTRIBUTES,
+# either at the top level (a norm's 'fused_activation', an eltwise's 'post_activations') or inside a
+# program_config body (fused_activation=... on a matmul). So this is read from what ran, in the same
+# spirit as parse_lever_state above.
+#
+# MATCHED ON THE SHAPE OF THE KEY rather than a list of them: fused_activation, post_activations,
+# lhs_activations and rhs_activations all appear in ONE real capture, so a fixed table would already
+# be incomplete and would miss whatever ttnn adds next -- the reason _is_datamove asks a classifier
+# instead of keeping substrings.
+_FUSION_KEY_RE = re.compile(r"([A-Za-z0-9_]*activations?)'?\s*[=:]\s*'?([^;']*)")
+# Every way the capture spells "nothing is fused here".
+_FUSION_EMPTY = frozenset({"", "{}", "[]", "std::nullopt", "nullopt", "none"})
+
+
+def parse_fused_ops(attributes: str) -> tuple[str, ...]:
+    """The activations this op has folded INTO itself, as it reports them; empty when it fuses none.
+
+    Deduplicated and ordered, so the value is stable enough to compare between two captures.
+    """
+    if not attributes:
+        return ()
+    found: list[str] = []
+    for _key, raw in _FUSION_KEY_RE.findall(attributes):
+        val = (raw or "").strip()
+        if val.lower() in _FUSION_EMPTY or val in found:
+            continue
+        found.append(val)
+    return tuple(found)
+
+
 # ---------------------------------------------------------------------------
 # stage 2 — REFINE (real tt-perf-report subprocess)
 # ---------------------------------------------------------------------------
@@ -707,6 +738,8 @@ def _top_ops(
                 "cores": int(_to_float(rep.get("Cores")) or 0),
                 "grid": normalize_grid(_to_float(rep.get("Cores")) or 0.0, available_cores),
                 "fidelity": normalize_fidelity(raw.get("MATH FIDELITY", "")),
+                # What this op has fused into itself, in its own words -- see parse_fused_ops.
+                "fused": list(parse_fused_ops(raw.get("ATTRIBUTES", ""))),
                 # what ran either side of this op, most common -- see _neighbours
                 "prev_op": _nb.get("prev", ""),
                 "next_op": _nb.get("next", ""),

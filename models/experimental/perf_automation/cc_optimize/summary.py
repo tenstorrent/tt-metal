@@ -59,6 +59,23 @@ _STRUCTURAL_KINDS = {
     "sparse",
 }
 
+
+def _structural_kinds() -> set:
+    """The set above, plus every kind the gates ACTUALLY mint, read from the table that defines them.
+
+    A gate kind missing here does not fail loudly -- it renders in the anonymous `other` column,
+    which is the exact confusion this set was added to end, so the omission looks like a report that
+    is merely vague rather than one that is wrong. perf_mcp._GATE_LEVERS is where a gate's kinds are
+    declared; taking them from there means adding a gate cannot silently un-name its own lever in the
+    report. The literals stay because they cover the kinds no gate mints (`gather`, `sparse`,
+    `kv-cache`, bare `structural`).
+
+    Resolved lazily for the reason _levels_display is: perf_mcp imports this module, so it cannot be
+    imported at load time.
+    """
+    return _STRUCTURAL_KINDS | set(getattr(_perf_mcp(), "_GATE_KINDS", None) or ())
+
+
 _REPORT_NAME = "RUN_REPORT.md"
 
 
@@ -281,7 +298,7 @@ def _level_of(kind: str) -> str:
     k = _normalise_kind(kind)
     if k in _LEVEL_COLS and k != "host":
         return k
-    if k in _STRUCTURAL_KINDS:
+    if k in _structural_kinds():
         return "structural"
     if k in _HOST_KINDS or k == "host":
         return "host"
