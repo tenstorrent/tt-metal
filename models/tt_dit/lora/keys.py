@@ -16,9 +16,9 @@ silently ships a wrong model:
     vectors, biases, and matrices whose smaller dimension is already at or below ``r``.
 
 ``.set_weight``
-    A whole parameter the base model does not carry, so no delta is expressible. Not a delta and
-    not loadable against an unmodified architecture; recognised here so it can be rejected with a
-    reason instead of being dropped as unparseable.
+    A whole parameter, for a module the base checkpoint has nothing to say about, so no delta is
+    expressible. Assigned rather than added -- see :mod:`.direct`. A model built without that module
+    has no destination for it, and routing says so; being unparseable here would not.
 
 ``.alpha``
     The scale numerator. Absent means the adapter's own scale is 1, **not** ``alpha == rank``:

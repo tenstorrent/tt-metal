@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ..layers.module import Module
-    from .direct import DirectDelta
+    from .direct import DirectDelta, DirectSet
     from .keys import AdapterEntry
     from .route import RoutedTensor
 
@@ -68,15 +68,15 @@ class AdapterReport:
     bound: dict[str, int] = field(default_factory=dict)
     """Destination parameter path -> bank index of the bound adapter."""
     deltas: list[DirectDelta] = field(default_factory=list)
+    replaced: list[DirectSet] = field(default_factory=list)
+    """Whole parameters assigned from a ``.set_weight`` payload."""
     host: list[AdapterEntry] = field(default_factory=list)
     """Entries the model does not hold on device; the caller's ``host_sink`` owns these."""
-    rejected: dict[str, str] = field(default_factory=dict)
-    """Adapter path -> why it cannot be applied. Non-empty means the adapter is not fully applied."""
 
     def summary(self) -> str:
         return (
             f"{self.name}: bound {len(self.bound)} low-rank, added {len(self.deltas)} dense, "
-            f"deferred {len(self.host)} to host, rejected {len(self.rejected)}"
+            f"replaced {len(self.replaced)} whole, deferred {len(self.host)} to host"
         )
 
 
@@ -125,30 +125,23 @@ def apply_entries(
     silence.
 
     """
-    from .direct import apply_direct_delta
+    from .direct import apply_direct_delta, apply_direct_set
 
     report = AdapterReport(name=name, strength=strength)
     device_entries = []
     for entry in entries:
-        if entry.kind == "set_weight":
-            report.rejected[entry.path] = "set_weight replaces a parameter absent from the base architecture"
-        elif is_host is not None and is_host(entry.path):
+        if is_host is not None and is_host(entry.path):
             report.host.append(entry)
         else:
             device_entries.append(entry)
 
-    if report.rejected:
-        paths = ", ".join(sorted(report.rejected)[:3])
-        msg = (
-            f"adapter {report.name} carries {len(report.rejected)} unsupported payload(s) ({paths}...); "
-            "this adapter needs an architecture the port does not have"
-        )
-        raise NotImplementedError(msg)
-
     fused, singles = _partition(device_entries, groups)
     for sources, item in _route_each(model, fused, singles, adapter_name=report.name):
-        if sources[0].kind == "lora":
+        kind = sources[0].kind
+        if kind == "lora":
             report.bound[item.path] = _bind(item.module, item.value, sources, strength=strength, name=report.name)
+        elif kind == "set_weight":
+            report.replaced.append(apply_direct_set(item.path, item.param, item.value, strength=strength))
         else:
             report.deltas.append(apply_direct_delta(item.path, item.param, item.value, strength=strength))
 
