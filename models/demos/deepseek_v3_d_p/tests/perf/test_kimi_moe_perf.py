@@ -109,17 +109,18 @@ _K2_7 = _MoEPerfCase(
 # This case measures the checkpoint's SiTU-GLU on every FFN site and reports 35 programs, on this
 # branch and on unmodified main alike.
 #
-# Re-centred 2026-08-28: the 2D matmul program configs land on the 3584-latent projections this case
-# runs, so the previous 11,063,717 centres on a matmul shape nothing builds. This gate has gone stale
-# downward three times now; per the repo's rule it is fixed by lowering the midpoint, never by
-# widening the margin.
+# The midpoint tracks the MoE forward's op order: the number is a sum of per-program critical paths,
+# so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
+# fixed by lowering it, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 9,535,901 ns.
-# ONE sample, against the four-sample 0.44% spread that set the margin below.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33642820055: 8,369,824 ns
+# over the same 35 programs -- that count is what separates a real drop from a record window closing
+# early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
+# margin below.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=9_535_901,
+    expected_ns=8_369_824,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
