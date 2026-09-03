@@ -26,8 +26,17 @@
 namespace tt::tt_fabric::detail {
 
 // Full definition of the opaque session type forward-declared in topology_solver.hpp.
+// Conflict budget for solving under a HARD host-group cap. An intractable at-most-K cap is abandoned after this
+// many conflicts (a few seconds) rather than churning unbounded; the caller then relaxes the cap. Shared by the
+// single-shot solve (topology_sat_search) and the enumeration session so both bail identically. Tractable caps
+// finish well within it and return the identical model, so golden mappings are unchanged.
+static constexpr int kHostCapConflictBudget = 300'000;
+
 struct TopologySatSession {
     TopologySatSolver solver;
+    // Set when a hard host-group cap is encoded: solves are conflict-limited to kHostCapConflictBudget so an
+    // intractable cap is abandoned (like the single-shot path) instead of hanging in CaDiCaL for minutes.
+    bool cap_active = false;
 };
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
@@ -1590,10 +1599,9 @@ bool topology_sat_search(
             // makes tight packings like a 16-host ring on a 24-host cluster tractable (issue #50253).
             const bool uniform_capacity = (min_group_capacity == max_group_capacity);
             const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
-            // The occupancy solve is conflict-capped so an intractable cap is abandoned for the fall-through rather
-            // than proved unbounded. Tractable caps finish well within the budget and return the identical model
-            // they would unbounded, so existing golden mappings are unchanged.
-            static constexpr int kHostCapConflictBudget = 300'000;
+            // The occupancy solve is conflict-capped (kHostCapConflictBudget, file scope) so an intractable cap is
+            // abandoned for the fall-through rather than proved unbounded. Tractable caps finish well within the
+            // budget and return the identical model they would unbounded, so existing golden mappings are unchanged.
             // Attempt the at-most-K occupancy encode once. Returns: 1 = solved (mapping finalized), 0 =
             // UNSAT/unencodable/timed out (fall through), -1 = hard constraints alone are UNSAT (defer to the
             // normal path for error messaging).
@@ -1877,6 +1885,7 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     if (!topology_sat_encode_host_group_cap_for_enumeration(session->solver, constraint_data, enc)) {
         return nullptr;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
+    session->cap_active = (constraint_data.max_same_rank_groups_used > 0);
     return session;
 }
 
@@ -1890,7 +1899,12 @@ bool topology_sat_session_add_blocking_clause(
 
 bool topology_sat_session_solve_and_decode(
     TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    if (session->solver.solve() != TopologySatSolver::kSat) {
+    // Under a HARD cap, conflict-limit the solve so an intractable at-most-K cap is abandoned (returns "not found")
+    // rather than churning unbounded in CaDiCaL -- mirroring the single-shot topology_sat_search. The caller then
+    // relaxes the cap. Uncapped solves stay unlimited so genuine exhaustion is never misreported.
+    const int status =
+        session->cap_active ? session->solver.solve_limited(kHostCapConflictBudget) : session->solver.solve();
+    if (status != TopologySatSolver::kSat) {
         return false;
     }
     return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
