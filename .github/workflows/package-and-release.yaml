@@ -28,7 +28,7 @@ on:
         default: ""
         type: string
       ops-test-categories:
-        description: "Categories from ops_pnr_tests.yaml to run (comma-separated)."
+        description: "Categories from ops_pnr_tests.yaml to run (comma-separated, e.g. matmul,fused,reduction,moreh)."
         required: false
         default: ""
         type: string
