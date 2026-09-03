@@ -10,15 +10,17 @@ K=V + compressor cache in place, then generation continues one token per step
 (``S = 1``) against that cache. The RoPE tables are produced once for the
 maximum length; each decode step slices the single position row(s) it needs.
 
-The test has two deployment variants:
+The test has three deployment variants:
 
-* ``pp8_tp1``: eight single-chip pipeline stages (the existing 8-chip path).
-* ``pp2_tp4``: two 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
-  uses unfused q_a/kv, each N-sharded across the 4 ranks then all-gathered,
-  with those weights left in L1; head-sharded SDPA, sequential local-group
-  O_A and row-parallel O_B. MoE shards the intermediate dimension and
-  all-reduces its output. The DRISC prefetcher stays on (same as TP1) for
-  every projection that still fits the shared GCB.
+* ``tp1_8chip``: eight single-chip pipeline stages on an 8-chip mesh.
+* ``tp4_8chip``: two 1x4 tensor-parallel stages on the same 8-chip mesh.
+* ``tp4_32chip``: the same two 1x4 stages on a 32-chip Galaxy (24 chips idle).
+
+Attention uses unfused q_a/kv, replicated full-width on every rank of a
+stage; head-sharded SDPA, sequential local-group O_A and row-parallel O_B.
+MoE shards the intermediate dimension and all-reduces its output. The DRISC
+prefetcher stays on (same as TP1) for every projection that still fits the
+shared GCB.
 
 All weights live on device in ``bfloat4_b``. Set ``DEEPSEEK_V4_CACHE_DIR`` to
 reuse the converted ttnn weight tiles across runs, and optionally cap the stack
@@ -253,8 +255,13 @@ def _build_and_prefill(
 @pytest.mark.parametrize(
     "mesh_device,tp_size",
     [
-        pytest.param((8, 1), 1, id="pp8_tp1_8chip"),
-        pytest.param((8, 4), 4, id="pp2_tp4_32chip"),
+        pytest.param((8, 1), 1, id="tp1_8chip"),
+        # TP4 opens the mesh directly in the 1x4-stage shape so no ``mesh.reshape``
+        # runs — on an 8-chip P150 host, reshaping (8, 1) -> (2, 4) has been seen
+        # to leave submesh 1 with a downgraded per-device compute grid, which
+        # breaks the single-user hyperconnection's width-sharded layout.
+        pytest.param((2, 4), 4, id="tp4_8chip"),
+        pytest.param((8, 4), 4, id="tp4_32chip"),
     ],
     indirect=["mesh_device"],
 )
@@ -274,12 +281,13 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         generated: list[int] = [next_id]
         assert model.tp_size == tp_size
         assert model.num_submeshes == (2 if tp_size == 4 else 8)
+        assert model.pipeline_devices == model.num_submeshes * tp_size
         assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
         if tp_size > 1:
             attn = model.layers[0].self_attn
-            assert attn.qkv_tp_strategy == "replicated", "galaxy32 TP4 keeps q_a and kv unfused and replicated"
+            assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv unfused and replicated"
             assert not attn.fused_qa_kv
             assert attn.q_a_proj.use_prefetcher
             assert attn.kv_proj.use_prefetcher
