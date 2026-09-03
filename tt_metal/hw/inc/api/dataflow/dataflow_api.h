@@ -575,6 +575,29 @@ inline void noc_async_read(
 
 // clang-format off
 /**
+ * Same as \a noc_async_read, but for a src_noc_addr that is routed through the PCIe core. Sets
+ * NOC_TARG_ADDR_MID before the read and clears it after, since \a noc_async_read does not otherwise touch
+ * that register on read_cmd_buf.
+ *
+ * Return value: None
+ *
+ * | Argument          | Description                                        | Data type | Valid range                      | required |
+ * |-------------------|----------------------------------------------------|-----------|-----------------------------------|----------|
+ * | src_noc_addr      | PCIe-routed NOC address                            | uint64_t  | Results of a PCIe NOC encoding   | True     |
+ * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
+ * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
+ * | noc               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ */
+// clang-format on
+inline void noc_async_read_pcie(
+    uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    noc_cmd_buf_set_targ_addr_mid_pcie(noc, read_cmd_buf, src_noc_addr);
+    noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
+    noc_cmd_buf_clear_targ_addr_mid(noc, read_cmd_buf);
+}
+
+// clang-format off
+/**
  * Sets the stateful registers for an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
  * Refer to \a noc_async_read_set_state for more details.
  *
