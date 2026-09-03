@@ -17,38 +17,28 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
 constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
-#ifdef DO_MASK_H
-#define MOREH_MASK_H(wt)                             \
-    ckl::runtime_if(                                 \
-        need_to_do_mask_h(wt, origin_Ht, origin_Wt), \
-        ckl::CopyTile<                               \
-            ckl::input(                              \
-                dfb::mask_h_w,                       \
-                ckl::WaitPolicy::None,               \
-                ckl::PopPolicy::None,                \
-                ckl::InputTileMapping::Scalar,       \
-                kDataFormatReconfig,                 \
-                ckl::TileAddressing::Offset),        \
-            ckl::Dst::D1>{0},                        \
+#define MOREH_MASK(predicate, mask_tile_offset) \
+    ckl::runtime_if(                            \
+        predicate,                              \
+        ckl::CopyTile<                          \
+            ckl::input(                         \
+                dfb::mask_h_w,                  \
+                ckl::WaitPolicy::None,          \
+                ckl::PopPolicy::None,           \
+                ckl::InputTileMapping::Scalar,  \
+                kDataFormatReconfig,            \
+                ckl::TileAddressing::Offset),   \
+            ckl::Dst::D1>{mask_tile_offset},    \
         ckl::Mask<>{}),
+
+#ifdef DO_MASK_H
+#define MOREH_MASK_H(wt) MOREH_MASK(need_to_do_mask_h(wt, origin_Ht, origin_Wt), 0)
 #else
 #define MOREH_MASK_H(wt)
 #endif
 
 #ifdef DO_MASK_W
-#define MOREH_MASK_W(wt)                       \
-    ckl::runtime_if(                           \
-        ((wt + 1) % origin_Wt == 0),           \
-        ckl::CopyTile<                         \
-            ckl::input(                        \
-                dfb::mask_h_w,                 \
-                ckl::WaitPolicy::None,         \
-                ckl::PopPolicy::None,          \
-                ckl::InputTileMapping::Scalar, \
-                kDataFormatReconfig,           \
-                ckl::TileAddressing::Offset),  \
-            ckl::Dst::D1>{1},                  \
-        ckl::Mask<>{}),
+#define MOREH_MASK_W(wt) MOREH_MASK(((wt + 1) % origin_Wt == 0), 1)
 #else
 #define MOREH_MASK_W(wt)
 #endif
@@ -371,4 +361,5 @@ void kernel_main() {
 #undef MOREH_DYCOPY_OP
 #undef MOREH_MASK_W
 #undef MOREH_MASK_H
+#undef MOREH_MASK
 }

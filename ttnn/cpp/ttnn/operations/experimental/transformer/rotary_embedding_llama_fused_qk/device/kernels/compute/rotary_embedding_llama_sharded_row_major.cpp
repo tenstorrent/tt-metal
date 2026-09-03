@@ -9,11 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
-
-namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -92,28 +88,30 @@ void kernel_main() {
 
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
-
+        rotated_in_interm_cb_obj.wait_front(Wt);
+        mul_init(rotated_in_interm_cb, sin_cb);
+        ACQ();
         // sin_interim = rotated * sin
-        ckl::mul<
-            ckl::input(rotated_in_interm_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::input(sin_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::one_tile());
+        mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
+        pack_tile(0, sin_interm_cb, 0);
+        REL();
+        sin_interm_cb_obj.push_back(Wt);
+        rotated_in_interm_cb_obj.pop_front(Wt);
 
-        // cos_interim = x * cos
         mul_init(in_cb, cos_cb);
         ACQ();
+        // cos_interim = x * cos
         mul_tiles(in_cb, cos_cb, 0, 0, 0);
         pack_tile(0, cos_interm_cb, 0);
         REL();
         cos_interm_cb_obj.push_back(Wt);
         in_cb_obj.pop_front(Wt);  // Done with input
 
-        // out = cos_interim + sin_interim
         sin_interm_cb_obj.wait_front(Wt);
         cos_interm_cb_obj.wait_front(Wt);
         add_init(cos_interm_cb, sin_interm_cb);
         ACQ();
+        // out = cos_interim + sin_interim
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
         pack_tile(0, out_cb, 0);
         REL();

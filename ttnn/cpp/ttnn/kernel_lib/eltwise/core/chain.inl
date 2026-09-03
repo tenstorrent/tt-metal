@@ -98,6 +98,10 @@ constexpr bool input_owns_cb_window(InputSpec spec) noexcept {
            ((spec.wait == WaitPolicy::Cumulative) && (spec.pop == PopPolicy::AtEnd));
 }
 
+// A peer which pops a staged CB front invalidates the owner's absolute window indices.
+// Keep this separate from ownership: non-popping readers may safely observe the same window.
+constexpr bool input_pops_cb_front(InputSpec spec) noexcept { return spec.pop != PopPolicy::None; }
+
 constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 
 namespace detail {
@@ -448,8 +452,10 @@ struct PackTileTag : CbWriterTag {};
 
 /// Constant → DEST (no CB read).
 struct FillTileTag : DestOnlyTag {};
+/// DEST-only element whose init seeds the shared hardware PRNG.
+struct PrngSeedTag {};
 /// RNG → DEST (no CB read).
-struct RandTileTag : DestOnlyTag {};
+struct RandTileTag : DestOnlyTag, PrngSeedTag {};
 
 // Trait predicates — which predicate drives each chain decision:
 //
@@ -484,6 +490,8 @@ inline constexpr bool is_fill_tile_op_v = std::is_base_of_v<FillTileTag, T>;
 template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
 template <class T>
+inline constexpr bool is_prng_seed_op_v = std::is_base_of_v<PrngSeedTag, T>;
+template <class T>
 inline constexpr bool is_runtime_conditional_op_v = std::is_base_of_v<RuntimeConditionalTag, T>;
 template <class T>
 inline constexpr bool is_runtime_conditional_sequence_op_v = std::is_base_of_v<RuntimeConditionalSequenceTag, T>;
@@ -501,11 +509,11 @@ inline constexpr bool is_classified_chain_element_v =
     std::is_same_v<T, DisabledChainElement>;
 /// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
 /// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
-/// Fill / Rand share the `DestOnlyTag` lineage but their init programs PRNG /
-/// fill state, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
+/// Fill / PRNG-seeding elements share the `DestOnlyTag` lineage but their init programs
+/// fill state or the shared PRNG, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
 /// SFPU init types — `is_sfpu_op_v` is the predicate.
 template <class T>
-inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_rand_tile_op_v<T>;
+inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_prng_seed_op_v<T>;
 
 /// FPU-kind (non-CopyTile, FPU-MOP-touching) element predicate. Groups
 /// `BinaryFpu`, `DestReuseBinary`, `UnaryBcast` — each programs the FPU MOP /
@@ -1522,6 +1530,22 @@ constexpr bool b_owns_cb_window_of() {
     return false;
 }
 
+template <class E>
+constexpr bool a_pops_cb_front_of() {
+    if constexpr (is_cb_reader_op_v<E>) {
+        return input_pops_cb_front(E::a_input());
+    }
+    return false;
+}
+
+template <class E>
+constexpr bool b_pops_cb_front_of() {
+    if constexpr (is_cb_reader_op_v<E>) {
+        return input_pops_cb_front(b_input_of<E>());
+    }
+    return false;
+}
+
 // One plain-data descriptor per element — reflected once via the existing accessors.
 struct ElemDesc {
     bool is_cb_reader;
@@ -1544,6 +1568,8 @@ struct ElemDesc {
     bool uses_pack_relu;
     bool a_owns_cb_window;
     bool b_owns_cb_window;
+    bool a_pops_cb_front;
+    bool b_pops_cb_front;
     uint32_t lane_width;
     uint32_t transient_lane_width;
     bool supports_block;
@@ -1738,6 +1764,8 @@ constexpr ElemDesc describe() {
         uses_pack_relu_of<E>(),
         a_owns_cb_window_of<E>(),
         b_owns_cb_window_of<E>(),
+        a_pops_cb_front_of<E>(),
+        b_pops_cb_front_of<E>(),
         elem_lane_width_v<E>,
         transient_lane_width_of<E>(),
         element_supports_block<E>(),
@@ -1802,9 +1830,17 @@ constexpr bool ct_reader_collide(const ElemDesc* d, int n) {
             }
             uint32_t a0 = d[i].dfb_a, a1 = d[i].dfb_b, b0 = d[j].dfb_a, b1 = d[j].dfb_b;
             if ((a0 != INVALID_DFB && d[i].a_owns_cb_window &&
-                 ((a0 == b0 && d[j].a_owns_cb_window) || (a0 == b1 && d[j].b_owns_cb_window))) ||
+                 ((a0 == b0 && (d[j].a_owns_cb_window || d[j].a_pops_cb_front)) ||
+                  (a0 == b1 && (d[j].b_owns_cb_window || d[j].b_pops_cb_front)))) ||
                 (a1 != INVALID_DFB && d[i].b_owns_cb_window &&
-                 ((a1 == b0 && d[j].a_owns_cb_window) || (a1 == b1 && d[j].b_owns_cb_window)))) {
+                 ((a1 == b0 && (d[j].a_owns_cb_window || d[j].a_pops_cb_front)) ||
+                  (a1 == b1 && (d[j].b_owns_cb_window || d[j].b_pops_cb_front)))) ||
+                (b0 != INVALID_DFB && d[j].a_owns_cb_window &&
+                 ((b0 == a0 && (d[i].a_owns_cb_window || d[i].a_pops_cb_front)) ||
+                  (b0 == a1 && (d[i].b_owns_cb_window || d[i].b_pops_cb_front)))) ||
+                (b1 != INVALID_DFB && d[j].b_owns_cb_window &&
+                 ((b1 == a0 && (d[i].a_owns_cb_window || d[i].a_pops_cb_front)) ||
+                  (b1 == a1 && (d[i].b_owns_cb_window || d[i].b_pops_cb_front))))) {
                 return true;
             }
         }
@@ -2530,8 +2566,8 @@ ALWI void elem_pack_init(SelectedElement<E, TransitionFacts<PrevA, PrevB, PrevP,
 // Boot-time hoist of compute-cohort init (math-MOP and/or DEST-only ops). The chain dispatcher
 // computes `HoistMath` from `chain_hoist_math_mop_v` and `HoistSfpu` from `chain_hoist_sfpu_v`,
 // then this walk emits the element's transitions + init() only when its cohort is hoisted. The
-// HoistSfpu leg gates on `is_dest_only_op_v`, so Fill/Rand init() ride along (chain_hoist_sfpu_v
-// itself is decided from SFPU-op uniformity alone).
+// HoistSfpu leg covers ordinary SFPU and Fill init. PRNG seeders are emitted by the dedicated
+// final boot pass below, so they cannot be replayed by a per-block fallback.
 //
 // PackTile is intentionally excluded from this walk — pack-side reconfig is
 // emitted unconditionally at boot via the indexed pack-init fold (PACK cohort is
@@ -2692,7 +2728,7 @@ ALWI void elem_apply_compute(
             }
         }
     } else if constexpr (is_dest_only_op_v<ElemT> && !eltwise_chain_skip_compute_v) {
-        if constexpr (EmitSfpuInit) {
+        if constexpr (EmitSfpuInit && !is_prng_seed_op_v<ElemT>) {
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
@@ -2940,9 +2976,19 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         "eltwise_chain: only one PackTile may manage the L1-accumulation output lifecycle");
     static_assert(
         !chain_has_duplicate_upfront_cbs_v<Chain>,
-        "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
+        "eltwise_chain: a staged CB window shares its front with another reader that can pop it.");
     static_assert(
         !chain_pack_writes_collide_v<Chain>, "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
+    static_assert(
+        (uint32_t{0} + ... + uint32_t{is_prng_seed_op_v<Es>}) <= 1,
+        "eltwise_chain: RandTile and Dropout seed one shared hardware PRNG; use at most one PRNG-seeding element.");
+    static_assert(
+        !((false || ... || is_prng_seed_op_v<Es>) && (false || ... || is_sfpu_op_v<Es>)),
+        "eltwise_chain: a PRNG-seeding element may be combined only with Fill and non-SFPU stages; "
+        "mixed SFPU stages need a separate PRNG reconfiguration design.");
+    static_assert(
+        Owner == InitReconfigOwner::Chain || (!(false || ... || is_prng_seed_op_v<Es>)),
+        "eltwise_chain: PRNG-seeding elements require InitReconfigOwner::Chain so the helper seeds the PRNG once.");
     // InitReconfigOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
     // before the loop." That's only achievable if EVERY part of it is boot-hoistable: uniform
     // math MOP + SFPU init (so input/srca-srcb reconfig is boot-only) AND homogeneous pack CBs
@@ -2982,11 +3028,22 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                                     detail::ChainTraits<Es...>::pack_hetero>>(elts)),
          ...);
         (detail::hoist_compute_init_one(
-             detail::select_element < (is_math_mop_op_v<Es> && hoist_math) || (is_dest_only_op_v<Es> && hoist_sfpu),
+             detail::select_element < (is_math_mop_op_v<Es> && hoist_math) ||
+                 ((is_dest_only_op_v<Es> && !is_prng_seed_op_v<Es>) && hoist_sfpu),
              detail::TransitionFacts < detail::ChainTraits<Es...>::prev.srca[Is],
              detail::ChainTraits<Es...>::prev.srcb[Is],
              detail::ChainTraits<Es...>::prev.pack[Is],
              detail::ChainTraits<Es...>::pack_hetero >> (elts)),
+         ...);
+        // Seed last, after Fill and ordinary one-time setup. The seed must remain live across every
+        // block, so PRNG seeders never participate in the per-block SFPU-init fallback.
+        (detail::hoist_compute_init_one(detail::select_element<
+                                        is_prng_seed_op_v<Es>,
+                                        detail::TransitionFacts<
+                                            detail::ChainTraits<Es...>::prev.srca[Is],
+                                            detail::ChainTraits<Es...>::prev.srcb[Is],
+                                            detail::ChainTraits<Es...>::prev.pack[Is],
+                                            detail::ChainTraits<Es...>::pack_hetero>>(elts)),
          ...);
     }
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation

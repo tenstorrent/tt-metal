@@ -30,20 +30,22 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::tmp_weight, dfb::tmp_input, dfb::output);
 
-    if constexpr (has_divisor) {
+    // `dfb::divisor` is not declared at all in the sum-reduction program.  This
+    // must be a preprocessor guard rather than `if constexpr`: non-dependent
+    // DFB token names are resolved before the discarded branch is eliminated.
+#if defined(DIVISOR)
+    {
         ckl::unary<
             ckl::Recip<D::D0>,
             ckl::input(
-                dfb::divisor,
-                ckl::WaitPolicy::Upfront,
-                ckl::PopPolicy::AtEnd,
-                ckernel::moreh_data_format_reconfig),
+                dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
             ckl::output(
                 dfb::divisor_recip,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
                 ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
     }
+#endif
 
     // Keep the current algorithm's operation order: negate, then apply the optional weight,
     // then the scalar reciprocal. Re-associating these products changes low-precision rounding.
@@ -69,10 +71,7 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
-                    dfb::tmp1,
-                    ckl::WaitPolicy::PerTile,
-                    ckl::PopPolicy::PerTile,
-                    ckernel::moreh_data_format_reconfig),
+                    dfb::tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
                 ckl::input(
                     dfb::tmp_weight,
                     ckl::BroadcastDim::None,
