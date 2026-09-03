@@ -22,16 +22,16 @@ static constexpr uint32_t default_l1_alignment = 16;
 
 TEST(DispatchSettingsTest, CPU_TestDispatchSettingsDefaultUnsupportedCoreType) {
     const auto unsupported_core = CoreType::ARC;
-    EXPECT_THROW(DispatchSettings(1, 1, unsupported_core, false, false, default_l1_alignment, 4), std::runtime_error);
+    EXPECT_THROW(DispatchSettings(1, unsupported_core, false, false, default_l1_alignment, 4), std::runtime_error);
 }
 
 TEST(DispatchSettingsTest, CPU_TestDispatchSettingsInvalidPrefetchQEntrySize) {
-    EXPECT_THROW(DispatchSettings(1, 1, CoreType::WORKER, false, false, default_l1_alignment, 3), std::runtime_error);
+    EXPECT_THROW(DispatchSettings(1, CoreType::WORKER, false, false, default_l1_alignment, 3), std::runtime_error);
 }
 
 TEST(DispatchSettingsTest, CPU_TestDispatchSettingsEq) {
     const uint32_t hw_cqs = 2;
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4);
+    DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     DispatchSettings settings_2 = settings;  // Copy
     EXPECT_EQ(settings, settings_2);
     settings_2.dispatch_size_ += 1;
@@ -43,7 +43,7 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchDBuffer) {
     const uint32_t expected_buffer_bytes = 0xcafe;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4);
+    DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     settings.prefetch_d_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_buffer_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_pages_, expected_page_count);
@@ -53,7 +53,7 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * 4;
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4);
+    DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_size_, expected_buffer_bytes);
@@ -64,7 +64,7 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBufferWith2ByteEn
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * 2;
-    DispatchSettings settings(hw_cqs, 1, CoreType::ETH, false, false, default_l1_alignment, 2);
+    DispatchSettings settings(hw_cqs, CoreType::ETH, false, false, default_l1_alignment, 2);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_size_, expected_buffer_bytes);
@@ -75,7 +75,7 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetDispatchBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4);
+    DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     settings.dispatch_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_pages_, expected_page_count);
@@ -86,7 +86,7 @@ TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetDispatchSBuffer) {
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings settings(hw_cqs, 1, CoreType::WORKER, false, false, default_l1_alignment, 4);
+    DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     settings.dispatch_s_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_size_, expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_pages_, expected_page_count);

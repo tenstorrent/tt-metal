@@ -9,20 +9,37 @@
 // accumulates K_block_tiles tiles per pass into c_2 (FP32 intermediate). After each
 // (m_sub, n_sub) block, the output is packed/sent/reduced per the core's role:
 //
-//   REDUCE_SENDER / REDUCE_SENDER_TRANSPOSE:
-//     matmul → c_2, then pack c_2 → c_5 (row-major; TRANSPOSE variant transposes tile
-//     content + swaps indices so receiver can add directly). DM writer NOC-sends c_5
-//     to reduction partner.
+//   REDUCE_SENDER_TRANSPOSE:
+//     matmul → c_2, then pack c_2 → c_5 transposed (tile content transposed + indices
+//     swapped) so the receiver can add directly. DM writer NOC-sends c_5 to the
+//     reduction partner. Diagonal cores use this path too: their even-K partial is
+//     symmetric ((i,j) and (j,i) accumulate the same products in the same order), so the
+//     transposed block matches the direct one — bitwise when multiplies are exact (HiFi4,
+//     the default; lower fidelities pair the src operands asymmetrically, leaving
+//     ulp-level differences).
 //   REDUCE_ACCUMULATOR:
 //     matmul → c_2, then add own c_2 (FP32) + partner's c_5 (BF16) → c_6. DM writer
 //     writes c_6 to DRAM. If MIRROR_OUTPUT is defined, also stage-add+transpose into c_4
 //     for the lower-triangle mirror tile (see add_transpose_block).
 //
+// Sub-block iteration order depends on the role. REDUCE_ACCUMULATOR cores iterate
+// (m_sub, n_sub) row-major. REDUCE_SENDER_TRANSPOSE cores iterate column-major
+// (n_sub outer, m_sub inner): the sender's transposed sub-block (m, n) is the
+// receiver's sub-block (n, m), so column-major production delivers blocks in exactly
+// the receiver's row-major consume order — one block in flight, no reordering buffer.
+// The mcast senders feed each parity group in the matching order.
+//
+// CB discipline: every c_2/c_5 transaction is a full M_block × N_block block and every
+// c_4/c_6/c_7 transaction is a full M_block group, with partial edge blocks occupying
+// a valid prefix. CB pointers only wrap when they hit the buffer limit exactly, so
+// pushes must always equal the CB capacity; the fixed sizes also pin c_5 to its base
+// address on both ends of the reduce NOC write.
+//
 // Helper functions:
-//   matmul_blocks       — K-loop matmul over a subblock grid.
-//   pack_subblock_pernsb — c_2 → c_5 (REDUCE_SENDER variants).
-//   add_reduce_block    — c_2 + c_5 → c_6 (REDUCE_ACCUMULATOR).
-//   add_transpose_block — c_2 + c_5 → c_4 via c_7 staging (MIRROR_OUTPUT).
+//   matmul_blocks        — K-loop matmul over a subblock grid.
+//   pack_transposed_block — c_2 → c_5 (REDUCE_SENDER_TRANSPOSE).
+//   add_reduce_block     — c_2 + c_5 → c_6 (REDUCE_ACCUMULATOR).
+//   add_transpose_block  — c_2 + c_5 → c_4 via c_7 staging (MIRROR_OUTPUT).
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -100,12 +117,11 @@ void matmul_blocks(
     }
 }
 
-// Pack in_cb → out_cb in row-major order for DM to send to reduction partner.
-// REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
-// REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
-void pack_subblock_pernsb(
+// Pack in_cb → out_cb transposed (tile content transposed + indices swapped) so the
+// reduction partner can add directly. The packed block is the partner's sub-block,
+// row-major: current_N rows × current_M cols, compact at the front of the reservation.
+void pack_transposed_block(
     const uint32_t in_cb, const uint32_t out_cb, const uint32_t current_M, const uint32_t current_N) {
-#ifdef REDUCE_SENDER_TRANSPOSE
     transpose_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
@@ -122,36 +138,24 @@ void pack_subblock_pernsb(
             tile_regs_release();
         }
     }
-#else
-    copy_init(in_cb);
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-
-    for (uint32_t t = 0; t < current_M * current_N; t++) {
-        tile_regs_acquire();
-        copy_tile(in_cb, t, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile<true>(0, out_cb, t);
-        tile_regs_release();
-    }
-#endif
 }
 
 #ifdef REDUCE_ACCUMULATOR
+// row_group: fixed CB transaction size (= c_6 capacity); valid tiles are the prefix.
 void add_reduce_block(
     const uint32_t own_cb,
     const uint32_t recv_cb,
     const uint32_t out_cb,
     const uint32_t M_rows,
-    const uint32_t N_cols) {
+    const uint32_t N_cols,
+    const uint32_t row_group) {
     add_init(own_cb, recv_cb);
     reconfig_data_format(own_cb, recv_cb);
     pack_reconfig_data_format(out_cb);
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_rows; m++) {
-        cb_reserve_back(out_cb, N_cols);
+        cb_reserve_back(out_cb, row_group);
         for (uint32_t n = 0; n < N_cols; n++) {
             tile_regs_acquire();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
@@ -161,14 +165,17 @@ void add_reduce_block(
             tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_cols);
+        cb_push_back(out_cb, row_group);
     }
 }
 
 #ifdef MIRROR_OUTPUT
-// Add own_cb + recv_cb, transpose via c_7 staging, pack to mirror_cb (col by col).
-// Produces N_cols columns of M_rows tiles each (matching DM mirror write pattern).
-// src_stride: column stride in source CBs (= M_block for row-major c_2).
+// Add own_cb + recv_cb, transpose via c_7 staging, pack to mirror_cb.
+// Group n (one per source column, N_cols total) carries mirror row n of the block:
+// source tiles (m, n) for m = 0..M_rows, each tile-transposed. src_stride is the
+// source row stride (= current_N for the compact row-major block). Every staging and
+// mirror CB transaction is `group_capacity` tiles (= CB capacity) so pushes always
+// wrap exactly; valid tiles are the prefix.
 // Note: transpose_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
 void add_transpose_block(
     const uint32_t own_cb,
@@ -176,16 +183,17 @@ void add_transpose_block(
     const uint32_t mirror_cb,
     const uint32_t M_rows,
     const uint32_t N_cols,
-    const uint32_t src_stride) {
+    const uint32_t src_stride,
+    const uint32_t group_capacity) {
     constexpr uint32_t staging_cb = tt::CBIndex::c_7;
     for (uint32_t n = 0; n < N_cols; n++) {
-        // Phase 1: batch add M_rows tiles for column n into staging
+        // Phase 1: batch add M_rows tiles of source column n into staging
         add_init(own_cb, recv_cb);
         reconfig_data_format(own_cb, recv_cb);
         pack_reconfig_data_format(staging_cb);
-        cb_reserve_back(staging_cb, M_rows);
+        cb_reserve_back(staging_cb, group_capacity);
         for (uint32_t m = 0; m < M_rows; m++) {
-            const uint32_t tile_id = n * src_stride + m;
+            const uint32_t tile_id = m * src_stride + n;
             tile_regs_acquire();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
             tile_regs_commit();
@@ -193,11 +201,11 @@ void add_transpose_block(
             pack_tile<true>(0, staging_cb, m);
             tile_regs_release();
         }
-        cb_push_back(staging_cb, M_rows);
+        cb_push_back(staging_cb, group_capacity);
 
         // Phase 2: transpose all M_rows tiles from staging to mirror
-        cb_wait_front(staging_cb, M_rows);
-        cb_reserve_back(mirror_cb, M_rows);
+        cb_wait_front(staging_cb, group_capacity);
+        cb_reserve_back(mirror_cb, group_capacity);
         transpose_init(staging_cb);
         reconfig_data_format_srca(staging_cb);
         pack_reconfig_data_format(mirror_cb);
@@ -209,8 +217,8 @@ void add_transpose_block(
             pack_tile(0, mirror_cb);
             tile_regs_release();
         }
-        cb_pop_front(staging_cb, M_rows);
-        cb_push_back(mirror_cb, M_rows);
+        cb_pop_front(staging_cb, group_capacity);
+        cb_push_back(mirror_cb, group_capacity);
     }
 }
 #endif
@@ -229,6 +237,10 @@ void kernel_main() {
     constexpr uint32_t tiles_per_in0_block = K_block_tiles * M_block;
     constexpr uint32_t tiles_per_in1_block = K_block_tiles * N_block;
     constexpr uint32_t num_m_blocks = (Mpc + M_block - 1) / M_block;
+    // The sub-block loop remap below relies on the grids being square.
+    static_assert(num_m_blocks == num_n_blocks);
+    // Fixed transaction size for c_2/c_5 (= their capacity); partial blocks use a prefix.
+    constexpr uint32_t block_capacity = M_block * N_block;
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -246,15 +258,22 @@ void kernel_main() {
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(intermed_cb);
 
-    for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
-        const uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
+    for (uint32_t outer = 0; outer < num_m_blocks; outer++) {
+        for (uint32_t inner = 0; inner < num_n_blocks; inner++) {
+            // Accumulators iterate row-major; senders column-major so transposed blocks
+            // arrive in the partner's consume order (see header comment). The mcast feed
+            // matches: even-parity senders stream m_sub fast, odd-parity m_sub slow.
+#ifdef REDUCE_ACCUMULATOR
+            const uint32_t m_sub = outer;
+            const uint32_t n_sub = inner;
+#else
+            const uint32_t m_sub = inner;
+            const uint32_t n_sub = outer;
+#endif
+            const uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
+            const uint32_t current_N = std::min(N_block, Mpc - n_sub * N_block);
 
-        for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
-            const uint32_t N_start = n_sub * N_block;
-            const uint32_t current_N = std::min(N_block, Mpc - N_start);
-            const uint32_t intermed_tiles = current_M_block * current_N;
-
-            cb_reserve_back(intermed_cb, intermed_tiles);
+            cb_reserve_back(intermed_cb, block_capacity);
 
             for (uint32_t kb = 0; kb < K_num_blocks; kb++) {
                 cb_wait_front(in0_cb, tiles_per_in0_block);
@@ -280,39 +299,40 @@ void kernel_main() {
                 }
             }
 
-            cb_push_back(intermed_cb, intermed_tiles);
+            cb_push_back(intermed_cb, block_capacity);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
             // Pack or reduce immediately after each (m_sub, n_sub) block
 #ifndef REDUCE_ACCUMULATOR
-            // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner
-            cb_reserve_back(out_cb, intermed_tiles);
-            cb_wait_front(intermed_cb, intermed_tiles);
-            pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N);
-            cb_pop_front(intermed_cb, intermed_tiles);
-            cb_push_back(out_cb, intermed_tiles);
+            // Sender path: pack c_2 → c_5 transposed for DM to send to partner
+            cb_reserve_back(out_cb, block_capacity);
+            cb_wait_front(intermed_cb, block_capacity);
+            pack_transposed_block(intermed_cb, out_cb, current_M_block, current_N);
+            cb_pop_front(intermed_cb, block_capacity);
+            cb_push_back(out_cb, block_capacity);
 #else
             // REDUCE_ACCUMULATOR: add c_2(FP32) + c_5(BF16) → c_6
-            cb_wait_front(intermed_cb, intermed_tiles);
-            cb_wait_front(reduce_cb, intermed_tiles);
-            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N);
+            cb_wait_front(intermed_cb, block_capacity);
+            cb_wait_front(reduce_cb, block_capacity);
+            add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N, N_block);
 #ifdef MIRROR_OUTPUT
-            add_transpose_block(intermed_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, current_N, current_M_block);
+            add_transpose_block(
+                intermed_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, current_N, current_N, M_block);
 #endif
-            cb_pop_front(intermed_cb, intermed_tiles);
-            cb_pop_front(reduce_cb, intermed_tiles);
+            cb_pop_front(intermed_cb, block_capacity);
+            cb_pop_front(reduce_cb, block_capacity);
 #endif
 
             // Re-init matmul pipeline after copy/pack changed data formats
-            if (n_sub + 1 < num_n_blocks) {
+            if (inner + 1 < num_n_blocks) {
                 matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
                 reconfig_data_format(in1_cb, in0_cb);
                 pack_reconfig_data_format(intermed_cb);
             }
         }
 
-        // Re-init matmul pipeline for next m_sub
-        if (m_sub + 1 < num_m_blocks) {
+        // Re-init matmul pipeline for next outer pass
+        if (outer + 1 < num_m_blocks) {
             matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermed_cb);

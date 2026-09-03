@@ -49,16 +49,18 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
-        # Mean of 14 runs, 5.876-5.921 ms, 0.76% peak to peak.
-        expected_ns_8x1=5_895_298,
+        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample.
+        # The 2D matmul program configs are the whole delta: against main on the same box and day
+        # the Matmul bucket falls 2,201,295 -> 381,174 ns while Other (3,615,143 -> 3,617,678) and
+        # CCL (17,690 -> 22,700) hold, so 5_895_298 centred on a matmul shape nothing builds now.
+        expected_ns_8x1=4_021_552,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox): runs 33089588265 and 33179961983
-        # measured 9.381 / 9.298 ms, mean below. The dev box bh-lb-15 read 9_601_530 (14-run
-        # mean), 2.7% slower, and the 9.298 sample fell 0.16% under that band's floor -- this
-        # gate has to be cut on the CI runner.
-        expected_ns_2x4=9_339_547,
+        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample,
+        # superseding the 9_339_547 two-run CI mean cut earlier the same day. Same cause as 8x1:
+        # Matmul 715,503 -> 216,878 ns against main, Other flat within 0.2%. This gate still has
+        # to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
+        expected_ns_2x4=8_840_595,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

@@ -42,11 +42,10 @@
 //
 // =============================================================================
 
-#define NOC_API_V2
-
-#if !defined(NOC_API_V2)
+#if defined(NOC_API_V1)
 #include "noc_nonblocking_api_v1.h"
 #else
+#define NOC_API_V2
 #include "noc_nonblocking_api_v2.h"
 
 // Legacy per-processor cmd_buf aliases for dataflow_cmd_bufs.h compatibility.

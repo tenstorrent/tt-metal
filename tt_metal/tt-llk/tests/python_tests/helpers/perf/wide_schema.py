@@ -124,6 +124,7 @@ DB_SCHEMA = [
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
+    Column("relu_config", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),

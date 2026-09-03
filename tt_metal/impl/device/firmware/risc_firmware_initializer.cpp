@@ -960,7 +960,8 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    bool skip_physical = cluster_.arch() == ARCH::BLACKHOLE and hal_.is_coordinate_virtualization_enabled();
+    const bool virtualizes_non_worker_cores = hal_.virtualizes_non_worker_cores();
+    bool skip_physical = hal_.is_coordinate_virtualization_enabled() and virtualizes_non_worker_cores;
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             set_addressable_core(
@@ -974,13 +975,21 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             set_addressable_core(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
         }
-        for (tt::umd::CoreCoord core : dispatch_cores) {
-            set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
-        }
+    }
+    // DISPATCH cores (Quasar-only) are never virtualized, so always register them in the physical list.
+    for (tt::umd::CoreCoord core : dispatch_cores) {
+        set_addressable_core(
+            core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
     }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
+        const size_t num_virtual_non_worker_cores =
+            eth_cores.size() + (virtualizes_non_worker_cores ? pcie_cores.size() + dram_cores.size() : 0);
+        TT_FATAL(
+            num_virtual_non_worker_cores <= core_info.virtual_non_worker_cores().size(),
+            "Virtual non-worker cores ({}) exceed the mailbox capacity ({}) for this architecture",
+            num_virtual_non_worker_cores,
+            core_info.virtual_non_worker_cores().size());
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -990,7 +999,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 dev_msgs::AddressableCoreType::ETH);
         }
 
-        if (cluster_.arch() == ARCH::BLACKHOLE) {
+        if (virtualizes_non_worker_cores) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -1034,7 +1043,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             uint32_t end_virtual_grid;
             if (hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
                 end_virtual_grid = hal_.get_virtual_worker_start_y() + logical_grid_size.y;
-            } else if (cluster_.arch() == ARCH::BLACKHOLE) {
+            } else if (cluster_.arch() != ARCH::WORMHOLE_B0) {
                 end_virtual_grid = max_along_axis - 1;
             } else {
                 end_virtual_grid = hal_.get_virtual_worker_start_x() + logical_grid_size.x;

@@ -27,7 +27,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/debug_ring_buffer_common.h"
 
@@ -374,9 +374,12 @@ struct addressable_core_t {
 // TODO: This can move into the hal eventually.
 // This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-// Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth). On WH only Eth and Tensix
-// cores are virtualized BH = DRAM(8*2) + 1 PCIe + Eth(12) vs. WH = Eth(16)
-constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
+// Sized for the largest supported configuration: unharvested Blackhole (the ttsim CI target) =
+// DRAM(8*2) + Eth(14) = 30. Harvested BH silicon (P150) is DRAM(8*2) + 1 PCIe + Eth(12) = 29; WH
+// virtualizes only Eth(16) and Tensix; Quasar (quasar_32) is DRAM only today.
+// populate_core_info_msg bounds-checks against this capacity. Kept at the exact requirement:
+// the mailbox L1 budgets (MEM_MAILBOX_SIZE) have no headroom, so every extra entry costs kernel L1.
+constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 30;
 // This is the max number of Non Worker Cores across BH and WH.
 // BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
 constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;

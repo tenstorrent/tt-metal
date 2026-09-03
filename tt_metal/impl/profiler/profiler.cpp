@@ -36,7 +36,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -2145,11 +2145,14 @@ void DeviceProfiler::readTsData16BMarkerData(
     }
 
 #if defined(TRACY_ENABLE)
-    // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
-    // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
-    // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
-    // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
-    // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    // Emit the NOC-debug event exactly once per genuine device event. One read pass parses the same undrained buffer
+    // more than once -- the debug-dump poll reads each stalled core's active DRAM buffer, then processResults re-reads
+    // buffer 0 plus the L1 residual -- and the marker set (device_markers_per_core_risc_map) deduplicates those
+    // re-reads, so pushing only when the marker was newly inserted guarantees each event reaches the NOCDebugState
+    // once. The set only has to survive the pass, NOT the whole run: every read path calls resetControlBuffers when it
+    // is done and parsing is bounded by the control-buffer end index, so once a pass completes the device cannot
+    // reproduce that data. That is what lets the mid-run dump clear the set to keep host memory bounded. This mirrors
+    // how readDeviceMarkerData handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
     if (noc_debug_event.has_value()) {
         MetalContext::instance(context_id)
             .noc_debug_state()
@@ -2633,32 +2636,6 @@ void DeviceProfiler::processResults(
         readRiscProfilerResults(device, virtual_core, data_source, metadata, riscs_to_include);
     }
 #endif
-}
-
-void DeviceProfiler::dumpRoutingInfo() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump topology to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpRoutingInfo(noc_trace_data_output_dir / "topology.json");
-}
-
-void DeviceProfiler::dumpClusterCoordinates() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {

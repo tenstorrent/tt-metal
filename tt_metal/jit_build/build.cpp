@@ -38,7 +38,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
@@ -195,7 +195,21 @@ void JitBuildEnv::init(
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable "
         // And don't detect these issues
-        "-Wno-unused-variable -Wno-unused-function ";
+        "-Wno-unused-variable -Wno-unused-function "
+        // Firmware and kernels access mailboxes and MMIO through pointers
+        // formed from small literal addresses (e.g. MEM_MAILBOX_BASE is 16
+        // on Wormhole). On these bare-metal cores the bottom of the address
+        // space is ordinary L1 memory, but GCC assumes no object can live in
+        // the first page and -Warray-bounds diagnoses such accesses as
+        // "source object is likely at address zero", which -Werror makes
+        // fatal. (With -flto the literal address is not visible during
+        // per-TU compilation, so today this only fires if LTO is disabled;
+        // see issue #54692.) min-pagesize=0 tells GCC that constant
+        // addresses from zero up are valid objects, disabling exactly that
+        // heuristic while keeping -Warray-bounds active for genuine
+        // out-of-bounds accesses. It is a diagnostics-only parameter with no
+        // effect on generated code.
+        "--param=min-pagesize=0 ";
 
     // Defines
     this->defines_ = "";
@@ -203,6 +217,10 @@ void JitBuildEnv::init(
         this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
+    if (this->arch_ == tt::ARCH::QUASAR && rtoptions.get_simulator_enabled() &&
+        rtoptions.get_simulator_path().extension() == ".so") {
+        this->defines_ += "-DNOC_API_V1 ";
+    }
 
     if (rtoptions.get_profiler_enabled()) {
         uint32_t profiler_options = 1;

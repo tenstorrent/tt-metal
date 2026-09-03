@@ -162,7 +162,7 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
     // Run the 16-bit single-face transpose MOP
     ckernel_template::run();
@@ -180,7 +180,7 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
     // Run the 16-bit single-face transpose MOP
     ckernel_template::run();
@@ -198,7 +198,7 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
     ckernel_template::run();
 

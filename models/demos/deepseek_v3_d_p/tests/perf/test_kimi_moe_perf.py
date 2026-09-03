@@ -86,46 +86,44 @@ class _MoEPerfCase:
 
 # K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Measured 2026-08-27 on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 24 programs.
-# Five samples: 6,961,326 / 7,139,200 / 6,728,662 / 6,702,126 / 7,196,637 ns
-# (runs 33061606608, 33061626833, 33071049272, 33071067800, 33071086048).
-# The value below is their MEAN. Note the 7.12% peak-to-peak spread, against K3's 0.44% on the same
-# box and in the same jobs -- K2.6 runs FIRST in the merged job, so it absorbs the warm-up
-# variability that K3, running second on an already-warm device, does not. That asymmetry is why
-# this case needs a wider margin than K3 despite being the smaller shape.
+# Re-centred 2026-08-28: the 2D matmul program configs on this branch moved the midpoint, so the
+# 6,945,590 five-sample mean now measures a matmul shape nothing builds. Per the repo's rule that
+# is fixed by lowering the midpoint, never by widening the margin.
+#
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 6,574,780 ns.
+# ONE sample -- the K2.6 warm-up spread below was characterised on the superseded shape and is not
+# re-verified here.
 _K2_6 = _MoEPerfCase(
     label="kimi-k2.6",
     config=KimiK26Config,
-    expected_ns=6_945_590,
-    # 4%, not 3%: the five samples span 7.12% peak to peak, so a 3% band holds only 3 of them while
-    # 4% holds all five. Do NOT tighten this to match K3 -- the spread is real and measured, not a
-    # stand-in for missing data. Sub-nominal DDR doubles it to 8% via adjust_margin_for_ddr_speed.
+    expected_ns=6_574_780,
+    # 4%, not 3%: K2.6 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
+    # running second on an already-warm device, does not -- five samples on the previous shape spanned
+    # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
+    # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
     margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
 
 # K3: 896 experts / top-16, 3584 latent.
 #
-# Re-centred 2026-08-27: the previous 11,646,483 +/-3% held ZERO of four fresh high-power samples --
-# every one landed ~5% below its floor. Same shape of staleness as the 2026-08-25 re-centre (#54280),
-# where the forward got ~4.6% faster and fell out the bottom; per the repo's rule this is fixed by
-# lowering the midpoint, never by widening the margin.
+# This case measures the checkpoint's SiTU-GLU on every FFN site and reports 35 programs, on this
+# branch and on unmodified main alike.
 #
-# Two things had drifted since that value was cut. It predates the shared expert moving off SiLU (it
-# now measures the checkpoint's SiTU-GLU on every FFN site), and its "31-program shape" no longer
-# holds: every run here reports 35 programs, on this branch AND on unmodified main, so the graph
-# changed under it.
+# Re-centred 2026-08-28: the 2D matmul program configs land on the 3584-latent projections this case
+# runs, so the previous 11,063,717 centres on a matmul shape nothing builds. This gate has gone stale
+# downward three times now; per the repo's rule it is fixed by lowering the midpoint, never by
+# widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 35 programs.
-# Four samples: 11,089,054 / 11,040,504 / 11,067,107 / 11,058,204 ns
-# (runs 33065088619, 33071049272, 33071067800, 33071086048). The value below is their MEAN.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 9,535,901 ns.
+# ONE sample, against the four-sample 0.44% spread that set the margin below.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=11_063_717,
-    # 3% retained: the four samples span just 0.44% peak to peak, so 3% is already generous and the
-    # margin was never the problem -- the midpoint was. Sub-nominal DDR doubles it to 6% via
-    # adjust_margin_for_ddr_speed.
+    expected_ns=9_535_901,
+    # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
+    # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
+    # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(

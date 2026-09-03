@@ -530,6 +530,7 @@ def _run_chunked_prefill(
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
+    tight_cache=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -587,12 +588,35 @@ def _run_chunked_prefill(
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
+    max_real_end = 0
     for g in groups:
         ka = prefill_len
         for v in g:
             max_window = max(max_window, ka + chunk_size_global)
             ka += v
+            max_real_end = max(max_real_end, ka)
+    if tight_cache:
+        # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
+        # caps logical_n at the cache.
+        write_end = -(-max_real_end // tile) * tile
+        max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+    if tight_cache:
+        overruns = [
+            ka
+            for g in groups
+            for ka in [prefill_len + sum(g[:i]) for i in range(len(g))]
+            if ka + chunk_size_global > seq_len_cache
+        ]
+        assert overruns, (
+            f"tight_cache scenario does not actually overrun: cache {seq_len_cache}, chunk "
+            f"{chunk_size_global}, real end {max_real_end} -- no iteration's padded window passes the cache"
+        )
+        logger.info(
+            f"tight_cache: cache {seq_len_cache} for {max_real_end} real tokens; "
+            f"{len(overruns)} iteration(s) pad past it, worst {max(overruns) + chunk_size_global}"
+        )
 
     if use_pretrained:
         # MLA-only fixture: this driver uses nothing but the attention weights, and the full-layer one
@@ -660,7 +684,11 @@ def _run_chunked_prefill(
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
-        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+        # tail_slack: an overrunning iteration still ropes its whole padded slab, so the table needs one
+        # chunk of headroom (as the production transformer passes).
+        cache_seq_len_global=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        tail_slack=tight_cache,
     )
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -760,10 +788,10 @@ def _run_chunked_prefill(
                     )
                     for val in (u, kv_actual, valid_end)
                 )
-            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
-            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
-            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
-            # (slot comes from metadata[0]).
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
             # Determinism re-issues the SAME forward on the same device inputs. forward takes
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.
@@ -776,6 +804,9 @@ def _run_chunked_prefill(
                         rope_tensors=indexed_rope,
                         kvpe_cache=tt_kvpe_cache,
                         actual_start=None if use_metadata_tensor else kv_actual,
+                        # Scalar path needs actual_end only when the window overruns; None otherwise keeps
+                        # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
+                        actual_end=valid_end if (tight_cache and not use_metadata_tensor) else None,
                         cache_user_id=u,
                         metadata=kv_pad_metadata,
                     )
@@ -903,6 +934,10 @@ _CHUNKED_SCENARIOS = (
         # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
         # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
         ("maxedge-2u", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
+        # Tail chunk padding PAST the cache end: each iter leaves a tile of pad, so kv_actual drifts and
+        # the final 32-token iter's window ends 5056 past the 10240 cache while its real tokens fit. Only
+        # a drifted start can overrun. See tight_cache in the driver.
+        ("padoverflow-1u", dict(iters_isl=[5120 - 32] * 2 + [32], tight_cache=True)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
@@ -916,6 +951,7 @@ _CHUNKED_SCENARIOS = (
         pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
+        #
         pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
     ],
     indirect=["mesh_device", "device_params"],

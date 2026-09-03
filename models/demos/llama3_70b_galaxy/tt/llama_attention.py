@@ -126,7 +126,7 @@ class TtLlamaAttention(LightweightModule):
         self.model_config["USE_PREFETCHER"] = configuration.use_prefetcher
         # BH-prefetcher bring-up: keep the ring matmuls (gated by use_prefetcher) but route the
         # post-matmul collectives through the stable/no-prefetcher branches (gated by use_unfused_ccl).
-        self.use_unfused_ccl = getattr(configuration, "use_unfused_ccl", False)
+        self.use_unfused_ccl = self.use_prefetcher and getattr(configuration, "use_unfused_ccl", False)
         self.sdpa_decode_compute_kernel_config = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip

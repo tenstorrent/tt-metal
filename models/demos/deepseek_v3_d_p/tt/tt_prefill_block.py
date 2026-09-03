@@ -16,7 +16,10 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ROUTED_EXPERT_ACTIVATION_BY_NAME,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
@@ -76,12 +79,18 @@ class TtPrefillBlock(LightweightModule):
         experts_per_chip: int = 8,
         *,
         model_cfg: type | None = None,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
         missing them as complete. Left optional so existing callers are unaffected.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
 
@@ -103,6 +112,7 @@ class TtPrefillBlock(LightweightModule):
                 use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
             ):
                 return False
 
@@ -124,7 +134,7 @@ class TtPrefillBlock(LightweightModule):
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
@@ -243,7 +253,7 @@ class TtPrefillBlock(LightweightModule):
         is_balanced: bool = False,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
@@ -527,7 +537,7 @@ class TtPrefillBlock(LightweightModule):
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         d2h_service=None,
-        record_dev: Optional[ttnn.Tensor] = None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -554,8 +564,8 @@ class TtPrefillBlock(LightweightModule):
                 the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
                 outbound_socket_service_sync device op on the same CQ — no host sync. This is the
                 single-host (LayerAckService) ack path; mutually exclusive with on_layer_complete.
-            record_dev: the chunk's PrefillMetadata device tensor sent as the ack record; required when
-                d2h_service is set. Distinct from `metadata`: record_dev is the socket record handed to
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as the ack record; required when
+                d2h_service is set. Distinct from `metadata`: metadata_msg is the socket record handed to
                 the host, `metadata` is the per-element scalar triple read by the on-device ops.
             on_layer_complete: optional per-layer migration ack fired on the HOST. In chunked prefill,
                 after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
@@ -600,6 +610,7 @@ class TtPrefillBlock(LightweightModule):
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             actual_start=actual_start,
+            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
             indexer_indices=indexer_indices,
@@ -635,7 +646,7 @@ class TtPrefillBlock(LightweightModule):
         # cache_layer_idx is the LOCAL per-rank cache slot in both.
         if d2h_service is not None or on_layer_complete is not None:
             assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
-            assert d2h_service is None or record_dev is not None, "record_dev required when d2h_service is set"
+            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
@@ -667,10 +678,11 @@ class TtPrefillBlock(LightweightModule):
                 # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
                 # host before the zero has executed, so the ack implies zero-complete with no host sync —
                 # unlike the host-callback path below, which needs an explicit flush.
-                # NOT used under trace: record_dev is the per-chunk socket metadata tensor, so its address
-                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
-                # asserts d2h_service is None when use_trace.
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
+                # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
+                # buffer binding, which trace replay does not re-patch. A traced caller must therefore
+                # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
+                # socket tensor, whose address moves every chunk.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             else:
                 # Trace path: route the ack through the controller. At capture it splits the trace here (a host
                 # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
