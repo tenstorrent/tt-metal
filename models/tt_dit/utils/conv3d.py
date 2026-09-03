@@ -471,6 +471,12 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # Wan VAE decoder upsample3d time_conv (T-doubling, 384->768, kT=3 only). Without this
+    # entry it fell to the hardcoded (Cin, 32, 1, 1, 1) default: 1x1x1 output blocks and 24
+    # C_out passes per position -> 295 ms/op at 1080p, 4x slower than a full 3x3x3 conv on
+    # the same tensor (~10% of the whole decode, Tracy 2026-09-02). Mirrors the proven
+    # (3,3,3) sibling blocking; the 9x smaller (3,1,1) patch leaves headroom to go bigger.
+    (384, 768, (3, 1, 1)): (96, 96, 1, 8, 4),
     # LTX-2.3 22B VAE decoder + latent upsampler conservative fallbacks. These
     # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
     # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
