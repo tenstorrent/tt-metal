@@ -120,7 +120,17 @@ std::uint64_t hash_tensorspec_with_relaxation(
     const relaxation_fields::PertinentFields fields = relaxation_fields::pertinent_fields(relaxation);
     if (fields.whole_spec) {
         // logical_shape + tensor_layout are TensorSpec's own reflected attributes, so this is
-        // equivalent to hashing the whole spec.
+        // equivalent to hashing the whole spec. The three members it does NOT reflect
+        // (cached_padded_shape_, cached_logical_2d_shape_, cached_physical_shape_) are pure
+        // functions of these two, which is also what lets the strict match below compare all five
+        // via operator== while this hashes two, without breaking match => equal hash.
+        //
+        // CAUTION: this hashes the same FIELDS as TTNN's default hash of a TensorSpec, but does not
+        // produce the same VALUE. A reflected struct's fold starts at 0 (reflection.hpp, the
+        // supports_compile_time_attributes branch) whereas this seeds at DEFAULT_SEED. The
+        // equivalence relation is identical; the number is not. Do not treat the no-relaxation case
+        // as a drop-in for the default TensorSpec hash -- mixing the two in one key silently
+        // compares values that were never meant to line up.
         return ttsl::hash::hash_objects_with_default_seed(spec.logical_shape(), spec.tensor_layout());
     }
     ttsl::hash::hash_t hash = ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout());
