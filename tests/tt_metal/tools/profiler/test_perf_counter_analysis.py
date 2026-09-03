@@ -81,7 +81,7 @@ QUASAR_CAPTURE_TYPES = (
 )
 
 QUASAR_EXPECTED_METRICS = [
-    "Thread 3 Stall Rate",
+    "Thread 3 Issue Stall Rate",
     "T3 Instrn Issue Rate",
     "SrcA Stall Math Rate",
     "Dest Stall Pack Rate",
