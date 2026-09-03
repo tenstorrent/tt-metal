@@ -41,12 +41,14 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
         "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
     TT_FATAL(operation_attributes.num_h_slices >= 1, "num_h_slices must be >= 1");
-    // Stage 1 of the TILE H-axis split: tiled input and compute, but ROW_MAJOR SUM partials so the
-    // per-slice results land one row per page (a TILE partial would share a page across slices).
-    // `dim` must be constrained too: compute_output_specs sizes output_shape[2] from num_h_slices,
-    // so a W or HW reduce with num_h_slices > 1 would silently produce a mis-shaped result.
-    // num_h_slices > 1 is part of the predicate: it is what makes the factory pick the RM writer,
-    // so without it an un-split tiled reduce could ask for ROW_MAJOR output that nothing emits.
+    TT_FATAL(
+        operation_attributes.output_layout == Layout::TILE || !is_block_float(operation_attributes.output_dtype),
+        "Block-float output is TILE-only, got output_layout {} with dtype {}",
+        operation_attributes.output_layout,
+        operation_attributes.output_dtype);
+    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR SUM partials (one row per slice).
+    // dim must be H: compute_output_specs sizes H from num_h_slices. num_h_slices > 1 is what
+    // makes the factory pick the RM writer.
     const bool tile_h_split = tensor_args.layout() == Layout::TILE && operation_attributes.num_h_slices > 1 &&
                               operation_attributes.dim == tt::tt_metal::ReduceOpDim::H &&
                               operation_attributes.output_layout == Layout::ROW_MAJOR &&
@@ -114,12 +116,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "Tilized reduce paths only emit TILE output, got {}",
             operation_attributes.output_layout);
         if (tile_h_split) {
-            // The RM writer this path borrows extracts datums with get_tilized_idx at a fixed
-            // datum_bytes stride, and make_rm_plan's tt::datum_size throws for block-float, so the
-            // dtypes the tilized branch otherwise admits (BFLOAT8_B / UINT32 / INT32) are excluded.
             TT_FATAL(
-                tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32,
-                "TILE H-axis split only supports BFLOAT16 and FLOAT32 input, got {}",
+                tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+                    is_block_float(tensor_args.dtype()),
+                "TILE H-axis split only supports BFLOAT16, FLOAT32 and block-float input, got {}",
                 tensor_args.dtype());
             TT_FATAL(
                 tensor_args.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
