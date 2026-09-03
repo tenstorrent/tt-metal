@@ -371,6 +371,33 @@ class CodePredictor(LightweightModule):
         self._cp_down_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_d, _cols_d, _rows_d)
         self._cp_down_n_padded = _n_pad_d
 
+        # DRAM-sharded o_proj on the N300 fast path. N150 builds its own below, coupled to
+        # its DRAM-sharded QKV; this is the o_proj half alone, which needs no KV-group
+        # weight permutation and so ports cleanly.
+        #
+        # Why: o_proj is N=1024 = 32 output tiles, so a 1D width-split caps at 32 cores and
+        # the plain matmul measured 35.1 % of Wormhole's 288 GB/s -- the worst of the five
+        # CP matmul shapes, and the second largest by time (75 calls, 1.56 ms). The
+        # DRAM-sharded path is bank-parallel instead of core-parallel, and the two shapes
+        # already using it are the two best (down 62.8 %, gate/up 50.5 %). Every CP matmul
+        # is M=1 tile and therefore weight-bandwidth bound, so DRAM % is the metric here;
+        # FLOPs % cannot go high at this M no matter what the config is.
+        #
+        # QWEN3_TTS_CP_DS_OPROJ=0 restores the interleaved matmul.
+        self._ds_oproj = self._n300_cp_opt and os.environ.get("QWEN3_TTS_CP_DS_OPROJ", "1") != "0"
+        if self._ds_oproj:
+            _local_hidden_o = self.num_heads * HD
+            _k_tiles_o3 = _local_hidden_o // 32
+            _n_pad_o3 = pad_n_for_dram_align(H, _dram_cores)
+            _n_tiles_o3 = _n_pad_o3 // 32
+            _rows_o3, _cols_o3 = find_grid_k_n(_k_tiles_o3, _n_tiles_o3, max_rows=_cg.y, max_cols=_cg.x)
+            self._cp_wo_dramshard_progcfg = dram_sharded_program_config(
+                m=32, k=_local_hidden_o, n=_n_pad_o3, num_cores=_rows_o3 * _cols_o3
+            )
+            self._cp_wo_in0_memcfg = width_sharded_l1_memcfg(1, _k_tiles_o3, _cols_o3, _rows_o3)
+            self._cp_wo_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_o3, _cols_o3, _rows_o3)
+            self._cp_wo_n_padded = _n_pad_o3
+
         # N150-only: DRAM-sharded QKV / o_proj + fused-SDPA program config +
         # sharded nlp_create / nlp_concat so the DS QKV output can split in place.
         _n150_qkv_cores = None
@@ -566,6 +593,15 @@ class CodePredictor(LightweightModule):
             lw["down_ds"], _, _ = build_dram_sharded_weight_tp(
                 down_kn, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
             )
+            if self._ds_oproj:
+                # Row-parallel under TP: each chip owns local_hidden rows and produces a
+                # full-width partial that the all-reduce sums. lw["o_proj"] is deliberately
+                # NOT freed -- QWEN3_TTS_CP_FUSED_SDPA=0 falls back to the manual fp32
+                # chain, which still uses it.
+                _wo_kn_ds = lw_t["self_attn.o_proj.weight"].transpose(0, 1).contiguous()
+                lw["o_ds"], _, _ = build_dram_sharded_weight_tp(
+                    _wo_kn_ds, device, self.tp_size, split_dim=0, dtype=ttnn.bfloat16
+                )
             if self._n150:
                 _q = _perm_rope_rows(state_dict[pfx + "self_attn.q_proj.weight"], HD)
                 _k = _perm_rope_rows(state_dict[pfx + "self_attn.k_proj.weight"], HD)
@@ -613,7 +649,7 @@ class CodePredictor(LightweightModule):
             else:
                 self.codec_embeddings_tt.append(None)
 
-    def _all_reduce(self, t: ttnn.Tensor, fast: bool) -> ttnn.Tensor:
+    def _all_reduce(self, t: ttnn.Tensor, fast: bool, out_width: int = None) -> ttnn.Tensor:
         """TP all-reduce. On N300 use the 1-CCL 2-chip form (see mesh_utils).
 
         Both forms are noisy run to run, so this was picked on medians of 3 captures of
@@ -621,8 +657,19 @@ class CodePredictor(LightweightModule):
         """
         from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce, tp_all_reduce_2chip
 
-        fn = tp_all_reduce_2chip if fast else tp_all_reduce
-        return fn(t, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if fast:
+            return tp_all_reduce_2chip(t, self.device, memory_config=ttnn.L1_MEMORY_CONFIG, out_width=out_width)
+        out = tp_all_reduce(t, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if out_width is not None and int(out.shape[-1]) != out_width:
+            narrowed = ttnn.slice(
+                out,
+                [0, 0, 0, 0],
+                [out.shape[0], out.shape[1], out.shape[2], out_width],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out)
+            out = narrowed
+        return out
 
     # ─── Per-layer forward — caller owns input h_tt; we do NOT deallocate it. ───
     def _layer_forward(
@@ -936,19 +983,58 @@ class CodePredictor(LightweightModule):
                 ttnn.deallocate(attn_out)
                 attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_s, memory_config=self._n300_concat_out_memcfg)
                 ttnn.deallocate(attn_s)
-                attn_concat = ttnn.to_memory_config(attn_concat_s, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(attn_concat_s)
             else:
-                attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+                attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(attn_out)
-            o = ttnn.matmul(
-                attn_concat,
-                lw["o_proj"],
-                dtype=self.act_dtype,
-                compute_kernel_config=self.mm_kcfg,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(attn_concat)
+            if self._ds_oproj:
+                # The fast-path concat already emitted a WIDTH_SHARDED tensor, so the
+                # DRAM-sharded linear consumes it directly -- the unshard to interleaved
+                # that the plain matmul needed disappears with it.
+                if attn_concat_s.memory_config() != self._cp_wo_in0_memcfg:
+                    attn_wo = ttnn.to_memory_config(attn_concat_s, self._cp_wo_in0_memcfg)
+                    ttnn.deallocate(attn_concat_s)
+                else:
+                    attn_wo = attn_concat_s
+                o_s = ttnn.linear(
+                    attn_wo,
+                    lw["o_ds"],
+                    compute_kernel_config=self.mm_kcfg,
+                    program_config=self._cp_wo_dramshard_progcfg,
+                    memory_config=self._cp_wo_out_memcfg,
+                )
+                ttnn.deallocate(attn_wo)
+                o_il = ttnn.to_memory_config(o_s, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(o_s)
+                # Leave the DRAM-shard N-pad on when an all-reduce follows: its slices
+                # drop it for free (see tp_all_reduce_2chip's out_width). Without TP
+                # there is no all-reduce, so unpad here.
+                if self._cp_wo_n_padded != self.hidden_size and self.tp_size == 1:
+                    o = ttnn.slice(
+                        o_il,
+                        [0, 0, 0, 0],
+                        [o_il.shape[0], o_il.shape[1], o_il.shape[2], self.hidden_size],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(o_il)
+                else:
+                    o = o_il
+            else:
+                # to_memory_config is a no-op returning the SAME tensor when the config
+                # already matches, which the generic path's concat output does. The
+                # deallocate below would then free the tensor attn_concat names.
+                if attn_concat_s.memory_config() != ttnn.L1_MEMORY_CONFIG:
+                    attn_concat = ttnn.to_memory_config(attn_concat_s, ttnn.L1_MEMORY_CONFIG)
+                    ttnn.deallocate(attn_concat_s)
+                else:
+                    attn_concat = attn_concat_s
+                o = ttnn.matmul(
+                    attn_concat,
+                    lw["o_proj"],
+                    dtype=self.act_dtype,
+                    compute_kernel_config=self.mm_kcfg,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(attn_concat)
         else:
             # SDPA runs in fp32 — QK-norm amplifies K by ~68x; bf16 max=65504 and
             # q·k dot products can reach ~260*260*128 = overflow. Cast explicitly.
@@ -1059,7 +1145,7 @@ class CodePredictor(LightweightModule):
             )
             ttnn.deallocate(attn_concat)
         if self.tp_size > 1:
-            o = self._all_reduce(o, fast)
+            o = self._all_reduce(o, fast, out_width=self.hidden_size)
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
         # On N150 / N300 the add writes the post-LN / gate-up in0 spec so both
@@ -1126,7 +1212,7 @@ class CodePredictor(LightweightModule):
             memory_config=self._cp_down_out_memcfg,
         )
         ttnn.deallocate(gated_d)
-        if self._cp_down_n_padded != self.hidden_size:
+        if self._cp_down_n_padded != self.hidden_size and self.tp_size == 1:
             mlp_o_il = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mlp_o_sharded)
             mlp_o = ttnn.slice(
@@ -1140,7 +1226,7 @@ class CodePredictor(LightweightModule):
             mlp_o = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mlp_o_sharded)
         if self.tp_size > 1:
-            mlp_o = self._all_reduce(mlp_o, fast)
+            mlp_o = self._all_reduce(mlp_o, fast, out_width=self.hidden_size)
         # Next layer's input LN skips I2S when this add already wrote its spec.
         # forward_single_step S2Is once before the interleaved final norm.
         _out_memcfg = self._ln_attn_memcfg if self._use_sharded_ln else ttnn.L1_MEMORY_CONFIG
