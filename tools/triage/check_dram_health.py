@@ -90,8 +90,8 @@ def check_dram_telemetry(device: Device) -> list[DramHealthRow] | None:
         speed = read_arc_telemetry_entry(device_id, TAG_DDR_SPEED)
         status_word = read_arc_telemetry_entry(device_id, TAG_DDR_STATUS)
         uncorr_bitmask = read_arc_telemetry_entry(device_id, TAG_GDDR_UNCORR)
-        temp_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_TEMP_BASE + p) for p in range((modules + 1) // 2)]
-        corr_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_CORR_BASE + p) for p in range((modules + 1) // 2)]
+        temp_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_TEMP_BASE + p) for p in range(modules // 2)]
+        corr_words = [read_arc_telemetry_entry(device_id, TAG_GDDR_CORR_BASE + p) for p in range(modules // 2)]
     except RuntimeError as e:
         log_warning_device(device, f"no GDDR telemetry on FW {fw}: {e}")
         return None
