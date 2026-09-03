@@ -301,20 +301,24 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio decode T-sharding over the TP axis. Default 4 (~3x faster decode on a 4x8 mesh at
-        # the same fidelity); factor 4 is the tested max -- factor 8 leaves too few rows/shard for
-        # the depthwise resample conv1d. Falls back to unsharded when the TP axis can't be split
-        # that way (e.g. a single device), so the default is safe on any mesh. Pass
-        # audio_t_factor=1 to force unsharded.
-        if audio_t_factor > 1 and self.tp_factor % audio_t_factor == 0:
-            self.audio_t_factor = audio_t_factor
-        else:
-            if audio_t_factor > 1:
-                logger.info(
-                    f"audio_t_factor={audio_t_factor} does not divide TP-axis size {self.tp_factor}; "
-                    "decoding audio unsharded"
-                )
+        # Audio decode T-sharding: place the T-shard on whichever mesh axis has exactly
+        # `audio_t_factor` devices, preferring the TP axis then the SP axis. This lets a factor
+        # larger than the TP axis (e.g. 8 on a 4x8 mesh, which shards over the size-8 SP axis)
+        # actually shard instead of silently decoding unsharded. Default 4 (~3x faster decode at the
+        # same fidelity); factor 8 shards over an 8-wide axis when one exists. Falls back to
+        # unsharded when no axis matches (e.g. a single device), so the default is safe on any mesh.
+        # Pass audio_t_factor=1 to force unsharded.
+        self._audio_t_axis = None
+        if audio_t_factor > 1:
+            self._audio_t_axis = next((ax for ax in (self.tp_axis, self.sp_axis) if shape[ax] == audio_t_factor), None)
+        if audio_t_factor > 1 and self._audio_t_axis is None:
+            logger.info(
+                f"audio_t_factor={audio_t_factor} matches no mesh axis of that size in {shape}; "
+                "decoding audio unsharded"
+            )
             self.audio_t_factor = 1
+        else:
+            self.audio_t_factor = audio_t_factor
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -1220,9 +1224,11 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
-            # Unsharded by default; T-shard over the TP axis when audio_t_factor > 1.
+            # Unsharded by default; T-shard over the matched mesh axis when audio_t_factor > 1.
             audio_parallel_config = (
-                ParallelFactor(factor=self.audio_t_factor, mesh_axis=self.tp_axis) if self.audio_t_factor > 1 else None
+                ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
+                if self.audio_t_factor > 1
+                else None
             )
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
