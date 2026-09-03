@@ -1064,6 +1064,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
     // Keep the lane-variance sum unscaled so the final reciprocal applies once to both variance terms.
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
     constexpr std::uint32_t mean_tile_offset = 0;
     constexpr std::uint32_t var_tile_offset  = 64;
