@@ -94,7 +94,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                     torch.randn(64), dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
                 index = ttnn.argmax(flat)
-        
+
         )doc";
 
     ttnn::bind_function<"argmax">(
