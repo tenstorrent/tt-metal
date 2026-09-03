@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
@@ -269,25 +270,6 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
             continue;
         }
 
-        // Every target and non-target is checked. Skip a mesh split across hosts rather than silently
-        // leaving part of its multicast range unobservable.
-        bool full_mesh_is_local = true;
-        for (uint32_t y = 0; y < mesh_shape[0] && full_mesh_is_local; ++y) {
-            for (uint32_t x = 0; x < mesh_shape[1]; ++x) {
-                const ChipId chip_id =
-                    mesh_graph.coordinate_to_chip(mesh_id, tt_metal::distributed::MeshCoordinate({y, x}));
-                const auto physical_id =
-                    control_plane.try_get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, chip_id));
-                if (!physical_id.has_value() || !local_physical_ids.contains(physical_id.value())) {
-                    full_mesh_is_local = false;
-                    break;
-                }
-            }
-        }
-        if (!full_mesh_is_local) {
-            continue;
-        }
-
         const auto* y_topology = control_plane.axis_topology(mesh_id, 0);
         const auto* x_topology = control_plane.axis_topology(mesh_id, 1);
         TT_FATAL(y_topology != nullptr && x_topology != nullptr, "Missing 2D axis topology for mesh {}", mesh_id);
@@ -302,7 +284,12 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
                 const ChipId source_chip_id =
                     mesh_graph.coordinate_to_chip(mesh_id, tt_metal::distributed::MeshCoordinate({root_y, root_x}));
                 const FabricNodeId source(mesh_id, source_chip_id);
-                const ChipId source_physical_id = control_plane.get_physical_chip_id_from_fabric_node_id(source);
+                const auto source_physical_id_opt = control_plane.try_get_physical_chip_id_from_fabric_node_id(source);
+                if (!source_physical_id_opt.has_value() ||
+                    !local_physical_ids.contains(source_physical_id_opt.value())) {
+                    continue;
+                }
+                const ChipId source_physical_id = source_physical_id_opt.value();
 
                 const bool found_preferred_branch = visit_candidate_branches(mesh_shape, [&](const auto& branch) {
                     const auto& extents = branch.extents;
@@ -417,7 +404,8 @@ std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidat
 void run_source_inject_test(BaseFabricFixture* fixture) {
     const auto candidate = select_candidate(fixture);
     if (!candidate.has_value()) {
-        GTEST_SKIP() << "No host-local source has a legal multicast branch with connectable root outputs";
+        GTEST_SKIP() << "No source this rank can open has a legal multicast branch with connectable root "
+                        "outputs and at least one verifiable target";
     }
 
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
