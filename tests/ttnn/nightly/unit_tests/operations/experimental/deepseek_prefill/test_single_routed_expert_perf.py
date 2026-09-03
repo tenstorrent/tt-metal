@@ -18,8 +18,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merg
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
-    _ISL_EXHAUSTIVE_MODELS,
-    _ISL_EXHAUSTIVE_SWEEP,
+    _routed_expert_k,
     SINGLE_EXPERT_MODELS,
     run_single_routed_expert,
 )
@@ -64,10 +63,10 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 }
 
 
-# Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
-# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
-# _EXPECTED_NS: median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-20), centred over 3
-# sweeps rather than taken from one. Flat to ~256 tokens (the op sits on its DRAM weight-read
+# Kimi K3 keeps its own baseline table: SiTU-GLU is calibrated separately from the SiLU models, and
+# its knee sits at a different token count (see _K3_KNEE_TOKENS). Same measurement as _EXPECTED_NS:
+# median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-20), centred over 3 sweeps rather than
+# taken from one. Flat to ~256 tokens (the op sits on its DRAM weight-read
 # floor), linear in tokens past that.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
     0: 3_782,
@@ -96,29 +95,34 @@ def _margin_for_k3(active: int) -> float:
 
 
 def _perf_params():
-    """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims from
-    SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
+    """Baseline and margin per (model, active), dims from SINGLE_EXPERT_MODELS. No extended_model
+    mark: the markers below already scope where these run.
+
+    _EXPECTED_NS is the source of truth for what this gate covers -- a case with no baseline has
+    nothing to assert against, and the worker sweep's model and ISL lists grow independently of it."""
+    dims = {name: (config, activation) for name, config, _extended, activation in SINGLE_EXPERT_MODELS}
     params = []
-    for name, config, _extended in SINGLE_EXPERT_MODELS:
-        if name not in _ISL_EXHAUSTIVE_MODELS:
-            continue
-        for active in _ISL_EXHAUSTIVE_SWEEP:
-            params.append(
-                pytest.param(
-                    name,
-                    active,
-                    config.EMB_SIZE,
-                    config.MOE_INTERMEDIATE_SIZE,
-                    _EXPECTED_NS[(name, active)],
-                    _margin_for(active),
-                    # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
-                    id=f"{name}-isl-{active}-perf",
-                )
+    for name, active in sorted(_EXPECTED_NS):
+        config, activation = dims[name]
+        params.append(
+            pytest.param(
+                name,
+                active,
+                _routed_expert_k(config),
+                config.MOE_INTERMEDIATE_SIZE,
+                activation,
+                _EXPECTED_NS[(name, active)],
+                _margin_for(active),
+                # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
+                id=f"{name}-isl-{active}-perf",
             )
+        )
     return params
 
 
-@pytest.mark.parametrize("model_name, active_tokens, emb_dim, hidden_dim, expected_ns, margin", _perf_params())
+@pytest.mark.parametrize(
+    "model_name, active_tokens, emb_dim, hidden_dim, activation, expected_ns, margin", _perf_params()
+)
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the measured fused FFN path is Blackhole-only")
 @pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
@@ -130,6 +134,7 @@ def test_single_routed_expert_perf(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    activation,
     expected_ns: int,
     margin: float,
 ):
@@ -146,6 +151,7 @@ def test_single_routed_expert_perf(
             hidden_dim,
             active_tokens=active_tokens,
             x_row_major=True,  # x_rm: the Blackhole fused-tilize production fast path
+            activation=activation,
         ),
         _OP_KERNEL_DIR,
         expected_ns=expected_ns,
@@ -160,7 +166,7 @@ def test_single_routed_expert_perf(
     "active_tokens, expected_ns, margin",
     [
         pytest.param(active, _K3_SITU_EXPECTED_NS[active], _margin_for_k3(active), id=f"k3-isl-{active}-perf")
-        for active in _ISL_EXHAUSTIVE_SWEEP
+        for active in sorted(_K3_SITU_EXPECTED_NS)
     ],
 )
 @pytest.mark.requires_host_iommu

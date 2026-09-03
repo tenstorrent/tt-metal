@@ -229,19 +229,22 @@ def run_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
-# Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
-# MOE_INTERMEDIATE_SIZE). DeepSeek V3 is the baseline and runs by default; every other model is
-# gated behind @pytest.mark.extended_model.
+# Per-model dims as (id_prefix, config, extended_model, activation), each run at its own
+# (emb_dim, MOE_INTERMEDIATE_SIZE) and its own routed-expert activation. DeepSeek V3 is the
+# baseline and runs by default; every other model is gated behind @pytest.mark.extended_model.
 SINGLE_EXPERT_MODELS = [
-    ("dsv3", DeepSeekV3Config, False),
-    ("minimax_m27", MiniMaxM27Config, True),
-    ("glm_51", GLM51Config, True),
-    ("dsv4_pro", DeepSeekV4ProConfig, True),
-    ("dsv4_flash", DeepSeekV4FlashConfig, True),
-    ("gptoss_120b", GptOss120BConfig, True),
-    ("kimi_k26", KimiK26Config, True),
-    ("kimi_k3", KimiK3Config, True),
-    ("minimax_m3", MiniMaxM3Config, True),
+    ("dsv3", DeepSeekV3Config, False, ttnn.RoutedExpertActivation.Silu),
+    ("minimax_m27", MiniMaxM27Config, True, ttnn.RoutedExpertActivation.Silu),
+    ("glm_51", GLM51Config, True, ttnn.RoutedExpertActivation.Silu),
+    ("dsv4_pro", DeepSeekV4ProConfig, True, ttnn.RoutedExpertActivation.Silu),
+    ("dsv4_flash", DeepSeekV4FlashConfig, True, ttnn.RoutedExpertActivation.Silu),
+    ("gptoss_120b", GptOss120BConfig, True, ttnn.RoutedExpertActivation.Silu),
+    ("kimi_k26", KimiK26Config, True, ttnn.RoutedExpertActivation.Silu),
+    ("kimi_k3", KimiK3Config, True, ttnn.RoutedExpertActivation.SituGlu),
+    # M3's routed expert is swigluoai (HIDDEN_ACT), but _TORCH_ACTIVATION has no reference for it,
+    # so these cases drive the M3 dims under SiLU: they measure the M3 shape, not its activation.
+    # M3's activation coverage is test_swigluoai_routed_expert.py.
+    ("minimax_m3", MiniMaxM3Config, True, ttnn.RoutedExpertActivation.Silu),
 ]
 
 
@@ -300,12 +303,12 @@ def _routed_expert_k(config):
 
 
 def _isl_params(active_sweep, only_models=None):
-    """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
+    """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim, activation) parametrization over
     `active_sweep`, all against the fixed _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so
     non-baseline models stay gated behind the extended_model marker; `only_models` restricts to a
     subset of model names."""
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, extended, activation in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
@@ -316,6 +319,7 @@ def _isl_params(active_sweep, only_models=None):
                     active,
                     _routed_expert_k(config),
                     config.MOE_INTERMEDIATE_SIZE,
+                    activation,
                     marks=marks,
                     id=f"{name}-isl-{active}",
                 )
@@ -324,7 +328,9 @@ def _isl_params(active_sweep, only_models=None):
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim, activation", _isl_params(_ISL_FUNCTIONAL_SWEEP)
+)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_single_routed_expert_functional(
     device,
@@ -332,6 +338,7 @@ def test_single_routed_expert_functional(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    activation,
     x_row_major: bool,
 ):
     run_single_routed_expert(
@@ -341,12 +348,13 @@ def test_single_routed_expert_functional(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        activation=activation,
     )
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim, activation",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
@@ -357,6 +365,7 @@ def test_single_routed_expert_isl_sweep(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    activation,
     x_row_major: bool,
 ):
     run_single_routed_expert(
@@ -366,6 +375,7 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        activation=activation,
     )
 
 
