@@ -20,7 +20,8 @@ ttnn::Tensor broadcast_ring(
     uint32_t chunk_size_tiles,
     uint32_t broadcast_offset_tiles,
     uint32_t broadcast_num_tiles,
-    bool use_l1_relay) {
+    bool use_l1_relay,
+    uint32_t num_slots) {
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "broadcast_ring requires a mesh device");
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
@@ -37,7 +38,8 @@ ttnn::Tensor broadcast_ring(
         chunk_size_tiles,
         broadcast_offset_tiles,
         broadcast_num_tiles,
-        use_l1_relay);
+        use_l1_relay,
+        num_slots);
 }
 
 }  // namespace ttnn

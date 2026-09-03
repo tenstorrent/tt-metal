@@ -55,7 +55,8 @@ Tensor broadcast_ring(
     uint32_t chunk_size_tiles,
     uint32_t broadcast_offset_tiles,
     uint32_t broadcast_num_tiles,
-    bool use_l1_relay) {
+    bool use_l1_relay,
+    uint32_t num_slots) {
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices > 1, "broadcast_ring needs >1 device along cluster_axis, got {}", num_devices);
 
@@ -71,7 +72,8 @@ Tensor broadcast_ring(
             chunk_size_tiles,
             broadcast_offset_tiles,
             broadcast_num_tiles,
-            use_l1_relay),
+            use_l1_relay,
+            num_slots),
         BroadcastRingInputs{.input_tensor = input_tensor});
 }
 

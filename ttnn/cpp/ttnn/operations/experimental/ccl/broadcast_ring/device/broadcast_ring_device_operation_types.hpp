@@ -33,6 +33,9 @@ struct BroadcastRingParams {
     // L1 relay: forward each chunk straight into the downstream's L1 recv buffer (no per-hop DRAM read),
     // gated by a backward credit protocol. Default false keeps the DRAM-output relay. Experimental.
     bool use_l1_relay = false;
+    // L1-relay credit window: number of recv-buffer slots (chunks in flight). 0 = auto. Deeper = more
+    // pipeline overlap at the cost of L1 (slots * chunk * page_size). Ignored unless use_l1_relay.
+    uint32_t num_slots = 0;
 
     BroadcastRingParams(
         uint32_t sender_ring_index_,
@@ -45,7 +48,8 @@ struct BroadcastRingParams {
         uint32_t chunk_size_tiles_ = 0,
         uint32_t broadcast_offset_tiles_ = 0,
         uint32_t broadcast_num_tiles_ = 0,
-        bool use_l1_relay_ = false) :
+        bool use_l1_relay_ = false,
+        uint32_t num_slots_ = 0) :
         sender_ring_index(sender_ring_index_),
         cluster_axis(cluster_axis_),
         num_links(num_links_),
@@ -56,7 +60,8 @@ struct BroadcastRingParams {
         chunk_size_tiles(chunk_size_tiles_),
         broadcast_offset_tiles(broadcast_offset_tiles_),
         broadcast_num_tiles(broadcast_num_tiles_),
-        use_l1_relay(use_l1_relay_) {}
+        use_l1_relay(use_l1_relay_),
+        num_slots(num_slots_) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "sender_ring_index",
@@ -69,7 +74,8 @@ struct BroadcastRingParams {
         "chunk_size_tiles",
         "broadcast_offset_tiles",
         "broadcast_num_tiles",
-        "use_l1_relay");
+        "use_l1_relay",
+        "num_slots");
     auto attribute_values() const {
         return std::make_tuple(
             sender_ring_index,
@@ -82,7 +88,8 @@ struct BroadcastRingParams {
             chunk_size_tiles,
             broadcast_offset_tiles,
             broadcast_num_tiles,
-            use_l1_relay);
+            use_l1_relay,
+            num_slots);
     }
 };
 

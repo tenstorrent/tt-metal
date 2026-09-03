@@ -28,6 +28,7 @@ ttnn::Tensor broadcast_ring(
     uint32_t chunk_size_tiles = 0,        // tiles per relay chunk; 0 = auto. Tuning knob.
     uint32_t broadcast_offset_tiles = 0,  // broadcast only [offset, +num) of the sender's shard; 0 num = whole.
     uint32_t broadcast_num_tiles = 0,
-    bool use_l1_relay = false);  // relay through L1 (no per-hop DRAM read) via a credit protocol. Experimental.
+    bool use_l1_relay = false,  // relay through L1 (no per-hop DRAM read) via a credit protocol. Experimental.
+    uint32_t num_slots = 0);    // L1-relay credit window (recv-buffer slots); 0 = auto. Tuning knob.
 
 }  // namespace ttnn

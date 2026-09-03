@@ -233,8 +233,8 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             .ring_index = ring_index}};
 }
 
-// Number of L1 recv slots (== staging CB depth). The backward credit protocol keeps at most this many
-// chunks in flight per device; must match kCbDepthChunks used for the CB and the kernel's num_slots CT arg.
+// Default L1 recv-slot count (credit window) when num_slots is auto (0). The backward credit protocol
+// keeps at most num_slots chunks in flight per device.
 static constexpr uint32_t kL1RelaySlots = 3;
 
 BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::create_at_l1(
@@ -297,17 +297,20 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             ? std::min(operation_attributes.broadcast_num_tiles, input_num_pages - bcast_offset)
             : input_num_pages;
 
-    // Chunk sizing identical to the DRAM path; slots = kL1RelaySlots. The recv buffer is num_slots x chunk.
+    // Credit window: num_slots recv-buffer slots (chunks in flight), auto = kL1RelaySlots.
+    const uint32_t num_slots = operation_attributes.num_slots > 0 ? operation_attributes.num_slots : kL1RelaySlots;
+    // Chunk sizing mirrors the DRAM path; the auto budget is split across num_slots so the recv buffer
+    // (num_slots x chunk) stays within kChunkL1Budget. An explicit chunk/slots pair may exceed L1 (caller's call).
     constexpr uint32_t kChunkL1Budget = 768 * 1024;
     constexpr uint32_t kMaxChunkPages = 256;
-    const uint32_t budget_chunk = std::max<uint32_t>(1, kChunkL1Budget / (kL1RelaySlots * page_size));
+    const uint32_t budget_chunk = std::max<uint32_t>(1, kChunkL1Budget / (num_slots * page_size));
     const uint32_t auto_chunk_pages = std::min(budget_chunk, kMaxChunkPages);
     const uint32_t chunk_num_pages = std::min(
         bcast_count,
         operation_attributes.chunk_size_tiles > 0 ? operation_attributes.chunk_size_tiles : auto_chunk_pages);
-    const uint32_t recv_buf_pages = kL1RelaySlots * chunk_num_pages;
+    const uint32_t recv_buf_pages = num_slots * chunk_num_pages;
 
-    // Recv buffer: kL1RelaySlots slots the upstream fabric-writes into; the kernel indexes it by chunk%slots.
+    // Recv buffer: num_slots slots the upstream fabric-writes into; the kernel indexes it by chunk%slots.
     const uint32_t cb_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto cb_config =
@@ -336,7 +339,7 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         unicast_forward_args[1],
         unicast_backward_args[0],
         unicast_backward_args[1],
-        kL1RelaySlots,
+        num_slots,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);

@@ -37,6 +37,7 @@ Tensor broadcast_ring(
     uint32_t chunk_size_tiles = 0,
     uint32_t broadcast_offset_tiles = 0,
     uint32_t broadcast_num_tiles = 0,
-    bool use_l1_relay = false);
+    bool use_l1_relay = false,
+    uint32_t num_slots = 0);
 
 }  // namespace ttnn::prim

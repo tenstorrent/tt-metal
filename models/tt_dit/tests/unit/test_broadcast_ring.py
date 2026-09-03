@@ -53,21 +53,23 @@ OWNER = 5  # sender index along the ring (cluster) axis
     # (tiles_per_shard, chunk_size_tiles, bcast_offset_tiles, bcast_num_tiles, use_l1_relay): offset/num 0/0 =
     # whole shard, a nonzero pair broadcasts only that sub-range (pre-slice). use_l1_relay picks the L1 relay
     # (no per-hop DRAM read); the matched chunk128 rows give a DRAM-vs-L1 steady-state comparison in one CSV.
-    ("tiles_per_shard", "chunk_size_tiles", "bcast_offset_tiles", "bcast_num_tiles", "use_l1_relay"),
+    ("tiles_per_shard", "chunk_size_tiles", "bcast_offset_tiles", "bcast_num_tiles", "use_l1_relay", "num_slots"),
     [
-        pytest.param(1, 0, 0, 0, False, id="1tile"),
-        pytest.param(1024, 0, 0, 0, False, id="1024tiles_chunkauto"),
-        pytest.param(1024, 8, 0, 0, False, id="1024tiles_chunk8"),
-        pytest.param(1024, 32, 0, 0, False, id="1024tiles_chunk32"),
-        pytest.param(1024, 128, 0, 0, False, id="1024tiles_chunk128"),
-        pytest.param(1024, 0, 300, 400, False, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
-        # L1-relay chunk sweep. The credit round-trip shifts the overhead balance, so re-find the knee here
-        # rather than assuming the DRAM optimum. chunk128 already fills the 768KB budget at num_slots=3;
-        # chunk192 (~1.125MB) probes the L1 ceiling and may fail to allocate — that failure locates the limit.
-        pytest.param(1024, 32, 0, 0, True, id="1024tiles_chunk32_l1"),
-        pytest.param(1024, 64, 0, 0, True, id="1024tiles_chunk64_l1"),
-        pytest.param(1024, 128, 0, 0, True, id="1024tiles_chunk128_l1"),
-        pytest.param(1024, 192, 0, 0, True, id="1024tiles_chunk192_l1"),
+        pytest.param(1, 0, 0, 0, False, 0, id="1tile"),
+        pytest.param(1024, 0, 0, 0, False, 0, id="1024tiles_chunkauto"),
+        pytest.param(1024, 8, 0, 0, False, 0, id="1024tiles_chunk8"),
+        pytest.param(1024, 32, 0, 0, False, 0, id="1024tiles_chunk32"),
+        pytest.param(1024, 128, 0, 0, False, 0, id="1024tiles_chunk128"),
+        pytest.param(1024, 0, 300, 400, False, 0, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
+        # L1-relay chunk sweep. sp=8 knee was chunk64 (L1 is overlap-limited, wants smaller chunks, not larger).
+        pytest.param(1024, 32, 0, 0, True, 0, id="1024tiles_chunk32_l1"),
+        pytest.param(1024, 64, 0, 0, True, 0, id="1024tiles_chunk64_l1"),
+        pytest.param(1024, 128, 0, 0, True, 0, id="1024tiles_chunk128_l1"),
+        # L1-relay credit-window (num_slots) sweep at the best chunk (64). Deeper window = more overlap; L1
+        # cost is num_slots * chunk * page_size (slots=8 x chunk64 x 2KB ~ 1MB, still within a Blackhole core).
+        pytest.param(1024, 64, 0, 0, True, 4, id="1024tiles_chunk64_slots4_l1"),
+        pytest.param(1024, 64, 0, 0, True, 6, id="1024tiles_chunk64_slots6_l1"),
+        pytest.param(1024, 64, 0, 0, True, 8, id="1024tiles_chunk64_slots8_l1"),
     ],
 )
 def test_broadcast_ring(
@@ -81,6 +83,7 @@ def test_broadcast_ring(
     bcast_offset_tiles,
     bcast_num_tiles,
     use_l1_relay,
+    num_slots,
 ):
     rows, cols = tuple(mesh_device.shape)
     tp_factor, sp_factor = rows, cols
@@ -141,6 +144,7 @@ def test_broadcast_ring(
             broadcast_offset_tiles=bcast_offset_tiles,
             broadcast_num_tiles=bcast_num_tiles,
             use_l1_relay=use_l1_relay,
+            num_slots=num_slots,
         )
 
     def run_ag():
