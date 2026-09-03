@@ -529,8 +529,9 @@ class TPAttention:
     # counts when a pair does not fit). Tg=4 is the sweet spot at head_dim=256 — it still affords 64
     # cores/head — while Tg=7 fits only 4 cores/head, which measured as a net regression against the
     # legacy call. So wide drafts SPLIT instead of widening: T=8 runs as B=2 groups of 4, where the
-    # factory's per-batch split gives 110/2 = 55 cores/head and keeps the whole 110-core grid busy.
-    # A T with no such split (7, 11, ...) falls through to the legacy B=T call.
+    # factory's per-batch split gives 110/2 = 55 cores/head and keeps the whole 110-core grid busy;
+    # T=12 runs as B=3 groups of 4 at 36 cores/head (108 active). A T with no such split (7, 11,
+    # ...) falls through to the legacy B=T call.
     #
     # k_chunk_size=0 = the in-kernel dynamic chunk (capped at 4 tiles in spec mode), which also
     # skips the compute kernel's granularity defines. A FIXED k-chunk does not: the kernel needs
@@ -543,6 +544,11 @@ class TPAttention:
     _SPEC_SDPA_L1_FIT = {
         4: (1, 64, 0),  # Tg=4 on one row, 64 cores/head (the whole grid on one reduction group)
         8: (2, 55, 0),  # two groups of 4, 55 cores/head each -> 110 active, 1,310,976 B CB
+        12: (
+            3,
+            36,
+            0,
+        ),  # three groups of 4, 36 cores/head each -> 108 active (2 idle), 6 tree rounds (at cap), same Tg=4 CB footprint
     }
 
     def _spec_sdpa_plan(self, T):

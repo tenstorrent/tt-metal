@@ -691,6 +691,48 @@ def test_spec_multi_pos_group_shapes(device, B, Tg):
     _check_groups(device, B=B, Tg=Tg, p=1024, seq_len=2048, max_cores=4, seed=59, k_chunk_size=64)
 
 
+@pytest.mark.parametrize(
+    "seq_len, p",
+    [
+        (2048, 1024),
+        (2048, 1025),
+        (2048, 1054),
+        (2048, 1055),
+        (2048, 1020),
+        (2048, 1021),
+        (8192, 4095),
+        (8192, 5000),
+        (32768, 30000),
+        (32768, 32700),
+    ],
+    ids=[
+        "s2k_p1024",
+        "s2k_p1025",
+        "s2k_p1054",
+        "s2k_p1055",
+        "s2k_p1020_split_scan",
+        "s2k_p1021_straddle",
+        "s8k_p4095_straddle",
+        "s8k_p5000",
+        "s32k_p30000",
+        "s32k_p32700",
+    ],
+)
+@pytest.mark.parametrize("k_chunk_size", [0, 128], ids=["B3_Tg4_dyn_chunk", "B3_Tg4_chunk128"])
+def test_spec_groups_b3_tg4_full_grid(device, seq_len, p, k_chunk_size):
+    """B=3 groups of Tg=4 (12 candidates) at 36 cores/head — the T=12 full-grid config the model
+    uses (``_SPEC_SDPA_L1_FIT[12]``): three ~36-core reduction groups, 108 of ~110 cores active,
+    the KV read three times for 12 candidates instead of twelve. Same Tg=4 CB footprint as the
+    B=2 config; the only new thing is a third group and a reduction tree at the 6-round cap.
+
+    Run once with the in-kernel dynamic chunk (what the model passes) and once at the fixed
+    4-tile chunk. The reference (B=12 rows) is capped by its own row count to ~9 cores/head, so
+    the reduction trees differ and only bf16 partial-sum accuracy is available (pcc pinned
+    explicitly: the default's ``_group_straddles`` cannot be evaluated at ``k_chunk_size=0``).
+    """
+    _check_groups(device, B=3, Tg=4, p=p, seq_len=seq_len, max_cores=36, seed=67, k_chunk_size=k_chunk_size, pcc=0.999)
+
+
 def test_rejects_group_cur_pos_length(device, expect_error):
     """cur_pos must carry B*Tg bounds — Tg per batch group, not Tg in total."""
     B, Tg = 2, 4

@@ -394,19 +394,15 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
     T = token_ids.shape[1]
-    # Draft width. Acceptance saturates with context: at ISL 128 a wide draft still lands (~5.6/10),
-    # so K=10 wins (61 tok/s); by 8k acceptance is 2.37 at BOTH K=6 and K=10, so the narrower draft
-    # wins on drafter cost alone (31.9 vs 27.8 tok/s). Threshold at the 4k prompt bucket.
-    # Above 4k the width is picked for the verify kernel, not for acceptance. K=7 gives T=K+1=8,
-    # which the fused verify SDPA (spec_multi_pos_tiles) splits into 2 L1-fitting groups of 4
-    # candidates — 2 KV reads per layer instead of 8; T=7 has no such split and falls back to the
-    # legacy 7-pseudo-user call. That fused KV-scan saving scales with ISL, so it only pays for
-    # K=7's extra draft step (~2.4 ms) and extra MTP LM head once the prompt is long enough: at 8k
-    # the saving is still the smaller term (K=6 legacy 43.1 tok/s vs K=7 fused 40.9), from 16k up it
-    # is not (K=7 fused 39.4 vs K=6 legacy 36.4). Hence the middle band.
+    # Draft width. K is chosen so that T=K+1 is a layout the fused verify SDPA (spec_multi_pos_tiles)
+    # supports: it splits the T candidates into L1-fitting groups of 4 and reads KV once per group
+    # rather than once per candidate. Short prompts (<=4k) accept many drafts, so K=11 -> T=12 =
+    # 3 groups x 4; elsewhere acceptance saturates and the narrower K=7 -> T=8 = 2 groups x 4 keeps
+    # the drafter cheap. Other K values fall back to the legacy B=T pseudo-user verify, which reads
+    # KV T times and rounds differently from plain decode at near ties, so they are avoided.
     # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
     # SpeculativeDecoder, whose own library default stays 3).
-    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (10 if T <= 4096 else (6 if T <= 8192 else 7))
+    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (11 if T <= 4096 else 7)
     logger.info(
         f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
         f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"
