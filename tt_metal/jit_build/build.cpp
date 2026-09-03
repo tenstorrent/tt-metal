@@ -922,8 +922,10 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         std::error_code elf_size_ec;
         const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
         if (!elf_size_ec) {
-            per_target_telemetry_token("kernel_binary_size", target->target_name_, "bytes")
-                .record(static_cast<double>(elf_size));
+            // KiB, not bytes: dump_metrics() prints 3 decimal places, so bytes would show
+            // as large integers with meaningless trailing zeros.
+            per_target_telemetry_token("kernel_binary_size", target->target_name_, "KiB")
+                .record(static_cast<double>(elf_size) / 1024.0);
         }
     }
 
