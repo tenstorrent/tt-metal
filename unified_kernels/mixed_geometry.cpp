@@ -1,0 +1,86 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// TWO STORES OF DIFFERENT TILE GEOMETRY IN ONE BODY, which is the one thing no other kernel
+// here does -- and the reason the defect in unified_blaze_integration_spec.md A3 survived
+// unseen. Every other kernel in this directory is homogeneous: one geometry throughout, so
+// `pack_to`'s reconfiguration had nothing to get wrong.
+//
+// The order matters. The 32x32 store goes FIRST, so a 4-face 16x16 configuration is what the
+// packer holds when the row-form store arrives. A 1x32 tile is TWO faces of 1x16, and packed
+// through a four-face configuration it loses face 1 entirely -- elements 16..31 of the row --
+// which is why the launcher checks the two faces separately rather than only a PCC. Reversing
+// the order would test the same transition in the direction that happens to be harmless,
+// because the row form's configuration is the narrower of the two.
+//
+// This is a REGRESSION test for a fix, so what it must do is fail without it. Verified by
+// reverting `pack_to`'s geometry branch: face 1 comes back 0/16 correct, exactly the
+// signature A3 measured on craq-sim through blaze's `u_flash_kda`.
+//
+// Compile-time args, all named: a dfb_<name> per buffer. No runtime args -- the tensors are
+// bound, so their addresses ride along with the accessors.
+
+#include <tt/unified/core>
+#include "experimental/kernel_args.h"
+
+namespace u = tt::unified;
+
+void kernel_main() {
+    constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbInRow = get_arg(args::dfb_in_row);
+    constexpr uint32_t kDfbOutRow = get_arg(args::dfb_out_row);
+
+    // One full tile, and one ROW-FORM tile. `Tiled<>` is what says the second pair's pages
+    // are 1x32 rather than 32x32; the launcher says the same thing to the host through
+    // dfb(..., tile=), and Storage static_asserts the two against the JIT's own tables.
+    using Blk = u::Shape<1, 1>;
+    using Row = u::Tiled<u::Tile<1, 32>, u::Shape<1, 1>>;
+
+    // MG_ROW_INIT points the kernel's init at the ROW pair instead of the 32x32 one. A3's own
+    // table row 1 is this case -- init naming the row buffer makes the row store exact -- so
+    // it separates "the packer was left configured for the other geometry" from "the init is
+    // the only thing that ever configures geometry, on either side".
+#if defined(MG_ROW_INIT)
+    u::compute_init(kDfbInRow, kDfbOutRow);
+#else
+    u::compute_init(kDfbIn, kDfbOut);
+#endif
+
+    u::Input<0, kDfbIn, Blk> in_storage;
+    u::Output<1, kDfbOut, Blk> out_storage;
+    u::Input<0, kDfbInRow, Row> in_row_storage;
+    u::Output<1, kDfbOutRow, Row> out_row_storage;
+
+    const auto in = TensorAccessor(tensor::in);
+    const auto out = TensorAccessor(tensor::out);
+    const auto in_row = TensorAccessor(tensor::in_row);
+    const auto out_row = TensorAccessor(tensor::out_row);
+
+    // 32x32 first: this is what leaves the packer configured for four faces.
+    //
+    // MG_ROW_ONLY skips it, which is how the row store is tested in ISOLATION: if the row
+    // pass fails alone then the transition is not the mechanism and the row-form pack path
+    // is broken on its own terms.
+#if !defined(MG_ROW_ONLY)
+    u::ComputeBlock a = u::noc_load(in_storage, in, 0).wait();
+    u::noc_store(out_storage, u::recip(a), out, 0);
+#endif
+
+    // MG_REINIT re-inits the SFPU for the ROW pair right here, mid-body, through the raw
+    // API. This is A3's table row 5 in-tree, and it identifies the repairing call exactly:
+    // compute_init is ckernel::init_sfpu(in, out), which programs the geometry on BOTH sides
+    // -- unpacker and packer. pack_to_forget() goes with it because the memo would otherwise
+    // skip the format reconfig that the re-init's own programming has to be followed by.
+#if defined(MG_REINIT) && defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    u::pack_to_forget();
+    ckernel::init_sfpu(kDfbInRow, kDfbOutRow);
+#endif
+
+    // Then the row form, whose store is the one that needs the packer reprogrammed and not
+    // merely reformatted. Same op both times, so a difference between the two outputs is the
+    // geometry transition and nothing else.
+    u::ComputeBlock r = u::noc_load(in_row_storage, in_row, 0).wait();
+    u::noc_store(out_row_storage, u::recip(r), out_row, 0);
+}
