@@ -29,17 +29,20 @@ Wall clock per generated token, 32,768-token context, one user, board 0. Lower i
 | start of this work (`fd2c3290563`, benchmark added, nothing tuned) | 36.17 | 27.6 |
 | after the scheduling and fidelity work (`563fe9b9fca`) | 32.71 | 30.6 |
 | after picking the next token on the chip | 29.82 | 33.5 |
-| after cutting to the real users before the chips exchange scores | **28.70** | **34.8** |
+| after cutting to the real users before the chips exchange scores | **28.73** | **34.8** |
 
 **Cumulative: 36.17 -> 28.73 ms/token, a 20.6% reduction.**
 
-Both final rows are the shipped configuration; they are listed separately because the two
-changes were measured separately. The 28.73 figure is the mean of a 20-run soak (range
-28.67–28.77); 28.70 is a single confirming run of the shipped default. Against a baseline
-paired in the same session (33.14 ms/token), picking the token on the chip is worth
-**3.32 ms/token (10.0%)**, and cutting before the exchange a further **1.12 ms/token**.
+The rows are cumulative stages; the last one is what ships. Its 28.73 is the mean of a
+20-run soak (range 28.67–28.77), and a confirming run of the shipped default measured
+28.70. Against a baseline paired in the same session (33.14 ms/token), picking the token
+on the chip is worth **3.32 ms/token (10.0%)**, and cutting before the exchange a further
+**1.09 ms/token** over that soak (1.12 in the confirming pair).
 
-Across user counts, measured before and after that change:
+Across user counts, paired in one session, before and after moving token selection onto
+the chip (with the pre-gather cut). These are their own runs, so the batch-1 "after" of
+28.75 is a third sample of the same configuration as the 28.73 and 28.70 above — all
+within the 0.35 ms/token wall-clock spread.
 
 | users | before | after | generated tokens identical? |
 |---|---|---|---|
@@ -104,7 +107,7 @@ changes behaviour.
 | 4 | decode attention accumulation | `HIFI2_NOFP32` on the three decode attention operators | `ModelOptimizations.performance()`, gated on `Qwen3-8B` | 0.139 ms/token |
 | 5 | per-layer chip-to-chip collectives | 40 chunks per sync, 3 workers per link | `non_galaxy_ccl_configs`, keyed `Qwen3-8B` | 0.095 ms/token |
 | 6 | next-token selection | on the chip (`allow_force_argmax: True`) | same table | 3.32 ms/token |
-| 6a | cut to the real users before the chips exchange scores | `pre_slice_before_gather: True` | same table | 1.12 ms/token |
+| 6a | cut to the real users before the chips exchange scores | `pre_slice_before_gather: True` | same table | 1.09 ms/token |
 | 6b | gather for token selection | 40 chunks per sync, **4** workers per link | same table, `sampling_force_argmax` | 0.07 ms/token |
 | 7 | feed-forward gate weights | 4-bit with low-fidelity arithmetic | framework default in the performance preset | pre-existing |
 | 8 | KV-cache page block | 256 tokens | `PAGE_BLOCK_SIZE` in the benchmark | 0.59% |
@@ -381,9 +384,9 @@ A useful cross-check for the byte accounting: the profiler's own bandwidth figur
 - **Device time and wall clock are different numbers and must not be mixed.** This work
   began because commit messages quoted 36.0 tok/s/user (derived from device time) while the
   benchmark printed 30.4 (wall clock) for the same run. That 5.5 tok/s/user disagreement
-  *was* the host gap — 5.07 ms/token, 18% of the token — and finding it produced the largest
-  single win here. A formula in the benchmark that mixed a device-time intercept with a
-  wall-clock slope has been corrected for the same reason.
+  *was* the host gap — 5.07 ms/token, 15.5% of the 32.75 ms token it was measured in — and
+  finding it produced the largest single win here. A formula in the benchmark that mixed a
+  device-time intercept with a wall-clock slope has been corrected for the same reason.
 - **An isolated benchmark can reverse a ranking.** It happened twice, in both directions:
   the 32-core attention grid won in isolation and lost in the model, and the fusion harness
   was host-bound and reported the combination at 101 us where the model measures 3.3. Both
