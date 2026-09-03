@@ -5,6 +5,8 @@
 #include "adamw_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <optional>
+#include <tuple>
 
 #include "adamw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -108,11 +110,6 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (tensor_args.step_scalars.has_value()) {
-        // Stochastic rounding needs a fresh seed as a per-step compute runtime argument,
-        // which defeats the point of taking the step-varying scalars as device tensors.
-        TT_FATAL(
-            args.stochastic_rounding == StochasticRounding::Disabled,
-            "Stochastic rounding is not supported when the step-varying scalars are passed as tensors");
         const auto& scalars = tensor_args.step_scalars.value();
         for (const auto& [tensor, name] :
              {std::pair{&scalars.step_size, "step_size"},
@@ -152,11 +149,17 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
     auto scalars_from_tensor = tensor_args.step_scalars.has_value();
+    std::optional<std::tuple<int, int, int>> scalar_device_ids;
+    if (scalars_from_tensor) {
+        const auto& scalars = *tensor_args.step_scalars;
+        scalar_device_ids = {
+            scalars.step_size.device()->id(), scalars.inv_sqrt_bc2.device()->id(), scalars.decay_factor.device()->id()};
+    }
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
         amsgrad,
         stochastic_rounding,
         max_exp_avg_sq_initialized,
-        scalars_from_tensor,
+        scalar_device_ids,
         param_tensor.dtype(),
         param_logical_shape);
 

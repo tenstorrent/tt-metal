@@ -388,7 +388,15 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     if (scalars_from_tensor) {
         // One aligned slot per scalar; the reader does sized reads of just the first
-        // element of each tile instead of pulling in three full f32 tiles.
+        // element of each tile instead of pulling in three full f32 tiles. Every CB base
+        // is DRAM-aligned by the CB allocator, so the slot stride is what keeps
+        // (l1_addr % dram_alignment) == (dram_addr % dram_alignment) for slots 1 and 2.
+        const uint32_t dram_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+        TT_FATAL(
+            kScalarSlotBytes % dram_alignment == 0U,
+            "Scalar CB slot stride ({} B) must be a multiple of the DRAM read alignment ({} B)",
+            kScalarSlotBytes,
+            dram_alignment);
         [[maybe_unused]] auto cb_scalars = create_circular_buffer_bytes(
             program, all_cores, kScalarsCbIndex, tt::DataFormat::Float32, 3U * kScalarSlotBytes, kScalarSlotBytes);
     }
