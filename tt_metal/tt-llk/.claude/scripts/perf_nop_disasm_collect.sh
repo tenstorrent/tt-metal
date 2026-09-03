@@ -16,10 +16,14 @@ export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-disasm-build}"
 mkdir -p "$OUT"; cd "$PT"; source "$LLK/tests/.venv/bin/activate"
 say() { echo "=== $* -- $(date -u +%H:%M:%SZ) ==="; }
 restore() { cd "$PT"; git checkout -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" 2>/dev/null; }
-trap 'restore; echo "=== restored ==="' EXIT
 
 git diff --quiet -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" \
   || { echo "FATAL: tree dirty"; exit 1; }
+
+# Install the cleanup trap only AFTER the dirty-tree check. If it is installed
+# first, aborting on a dirty tree runs the restore and reverts the patches of
+# whichever run made the tree dirty -- corrupting a measurement in progress.
+trap 'restore; echo "=== restored ==="' EXIT
 
 OBJDUMP=""
 for c in "$LLK/tests/sfpi/compiler/bin/riscv-tt-elf-objdump" \

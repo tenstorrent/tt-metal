@@ -21,10 +21,14 @@ mkdir -p "$OUT"; cd "$PT"; source "$LLK/tests/.venv/bin/activate"
 say() { echo "=== $* -- $(date -u +%H:%M:%SZ) ==="; }
 restore() { cd "$PT"; git checkout -- perf_math_matmul.py helpers/profiler.py \
             "$SRC/math_matmul_perf.cpp" 2>/dev/null; }
-trap 'restore; echo "=== restored ==="' EXIT
 
 git diff --quiet -- perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_perf.cpp" \
   || { echo "FATAL: tree dirty"; exit 1; }
+
+# Install the cleanup trap only AFTER the dirty-tree check. If it is installed
+# first, aborting on a dirty tree runs the restore and reverts the patches of
+# whichever run made the tree dirty -- corrupting a measurement in progress.
+trap 'restore; echo "=== restored ==="' EXIT
 
 say "resetting card"; tt-smi -r 2>&1 | tail -2; sleep 10
 
