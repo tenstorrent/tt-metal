@@ -86,17 +86,17 @@ class _MoEPerfCase:
 
 # K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-centred 2026-08-28: the 2D matmul program configs on this branch moved the midpoint, so the
-# 6,945,590 five-sample mean now measures a matmul shape nothing builds. Per the repo's rule that
-# is fixed by lowering the midpoint, never by widening the margin.
+# Re-centred 2026-09-01: the routed experts now take the fused-only dispatch K2.6's config ships, so
+# the 6,574,780 midpoint measures a schedule this model no longer runs. Per the repo's rule that is
+# fixed by lowering the midpoint, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 6,574,780 ns.
-# ONE sample -- the K2.6 warm-up spread below was characterised on the superseded shape and is not
-# re-verified here.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33529630383: 5,526,814 ns
+# over 24 programs -- the same count the superseded midpoint reported, so the 16% is the same work
+# done faster rather than a short trace. ONE sample, as with the midpoint it replaces.
 _K2_6 = _MoEPerfCase(
     label="kimi-k2.6",
     config=KimiK26Config,
-    expected_ns=6_574_780,
+    expected_ns=5_526_814,
     # 4%, not 3%: K2.6 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
