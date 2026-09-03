@@ -20,8 +20,12 @@ word back, and LLK_ASSERTs the per-arch contract on-device:
   that code.
 * Blackhole: tilize init does write the descriptor, so teardown must
   re-establish ``z_dim = tilize num_faces``; ``y_dim`` stays untouched.
-* Both: ``Tile_x_dim_cntx0`` is tilize's to restore, so it must come back to the
-  canonical ``face_r_dim``-derived value.
+* Wormhole only: ``Tile_x_dim_cntx0`` is tilize's to restore, so it must come back
+  to the canonical ``face_r_dim``-derived value. Deliberately not asserted on
+  Blackhole: ``_llk_unpack_tilize_uninit_wrapper_`` hardcodes ``MAX_FACE_R_DIM``
+  there instead of threading this test's ``face_r_dim`` through, so the expected
+  value would not correspond to the operand under test. The Blackhole descriptor
+  assertions above are what this test exists for.
 
 All verification is on-device (LLK_ASSERT); there is no stimuli or golden — the
 register state is the deliverable, same shape as
