@@ -47,6 +47,10 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
+#: Slice bounds on a tiled tensor move a tile row at a time, which is what sets the
+#: granularity a chunk may end on.
+TILE_HEIGHT = 32
+
 
 class TtSWAState:
     """Chunked-prefill state, owned by the caller and passed to ``TtSWA.forward``.
@@ -280,12 +284,31 @@ class TtSWA(LightweightModule):
         # ttnn.slice sizes its output as in_rows / num_devices, so this is a divisor and not a mesh size.
         self._halo_num_devices = (sw + chunk) // sw
 
+    def _carry_key(self, real_len: int):
+        """The carry index is tabulated per tile row, the granularity a slice start can take. A chunk
+        ending mid-tile rounds down, which only the final chunk may do.
+
+        Invisible to prefill, which never reads that last carry, but NOT invisible to migration: decode
+        picks the carry up from the address table and would be short by up to 31 positions after a
+        final chunk that ended mid-tile. Deciding that is a decode-interface question, not a local one
+        -- see "the final chunk's carry is not migration-correct" in V4_HCA_next_steps.MD. TtHCA rounds
+        the same way at 128, so it is off by up to 127."""
+        return (int(real_len) // TILE_HEIGHT) * TILE_HEIGHT
+
     def _build_carry_index(self, chunk: int):
         """start/end index tensors for the carry slice, one pair per real_len a chunk can have.
 
-        The carry is the GLOBAL ``[real_len - sw, real_len)`` block, not the last rows of the padded
-        slab, and those differ as soon as ``real_len < chunk``. The bounds are the same on every chip
-        (the gathered slab is replicated), so unlike the halo these are not sharded."""
+        The carry is the last ``sw`` keys of the ACCUMULATED prefix, not the last rows of the padded
+        slab, and those differ as soon as ``real_len < chunk``. It is cut out of ``[carry | chunk]``
+        rather than out of the chunk alone, which is what lets a chunk be shorter than the window:
+        the real tokens of this chunk sit at ``[sw, sw + real_len)`` there, so the last ``sw`` of the
+        prefix are ``[real_len, real_len + sw)`` -- for ``real_len`` below ``sw`` that range walks
+        back into the previous carry on its own, and for ``real_len == 0`` it reproduces it exactly.
+        Out of the chunk alone no such range exists, since the chunk holds no history.
+
+        Tabulated per tile row: the start is a slice bound on a tiled tensor, so it moves a tile at a
+        time. The bounds are the same on every chip (the gathered slab is replicated), so unlike the
+        halo these are not sharded."""
         sw = self.sliding_window
 
         def idx(vals):
@@ -294,8 +317,8 @@ class TtSWA(LightweightModule):
             )
 
         self._carry_index = {
-            real_len: (idx([0, 0, real_len - sw, 0]), idx([1, 1, real_len, self.head_dim]))
-            for real_len in range(sw, int(chunk) + 1, sw)
+            real_len: (idx([0, 0, real_len, 0]), idx([1, 1, real_len + sw, self.head_dim]))
+            for real_len in range(0, int(chunk) + 1, TILE_HEIGHT)
         }
 
     def _attention(self, q, sliding_kv, cos, sin, carry, kv_actual: int, real_len: int):
@@ -360,8 +383,8 @@ class TtSWA(LightweightModule):
         # The next chunk's window reaches back into this one, so the carry is this chunk's last REAL
         # keys. Taking the start from a device tensor keeps only its shape in the program, so one
         # program serves every real_len.
-        c_start, c_end = self._carry_index[real_len]
-        next_carry = ttnn.slice(gathered, c_start, c_end, slice_dim=2, num_devices=gathered.shape[2] // sw)
+        c_start, c_end = self._carry_index[self._carry_key(real_len)]
+        next_carry = ttnn.slice(hist, c_start, c_end, slice_dim=2, num_devices=self._halo_num_devices)
 
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
@@ -509,9 +532,15 @@ class TtSWA(LightweightModule):
         seq_len = hidden_states.shape[2] * self.sp_factor
         real_len = int(seq_len if seq_len_actual is None else seq_len_actual)
         sw = self.sliding_window
-        assert real_len % sw == 0, (
-            f"a chunk must end on a window boundary, got {real_len} with sliding_window {sw}: the next "
-            f"chunk's first query needs the {sw} tokens before it, which is what the carry holds"
+        # Checked on the ACCUMULATED length, not this chunk's, and against a tile row rather than the
+        # window: the carry is cut out of [carry | chunk], so a chunk may be SHORTER than the window
+        # and still leave a correct carry -- the only real constraint is that its end be a slice bound
+        # a tiled tensor can take. A final chunk may end anywhere, since nothing reads its carry.
+        # Looser than TtHCA, which is tied to its compressor's 128-token windows; a chunk sequence
+        # valid there is therefore valid here too.
+        assert state.kv_actual % TILE_HEIGHT == 0, (
+            f"cannot append after a chunk with {state.kv_actual % TILE_HEIGHT} leftover tokens; only "
+            f"the final chunk may end mid-tile, non-final chunks must be a multiple of {TILE_HEIGHT}"
         )
 
         slab_index = self.ops.rope_index(self._slab_index, state.kv_actual)
