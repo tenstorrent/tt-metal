@@ -8,7 +8,9 @@ ARG BASE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-test-amd64:lat
 FROM ${BASE}
 
 # full  = source tree plus the build tarball unpacked over it; tests run the C++
-#         binaries from /work/build and import ttnn in place via PYTHONPATH=/work.
+#         binaries from /work/build and import ttnn in place. That import needs
+#         /work/ttnn on PYTHONPATH as well as /work, since /work/ttnn is a
+#         namespace dir and the package itself is /work/ttnn/ttnn.
 # wheel = source tree plus the wheel installed; no build tree.
 ARG PROFILE=full
 

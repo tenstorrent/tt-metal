@@ -406,7 +406,9 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
       env:
         TT_METAL_HOME: /work
-        PYTHONPATH: /work
+        # /work/ttnn as well as /work: /work/ttnn is a namespace dir and the
+        # package is /work/ttnn/ttnn. Same in-place layout as bisect-dispatch.
+        PYTHONPATH: /work:/work/ttnn
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
@@ -431,6 +433,13 @@ jobs:
           # .git is deliberately absent; scripts shelling out to git cannot run here.
           test ! -d /work/.git
           ls -la /work/build/test/tt_metal/
+
+      - name: The in-place ttnn package imports
+        run: |
+          set -euo pipefail
+          # The C++ leg below would pass even if the Python payload were unusable,
+          # so import it explicitly. This is the full profile's advertised path.
+          python3 -c 'import ttnn; print("ttnn imported from", ttnn.__file__)'
 
       - name: Run a runtime test against the baked build
         timeout-minutes: 10
