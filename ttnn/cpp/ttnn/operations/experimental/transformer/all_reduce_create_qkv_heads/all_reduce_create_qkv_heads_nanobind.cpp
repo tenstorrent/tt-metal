@@ -17,8 +17,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-
 namespace ttnn::operations::experimental::transformer::detail {
 
 void bind_all_reduce_create_qkv_heads(nb::module_& mod) {

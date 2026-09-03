@@ -7,7 +7,6 @@
 
 #include "loss.hpp"
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -34,12 +33,8 @@ Tensor loss_function(
     Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
 
     switch (reduce_mode) {
-        case LossReductionMode::SUM:
-            return ttnn::sum(
-                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
-        case LossReductionMode::MEAN:
-            return ttnn::mean(
-                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+        case LossReductionMode::SUM: return /* TODO(nuked-op): restore ttnn::sum */ (result);
+        case LossReductionMode::MEAN: return /* TODO(nuked-op): restore ttnn::mean */ (result);
         case LossReductionMode::NONE:
         default:
             // TODO: old code indicated this path is unsupported, but the all post commit test pipeline uses this path.

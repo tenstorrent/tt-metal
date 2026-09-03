@@ -21,8 +21,6 @@ file(
     accumulation/ema/kernels/*.hpp
     argmax/device/kernels/*.cpp
     argmax/device/kernels/*.hpp
-    generic/device/kernels/*.cpp
-    generic/device/kernels/*.hpp
     moe/device/kernels/*.cpp
     moe/device/kernels/*.hpp
     prod/device/kernels/*.cpp

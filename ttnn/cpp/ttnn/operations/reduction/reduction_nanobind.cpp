@@ -9,9 +9,6 @@
 
 #include "ttnn-nanobind/export_enum.hpp"
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions_nanobind.hpp"
-#include "ttnn/operations/reduction/generic/std_var_reductions_nanobind.hpp"
 #include "ttnn/operations/reduction/argmax/argmax_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum_nanobind.hpp"
@@ -27,10 +24,6 @@ namespace ttnn::operations::reduction {
 
 void py_module(nb::module_& mod) {
     export_enum<reduction_common::ReduceType>(mod, "ReduceType");
-
-    // Generic reductions
-    detail::bind_generic_reductions(mod);
-    detail::bind_std_var_reductions(mod);
 
     // Special reductions
     detail::bind_reduction_argmax_operation(mod);

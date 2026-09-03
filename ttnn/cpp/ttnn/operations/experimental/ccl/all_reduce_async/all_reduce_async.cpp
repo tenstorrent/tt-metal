@@ -143,7 +143,8 @@ Tensor local_sum_float32(
     auto transposed_tensor = ttnn::transpose(reshaped_tensor, device_dim, local_rows_dim);
 
     // 3. Reduce along the device dimension (which is now at `local_rows_dim`)
-    auto sum_tensor = ttnn::sum(transposed_tensor, local_rows_dim, false, memory_config);
+    (void)memory_config;
+    auto sum_tensor = /* TODO(nuked-op): restore ttnn::sum */ (transposed_tensor);
     if (is_rm) {
         return ttnn::to_layout(sum_tensor, Layout::ROW_MAJOR);
     }

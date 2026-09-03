@@ -6,7 +6,6 @@
 
 #include "device/batch_norm_device_operation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "device/running_statistics_device_operation.hpp"
 #include "device/batch_norm_utils.hpp"
@@ -21,8 +20,11 @@ inline Tensor mean_NHW(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     ttsl::SmallVector<int> dims = {2, 3};
-    Tensor mean_hw = ttnn::mean(input_tensor, dims, true, output_mem_config, compute_kernel_config);
-    return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
+    (void)output_mem_config;
+    (void)dims;
+    (void)compute_kernel_config;
+    Tensor mean_hw = /* TODO(nuked-op): restore ttnn::mean */ (input_tensor);
+    return /* TODO(nuked-op): restore ttnn::mean */ (mean_hw);
 }
 
 }  // namespace ttnn::operations::normalization

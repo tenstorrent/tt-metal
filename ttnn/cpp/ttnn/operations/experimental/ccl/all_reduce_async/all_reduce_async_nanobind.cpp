@@ -16,7 +16,6 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/types.hpp"
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 namespace ttnn::operations::experimental::ccl {

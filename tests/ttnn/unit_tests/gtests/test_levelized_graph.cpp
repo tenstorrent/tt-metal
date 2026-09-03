@@ -15,7 +15,6 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -123,8 +122,8 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     const auto input_tensor = ttnn::create_device_tensor(input, device);
 
     auto operation = [](const auto& input_tensor) {
-        const auto output_tensor_1 = ttnn::sum(input_tensor, 0, true);
-        const auto output_tensor_2 = ttnn::mean(input_tensor, 1, false);
+        const auto output_tensor_1 = /* TODO(nuked-op): restore ttnn::sum */ (input_tensor);
+        const auto output_tensor_2 = /* TODO(nuked-op): restore ttnn::mean */ (input_tensor);
     };
 
     nlohmann::json ref_json_trace;
@@ -182,7 +181,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     const auto input_tensor = ttnn::create_device_tensor(input, device);
 
     auto operation = [](const auto& input_tensor) {
-        const auto output_tensor_1 = ttnn::sum(input_tensor, 2, true);
+        const auto output_tensor_1 = /* TODO(nuked-op): restore ttnn::sum */ (input_tensor);
         const auto output_tensor_2 = ttnn::softmax(output_tensor_1, -1);
     };
 

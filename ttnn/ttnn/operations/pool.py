@@ -46,9 +46,6 @@ def golden_maxpool2d(
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
-
-
 def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
     """Global average pooling. Wrapper around avg_pool2d.
 
@@ -251,9 +248,6 @@ def golden_avg_pool2d(
     )
 
     return pool_output_to_flat_nhwc(output_tensor)
-
-
-ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
 
 
 def golden_adaptive_avg_pool2d(

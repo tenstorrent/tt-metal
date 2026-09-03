@@ -17,7 +17,6 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     device/kernels/*.hpp
-    generic/device/kernels/*.cpp
     grid_sample/device/kernels/*.hpp
     rotate/device/kernels/*.cpp
     upsample/device/kernels/*.cpp

@@ -4,7 +4,6 @@
 # This library holds standalone Quasar (metal 2.0) copies of selected ops. Each op is a
 # near-identical clone of its original, isolated in the ttnn::prim::qsr (device) and
 # ttnn::operations::experimental::quasar (host) namespaces so it can coexist with the original.
-# (pool_generic uses ttnn::operations::pool::quasar for the host side.)
 # Nanobind sources (*_nanobind.cpp) are compiled with the python module via ttnn/sources.cmake.
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
@@ -16,7 +15,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     transpose/transpose.hpp
     reshard/reshard.hpp
     halo/halo.hpp
-    pool_generic/generic_pools.hpp
     conv2d/conv2d.hpp
     matmul/matmul.hpp
     binary_ng/types.hpp
@@ -31,7 +29,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     tilize_with_val_padding/tilize_with_val_padding.hpp
     to_layout/to_layout_op.hpp
     reallocate/reallocate.hpp
-    reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
     typecast/typecast.hpp
     padded_slice/padded_slice.hpp
@@ -120,10 +117,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     halo/halo.cpp
     halo/device/halo_device_operation.cpp
     halo/device/untilize_with_halo_program_factory.cpp
-    # pool_generic
-    pool_generic/generic_pools.cpp
-    pool_generic/device/pool_op.cpp
-    pool_generic/device/pool_multi_core_program_factory.cpp
     # conv2d
     conv2d/conv2d.cpp
     conv2d/device/conv2d_device_operation.cpp
@@ -196,16 +189,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     to_layout/to_layout_op.cpp
     # reallocate (thin wrapper over quasar move; no device op / kernels)
     reallocate/reallocate.cpp
-    # reduction/generic (internal op; pool_sum used by quasar avg_pool2d — no nanobind)
-    reduction/generic/generic_reductions.cpp
-    reduction/generic/device/common.cpp
-    reduction/generic/device/reduce_op.cpp
-    reduction/generic/device/reduce_op_device_operation.cpp
-    reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp
-    reduction/generic/device/reduce_op_multi_core_w_program_factory.cpp
-    reduction/generic/device/reduce_op_single_core_hw_program_factory.cpp
-    reduction/generic/device/welford_reduce_device_operation.cpp
-    reduction/generic/device/welford_reduce_program_factory.cpp
     # to_device (thin host->device transfer wrapper; no device op / kernels)
     to_device/to_device.cpp
     # typecast (copy of operations/copy/typecast; device op + 3 CB program factories; no nanobind,
@@ -231,7 +214,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     slice/slice_nanobind.cpp
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
-    pool_generic/generic_pools_nanobind.cpp
     conv2d/conv2d_nanobind.cpp
     padded_slice/padded_slice_nanobind.cpp
     slice_write/slice_write_nanobind.cpp

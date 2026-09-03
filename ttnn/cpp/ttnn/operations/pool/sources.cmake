@@ -2,7 +2,6 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_POOL_API_HEADERS
-    generic/generic_pools.hpp
     grid_sample/grid_sample.hpp
     grid_sample/grid_sample_prepare_grid.hpp
     rotate/rotate.hpp
@@ -10,9 +9,6 @@ set(TTNN_OP_POOL_API_HEADERS
 )
 
 set(TTNN_OP_POOL_SRCS
-    generic/device/pool_multi_core_program_factory.cpp
-    generic/device/pool_op.cpp
-    generic/generic_pools.cpp
     grid_sample/device/grid_sample_device_operation.cpp
     grid_sample/device/grid_sample_bilinear_program_factory.cpp
     grid_sample/device/grid_sample_nearest_program_factory.cpp
@@ -39,7 +35,6 @@ set(TTNN_OP_POOL_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_POOL_NANOBIND_SRCS
-    generic/generic_pools_nanobind.cpp
     grid_sample/grid_sample_nanobind.cpp
     rotate/rotate_nanobind.cpp
     upsample/upsample_nanobind.cpp

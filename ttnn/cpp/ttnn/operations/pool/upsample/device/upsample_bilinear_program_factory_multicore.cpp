@@ -14,7 +14,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/reduce_op_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::prim {

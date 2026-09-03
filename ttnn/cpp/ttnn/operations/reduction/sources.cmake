@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_REDUCTION_SRCS
+    reduce_op_types.cpp
     argmax/device/argmax_device_operation.cpp
     argmax/device/argmax_multi_core_program_factory.cpp
     argmax/device/argmax_single_core_program_factory.cpp
@@ -23,15 +24,6 @@ set(TTNN_OP_REDUCTION_SRCS
     moe/device/moe_program_factory.cpp
     moe/moe.cpp
     prod/device/prod_all_program_factory.cpp
-    generic/device/reduce_op_device_operation.cpp
-    generic/device/reduce_op_single_core_hw_program_factory.cpp
-    generic/device/reduce_op_multi_core_h_program_factory.cpp
-    generic/device/reduce_op_multi_core_w_program_factory.cpp
-    generic/device/reduce_op.cpp
-    generic/device/common.cpp
-    generic/device/welford_reduce_device_operation.cpp
-    generic/device/welford_reduce_program_factory.cpp
-    generic/generic_reductions.cpp
     prod/device/prod_all_device_operation.cpp
     prod/device/prod_nc_op.cpp
     prod/device/prod_nc_device_operation.cpp
@@ -56,7 +48,6 @@ set(TTNN_OP_REDUCTION_SRCS
 
 set(TTNN_OP_REDUCTION_API_HEADERS
     argmax/argmax.hpp
-    generic/generic_reductions.hpp
     reduction_common/reduction_common.hpp
 )
 
@@ -67,7 +58,6 @@ set(TTNN_OP_REDUCTION_API_HEADERS
 # as a required co-owner.
 set(TTNN_OP_REDUCTION_NANOBIND_SRCS
     reduction_nanobind.cpp
-    generic/std_var_reductions_nanobind.cpp
     argmax/argmax_nanobind.cpp
     accumulation/cumprod/cumprod_nanobind.cpp
     accumulation/cumsum/cumsum_nanobind.cpp

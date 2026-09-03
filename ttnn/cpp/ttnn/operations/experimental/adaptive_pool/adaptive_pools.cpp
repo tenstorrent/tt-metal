@@ -4,7 +4,6 @@
 
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
-#include "ttnn/operations/pool/generic/generic_pools.hpp"
 
 namespace ttnn::operations::experimental::adaptive_pool {
 
@@ -30,27 +29,16 @@ Tensor adaptive_avg_pool2d(
 
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    return ttnn::operations::pool::avg_pool2d(
-        input_tensor,
-        batch_size,
-        input_h,
-        input_w,
-        channels,
-        params.kernel_size,
-        params.stride,
-        params.padding,
-        false,         // ceil_mode
-        false,         // count_include_pad always false because we want to ignore padding values
-        std::nullopt,  // divisor_override
-        memory_config,
-        dram_slice_config,
-        applied_shard_scheme,
-        compute_kernel_config,
-        deallocate_input,
-        reallocate_output,
-        DataType::BFLOAT16,  // dtype - using default
-        Layout::ROW_MAJOR,   // output_layout - using default
-        false);              // config_tensor_in_dram - using default
+    (void)batch_size;
+    (void)channels;
+    (void)memory_config;
+    (void)dram_slice_config;
+    (void)applied_shard_scheme;
+    (void)compute_kernel_config;
+    (void)deallocate_input;
+    (void)reallocate_output;
+    (void)params;
+    return /* TODO(nuked-op): restore ttnn::avg_pool2d */ (input_tensor);
 }
 
 Tensor adaptive_max_pool2d(
@@ -73,26 +61,15 @@ Tensor adaptive_max_pool2d(
 
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    auto result = ttnn::operations::pool::max_pool2d(
-        input_tensor,
-        batch_size,
-        input_h,
-        input_w,
-        channels,
-        params.kernel_size,
-        params.stride,
-        params.padding,
-        {1, 1},  // dilation
-        false,   // ceil_mode
-        memory_config,
-        dram_slice_config,
-        applied_shard_scheme,
-        deallocate_input,
-        reallocate_output,
-        false,  // return_indices
-        DataType::BFLOAT16,  // dtype - using default
-        Layout::ROW_MAJOR,   // output_layout - using default
-        false);              // config_tensor_in_dram - using default
+    (void)batch_size;
+    (void)channels;
+    (void)memory_config;
+    (void)dram_slice_config;
+    (void)applied_shard_scheme;
+    (void)deallocate_input;
+    (void)reallocate_output;
+    (void)params;
+    auto result = /* TODO(nuked-op): restore ttnn::max_pool2d */ std::vector<Tensor>{input_tensor};
 
     // Since return_indices=false, the result variant should always contain a Tensor
     TT_FATAL(result.size() == 1, "Expected Tensor result when return_indices is false");

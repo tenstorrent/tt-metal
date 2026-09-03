@@ -20,7 +20,6 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/hal.hpp>
@@ -39,7 +38,9 @@ Tensor _variance_impl(
     auto shape_wh = y.padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+    (void)scale;
+    (void)dims;
+    return /* TODO(nuked-op): restore ttnn::sum */ (sqr_y_minus_mean_y);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
@@ -133,7 +134,7 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
     ttsl::SmallVector<int> dims = {2, 3};
-    Tensor mean_y = ttnn::mean(y, dims, true);
+    Tensor mean_y = /* TODO(nuked-op): restore ttnn::mean */ (y);
     return detail::_variance_impl(y, mean_y, output_memory_config);
 }
 
@@ -148,7 +149,7 @@ Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
-    Tensor mean_y = ttnn::mean(y, dims, true);
+    Tensor mean_y = /* TODO(nuked-op): restore ttnn::mean */ (y);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = detail::_std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
