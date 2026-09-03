@@ -40,14 +40,13 @@ class MiniMaxKVCache(KvCaches):
     max_seq_len: int
     sp: int
 
-    # Device-valued slot metadata for request-mode tracing (populated only when num_users > 1). A captured trace
-    # reads these tensors by address, so an in-place host update (set_read_user) re-targets the user's slot
-    # WITHOUT recapture. `_slot_frozen` is set around trace capture so the captured forward only reads them
-    # (a host copy inside a trace is illegal); the warm forward pre-sets the values.
-    #   _read_slot_start   — cache-read partition-slice begin [slot,0,0,0], one per layer (prefill.py). The
-    #                        `_read_slot_end` companion is a constant (the reader ignores its value).
-    #   _write_slot        — KV-write user slot (update_padded_kv_cache tensor form); one scalar, all layers.
-    #   _write_kv_actual   — KV-write prior-length scalar, one per distinct depth (bucket); value == key.
+    # Device-valued slot metadata for request-mode tracing (populated only when num_users > 1). A captured
+    # trace reads these tensors by address, so set_read_user re-targets a user's slot in place without
+    # recapture; `_slot_frozen` blocks the host update during capture (a host copy inside a trace is illegal).
+    #   _read_slot_start — cache-read partition-slice begin [slot,0,0,0], one per layer. `_read_slot_end` is a
+    #                      constant companion (the reader ignores its value).
+    #   _write_slot      — KV-write user slot (update_padded_kv_cache tensor form); one scalar, all layers.
+    #   _write_kv_actual — KV-write prior-length scalar, one per distinct depth (bucket).
     _read_slot_start: dict = field(default_factory=dict, repr=False)
     _read_slot_end: object = field(default=None, repr=False)
     _write_slot: object = field(default=None, repr=False)
@@ -76,7 +75,6 @@ class MiniMaxKVCache(KvCaches):
 
     @staticmethod
     def _host_scalar(val):
-        # Host-side 1-element uint32 for the in-place copy_host_to_device update of a device scalar.
         return ttnn.from_torch(
             torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
             dtype=ttnn.uint32,
@@ -84,9 +82,8 @@ class MiniMaxKVCache(KvCaches):
         )
 
     def read_slot_start(self, layer_idx, slot, mesh_device):
-        """Persistent [slot,0,0,0] begin tensor for `layer_idx`, reused across chunks/users. Updated to
-        `slot` in place unless frozen; during trace capture the value is pre-set by the warm forward and
-        must be read as-is (a host copy inside a captured trace is illegal)."""
+        """Persistent [slot,0,0,0] begin tensor for `layer_idx`, reused across chunks/users. Re-targets to
+        `slot` in place unless frozen — during capture the warm forward's value must be read as-is."""
         t = self._read_slot_start.get(layer_idx)
         if t is None:
             self._read_slot_start[layer_idx] = t = self._begin_index_tensor([slot, 0, 0, 0], mesh_device)
@@ -115,8 +112,8 @@ class MiniMaxKVCache(KvCaches):
         return self._write_slot
 
     def write_kv_actual_tensor(self, kv_actual, mesh_device):
-        """Persistent prior-KV-length scalar, one per distinct depth (bucket). value == key, so it is never
-        updated after creation — each captured bucket reads its own depth, shared across users."""
+        """Persistent prior-KV-length scalar, keyed by depth (bucket), so it is never updated after creation —
+        each bucket reads its own depth and is shared across users (no set_read_user)."""
         t = self._write_kv_actual.get(kv_actual)
         if t is None:
             self._write_kv_actual[kv_actual] = t = self._meta_scalar(kv_actual, mesh_device)
