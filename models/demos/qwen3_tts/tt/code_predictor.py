@@ -113,6 +113,48 @@ class CodePredictor(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        _sdpa_cg = device.compute_with_storage_grid_size()
+        # The CP KV cache is always 32 deep (one tile), so a 64-wide K chunk pads
+        # against nothing: measured 20.0 -> 7.4 us per SDPA call at chunk 32.
+        # N150 keeps its validated 64 — it has no board here to re-measure on.
+        _sdpa_chunk = int(os.environ.get("QWEN3_TTS_CP_SDPA_CHUNK", "64" if self._n150 else "32"))
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_sdpa_cg.x, _sdpa_cg.y),
+            exp_approx_mode=False,
+            q_chunk_size=_sdpa_chunk,
+            k_chunk_size=_sdpa_chunk,
+        )
+        # Fused, GQA-native SDPA off N150 too. OPT-IN (default OFF) — see below.
+        #
+        # The manual fp32 chain costs ~47 us/layer (2x repeat_interleave to expand KV
+        # heads, 5 typecasts, a transpose, fp32 QK^T, scale-mul, mask-add, softmax,
+        # fp32 PV, a typecast back) = 234 us/step, and one SDPA call replaces all of
+        # it. Measured on N300, cp_decode_step: 270 -> 222 ops, 1703.1 -> 1537.8 us
+        # (with the 32-wide chunk below), i.e. -2.5 ms of a 24 ms CP frame, and the
+        # real demo's fused CP trace went 30.36 -> 27.35 ms/frame.
+        #
+        # It is OFF by default because the win is not yet gated. What IS known:
+        #   * test_qwen3_tts_pcc cp_step is digit-identical either way (0.999976) --
+        #     but that test runs kv_caches=None with no mask, so it takes SDPA's
+        #     is_causal branch and never exercises the explicit decode/prefill masks
+        #     the demo feeds.
+        #   * Both paths start from the SAME bf16 Q/K (the manual chain only casts
+        #     them up to fp32, which adds no information) and fused SDPA accumulates
+        #     in fp32 via fp32_dest_acc_en, so the expected delta is tiny.
+        #   * Yet paired demo runs (same tree, same prompt, only this flag differing)
+        #     generated consistently FEWER frames with it on -- seed 7: 72->65,
+        #     seed 42: 87->68, seed 123: 91->85. Direction is 3/3 but the within-arm
+        #     spread (~20 frames) is larger than the mean shift (~11), so n=3 cannot
+        #     separate "real regression" from sampler chaos, and fewer frames may just
+        #     be faster speech rather than dropped words.
+        #
+        # To promote it to default-on: run tests/test_qwen3_tts_cp_sdpa_parity.py
+        # (compares both arms on the real MASKED shapes with real weights) and, if
+        # that is clean, a frame-count sweep over >=8 seeds plus a listen/WER check.
+        # PERF_NOTES 3.4 is explicit that PCC cannot predict generation length here.
+        # NOTE: --greedy is NOT a usable gate for this -- pristine HEAD already runs
+        # away to the 256-frame cap on the en_long prompt.
+        self._fused_sdpa = not self._n150 and os.environ.get("QWEN3_TTS_CP_FUSED_SDPA", "0") != "0"
 
         # --- weight format helpers ---
         def _perm_rope_rows(w_2d: torch.Tensor, head_dim: int) -> torch.Tensor:
@@ -337,13 +379,6 @@ class CodePredictor(LightweightModule):
             self._cp_wo_in0_memcfg = width_sharded_l1_memcfg(1, _k_tiles_o, _cols_o, _rows_o)
             self._cp_wo_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_o, _cols_o, _rows_o)
             self._cp_wo_n_padded = _n_pad_o
-
-            self.sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(_cg.x, _cg.y),
-                exp_approx_mode=False,
-                q_chunk_size=64,
-                k_chunk_size=64,
-            )
 
             # CP M is always one tile (decode seq=1, prefill seq=2).
             _M = 32
@@ -851,6 +886,49 @@ class CodePredictor(LightweightModule):
             else:
                 o = ttnn.to_memory_config(o_s, self._ln_mlp_memcfg)
                 ttnn.deallocate(o_s)
+        elif self._fused_sdpa:
+            # One fused GQA-native SDPA instead of the ~11-op fp32 chain below.
+            q_seq = int(q.shape[2])
+            k_seq = int(k_for_attn.shape[2])
+            _explicit_mask = decode_attn_mask if decode_attn_mask is not None else cp_prefill_mask
+            _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)
+            _use_causal = _explicit_mask is None and q_seq == k_seq and q_seq > 1
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k_for_attn,
+                v_for_attn,
+                attn_mask=_explicit_mask,
+                is_causal=_use_causal,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_kcfg,
+                program_config=self.sdpa_program_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            if not k_cache_alias:
+                ttnn.deallocate(k_for_attn)
+                ttnn.deallocate(v_for_attn)
+            if _own_sdpa_mask:
+                ttnn.deallocate(_explicit_mask)
+
+            if fast:
+                attn_s = ttnn.to_memory_config(attn_out, self._n300_concat_in_memcfg)
+                ttnn.deallocate(attn_out)
+                attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_s, memory_config=self._n300_concat_out_memcfg)
+                ttnn.deallocate(attn_s)
+                attn_concat = ttnn.to_memory_config(attn_concat_s, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(attn_concat_s)
+            else:
+                attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(attn_out)
+            o = ttnn.matmul(
+                attn_concat,
+                lw["o_proj"],
+                dtype=self.act_dtype,
+                compute_kernel_config=self.mm_kcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_concat)
         else:
             # SDPA runs in fp32 — QK-norm amplifies K by ~68x; bf16 max=65504 and
             # q·k dot products can reach ~260*260*128 = overflow. Cast explicitly.
@@ -950,6 +1028,8 @@ class CodePredictor(LightweightModule):
             # and at M=32 (a tile pad of a true M=1) in0 is ~64 KB against a 2 MB
             # weight — so the only placement that can matter is the WRITEBACK, which
             # was a full extra DRAM round-trip that _all_reduce then re-read.
+            # Measured 113.6 GB/s (39.5% of the 288 GB/s WH peak) on 32 cores, vs
+            # 56-71% for the DRAM-sharded MLP siblings that already land in L1.
             o = ttnn.matmul(
                 attn_concat,
                 lw["o_proj"],
@@ -1088,7 +1168,7 @@ class CodePredictor(LightweightModule):
         # Fused SDPA rejects fp32. Convert once per step (Talker does the same);
         # prepare_fused_sdpa_mask is then a no-op inside each layer.
         _own_decode_mask = _own_prefill_mask = False
-        if self._n150:
+        if self._n150 or self._fused_sdpa:
             decode_attn_mask, _own_decode_mask = prepare_fused_sdpa_mask(decode_attn_mask)
             cp_prefill_mask, _own_prefill_mask = prepare_fused_sdpa_mask(cp_prefill_mask)
 
