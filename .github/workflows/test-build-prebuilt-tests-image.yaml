@@ -371,18 +371,20 @@ jobs:
           # Only the recipe hash may differ; sha12, CONFIG and the base slug must not.
           [ "${FULL%-*}" = "${EXPLICIT%-*}" ] \
             || { echo "::error::tags differ outside the recipe hash: ${FULL} vs ${EXPLICIT}"; exit 1; }
-          # And the payload must be byte-identical, or the explicit ref checked out
-          # something other than the commit the default resolves to.
-          layers() {
-            local ref="$1" repo="${1%:*}" child
-            child=$(docker manifest inspect "$ref" \
-              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest')
-            [ -n "$child" ] && ref="${repo}@${child}"
-            docker manifest inspect "$ref" | jq -r '.layers[].digest'
+          # The contents must match, or the explicit ref checked out something other
+          # than the commit the default resolves to. Compare paths and sizes rather
+          # than layer digests: these are independent builds, so tar header mtimes
+          # differ and the digests differ with them even when the files do not.
+          # Measured on two same-run bakes of the same commit: 211,190,989 vs
+          # 211,181,760 bytes for the same source layer.
+          tree() {
+            docker run --rm --entrypoint sh "$1" -c \
+              'find /work -type f -printf "%p %s\n" | LC_ALL=C sort | sha256sum | cut -d" " -f1'
           }
-          diff <(layers "$FULL") <(layers "$EXPLICIT") \
-            || { echo "::error::explicit source-ref produced different layers than the default"; exit 1; }
-          echo "source-ref separates the tag (${FULL##*-} vs ${EXPLICIT##*-}) with identical layers"
+          a=$(tree "$FULL"); b=$(tree "$EXPLICIT")
+          [ "$a" = "$b" ] \
+            || { echo "::error::explicit source-ref produced different /work contents (${a} vs ${b})"; exit 1; }
+          echo "source-ref separates the tag (${FULL##*-} vs ${EXPLICIT##*-}) with identical /work contents (${a})"
 
   verify-env:
     name: "Run a test from the env image"
