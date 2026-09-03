@@ -52,8 +52,9 @@ struct TernaryDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
-        // Cache-hit re-apply of only the per-dispatch args (src/dst buffer addresses + packed scalar),
-        // IN PLACE on the cached program -- no rebuild, no work-split re-derivation. See the .cpp.
+        // Cache-hit re-apply of the per-dispatch args IN PLACE on the cached program -- no descriptor
+        // rebuild, no per-core allocation. Covers everything a volume-equivalent shape can change:
+        // buffer addresses, packed scalar, strides, nD broadcast factors and tile counts. See the .cpp.
         static void override_runtime_arguments(
             tt::tt_metal::Program& program,
             const operation_attributes_t& operation_attributes,
