@@ -37,21 +37,13 @@ if TYPE_CHECKING:
 
 
 def _module_is_loaded(module: object | None) -> bool:
-    """Whether a submodule currently holds its weights on device.
-
-    Returns True for anything that has no load state (a torch fallback encoder, or None), so
-    callers treat it as "nothing to evict".
-    """
+    """Whether ``module`` holds weights on device. Anything without load state counts as loaded."""
     is_loaded = getattr(module, "is_loaded", None)
     return True if is_loaded is None else bool(is_loaded())
 
 
 def _release_module_trace(module: object | None) -> None:
-    """Release the trace captured on ``module.forward``, if it has one.
-
-    ``traced_function`` keeps one ``Tracer`` per context in a ``WeakKeyDictionary`` hung off
-    the decorated function, so the module instance is the key.
-    """
+    """Release the trace captured on ``module.forward``, if it has one."""
     forward = getattr(type(module), "forward", None)
     tracers = getattr(forward, "_tracers", None)
     if tracers is None:
@@ -267,20 +259,13 @@ class Flux2Pipeline:
             tracer.release_trace()
 
     def release_traces(self) -> None:
-        """Release every trace captured by this pipeline or its submodules.
-
-        A ttnn trace bakes its inputs' *and its weights'* device addresses, so a trace must
-        never outlive an eviction of the module it captured. With ``dynamic_load`` the three
-        big modules take turns in DRAM, so each `_prepare_*` below drops the traces that
-        depend on whatever it is about to evict.
-        """
+        """Release every trace captured by this pipeline or its submodules."""
         self._release_denoise_trace()
         _release_module_trace(self._vae_decoder)
         _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
 
     def _prepare_transformer(self) -> None:
-        # Loading the transformer evicts the encoder and the VAE (see the coresident
-        # exclusions registered in __init__), so their traces die with their weights.
+        # A trace bakes its weights' addresses, so drop the traces this load will evict.
         if self.dynamic_load and not self.transformer.is_loaded():
             _release_module_trace(self._vae_decoder)
             _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
@@ -297,7 +282,6 @@ class Flux2Pipeline:
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
-        # Loading the encoder evicts the transformer, which the denoise trace captured.
         encoder = getattr(self._prompt_encoder, "_encoder", None)
         if self.dynamic_load and not _module_is_loaded(encoder):
             self._release_denoise_trace()
@@ -305,7 +289,6 @@ class Flux2Pipeline:
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
-        # Loading the VAE also evicts the transformer.
         if self.dynamic_load and not self._vae_decoder.is_loaded():
             self._release_denoise_trace()
         cache.load_model(

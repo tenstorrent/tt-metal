@@ -363,8 +363,7 @@ class ColParallelLinear(Module):
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
-        per-TP-device output slice and require `parallel_config`. The Ring path fuses them into
-        the all-gather-matmul; other paths route through the addcmul-fused minimal matmul.
+        per-TP-device output slice, and require `parallel_config`.
         """
         if addcmul_a is not None or addcmul_b is not None:
             if (addcmul_a is None) != (addcmul_b is None):
@@ -492,16 +491,11 @@ class ColParallelLinear(Module):
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
             if addcmul_a is not None:
-                # This branch used to accept addcmul_a/addcmul_b and silently drop them:
-                # only the Ring all-gather-matmul above fused them, so on Linear topology
-                # the gated residual promised by the docstring was never added (flux2's
-                # double blocks lost their attention residual this way). Route through the
-                # addcmul-fused minimal matmul instead. That op has no fused-activation
-                # support, so reject the combination rather than compute the wrong thing.
+                # This op has no fused-activation support, so reject the combination rather
+                # than compute the wrong thing.
                 if self.fused_activation_fn is not None or self.fuse_swiglu:
                     msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
                     raise ValueError(msg)
-                # x may have been gathered above, so size the config from its current K.
                 matmul_config = get_matmul_config(M, x.padded_shape[-1], N, core_grid, default_block_size)
                 output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                     x,
