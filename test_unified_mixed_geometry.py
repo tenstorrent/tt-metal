@@ -10,28 +10,32 @@ unified_blaze_integration_spec.md B3 records as FIXED has had no regression test
 measurements were taken through throwaway probes and through blaze, neither of which is in
 this repo.
 
-WHAT THIS PINS. Tile geometry is programmed ONLY by the kernel's init, for the unpacker and
-the packer together, and the operand whose geometry the init did not name comes back wrong.
-With the init on the 32x32 pair, the row store loses face 1 entirely -- a 1x32 tile is two
-faces of 1x16, so that is half the row. See A3, which this test CORRECTS: the defect is not
-`pack_to` failing to carry geometry between stores. A body containing only the row store
-fails identically, and reprogramming the packer does not repair it.
+WHAT IT COVERS. Tile geometry reaches the hardware through hw_configure, which the kernel's
+init runs once for the ONE operand pair it names; the per-pass calls carry formats and the op
+and never carried geometry. So a pass over an operand of another geometry read and wrote
+through the init's descriptor. `unpack_geometry_to` / `pack_geometry_to` in math.hpp
+reprogram the descriptors per pass, and this is what holds them to it.
 
-THIS TEST PASSES WHILE THE DEFECT IS PRESENT, which needs saying out loud. It asserts the
-CURRENT behaviour, so it holds the finding still rather than turning the suite red over a
-defect nobody has fixed yet. Run it with --expect-fixed once a fix lands: that asserts the
-numbers are right instead, and is the switch to flip when the per-pass geometry re-init A3
-now asks for exists. Either way it fails if the behaviour CHANGES, which is the point of
-pinning it.
+WHAT IT LOOKED LIKE BEFORE THE FIX, because the numbers are the diagnosis:
+
+    init on 32x32, both passes         32x32 1024/1024   row face1  0/16
+    init on 32x32, row pass alone            n/a         row face1  0/16
+    init on row, row pass alone              n/a         row face1 16/16
+    init on row, both passes           32x32  277/1024   row face1 16/16
+    init on 32x32, re-init mid-body    32x32 1024/1024   row face1 16/16
+
+Whichever geometry the init named came back right, in BOTH directions -- row 4 is the same
+defect pointing the other way. Row 2 is what ruled out A3's first diagnosis (that `pack_to`
+failed to carry geometry between stores): one store, no transition, the same lost face. A
+1x32 tile is two faces of 1x16, so a lost face 1 is half the row.
 
 Checked face by face, not by PCC. A whole-row PCC reads 0.6-0.8 with half the values exactly
 wrong, and that is a number people explain away; "face 1: 0/16" is not.
 
     export TT_METAL_HOME=$PWD
     source python_env/bin/activate
-    python test_unified_mixed_geometry.py             # pins the defect
-    python test_unified_mixed_geometry.py --matrix    # the five bodies that localised it
-    python test_unified_mixed_geometry.py --expect-fixed
+    python test_unified_mixed_geometry.py             # the primary body
+    python test_unified_mixed_geometry.py --matrix    # all five, the ones that localised it
 """
 
 import argparse
@@ -55,15 +59,17 @@ FACE = 16  # a row-form tile is two faces of 1x16, and face 1 is the one that go
 #   row_init   point the kernel's init at the ROW pair instead of the 32x32 one
 #   reinit     re-init the SFPU for the row pair mid-body, through the raw API
 #
-# Read it downwards: whichever geometry the init names is the one that comes back right, in
-# BOTH directions, and a mid-body re-init repairs both. Row 2 is what rules out A3's stated
-# mechanism -- one store, no transition, same lost face.
+# All five are exact now, which is the point: the fix does not depend on which geometry the
+# init happened to name, and the mid-body re-init in the last body is redundant rather than
+# load-bearing. The docstring records what each of them measured BEFORE the fix, which is
+# where the diagnosis came from -- keep the bodies even though they now agree, because a
+# regression would show up in exactly one of them and the row tells you which half broke.
 VARIANTS = [
     # name                                  row_only row_init reinit   full  face0 face1
-    ("init on 32x32, both passes", False, False, False, True, True, False),
-    ("init on 32x32, row pass alone", True, False, False, None, True, False),
+    ("init on 32x32, both passes", False, False, False, True, True, True),
+    ("init on 32x32, row pass alone", True, False, False, None, True, True),
     ("init on row, row pass alone", True, True, False, None, True, True),
-    ("init on row, both passes", False, True, False, False, True, True),
+    ("init on row, both passes", False, True, False, True, True, True),
     ("init on 32x32, re-init for row", False, False, True, True, True, True),
 ]
 
@@ -141,7 +147,6 @@ def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--rel-err", type=float, default=0.02, help="max elementwise relative error")
     p.add_argument("--matrix", action="store_true", help="run all five bodies against the recorded table")
-    p.add_argument("--expect-fixed", action="store_true", help="assert the numbers are RIGHT (post-fix)")
     args = p.parse_args(argv)
 
     cases = VARIANTS if args.matrix else VARIANTS[:1]
@@ -154,7 +159,7 @@ def main(argv=None):
     failed = []
     for case, (full, face0, face1) in zip(cases, measured):
         name, row_only = case[0], case[1]
-        want = (None if row_only else True, True, True) if args.expect_fixed else tuple(case[4:])
+        want = tuple(case[4:])
         shown = "n/a" if full is None else ("exact" if full else "WRONG")
         logger.info(f"{name:34s} 32x32={shown:5s}  face0={face0}/{FACE}  face1={face1}/{FACE}")
         if (full, face0 == FACE, face1 == FACE) != want:
@@ -162,20 +167,13 @@ def main(argv=None):
 
     if failed:
         logger.error(f"FAIL: {failed}")
-        if args.expect_fixed:
-            logger.error("the per-pass geometry re-init A3 asks for is absent, or is not sufficient")
-        else:
-            logger.error("behaviour CHANGED from what this test pins -- re-run --matrix and update A3")
-        return 1
-
-    if args.expect_fixed:
-        logger.info("PASS")
-    else:
-        logger.warning(
-            "PASS -- and this is a test that passes while the defect is PRESENT: the row store "
-            "loses face 1, half the row, whenever the init named the other geometry. See "
-            "unified_blaze_integration_spec.md A3, and use --expect-fixed once it is fixed."
+        logger.error(
+            "a lost face on the row store means the per-pass descriptor reprogramming in "
+            "math.hpp (unpack_geometry_to / pack_geometry_to) is not reaching this path; a "
+            "lost 32x32 store means it reprogrammed and did not put it back"
         )
+        return 1
+    logger.info("PASS")
     return 0
 
 

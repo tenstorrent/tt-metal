@@ -113,7 +113,82 @@ namespace detail {
 // pack_to_forget().
 inline constexpr uint32_t kPackUnset = ~uint32_t(0);
 inline uint32_t g_pack_configured = kPackUnset;
+
+// THE TILE GEOMETRY each side is currently programmed for, tracked separately from the
+// format above and separately from each other.
+//
+// Per RISC, which is what these statics already are, and that is not a compromise: the
+// unpacker's descriptor is programmed on the UNPACK build from the unpack_* tables and the
+// packer's on the PACK build from the pack_* set, so each thread can see its own half and
+// only its own half. Two memos, two decisions, no agreement required between them.
+//
+// kPackUnset is not a geometry any buffer can have, so the first pass through always
+// programs -- which is right, because what the kernel's init left behind named one operand
+// pair and this pass may be another.
+inline uint32_t g_unpack_geometry = kPackUnset;
+inline uint32_t g_pack_geometry = kPackUnset;
 }  // namespace detail
+
+// ---------------------------------------------------------------------------
+// Per-pass tile geometry
+//
+// WHAT THESE FIX. Tile geometry reaches the hardware through hw_configure, and hw_configure
+// runs once, in the kernel's init, for the ONE operand pair that init named. The per-pass
+// calls the model already makes -- reconfig_data_format* for the formats,
+// copy_tile_to_dst_init_short / *_tiles_init for the op and the operand -- do not carry it:
+// `unary_op_init_common` is unpack_hw_configure + unpack_A_init, pack_hw_configure +
+// pack_init + pack_dest_init, math_hw_configure + pack_sync_init, and the model's per-pass
+// subset is the middle of each of those three.
+//
+// So a pass over an operand of DIFFERENT geometry read through the init's descriptor. A 1x32
+// tile is two faces of 1x16; read and written through a four-face 16x16 descriptor it loses
+// face 1 -- half the row, no diagnostic. Measured, and localised in five bodies, by
+// test_unified_mixed_geometry.py; see unified_blaze_integration_spec.md A3, which this is the
+// fix for and whose first diagnosis (that pack_to failed to carry geometry between stores)
+// these calls replace. A body with a single store fails the same way, so it was never about
+// transitions between stores.
+//
+// NOT pack_sync_init, which is the one call in that group that must not run twice -- it hangs
+// the device, the trap phase 7 hit with matmul. Nothing here touches DST synchronisation:
+// these reprogram descriptors and the packer's dest mapping, at a pass boundary, which is
+// where the model already reconfigures.
+// ---------------------------------------------------------------------------
+
+// The operand side. Called where the model already re-points the unpacker at a leaf's
+// buffer, so it costs nothing when the geometry is the one already programmed -- which is
+// every kernel with one geometry throughout, i.e. all of unified_kernels/ but one.
+inline void unpack_geometry_to(uint32_t dfb_id) {
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+    const uint32_t geometry = unpack_tile_geometry(dfb_id);
+    if (geometry != detail::g_unpack_geometry) {
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(dfb_id)));
+        // NOT llk_math_hw_configure: it sets the operand-driven DEFAULT for the Src
+        // zero-substitution flag, which eltwise_unary.h re-asserts immediately afterwards
+        // precisely because hw_configure clobbers it ("the last writer before the op runs").
+        // Re-running it mid-body would drop that flag on the floor.
+        detail::g_unpack_geometry = geometry;
+    }
+#else
+    (void)dfb_id;
+#endif
+}
+
+// The destination side, called from pack_to below.
+inline void pack_geometry_to(uint32_t dfb_id) {
+#if defined(TT_U_HAVE_PACK_TILE_GEOMETRY)
+    const uint32_t geometry = pack_tile_geometry(dfb_id);
+    if (geometry != detail::g_pack_geometry) {
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_id)));
+        PACK((llk_pack_init(dfb_id)));
+        // NOT llk_pack_dest_init: it reprograms where the packer READS Dest from, which is
+        // per-kernel state rather than per-pass, and re-running it mid-body corrupted both
+        // faces of the row store rather than repairing one -- measured.
+        detail::g_pack_geometry = geometry;
+    }
+#else
+    (void)dfb_id;
+#endif
+}
 
 inline void pack_to(uint32_t dfb_id) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
@@ -127,6 +202,7 @@ inline void pack_to(uint32_t dfb_id) {
     } else {
         ckernel::pack_reconfig_data_format(detail::g_pack_configured, dfb_id);
     }
+    pack_geometry_to(dfb_id);
     detail::g_pack_configured = dfb_id;
 #else
     (void)dfb_id;
@@ -146,7 +222,13 @@ inline void pack_to(uint32_t dfb_id) {
 //
 // Cheap enough to call whenever in doubt -- it costs one reconfig on the next pass, which
 // is what would have happened anyway had the memo not been there.
-inline void pack_to_forget() { detail::g_pack_configured = detail::kPackUnset; }
+inline void pack_to_forget() {
+    detail::g_pack_configured = detail::kPackUnset;
+    // The geometry memo is the same kind of claim about hardware state, so it goes with it.
+    // Leaving it would be the worse half of the bug this function exists for: the format
+    // would be reprogrammed and the descriptor would not.
+    detail::g_pack_geometry = detail::kPackUnset;
+}
 
 // Largest number of output ROWS whose tiles fit one acquire, and which divides the block
 // evenly so no band is short. Row bands rather than rectangles because a band covers
@@ -234,11 +316,15 @@ struct TileSource : expr::Fluent<TileSource<S>> {
     // the cheaper conditional form -- possible there because it batches all of one
     // operand's tiles together, which this per-tile loop does not.
     //
-    // Uniform TILE GEOMETRY is a separate assumption, and one the model already makes:
-    // every dataflow buffer here holds exactly one 32x32 tile per page.
+    // TILE GEOMETRY used to be a separate assumption here -- "every dataflow buffer holds
+    // exactly one 32x32 tile per page" -- and it stopped being true when the host could state
+    // a sub-tile geometry. unpack_geometry_to reprograms the unpacker's descriptor when this
+    // leaf's buffer is not the geometry currently programmed; the two calls beside it carry
+    // the format and the op and never carried this. See the note above it.
     void emit(uint32_t dst, uint32_t tile, bool reconfigure) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         if (reconfigure) {
+            unpack_geometry_to(dfb_id);
             ckernel::reconfig_data_format_srca(dfb_id);
             ckernel::copy_tile_to_dst_init_short(dfb_id);
         }
