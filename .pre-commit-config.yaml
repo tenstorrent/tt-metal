@@ -61,11 +61,6 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
-    - id: check-agent-prompt-lengths
-      name: check .agents/prompts goal objective lengths (<=4000 chars substituted)
-      entry: python3 scripts/check_agent_prompt_lengths.py
-      language: system
-      files: ^\.agents/prompts/
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api

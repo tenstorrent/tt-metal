@@ -129,6 +129,48 @@ assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK
 _PADDED_MID_15K = [2592, 1568, 5120, 800, 3360, 1920]  # sum == 15 * 1024
 assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_MID_15K)
 
+
+def _padded_cache_len(splits):
+    """Slab-aligned cache for the splits' REAL tokens -- deliberately NOT the padded window, so the
+    last chunk pads off the end of the cache and update_padded_kv_cache has to clamp the write. Sizing
+    to max(kv_actual + CHUNK) would house that pad tail and never exercise it.
+
+    Returns (seq_len_cache, overruns), overruns being the (chunk index, kv_actual) of every chunk
+    padding past the cache.
+    """
+    seq_len_cache = max(CHUNK * 2, ((sum(splits) + CHUNK - 1) // CHUNK) * CHUNK)
+    ka, overruns = 0, []
+    for c, v in enumerate(splits):
+        if ka + CHUNK > seq_len_cache:
+            overruns.append((c, ka))
+        ka += v
+    return seq_len_cache, overruns
+
+
+def _assert_splits_overrun():
+    """Checked at import so a splits edit that loses the overrun fails at collection, not after loading
+    61 layers of weights."""
+    for name, splits in (("_PADDED_FULL_55K", _PADDED_FULL_55K), ("_PADDED_MID_15K", _PADDED_MID_15K)):
+        cache, overruns = _padded_cache_len(splits)
+        assert overruns, (
+            f"{name} never pads past its {cache}-token cache, so it no longer covers the clamped tail "
+            f"write; keep a final chunk whose start + {CHUNK} exceeds the cache"
+        )
+
+
+_assert_splits_overrun()
+
+
+def _pad_overrun_summary(seq_len_cache, overruns):
+    """One log line naming the clamped chunks, so a CI log shows the coverage ran."""
+    worst = max(ka for _, ka in overruns) + CHUNK
+    return (
+        f"pad tail past the cache: {len(overruns)} chunk(s) {[c for c, _ in overruns]} pad past the "
+        f"{seq_len_cache}-token cache (worst window ends {worst}, +{worst - seq_len_cache}); their real "
+        f"tokens fit and update_padded_kv_cache clamps the rest"
+    )
+
+
 # Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
 # transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
 LAYER_PCC_THRESHOLD = 0.88
@@ -493,13 +535,8 @@ def run_chunked_transformer_padded(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
-    # Slab-aligned cache covering the largest rotated write (kv_actual + CHUNK), >= 2 slabs.
-    max_window = CHUNK * 2
-    ka = 0
-    for v in splits:
-        max_window = max(max_window, ka + CHUNK)
-        ka += v
-    seq_len_cache = ((max_window + CHUNK - 1) // CHUNK) * CHUNK
+    # Real-token cache, pad tail off the end (see _padded_cache_len).
+    seq_len_cache, pad_overruns = _padded_cache_len(splits)
 
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -509,6 +546,7 @@ def run_chunked_transformer_padded(
         f"chunked-padded transformer: num_layers={num_layers} mesh={mesh_shape} splits={splits} "
         f"total_len={total_len} cache={seq_len_cache} chunk={CHUNK}"
     )
+    logger.info(_pad_overrun_summary(seq_len_cache, pad_overruns))
 
     token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
 
@@ -2087,12 +2125,8 @@ def run_chunked_transformer_padded_trace(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
-    # Slab-aligned cache covering the largest rotated write (mirror run_chunked_transformer_padded).
-    max_window, ka = CHUNK * 2, 0
-    for v in splits:
-        max_window = max(max_window, ka + CHUNK)
-        ka += v
-    seq_len_cache = ((max_window + CHUNK - 1) // CHUNK) * CHUNK
+    # Real-token cache, pad tail off the end (mirror run_chunked_transformer_padded).
+    seq_len_cache, pad_overruns = _padded_cache_len(splits)
 
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_len_cache
@@ -2100,6 +2134,7 @@ def run_chunked_transformer_padded_trace(
         f"chunked-padded TRACE: num_layers={num_layers} mesh={mesh_shape} splits={splits} "
         f"total_len={total_len} cache={seq_len_cache} chunk={CHUNK}"
     )
+    logger.info(_pad_overrun_summary(seq_len_cache, pad_overruns))
     token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
 
     effective_cache_path = weight_cache_path / f"{sp}x{tp}"

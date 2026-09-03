@@ -25,7 +25,6 @@ from pydantic import (
 
 from .fuser_config import FuserConfig, GlobalConfig
 from .operand import OperandRegistry
-from .validator import PackSchema
 
 FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
@@ -39,24 +38,63 @@ arch = get_chip_architecture()
 OperationSchema = _get_parser().OperationSchema
 
 
+def _format_loc(loc):
+    parts = []
+    i = 0
+    while i < len(loc):
+        part = loc[i]
+        if isinstance(part, int):
+            parent = parts[-1] if parts else ""
+            ordinal = part + 1
+            if parent == "operations":
+                parts[-1] = f"Operation {ordinal}"
+            elif parent == "math":
+                parts[-1] = f"Math node {ordinal}"
+            elif parent == "pack":
+                parts[-1] = f"Pack entry {ordinal}"
+            elif parent == "operands":
+                parts[-1] = f"Operand {ordinal}"
+            else:
+                parts[-1] = f"{parent}[{part}]"
+        elif isinstance(part, str):
+            is_discriminator = (
+                parts
+                and parts[-1].startswith(("Math node", "Pack entry"))
+                and i + 1 < len(loc)
+                and isinstance(loc[i + 1], str)
+            )
+            if is_discriminator:
+                parts[-1] += f" ({part})"
+            else:
+                parts.append(part)
+        i += 1
+    return parts
+
+
 def format_validation_error(error: ValidationError) -> str:
     messages = []
     for err in error.errors():
-        loc = ".".join(str(x) for x in err["loc"])
+        loc_parts = _format_loc(err["loc"])
         msg = err["msg"]
 
         if "Input should be" in msg:
             inp = err.get("input")
             valid_values = re.findall(r"'([^']+)'", msg)
             expected = ", ".join(valid_values) if valid_values else msg
-            messages.append(f"'{loc}': got '{inp}', expected: {expected}")
+            error_msg = f"got '{inp}', expected: {expected}"
         elif "Extra inputs are not permitted" in msg:
-            messages.append(f"'{loc}': unknown field")
+            error_msg = "unknown field"
         elif "Field required" in msg:
-            messages.append(f"'{loc}': required field missing")
+            error_msg = "required field"
         else:
-            clean_msg = msg.removeprefix("Value error, ")
-            messages.append(f"'{loc}': {clean_msg}")
+            error_msg = msg.removeprefix("Value error, ")
+
+        for i, part in enumerate(loc_parts):
+            indent = "  " * i
+            if i == len(loc_parts) - 1:
+                messages.append(f"{indent}{part}: {error_msg}")
+            else:
+                messages.append(f"{indent}{part}")
 
     return "\n".join(messages)
 
@@ -126,6 +164,14 @@ class FuserConfigSchema(BaseModel):
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
 
+    @staticmethod
+    def _declared_format(formats: dict, name: str) -> DataFormat:
+        if name not in formats:
+            raise ValueError(
+                f"Operand '{name}' is not declared in the 'operands' section"
+            )
+        return formats[name]
+
     @model_validator(mode="after")
     def validate_config(self) -> "FuserConfigSchema":
         formats = {op_def.name: op_def.format for op_def in self.operands}
@@ -134,14 +180,18 @@ class FuserConfigSchema(BaseModel):
         for op in self.operations:
             src_a_name = None
             for node in op.math:
-                if hasattr(node, "src_a"):
-                    if src_a_name is None:
-                        src_a_name = node.src_a
-                    seen_operands.add(node.src_a)
-                if hasattr(node, "src_b"):
-                    seen_operands.add(node.src_b)
+                for operand_name in (
+                    getattr(node, "in0", None),
+                    getattr(node, "in1", None),
+                ):
+                    if operand_name is None:
+                        continue
+                    self._declared_format(formats, operand_name)
+                    seen_operands.add(operand_name)
+                if src_a_name is None:
+                    src_a_name = getattr(node, "in0", None)
 
-            pack_schemas = [e for e in op.pack if isinstance(e, PackSchema)]
+            pack_schemas = op.pack_schemas
 
             for pack_entry in pack_schemas:
                 if pack_entry.output in seen_operands:
@@ -151,8 +201,8 @@ class FuserConfigSchema(BaseModel):
                 seen_operands.add(pack_entry.output)
 
                 if src_a_name is not None:
-                    input_fmt = formats[src_a_name]
-                    output_fmt = formats[pack_entry.output]
+                    input_fmt = self._declared_format(formats, src_a_name)
+                    output_fmt = self._declared_format(formats, pack_entry.output)
                     if is_format_combination_outlier(
                         input_fmt, output_fmt, self.dest_acc
                     ):
@@ -161,7 +211,9 @@ class FuserConfigSchema(BaseModel):
                         )
 
             if len(pack_schemas) > 1:
-                pack_formats = [formats[e.output] for e in pack_schemas]
+                pack_formats = [
+                    self._declared_format(formats, e.output) for e in pack_schemas
+                ]
                 first_exp_b = pack_formats[0].is_exponent_B()
                 if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
                     names = [e.output for e in pack_schemas]
@@ -184,16 +236,20 @@ class FuserConfigSchema(BaseModel):
                 tile_dims=op_def.tile_dims,
             )
 
-        pipeline = [
-            op.to_l1_operation(operands, dest_acc=self.dest_acc.value)
-            for op in self.operations
-        ]
+        pipeline = []
+        for i, op in enumerate(self.operations):
+            try:
+                pipeline.append(
+                    op.to_l1_operation(operands, dest_acc=self.dest_acc.value)
+                )
+            except ValueError as e:
+                raise ValueError(f"Operation {i + 1}\n  {e}") from None
 
         num_stages = len(pipeline)
         for i, operation in enumerate(pipeline):
             operation.stage_id = i + 1
             operation.needs_pack_sync = any(
-                node.src_a.is_output
+                (node.src_a is not None and node.src_a.is_output)
                 or (node.src_b is not None and node.src_b.is_output)
                 for node in operation.math.math_nodes
                 if hasattr(node, "unpacker") and node.unpacker is not None
@@ -253,4 +309,7 @@ class FuserConfigSchema(BaseModel):
                 f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
             ) from None
 
-        return schema.to_fuser_config(test_name)
+        try:
+            return schema.to_fuser_config(test_name)
+        except ValueError as e:
+            raise ValueError(f"Validation failed for {yaml_path.name}:\n{e}") from None

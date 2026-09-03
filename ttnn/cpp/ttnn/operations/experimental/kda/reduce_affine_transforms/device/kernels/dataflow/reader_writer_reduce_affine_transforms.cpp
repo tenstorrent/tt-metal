@@ -25,9 +25,10 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
+template <typename ReadySem>
 FORCE_INLINE void send_affine_pair(
     Noc& noc,
-    Semaphore<>& ready,
+    ReadySem& ready,
     uint32_t target,
     DataflowBuffer& send_a,
     DataflowBuffer& send_b,
@@ -53,14 +54,14 @@ FORCE_INLINE void send_affine_pair(
     ready.up(noc, target_x, target_y, 1);
 }
 
-template <uint32_t G>
+template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
     uint32_t& completed_stages,
     Noc& noc,
-    Semaphore<>& arrival,
-    Semaphore<>& release) {
+    ArrivalSem& arrival,
+    ReleaseSem& release) {
     completed_stages++;
     const uint32_t coordinator = worker_index - group;
     const uint32_t coordinator_x = worker_x(coordinator);
@@ -94,9 +95,9 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
     Noc noc;
-    Semaphore<> ready(sem::ready);
-    Semaphore<> arrival(sem::arrival);
-    Semaphore<> release(sem::release);
+    Semaphore ready(sem::ready);
+    Semaphore arrival(sem::arrival);
+    Semaphore release(sem::release);
 
     initial_a.reserve_back(a_tiles);
     initial_b.reserve_back(b_tiles);

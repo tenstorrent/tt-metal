@@ -69,7 +69,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -85,7 +85,6 @@ void kernel_main() {
         pack_init(dfb_llk_post_id);
 #endif
         reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
-        pack_reconfig_data_format(dfb_llk_post_id);
         unary_bcast_init<BroadcastType::ROW>(dfb_bcast_id);
 
         tile_regs_acquire();
@@ -99,16 +98,13 @@ void kernel_main() {
         dfb_bcast.pop_front(num_tiles_per_cycle);
 
         pack_reconfig_data_format(dfb_llk_post_id, dfb_out_id);
-#ifdef ARCH_QUASAR
+#if defined(ARCH_BLACKHOLE)
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
+#elif defined(ARCH_QUASAR)
         // Retarget the packer destination ring back to dfb_out for the binary-op pack below; without
         // this the gasket-only pack_reconfig above leaves the ring on llk_post and pack_tile(0, out)
         // writes the wrong buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
         pack_init(dfb_out_id);
-#endif
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
         // --- Binary op (verbatim from eltwise_binary_no_bcast_dfb.cpp's body, single tile). ---
