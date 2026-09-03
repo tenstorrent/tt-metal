@@ -695,7 +695,7 @@ def _load_attempts_all() -> list:
     been shown to hold now. Only the tried/not-tried question changes.
     """
     out, seen = [], set()
-    for src in (Path(str(_KERNEL_LOG_PATH) + ".cumulative"), _KERNEL_LOG_PATH):
+    for src in (_kernel_log_archive(), _KERNEL_LOG_PATH):
         try:
             rows = json.loads(src.read_text())
         except Exception:  # noqa: BLE001 -- absent on a first run, and a bad archive must not erase
@@ -724,6 +724,16 @@ def _load_attempts_all() -> list:
 
 def _save_attempts(a: list) -> None:
     _KERNEL_LOG_PATH.write_text(json.dumps(a))
+
+
+def _kernel_log_archive() -> Path:
+    """The archive that sits beside the live attempt log.
+
+    Derived at CALL time and never stored: PERF_MCP_KERNEL_LOG redirects the live log and the
+    archive has to follow it there -- which is what test_the_attempt_log_is_durable pins -- and a
+    module constant would freeze the path at import, before any redirect.
+    """
+    return Path(str(_KERNEL_LOG_PATH) + ".cumulative")
 
 
 _LAST_TARGET_PATH = Path(str(_KERNEL_LOG_PATH) + ".target")
@@ -1153,7 +1163,7 @@ def _rebuild_optimize_report(model_root=None) -> None:
     import time as _t
 
     attempts = _load_attempts()
-    cum_path = Path(str(_KERNEL_LOG_PATH) + ".cumulative")
+    cum_path = _kernel_log_archive()
     merged = _merge_cumulative(cum_path, attempts)
     if not merged:
         return
@@ -6081,6 +6091,51 @@ def _ttnn_version() -> str:
         return ""
 
 
+_TTNN_BACKFILLED = False
+
+
+def _backfill_ttnn_version() -> None:
+    """Stamp the running ttnn onto attempts recorded before that field existed. Once per process.
+
+    A blank stamp reads as "graded by an unknown ttnn" and _stock_gate skips it, which is the right
+    reading of a blank -- an unknown version cannot be shown to differ from this one. But blanks stay
+    blank, so a kernel banked before the field existed would never be re-checked however far ttnn
+    moved: the gate would apply only to kernels written from now on, while the ones most likely to
+    have gone stale are exactly the oldest.
+
+    Filling them with the version running NOW is a statement this can support. These rows were
+    measured on this machine against the ttnn installed on it, and no upgrade has happened between
+    recording them and reading this line -- had one, the run that wrote them could not have been
+    using the build loaded here. It claims nothing about a past it cannot see, and it is what lets
+    the next upgrade find them.
+
+    Each log is rewritten IN PLACE. _load_attempts merges the archive with the live rows, and saving
+    that union back would move archived rows into the live log, where the resume filter would then
+    rewrite them against this run's baseline -- so the two files are read and written separately, as
+    that function reads them.
+    """
+    global _TTNN_BACKFILLED
+    if _TTNN_BACKFILLED:
+        return
+    _TTNN_BACKFILLED = True
+    now = _ttnn_version()
+    if not now:
+        return
+    for p in (_kernel_log_archive(), _KERNEL_LOG_PATH):
+        try:
+            rows = json.loads(p.read_text())
+            if not isinstance(rows, list):
+                continue
+            blank = [a for a in rows if isinstance(a, dict) and not str(a.get("ttnn_version") or "")]
+            if not blank:
+                continue  # nothing to fill: the common case writes no file at all
+            for a in blank:
+                a["ttnn_version"] = now
+            p.write_text(json.dumps(rows))
+        except Exception:  # noqa: BLE001 -- a stamp that cannot be written must never cost a run
+            continue
+
+
 def _stock_gate(prof: dict, attempts: list) -> dict | None:
     """A hand-written kernel that beat stock ttnn -- under a DIFFERENT ttnn than the one running now.
 
@@ -6102,6 +6157,10 @@ def _stock_gate(prof: dict, attempts: list) -> dict | None:
     now = _ttnn_version()
     if not now:
         return None  # (1) not applicable: this process cannot say what ttnn it is running
+    # Rows older than the stamp get it now, so a later upgrade can find them. It cannot change this
+    # round's answer -- what it writes IS `now`, which is by definition not stale -- so the gate
+    # below reads the same picture either way.
+    _backfill_ttnn_version()
     stale = [
         a
         for a in attempts

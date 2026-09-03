@@ -20,6 +20,7 @@ into the gate -- rather than handing the gate a dict shaped the way it likes.
 """
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -244,6 +245,48 @@ def test_an_unstamped_attempt_reads_as_unknown_not_as_stale(monkeypatch):
     monkeypatch.setattr(m, "_ttnn_version", lambda: "0.66.0")
     assert m._stock_gate(_view(_profile_fused()), [_kernel(None)]) is None
     assert m._stock_gate(_view(_profile_fused()), [_kernel("")]) is None
+
+
+def test_a_row_older_than_the_stamp_gets_one_so_the_next_upgrade_can_find_it(monkeypatch, tmp_path):
+    """Otherwise the gate only ever applies to kernels written from now on -- and the ones most
+    likely to have gone stale are the oldest. Voxtral's banked ArgMax is exactly such a row."""
+    m = _mcp()
+    live = tmp_path / "log.json"
+    live.write_text(json.dumps([{"op_signature": "X", "kernel_kind": "tt-lang", "beat_baseline": True}]))
+    monkeypatch.setattr(m, "_KERNEL_LOG_PATH", live)
+    monkeypatch.setattr(m, "_ttnn_version", lambda: "0.66.0")
+    m._TTNN_BACKFILLED = False
+    m._backfill_ttnn_version()
+    assert json.loads(live.read_text())[0]["ttnn_version"] == "0.66.0"
+
+
+def test_the_backfill_writes_nothing_when_there_is_nothing_to_fill(monkeypatch, tmp_path):
+    """The common case is every row already stamped; it must not rewrite the log on every round."""
+    m = _mcp()
+    live = tmp_path / "log.json"
+    live.write_text(json.dumps([{"op_signature": "X", "ttnn_version": "0.66.0"}]))
+    before = live.stat().st_mtime_ns
+    monkeypatch.setattr(m, "_KERNEL_LOG_PATH", live)
+    monkeypatch.setattr(m, "_ttnn_version", lambda: "0.66.0")
+    m._TTNN_BACKFILLED = False
+    m._backfill_ttnn_version()
+    assert live.stat().st_mtime_ns == before
+
+
+def test_the_backfill_does_not_move_archived_rows_into_the_live_log(monkeypatch, tmp_path):
+    """_load_attempts merges the archive with the live rows. Saving that union back would land
+    archived rows in the live log, where the resume filter rewrites against this run's baseline."""
+    m = _mcp()
+    live, cum = tmp_path / "log.json", tmp_path / "log.json.cumulative"
+    live.write_text(json.dumps([{"op_signature": "LIVE"}]))
+    cum.write_text(json.dumps([{"op_signature": "ARCHIVED"}]))
+    monkeypatch.setattr(m, "_KERNEL_LOG_PATH", live)
+    monkeypatch.setattr(m, "_ttnn_version", lambda: "0.66.0")
+    m._TTNN_BACKFILLED = False
+    m._backfill_ttnn_version()
+    assert [r["op_signature"] for r in json.loads(live.read_text())] == ["LIVE"]
+    assert [r["op_signature"] for r in json.loads(cum.read_text())] == ["ARCHIVED"]
+    assert json.loads(cum.read_text())[0]["ttnn_version"] == "0.66.0"
 
 
 def test_a_process_that_cannot_name_its_ttnn_asks_nothing(monkeypatch):
