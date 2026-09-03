@@ -128,13 +128,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // also beats any single host-side seed here, since each local expert carries a
     // different token count. (Owned by the op, not the caller.)
     //
-    // Why 4 rows/core and not the 8 that L1 can hold: per_core_M_max and the gate/up
-    // K-block width in0_block_w_gu compete for the same L1, and the width is worth
-    // more. The x-staging CBs are sized M * in0_block_w_gu tiles, so per_core_M_max
-    // sets the PRICE of a wider K-block. At M=8 width 16 does not fit and the guard
-    // below narrows it to 8, doubling the K-block count; each block costs a fixed
-    // mcast-ready barrier round plus read tail that does NOT shrink with width.
-    // Halving the max buys width 16 and halves the block count.
+    // The REQUESTED per_core_M_max, not necessarily the final one. 4 rather than the
+    // 8 L1 can hold because per_core_M_max and the gate/up K-block width
+    // in0_block_w_gu compete for the same L1, and on most shapes the width is worth
+    // more: the x-staging CBs are sized M * in0_block_w_gu tiles, so per_core_M_max
+    // sets the PRICE of a wider K-block. At M=8 width 16 does not fit and the L1 fit
+    // below narrows it, multiplying the K-block count; each block costs a fixed
+    // mcast-ready barrier round plus read tail that does NOT shrink with width. On
+    // shapes where the halved chunk count outweighs that, the L1 fit doubles this
+    // back to 8 -- see kWidenMMinTilesPerBlock.
     //
     // Keep this a POWER OF TWO * MAX_GRID_Y: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
@@ -315,70 +317,70 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         L1_SCRATCH_MARGIN);
     const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
 
-    // If the requested config — (per_core_M_max, in0_block_w_gu) from the CB-sized
-    // max chunk and the default in0_block_w_gu=16 — overflows the real L1 budget,
-    // shrink to fit: reduce per_core_M first (fewer weight re-reads, the dominant
-    // DRAM cost), then narrow in0_block_w_gu to the largest divisor of K_gate_tiles
-    // that fits. No-op when the requested config already fits (all DSV3 / M2.7
-    // dims).
-    if (cb_footprint_bytes(per_core_M, in0_block_w_gu) > l1_budget) {
-        // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
-        // than the requested in0_block_w_gu, largest first.
-        std::vector<uint32_t> w_gu_candidates;
-        w_gu_candidates.reserve(std::min<uint32_t>(in0_block_w_gu, K_gate_tiles));
-        for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
-            if (K_gate_tiles % w == 0) {
-                w_gu_candidates.push_back(w);
+    // Fit (per_core_M, in0_block_w_gu) to the real L1 budget. Candidate widths are
+    // divisors of K_gate_tiles no wider than the request, largest first; candidate
+    // Ms are DIVISORS of the request, largest first. Walking M down by 1 could stop
+    // on a prime: at per_core_M=5 a 16-tile tail needs 2 rows/core but the only
+    // divisors are {1,5}, so it would run 5 - 2.5x the M-work. Restricting to
+    // divisors of the request keeps per_core_M_for_chunk()'s tail ladder as fine as
+    // the request's own.
+    const auto fit_config = [&](uint32_t requested_M) -> std::pair<uint32_t, uint32_t> {
+        for (uint32_t M = requested_M; M >= 1; --M) {
+            if (requested_M % M != 0) {
+                continue;
             }
-        }
-        TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
-
-        // Candidate per_core_M values: DIVISORS of the requested per_core_M_max, largest
-        // first. per_core_M_for_chunk() quantizes a tail chunk to the smallest divisor
-        // of per_core_M_max that covers it, so a max with a coarse divisor ladder leaves
-        // the tail nowhere fine to land and silently inflates its M-work. Walking M down
-        // by 1 could stop on a prime: at per_core_M_max=5 a 16-tile tail needs 2
-        // rows/core but the only divisors are {1,5}, so it would run 5 — 2.5x the
-        // M-work. Restricting to divisors of the request keeps the tail ladder as fine
-        // as the request's own.
-        const uint32_t requested_per_core_M = per_core_M;
-        std::vector<uint32_t> m_gu_candidates;
-        for (uint32_t M = requested_per_core_M; M >= 1; --M) {
-            if (requested_per_core_M % M == 0) {
-                m_gu_candidates.push_back(M);
-            }
-        }
-
-        uint32_t fit_M = 0;
-        uint32_t fit_w = 0;
-        for (const uint32_t M : m_gu_candidates) {
-            for (const uint32_t w : w_gu_candidates) {
-                if (cb_footprint_bytes(M, w) <= l1_budget) {
-                    fit_M = M;
-                    fit_w = w;
-                    break;
+            for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
+                if (K_gate_tiles % w == 0 && cb_footprint_bytes(M, w) <= l1_budget) {
+                    return {M, w};
                 }
             }
-            if (fit_M != 0) {
-                break;
-            }
         }
-        TT_FATAL(
-            fit_M != 0,
-            "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
-            "(per_core_M=1, in0_block_w_gu={}): need {} B but only {} B available "
-            "(emb={}, hidden={}, grid {}x{}). Reduce model dims.",
-            w_gu_candidates.back(),
-            cb_footprint_bytes(1, w_gu_candidates.back()),
-            l1_budget,
-            N_down_tiles_full * TILE,
-            N_gate_tiles_full * TILE,
-            GRID_X,
-            GRID_Y);
-        per_core_M = fit_M;
-        in0_block_w_gu = fit_w;
-        chunk_M_tiles = per_core_M * GRID_Y;
+        return {0, 0};
+    };
+
+    auto [fit_M, fit_w] = fit_config(per_core_M);
+    TT_FATAL(
+        fit_M != 0,
+        "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
+        "(per_core_M=1, in0_block_w_gu=1): need {} B but only {} B available "
+        "(emb={}, hidden={}, grid {}x{}). Reduce model dims.",
+        cb_footprint_bytes(1, 1),
+        l1_budget,
+        N_down_tiles_full * TILE,
+        N_gate_tiles_full * TILE,
+        GRID_X,
+        GRID_Y);
+
+    // Doubling per_core_M halves the M-chunk count, and every chunk re-reads the
+    // full gate/up/down weights (adaptive_chunk.hpp) - the dominant DRAM cost. It is
+    // not free: per_core_M and in0_block_w_gu compete for the same L1, so the widest
+    // width that still fits narrows, and each gate/up K-block carries a fixed
+    // mcast-ready barrier plus read tail that does NOT shrink with width. Take the
+    // doubling only when each extra K-block buys enough avoided weight traffic:
+    //
+    //     weight tiles per extra gate/up K-block
+    //         = (2*K_gate*N_gate + K_down*N_down) / (K_gate/w_wide - K_gate/w_narrow)
+    //
+    // Measured on a BH p150b at ISL 5120, tiles per extra block: kimi_k3 4608,
+    // kimi_k26 / dsv4_flash / glm_51 3072, gptoss_120b 2700, minimax_m3 1536,
+    // dsv4_pro 658. Only kimi_k3 clears the bar, and it is the only shape the
+    // doubling measurably helps: +3-4% at ISL >= 512, -3% at ISL <= 256, against
+    // 1.5-1.85x LOSSES on the shapes below it. The bar sits between 3072 and 4608;
+    // it is calibrated on one favourable shape, so widen it only with measurements.
+    constexpr uint32_t kWidenMMinTilesPerBlock = 4096;
+    const auto [wide_M, wide_w] = fit_config(per_core_M * 2);
+    if (wide_M == per_core_M * 2 && wide_w < fit_w) {
+        const uint32_t extra_blocks = K_gate_tiles / wide_w - K_gate_tiles / fit_w;
+        const uint32_t weight_tiles = 2 * K_gate_tiles * N_gate_tiles_full + K_down_tiles * N_down_tiles_full;
+        if (extra_blocks > 0 && weight_tiles / extra_blocks >= kWidenMMinTilesPerBlock) {
+            fit_M = wide_M;
+            fit_w = wide_w;
+        }
     }
+
+    per_core_M = fit_M;
+    in0_block_w_gu = fit_w;
+    chunk_M_tiles = per_core_M * GRID_Y;
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
