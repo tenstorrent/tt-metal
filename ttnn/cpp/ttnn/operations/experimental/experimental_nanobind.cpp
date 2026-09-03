@@ -32,6 +32,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/indexed_page_cache/indexed_page_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
@@ -77,6 +78,7 @@
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
@@ -153,6 +155,7 @@ void py_module(nb::module_& mod) {
 
     copy::detail::bind_typecast(mod);
 
+    indexed_page_cache::detail::bind_experimental_indexed_page_cache_operations(mod);
     paged_cache::detail::bind_experimental_paged_cache_operations(mod);
     matmul::detail::bind_attn_matmul(mod);
     matmul::detail::bind_attn_matmul_from_cache(mod);
@@ -160,6 +163,7 @@ void py_module(nb::module_& mod) {
     matmul_decode::detail::bind_matmul_decode_operation(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
+    deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::moe_padding_config::detail::bind_moe_padding_config(mod);
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
