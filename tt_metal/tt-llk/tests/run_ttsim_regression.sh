@@ -150,7 +150,7 @@ provision_ttsim() {
         quasar)
             architecture=quasar
             so_name=libttsim_qsr.so
-            soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/quasar_32_arch.yaml"
+            soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml"
             hash_var=ttsim_qsr_so_hash
             ;;
         *)

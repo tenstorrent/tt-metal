@@ -1,9 +1,9 @@
-# quasar_32_arch.yaml plus the three dispatch-engine tiles. For simulators that model them
-# (craq-sim): copy this file to soc_descriptor.yaml next to the simulator. ttsim does not model
-# them and exits on first access, so ttsim keeps quasar_32_arch.yaml.
+# quasar_32_arch.yaml without the three dispatch engines. ttsim does not model them and fails to run if it reads them.
+# Once ttsim models them, this file can be deleted and ttsim can use quasar_32_arch.yaml.
+
 # grid is the full NOC coordinate-space extent and must contain every core's coords
 grid:
-  x_size: 11
+  x_size: 10
   y_size: 8
 
 arc:
@@ -49,9 +49,6 @@ harvested_workers:
 
 router_only:
   [0-2]
-
-dispatch:
-  [10-1, 10-6, 1-6]
 
 worker_l1_size:
   4194304
