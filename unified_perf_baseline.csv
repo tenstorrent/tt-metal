@@ -300,3 +300,89 @@ no-geometry-fix,d36c611ee47,2026-09-03,llama_prefill,Phi-3 mini 3.8B/d96/S512,19
 no-geometry-fix,d36c611ee47,2026-09-03,llama_prefill,Qwen3 0.6B/d128/S512,219.2
 no-geometry-fix,d36c611ee47,2026-09-03,llama_prefill,Llama 3.2 3B/d128/S512,219.2
 no-geometry-fix,d36c611ee47,2026-09-03,llama_prefill,Gemma 3 1B/d256/S512,307.3
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct1,3.37
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct4,6.27
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct8,10.03
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct1,6.30
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct4,12.61
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct8,21.32
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct1,10.22
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct4,20.97
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct8,36.43
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct1,8.17
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct4,18.39
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct8,32.05
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct1,18.71
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct4,40.22
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct8,71.30
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct1,32.85
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct4,69.90
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct8,123.60
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct1,3.60
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct4,6.80
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct8,10.88
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct1,6.88
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct4,13.49
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct8,23.05
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct1,11.05
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct4,22.65
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct8,39.73
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct1,8.42
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct4,18.98
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct8,32.83
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct1,19.27
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct4,41.15
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct8,72.95
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct1,33.74
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct4,71.65
+fpu-matmul-geometry,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct8,126.86
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Llama 3.2 1B/d64/S512,177.3
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Qwen2.5 0.5B/d64/S512,177.3
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,TinyLlama 1.1B/d64/S512,177.4
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Phi-3 mini 3.8B/d96/S512,200.5
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Qwen3 0.6B/d128/S512,220.9
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Llama 3.2 3B/d128/S512,221.0
+fpu-matmul-geometry,f1d762a3707,2026-09-03,llama_prefill,Gemma 3 1B/d256/S512,308.2
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct1,3.40
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct4,6.24
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt1/ct8,10.03
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct1,6.33
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct4,12.66
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt4/ct8,21.40
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct1,10.23
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct4,21.02
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt8/rt8/ct8,36.41
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct1,8.16
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct4,18.45
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt1/ct8,32.06
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct1,18.68
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct4,40.26
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt4/ct8,71.29
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct1,32.86
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct4,69.94
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,dst/kb1/kt32/rt8/ct8,123.59
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct1,3.61
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct4,6.80
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt1/ct8,10.89
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct1,6.91
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct4,13.50
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt4/ct8,23.04
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct1,11.11
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct4,22.70
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt8/rt8/ct8,39.73
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct1,8.38
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct4,18.99
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt1/ct8,32.90
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct1,19.28
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct4,41.16
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt4/ct8,72.96
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct1,33.73
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct4,71.64
+geometry-fix-only,f1d762a3707,2026-09-03,matmul,l1/kb1/kt32/rt8/ct8,126.89
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Llama 3.2 1B/d64/S512,177.2
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Qwen2.5 0.5B/d64/S512,177.2
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,TinyLlama 1.1B/d64/S512,177.3
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Phi-3 mini 3.8B/d96/S512,199.8
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Qwen3 0.6B/d128/S512,221.8
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Llama 3.2 3B/d128/S512,221.7
+geometry-fix-only,f1d762a3707,2026-09-03,llama_prefill,Gemma 3 1B/d256/S512,309.9

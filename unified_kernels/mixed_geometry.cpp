@@ -44,6 +44,21 @@ void kernel_main() {
     // the only thing that ever configures geometry, on either side".
 #if defined(MG_ROW_INIT)
     u::compute_init(kDfbInRow, kDfbOutRow);
+#elif defined(MG_MATMUL)
+    // The FPU MATMUL path, which configures its operands in a third place again -- the
+    // "put back what matmul_block needs" restore beside matmul_block_init -- and in reversed
+    // operand order. matmul_init is not interchangeable with compute_init: it programs the
+    // ALU for FPU work, so this body is its own shape rather than a variant of the others.
+    // The row-form matmul, with the init naming its own shapes -- B3's `1x32 @ 32x32`, in
+    // tree at last and in the honest Tiled<> spelling rather than the plain Shape<1,1> its
+    // probe used (which B3a explains no longer compiles).
+    //
+    // ONE matmul shape, deliberately. A second matmul of a DIFFERENT shape in the same body
+    // comes back entirely wrong -- 0/16 on both faces, measured -- because matmul_init
+    // programs the MOP once from one MatmulGeometry and nothing reprograms kt_dim/rt_dim/
+    // ct_dim per pass. That is a structural limit of the matmul path, not the descriptor
+    // defect this kernel is about, so it is recorded in A3 rather than tested here.
+    u::matmul_init<Row, Blk>(kDfbInRow, kDfbIn, kDfbOutRow);
 #else
     u::compute_init(kDfbIn, kDfbOut);
 #endif
@@ -58,6 +73,19 @@ void kernel_main() {
     const auto in_row = TensorAccessor(tensor::in_row);
     const auto out_row = TensorAccessor(tensor::out_row);
 
+#if defined(MG_MATMUL)
+    // Pass 1: a 32x32 product, which leaves every descriptor at the 32x32 geometry.
+    // Pass 2: a ROW-FORM LHS, which is B3's `1x32 @ 32x32` -- the inner dimension still
+    // agrees in elements (1 tile x 32 wide against 1 tile x 32 high), and the output
+    // inherits the LHS tile, so it is a row-form store as well. Reverse order means the
+    // row-form operand lands in srcB and the 32x32 one in srcA: a genuinely MIXED pair,
+    // which is the case the one-argument descriptor form cannot express.
+    u::ComputeBlock ma = u::noc_load(in_storage, in, 0).wait();
+    u::ComputeBlock mr = u::noc_load(in_row_storage, in_row, 0).wait();
+    u::noc_store(out_row_storage, u::matmul(mr, ma), out_row, 0);
+    return;
+#endif
+
     // 32x32 first: this is what leaves the packer configured for four faces.
     //
     // MG_ROW_ONLY skips it, which is how the row store is tested in ISOLATION: if the row
@@ -65,7 +93,11 @@ void kernel_main() {
     // is broken on its own terms.
 #if !defined(MG_ROW_ONLY)
     u::ComputeBlock a = u::noc_load(in_storage, in, 0).wait();
+#if defined(MG_FPU)
+    u::noc_store(out_storage, a + a, out, 0);
+#else
     u::noc_store(out_storage, u::recip(a), out, 0);
+#endif
 #endif
 
     // MG_REINIT re-inits the SFPU for the ROW pair right here, mid-body, through the raw
@@ -82,5 +114,14 @@ void kernel_main() {
     // merely reformatted. Same op both times, so a difference between the two outputs is the
     // geometry transition and nothing else.
     u::ComputeBlock r = u::noc_load(in_row_storage, in_row, 0).wait();
+#if defined(MG_FPU)
+    // The FPU path instead of the SFPU one, which configures its operands somewhere else
+    // entirely: fpu_seed_init points srcA and srcB at two buffers, so it is the two-operand
+    // descriptor form that has to be right. An elementwise binary cannot MIX geometries --
+    // the shapes would not match -- so the geometry changes BETWEEN the two passes, which is
+    // the real shape of it anyway: blaze's flash_kda alternates 32x32 ops and row ops.
+    u::noc_store(out_row_storage, r + r, out_row, 0);
+#else
     u::noc_store(out_row_storage, u::recip(r), out_row, 0);
+#endif
 }

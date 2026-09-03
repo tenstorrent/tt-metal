@@ -125,7 +125,14 @@ inline uint32_t g_pack_configured = kPackUnset;
 // kPackUnset is not a geometry any buffer can have, so the first pass through always
 // programs -- which is right, because what the kernel's init left behind named one operand
 // pair and this pass may be another.
-inline uint32_t g_unpack_geometry = kPackUnset;
+//
+// TWO memos on the unpack side, because the hardware has two descriptors: srcA and srcB are
+// programmed separately, and an FPU binary points them at different buffers. One word holding
+// both -- a hash of the pair -- would have been smaller and would have carried the one
+// failure this must not have: a collision reads as "already programmed", and the pass then
+// runs against the wrong descriptor with nothing to say so.
+inline uint32_t g_unpack_geometry_a = kPackUnset;
+inline uint32_t g_unpack_geometry_b = kPackUnset;
 inline uint32_t g_pack_geometry = kPackUnset;
 }  // namespace detail
 
@@ -159,17 +166,41 @@ inline uint32_t g_pack_geometry = kPackUnset;
 // every kernel with one geometry throughout, i.e. all of unified_kernels/ but one.
 inline void unpack_geometry_to(uint32_t dfb_id) {
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+    // The one-argument llk form programs BOTH sides from this buffer, so both halves of the
+    // memo move with it.
     const uint32_t geometry = unpack_tile_geometry(dfb_id);
-    if (geometry != detail::g_unpack_geometry) {
+    if (geometry != detail::g_unpack_geometry_a || geometry != detail::g_unpack_geometry_b) {
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(dfb_id)));
         // NOT llk_math_hw_configure: it sets the operand-driven DEFAULT for the Src
         // zero-substitution flag, which eltwise_unary.h re-asserts immediately afterwards
         // precisely because hw_configure clobbers it ("the last writer before the op runs").
         // Re-running it mid-body would drop that flag on the floor.
-        detail::g_unpack_geometry = geometry;
+        detail::g_unpack_geometry_a = geometry;
+        detail::g_unpack_geometry_b = geometry;
     }
 #else
     (void)dfb_id;
+#endif
+}
+
+// The two-operand form, for a pass whose srcA and srcB come from different buffers. The
+// one-argument form above forwards to llk_unpack_hw_configure(dfb, dfb), which would program
+// srcB from srcA's buffer -- right for a copy or an SFPU pass, wrong for an FPU binary.
+//
+// Each side is compared against its own memo, so a pair that swaps two buffers of the same
+// geometry costs nothing, and a pair that changes either side reprograms.
+inline void unpack_geometry_to(uint32_t dfb0, uint32_t dfb1) {
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+    const uint32_t geometry_a = unpack_tile_geometry(dfb0);
+    const uint32_t geometry_b = unpack_tile_geometry(dfb1);
+    if (geometry_a != detail::g_unpack_geometry_a || geometry_b != detail::g_unpack_geometry_b) {
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(dfb0, dfb1)));
+        detail::g_unpack_geometry_a = geometry_a;
+        detail::g_unpack_geometry_b = geometry_b;
+    }
+#else
+    (void)dfb0;
+    (void)dfb1;
 #endif
 }
 
@@ -379,6 +410,9 @@ struct FpuBinary {
         // not to a slightly worse number. The full init that would cover it,
         // binary_op_init_common, carries hw_configure and pack_sync_init and must not
         // run twice, so this is the same split matmul_block_init uses.
+        // And the GEOMETRY, for the same reason and from the same gap: reconfig_data_format
+        // and the *_tiles_init pair below carry formats and the op, never the descriptors.
+        unpack_geometry_to(dfb0, dfb1);
         ckernel::reconfig_data_format(dfb0, dfb1);
         if constexpr (TheOp == FpuOp::Add) {
             ckernel::add_tiles_init(dfb0, dfb1);
@@ -432,6 +466,10 @@ struct FpuBinary {
         // Only the buffer operand's side needs re-pointing here; the other side is DST,
         // whose format the accumulator already fixed. DstIsLhs means DST went to srcA,
         // so the buffer is srcB, and the other way round.
+        // The buffer operand's descriptor as well as its format. DST's side needs none: a
+        // Dest register has no tile geometry, which is why the one-operand form is right
+        // here where it would be wrong for the seed above.
+        unpack_geometry_to(dfb);
         if constexpr (DstIsLhs) {
             ckernel::reconfig_data_format_srcb(dfb);
         } else {
@@ -1715,6 +1753,12 @@ struct Strategy<FPUFusion> {
         }
 
         // Put back what matmul_block needs, so the next output block can run.
+        //
+        // Descriptors as well as formats, and in matmul's operand order: SrcOrder::Reverse
+        // puts in1 in srcA and in0 in srcB, which is why the reconfig below names in1 as
+        // srcA's new operand. Passing them the other way round would program each side from
+        // the other's buffer.
+        unpack_geometry_to(node.in1_dfb, node.in0_dfb);
         ckernel::reconfig_data_format_srca(acc_dfb, node.in1_dfb);
         ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 #else
@@ -1935,6 +1979,7 @@ struct Strategy<FPUFusion> {
                         buffer(acc_dfb).wait_front(kSubTiles);
                         ckernel::copy_block(acc_dfb, 0, 0, kSubTiles);
                         buffer(acc_dfb).pop_front(kSubTiles);
+                        unpack_geometry_to(node.in1_dfb, node.in0_dfb);
                         ckernel::reconfig_data_format_srca(acc_dfb, node.in1_dfb);
                         ckernel::matmul_block_init(
                             node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
