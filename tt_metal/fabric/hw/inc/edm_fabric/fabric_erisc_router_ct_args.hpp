@@ -426,6 +426,10 @@ constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_O
 #if defined(FABRIC_2D)
 constexpr size_t MESH_Y_SIZE = NAMED_CT_ARG("MESH_Y_SIZE");
 constexpr size_t MESH_X_SIZE = NAMED_CT_ARG("MESH_X_SIZE");
+static_assert(MESH_Y_SIZE > 0 && MESH_X_SIZE > 0, "2D router mesh dimensions must be nonzero");
+static_assert(
+    MESH_Y_SIZE + MESH_X_SIZE <= sizeof(PACKET_HEADER_TYPE::route_buffer),
+    "2D router mesh action map must fit in the configured packet header");
 // The landing intercept is keyed per receiver channel, not per kernel: a boundary-facing router's
 // intrachip channels carry intramesh egress traffic that must not be re-encoded.
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {

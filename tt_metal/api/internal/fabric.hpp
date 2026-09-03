@@ -35,15 +35,9 @@ namespace tt::tt_metal::internal {
 // Query the kernel defines required by the current fabric configuration and API type.
 // Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
 // Returns defines like {("FABRIC_2D", "1"), ("API_TYPE_Linear", "1")}.
-// Throws on a 2D fabric that has express links: the routing ABI is chosen per mesh there, so use
-// the overload below.
+// Exact 2D mesh shape is runtime routing metadata; configuration-wide header sizing and express
+// capacity are injected automatically when the kernel is created.
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
-    tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
-
-// As above, for a kernel that will run on src_fabric_node_id. Required on 2D fabrics with express
-// links, where the routing ABI (and therefore the kernel's encode) is a per-mesh property.
-std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Compute fabric connection RT args without any PD mutation.

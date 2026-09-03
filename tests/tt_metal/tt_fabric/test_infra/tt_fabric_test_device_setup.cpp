@@ -436,10 +436,6 @@ void TestWorker::create_kernel(
     uint32_t local_args_capacity_bytes,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto mesh_id = this->test_device_ptr_->get_node_id().mesh_id;
-    const auto defines = control_plane.get_fabric_context().get_2d_kernel_defines(control_plane, mesh_id);
-
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
@@ -448,7 +444,6 @@ void TestWorker::create_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = noc_id,
             .compile_args = ct_args,
-            .defines = defines,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
