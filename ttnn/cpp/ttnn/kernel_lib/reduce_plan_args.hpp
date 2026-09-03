@@ -11,6 +11,32 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
+/**
+ * @file reduce_plan_args.hpp
+ * @brief Constexpr device views over host-planned reduction arguments.
+ *
+ * A compute planning unit is a flat compile-time-argument suffix, not an object
+ * passed to the kernel:
+ *
+ * @code
+ * [kernel-owned prefix][call_count][call_0]...[call_(call_count - 1)]
+ * @endcode
+ *
+ * Read call_count at the known unit offset, then address each fixed-width call
+ * with ReduceCallAtT. The count is only a bound for walking the calls. A kernel
+ * must not derive accumulation, finalization, partial-tile handling, or any
+ * other behavior from the count or call index; each ReduceCallArgs carries
+ * those decisions itself.
+ *
+ * The matching dataflow suffix is independent and contains exactly one
+ * variable-width ReduceAuxiliaryArgs per planning unit. It carries the shared
+ * auxiliary CB ID and aggregate physical tile recipe. When multiple units are
+ * appended, the next compute unit begins at
+ * `first_call_offset + call_count * call_compile_time_arg_count()`. Use
+ * ReduceAuxiliaryArgs::next_compile_time_args_offset() for the next dataflow
+ * unit.
+ */
+
 namespace ttnn::kernel_lib {
 
 /** Constexpr view of one physical auxiliary-tile specification. */
@@ -45,7 +71,13 @@ public:
         "A zero auxiliary tile must use zero value bits and zero valid elements");
 };
 
-/** Constexpr view over the sequence-level auxiliary CB recipe. */
+/**
+ * @brief Constexpr view over one planning unit's aggregate auxiliary recipe.
+ *
+ * The descriptor includes the auxiliary CB ID. Dataflow code passes this type
+ * once to prepare_reduce_auxiliary_tiles(); it does not inspect compute calls
+ * or create one recipe per call.
+ */
 template <std::uint32_t CTA_OFFSET>
 struct ReduceAuxiliaryArgs {
 private:
@@ -77,7 +109,11 @@ public:
  * @brief Constexpr device view of one host-planned reduction call.
  *
  * Instances do not own storage. Every member is decoded from the kernel compile-time argument array, in the
- * same style as TensorAccessorArgs<CTA_OFFSET>.
+ * same style as TensorAccessorArgs<CTA_OFFSET>. The descriptor is
+ * self-contained: accumulation mode/index, partial mode, auxiliary slice,
+ * algorithm, CB IDs, shape, input policy, and reconfiguration choices are all
+ * call properties. In particular, partial_mode is authoritative; kernels must
+ * not infer partial handling by examining the auxiliary tiles.
  */
 template <std::uint32_t CTA_OFFSET>
 struct ReduceCallArgs {
@@ -198,8 +234,10 @@ public:
         "A non-accumulating call must use accumulation index zero");
 };
 
-// Address one fixed-size call without interpreting the call count or deriving
-// any call behavior from its position.
+// Address one fixed-size call in a planning unit. FIRST_CALL_CTA_OFFSET points
+// immediately after that unit's call-count word. This alias performs only
+// address arithmetic; it does not interpret the count or derive behavior from
+// CALL_INDEX.
 template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
 using ReduceCallAtT =
     ReduceCallArgs<FIRST_CALL_CTA_OFFSET + CALL_INDEX * reduce_plan_args::call_compile_time_arg_count()>;
