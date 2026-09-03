@@ -557,17 +557,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout);
-
-    // QSR pack-bounds fix: cap tiles-per-pack to 4. pack_untilize_dest<N> faults with PACR0_TILE_INC
-    // (ERROR_TRISC1 code 0x19) for N>=6 -- the pack's per-tile increment crosses the scratch CB's
-    // descriptor L1_LIMIT_ADDR (N<=5 works, N>=6 faults on the emulator). Forcing MAX_TILES_PER_REDUCTION=4
-    // makes any channel count >4 tiles chunk (in_nblocks_c>1) into <=4-tile packs, staying within bounds.
-    // <=4-tile configs (incl. the resnet stem = 2 tiles) keep in_nblocks_c==1 / is_wide==false -> unchanged.
-    // Paired with force_max_tiles_per_reduction_4=1u (compute + reader compile args below) so all three
-    // agree on the 4-tile chunk size.
-    params.MAX_TILES_PER_REDUCTION = 4;
-    params.is_wide_reduction = params.in_ntiles_c > params.MAX_TILES_PER_REDUCTION;
+        output_layout,
+        /*force_max_tiles_per_reduction_4=*/true,
+        shard_boundaries);
 
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
