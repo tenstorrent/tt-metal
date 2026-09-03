@@ -66,8 +66,7 @@ ALWI void sub_bcast_cols_compensated(
     std::uint32_t dst_tile,
     std::uint32_t tile_count) {
     MATH((llk_math_sub_bcast_cols_compensated(input_cb, dst_tile, tile_count)));
-    UNPACK(
-        (llk_unpack_AB_sub_bcast_col_custom(input_cb, split_mean_cb, input_tile, 0 /* split_mean_tile */, tile_count)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_custom(input_cb, split_mean_cb, input_tile, 0 /*tile_index_b*/, tile_count)));
 }
 
 }  // namespace ckernel
