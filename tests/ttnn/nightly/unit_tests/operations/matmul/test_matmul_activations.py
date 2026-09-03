@@ -5,7 +5,6 @@
 """Extended matmul tests with all supported fused activations."""
 
 import functools
-import re
 
 import pytest
 from loguru import logger
@@ -41,22 +40,6 @@ _RTOL_BY_OUTPUT_FORMAT = {
     (ttnn.bfloat8_b, True): 0.0181,
     (ttnn.bfloat8_b, False): 0.0493,
 }
-
-_ACTIVATION_PARAMS_PATTERN = re.compile(r"params=\[([^\]]*)\]")
-
-
-def activation_params(activation):
-    """Parameters of a ``ttnn.UnaryWithParam``, read from its text form.
-
-    The binding exposes ``op_type`` but no accessor for the parameters, so the
-    only way to recover them is the object's own text form.
-    """
-    if activation is None:
-        return []
-    match = _ACTIVATION_PARAMS_PATTERN.search(repr(activation))
-    if match is None or not match.group(1).strip():
-        return []
-    return [float(value) for value in match.group(1).split(",")]
 
 
 def get_activation_golden_function(activation):
@@ -603,7 +586,7 @@ def apply_activation_to_reference(tensor, activation):
             return tensor
 
     op_type = getattr(activation, "op_type", activation)
-    params = activation_params(activation)
+    params = getattr(activation, "params", [])
 
     if op_type == ttnn.UnaryOpType.RELU:
         return torch.nn.functional.relu(tensor)
