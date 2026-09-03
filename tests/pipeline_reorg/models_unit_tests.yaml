@@ -1868,13 +1868,13 @@
     # The checkpoint is a raw .pth on the Hub, not a pre-staged MLPerf asset, so this
     # job fetches it; prepare_assets.py downloads into the workspace, not HF_HUB_CACHE.
     export HF_HUB_OFFLINE=0
-    python3 models/demos/diffusion_drive/scripts/prepare_assets.py
+    python3 models/experimental/diffusion_drive/scripts/prepare_assets.py
     # A missing asset is now a failure, not a skip -- the real-checkpoint gate below
     # must not be able to quietly opt out of running.
     export DD_REQUIRE_ASSETS=1
     pytest --timeout 600 \
-      models/demos/diffusion_drive/tests/pcc/ \
-      models/demos/diffusion_drive/tests/sanity/
+      models/experimental/diffusion_drive/tests/pcc/ \
+      models/experimental/diffusion_drive/tests/sanity/
   model: diffusiondrive
   model_family: DiffusionDrive
   skus:
