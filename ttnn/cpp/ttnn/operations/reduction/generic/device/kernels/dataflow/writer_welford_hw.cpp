@@ -156,12 +156,12 @@ void kernel_main() {
     if (num_outputs > 0) {
         dfb_combined.reserve_back(1);
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
             for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(std::uint16_t); ++i) {
                 combined_ptr[i] = 0;
             }
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
             for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(float); ++i) {
                 combined_ptr[i] = 0.0f;
             }
@@ -275,12 +275,12 @@ void kernel_main() {
         // kernel will unpack this and re-pack into cb_out in the correct
         // output data format (using the packer hardware).
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
             // fp32_to_bf16 applies round-to-nearest-even, matching the packer
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
             combined_ptr[0] = final_var;
         }
         dfb_combined.push_back(1);
