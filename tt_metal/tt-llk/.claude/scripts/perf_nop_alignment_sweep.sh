@@ -28,12 +28,17 @@ git diff --quiet -- perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_pe
 
 say "resetting card"; tt-smi -r 2>&1 | tail -2; sleep 10
 
+# The kernels are RISC-V. A host objdump cannot read them: it exits non-zero and
+# leaves an empty file. The toolchain that built them ships with the tests
+# (helpers/test_config.py points TOOL_PATH at tests/sfpi/compiler/bin).
 OBJDUMP=""
-for c in riscv32-tt-elf-objdump riscv32-unknown-elf-objdump riscv64-unknown-elf-objdump \
-         llvm-objdump objdump; do
+for c in "$LLK/tests/sfpi/compiler/bin/riscv-tt-elf-objdump" \
+         "$LLK/tests/sfpi/compiler/bin/riscv32-tt-elf-objdump" \
+         riscv-tt-elf-objdump riscv32-unknown-elf-objdump; do
+    [ -x "$c" ] && { OBJDUMP="$c"; break; }
     command -v "$c" >/dev/null 2>&1 && { OBJDUMP="$c"; break; }
 done
-[ -n "$OBJDUMP" ] && say "using $OBJDUMP" || say "no objdump found; skipping disassembly"
+[ -n "$OBJDUMP" ] && say "using $OBJDUMP" || say "no RISC-V objdump found; skipping disassembly"
 
 dump_pack_elf() {
     local NAME=$1 ELF
@@ -41,8 +46,14 @@ dump_pack_elf() {
     ELF=$(find "$RUNNER_TEMP" -name pack.elf -printf '%T@ %p\n' 2>/dev/null \
           | sort -rn | head -1 | cut -d" " -f2-)
     [ -n "$ELF" ] || { echo "  (no pack.elf found)"; return 0; }
-    "$OBJDUMP" -d "$ELF" > "$OUT/${NAME}_pack.asm" 2>/dev/null \
-        && echo "  disassembly -> ${NAME}_pack.asm  ($(wc -l < "$OUT/${NAME}_pack.asm") lines)"
+    "$OBJDUMP" -d "$ELF" > "$OUT/${NAME}_pack.asm" 2> "$OUT/${NAME}_pack.err"
+    if [ -s "$OUT/${NAME}_pack.asm" ]; then
+        echo "  disassembly -> ${NAME}_pack.asm  ($(wc -l < "$OUT/${NAME}_pack.asm") lines)"
+        rm -f "$OUT/${NAME}_pack.err"
+    else
+        echo "  DISASSEMBLY FAILED: $(head -1 "$OUT/${NAME}_pack.err" 2>/dev/null)"
+        rm -f "$OUT/${NAME}_pack.asm"
+    fi
 }
 
 run_pass() {
