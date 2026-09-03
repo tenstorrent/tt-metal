@@ -4,10 +4,16 @@
 
 """Extended matmul tests with all supported fused activations."""
 
+import functools
+
 import pytest
 from loguru import logger
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
+from tests.ttnn.nightly.unit_tests.operations.matmul.numeric_tolerances import (
+    activation_params,
+    matmul_numeric_tolerances,
+)
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import torch.nn.functional as F
@@ -30,7 +36,6 @@ def get_activation_golden_function(activation):
         "hardtanh": F.hardtanh,
         "selu": F.selu,
         "softplus": F.softplus,
-        "mish": F.mish,
     }
 
     if isinstance(activation, str):
@@ -186,7 +191,6 @@ def test_matmul_with_fused_activations(
             "hardtanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH),
             "selu": ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU),
             "softplus": ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS),
-            "mish": ttnn.UnaryWithParam(ttnn.UnaryOpType.MISH),
         }
         fused_activation = activation_map.get(activation, None)
     else:
@@ -225,29 +229,32 @@ def test_matmul_with_fused_activations(
     tt_out = tt2torch_tensor(output_t)
 
     # Compute golden reference
-    pt_out = in0 @ in1
+    pt_matmul = in0 @ in1
     activation_fn = get_activation_golden_function(activation)
-    pt_out = activation_fn(pt_out)
+    pt_out = activation_fn(pt_matmul)
 
-    if dtype == ttnn.bfloat8_b:
-        atol = 0.05 * K
-        rtol = 15.0 * K
-    else:
-        atol = 0.02 * K
-        rtol = 10.0 * K
-
-    if activation in ["selu", "softplus", "mish", "gelu"]:
-        atol *= 2
-        rtol *= 2
+    tolerances = matmul_numeric_tolerances(
+        pt_matmul,
+        fused_activation,
+        activation_fn,
+        K=K,
+        in0_dtype=dtype,
+        in1_dtype=dtype,
+        out_dtype=dtype,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=packer_l1_acc,
+        k_tiles_per_block=in0_block_w,
+        # Both operands are bfloat16, so the reference product is rounded to
+        # bfloat16 as well.
+        reference_dtype=ttnn.bfloat16,
+    )
 
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
-        atol=atol,
-        rtol=rtol,
-        frobenius_threshold=0.01 * K,
-        pcc_threshold=0.98,
         check_ulp=False,
+        **tolerances,
     )
 
 
@@ -288,10 +295,12 @@ def test_matmul_with_custom_activation_params(
     grid_size = (max_cores, 1)
     num_cores = grid_size[0]
 
+    in0_block_w = K // num_cores // 32
+
     # activation is already UnaryWithParam in this test, no conversion needed
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
-        in0_block_w=K // num_cores // 32,  # K/num_cores/32
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=M // 32,  # M/32
@@ -321,35 +330,32 @@ def test_matmul_with_custom_activation_params(
     # Get TT output
     tt_out = tt2torch_tensor(output_t)
 
-    # Compute golden reference with custom parameters
-    pt_out = in0 @ in1
+    # Compute golden reference, taking the activation parameters from the same
+    # object the device was given so the two cannot drift apart.
+    pt_matmul = in0 @ in1
+    activation_fn = functools.partial(apply_activation_to_reference, activation=activation)
+    pt_out = activation_fn(pt_matmul)
 
-    # Apply custom activation based on type
-    # Map the test parameters to the golden functions
-    # Note: We hardcode the params here since we know what we're testing
-    if activation.op_type == ttnn.UnaryOpType.RELU6:
-        # Test uses 3.0 as max value
-        pt_out = torch.clamp(pt_out, min=0, max=3.0)
-    elif activation.op_type == ttnn.UnaryOpType.HARDTANH:
-        # Test uses -2.0, 2.0 as min/max
-        pt_out = F.hardtanh(pt_out, -2.0, 2.0)
-    elif activation.op_type == ttnn.UnaryOpType.SELU:
-        # Test uses alpha=1.5, lambda=1.1
-        # SELU formula: lambda * (max(0,x) + min(0, alpha * (exp(x) - 1)))
-        alpha, lambd = 1.5, 1.1
-        pt_out = lambd * torch.where(pt_out > 0, pt_out, alpha * (torch.exp(pt_out) - 1))
-    elif activation.op_type == ttnn.UnaryOpType.SOFTPLUS:
-        # Test uses beta=2.0, threshold=10.0
-        pt_out = F.softplus(pt_out, beta=2.0, threshold=10.0)
+    tolerances = matmul_numeric_tolerances(
+        pt_matmul,
+        activation,
+        activation_fn,
+        K=K,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=ttnn.bfloat16,
+        out_dtype=ttnn.bfloat16,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        k_tiles_per_block=in0_block_w,
+        reference_dtype=ttnn.bfloat16,
+    )
 
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
-        atol=0.05 * K,
-        rtol=15.0 * K,
-        frobenius_threshold=0.02 * K,
-        pcc_threshold=0.95,
         check_ulp=False,
+        **tolerances,
     )
 
 
@@ -405,10 +411,11 @@ def test_activation_with_different_program_configs(
         num_cores = grid_size[0]
         per_core_N = N // num_cores // 32
         out_subblock_w = min(2, per_core_N) if per_core_N > 0 else 1
+        in0_block_w = K // num_cores // 32
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
-            in0_block_w=K // num_cores // 32,
+            in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
             per_core_M=M // 32,
@@ -421,10 +428,11 @@ def test_activation_with_different_program_configs(
         # 2D multicast configuration
         per_core_N = N // grid_size[0] // 32
         out_subblock_w = min(2, per_core_N) if per_core_N > 0 else 1
+        in0_block_w = K // grid_size[0] // 32
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid_size[0], grid_size[1]),
-            in0_block_w=K // grid_size[0] // 32,
+            in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
             per_core_M=M // grid_size[1] // 32,
@@ -453,18 +461,30 @@ def test_activation_with_different_program_configs(
     tt_out = tt2torch_tensor(output_t)
 
     # Golden reference
-    pt_out = in0 @ in1
+    pt_matmul = in0 @ in1
     activation_fn = get_activation_golden_function(activation)
-    pt_out = activation_fn(pt_out)
+    pt_out = activation_fn(pt_matmul)
+
+    tolerances = matmul_numeric_tolerances(
+        pt_matmul,
+        fused_activation,
+        activation_fn,
+        K=K,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=ttnn.bfloat16,
+        out_dtype=ttnn.bfloat16,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        k_tiles_per_block=in0_block_w,
+        reference_dtype=ttnn.bfloat16,
+    )
 
     assert_numeric_metrics(
         pt_out.float(),
         tt_out,
-        atol=0.03 * K,
-        rtol=12.0 * K,
-        frobenius_threshold=0.01 * K,
-        pcc_threshold=0.97,
         check_ulp=False,
+        **tolerances,
     )
 
 
@@ -521,26 +541,25 @@ def convert_activation_to_unary_param(activation):
 
 
 def apply_activation_to_reference(tensor, activation):
-    """Apply activation function to reference tensor for comparison."""
+    """Apply an activation to a reference tensor, honouring its parameters.
+
+    The reference is always the true mathematical function. Some activations
+    accept a flag that makes the device evaluate them with a coarse piecewise
+    linear table instead of a fitted polynomial, but that changes only how
+    accurately the function is computed, not which function is intended, so it
+    belongs in the tolerance rather than in the reference.
+    """
     if activation is None:
         return tensor
 
-    # Handle UnaryWithParam or UnaryOpType
-    if isinstance(activation, ttnn.UnaryWithParam):
-        op_type = activation.op_type
-        params = activation.get_params() if hasattr(activation, "get_params") else []
-    elif isinstance(activation, str):
-        # Convert string to UnaryWithParam first
+    if isinstance(activation, str):
         activation = convert_activation_to_unary_param(activation)
         if activation is None:
             return tensor
-        op_type = activation.op_type
-        params = activation.get_params() if hasattr(activation, "get_params") else []
-    else:
-        op_type = activation
-        params = []
 
-    # Apply activation based on type
+    op_type = getattr(activation, "op_type", activation)
+    params = activation_params(activation)
+
     if op_type == ttnn.UnaryOpType.RELU:
         return torch.nn.functional.relu(tensor)
     elif op_type == ttnn.UnaryOpType.RELU6:
@@ -549,23 +568,13 @@ def apply_activation_to_reference(tensor, activation):
     elif op_type == ttnn.UnaryOpType.SILU:
         return torch.nn.functional.silu(tensor)
     elif op_type == ttnn.UnaryOpType.GELU:
-        fast_mode = bool(params[0]) if params else False
-        return torch.nn.functional.gelu(tensor, approximate="tanh" if fast_mode else "none")
+        return torch.nn.functional.gelu(tensor)
+    elif op_type == ttnn.UnaryOpType.GELU_TANH:
+        return torch.nn.functional.gelu(tensor, approximate="tanh")
     elif op_type == ttnn.UnaryOpType.TANH:
-        fast_mode = bool(params[0]) if params else False
-        if fast_mode:
-            # Fast tanh approximation using clipped linear region
-            x = torch.clamp(tensor, min=-3.0, max=3.0)
-            return x * (27.0 + x * x) / (27.0 + 9.0 * x * x)
-        else:
-            return torch.tanh(tensor)
+        return torch.tanh(tensor)
     elif op_type == ttnn.UnaryOpType.SIGMOID:
-        fast_mode = bool(params[0]) if params else False
-        if fast_mode:
-            # Fast sigmoid approximation: tanh(x/2)/2 + 0.5
-            return torch.tanh(tensor * 0.5) * 0.5 + 0.5
-        else:
-            return torch.sigmoid(tensor)
+        return torch.sigmoid(tensor)
     elif op_type == ttnn.UnaryOpType.HARDSIGMOID:
         return torch.nn.functional.hardsigmoid(tensor)
     elif op_type == ttnn.UnaryOpType.HARDTANH:
@@ -573,7 +582,15 @@ def apply_activation_to_reference(tensor, activation):
         max_val = params[1] if len(params) > 1 else 1.0
         return torch.nn.functional.hardtanh(tensor, min_val=min_val, max_val=max_val)
     elif op_type == ttnn.UnaryOpType.SELU:
-        return torch.nn.functional.selu(tensor)
+        # The fused activation interface documents the first parameter as alpha
+        # and the second as the scale, so the reference reads them in that
+        # order. With no parameters the standard SELU constants apply. SELU is
+        # scale * (max(0, x) + min(0, alpha * (exp(x) - 1))).
+        if not params:
+            return torch.nn.functional.selu(tensor)
+        alpha = params[0]
+        scale = params[1] if len(params) > 1 else 1.0507009873554805
+        return scale * torch.where(tensor > 0, tensor, alpha * (torch.exp(tensor) - 1.0))
     elif op_type == ttnn.UnaryOpType.SOFTPLUS:
         beta = params[0] if params else 1.0
         threshold = params[1] if len(params) > 1 else 20.0
@@ -709,83 +726,34 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
     output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     # Compute golden reference
-    pt_out = in0 @ in1
-    if has_bias:
-        pt_out += bias
+    pt_matmul = in0 @ in1
+    pt_pre_activation = (pt_matmul + bias) if has_bias else pt_matmul
 
-    # Apply activation
-    activation_fn = get_activation_golden_function(activation)
-    pt_out = activation_fn(pt_out)
+    activation_fn = functools.partial(apply_activation_to_reference, activation=activation_param)
+    pt_out = activation_fn(pt_pre_activation)
 
     tt_out = tt2torch_tensor(output_t)
 
-    # Determine tolerances and PCC threshold based on activation type and math fidelity
-    # Get activation name for comparison
-    activation_name = activation
-    if isinstance(activation, ttnn.UnaryWithParam):
-        # Map UnaryWithParam to string name for tolerance selection
-        op_type_to_name = {
-            ttnn.UnaryOpType.SIGMOID: "sigmoid",
-            ttnn.UnaryOpType.HARDSIGMOID: "hardsigmoid",
-            ttnn.UnaryOpType.HARDTANH: "hardtanh",
-            ttnn.UnaryOpType.SELU: "selu",
-            ttnn.UnaryOpType.SOFTPLUS: "softplus",
-            ttnn.UnaryOpType.RELU6: "relu6",
-            ttnn.UnaryOpType.TANH: "tanh",
-        }
-        activation_name = op_type_to_name.get(activation.op_type, "other")
+    tolerances = matmul_numeric_tolerances(
+        pt_pre_activation,
+        activation_param,
+        activation_fn,
+        K=K,
+        in0_dtype=in0_dtype,
+        in1_dtype=in1_dtype,
+        out_dtype=out_dtype,
+        math_fidelity=fidelity,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+        # The program config is given a quarter of the per-core K width.
+        k_tiles_per_block=max(1, in0_block_w // 4),
+    )
 
-    # Set tolerances and PCC threshold based on activation type and math fidelity
-    if fidelity == ttnn.MathFidelity.LoFi:
-        if activation_name in ["sigmoid", "hardsigmoid", "hardtanh"]:
-            # These activations have lower accuracy with LoFi math
-            atol = 0.01 * K
-            rtol = 3.0 * K
-            pcc_threshold = 0.99
-        elif activation_name in ["relu6", "tanh", "selu", "softplus"]:
-            # Relaxed tolerances
-            atol = 0.008 * K
-            rtol = 2.5 * K
-            pcc_threshold = 0.994
-        elif activation is not None:
-            # Standard tolerances for other activations
-            atol = 0.005 * K
-            rtol = 2.0 * K
-            pcc_threshold = 0.998
-        else:
-            # No activation - tighter tolerances
-            atol = 0.002 * K
-            rtol = 1.062 * K
-            pcc_threshold = 0.999
-    else:
-        # HiFi math - use appropriate thresholds
-        if activation_name in ["tanh"]:
-            # Tanh with HiFi2 still has slightly lower accuracy
-            atol = 0.008 * K
-            rtol = 2.5 * K
-            pcc_threshold = 0.993
-        elif activation_name in ["sigmoid", "hardsigmoid", "hardtanh"]:
-            atol = 0.007 * K
-            rtol = 2.0 * K
-            pcc_threshold = 0.995
-        elif activation is not None:
-            atol = 0.005 * K
-            rtol = 1.5 * K
-            pcc_threshold = 0.998
-        else:
-            atol = 0.002 * K
-            rtol = 1.062 * K
-            pcc_threshold = 0.9999
-
-    # Use assert_numeric_metrics with appropriate PCC threshold
     assert_numeric_metrics(
         pt_out,
         tt_out,
-        atol=atol,
-        rtol=rtol,
-        frobenius_threshold=0.001 * K,
-        pcc_threshold=pcc_threshold,
         check_ulp=False,
+        **tolerances,
     )
 
 
@@ -1054,47 +1022,31 @@ def test_matmul_1d_gather_with_activations(
     output = ttnn.to_torch(output_ttnn)
 
     # Compute reference in PyTorch
-    reference = torch.matmul(in0, in1)
+    pt_pre_activation = torch.matmul(in0, in1)
+    activation_fn = functools.partial(apply_activation_to_reference, activation=activation_param)
+    reference = activation_fn(pt_pre_activation)
 
-    # Apply activation to reference
-    if activation_param is not None:
-        reference = apply_activation_to_reference(reference, activation_param)
+    tolerances = matmul_numeric_tolerances(
+        pt_pre_activation,
+        activation_param,
+        activation_fn,
+        K=K,
+        in0_dtype=in0_dtype,
+        in1_dtype=in1_dtype,
+        out_dtype=out_dtype,
+        # No compute kernel config is passed, so the op's own defaults apply:
+        # LoFi because a program config was supplied, a 16 bit accumulator
+        # because the output is not float32, and accumulation in memory for the
+        # same reason.
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=out_dtype != ttnn.float32,
+        k_tiles_per_block=2,
+    )
 
-    # Check if this is a fast approximation that has low accuracy
-    skip_low_accuracy_fast = False
-    if isinstance(activation_param, ttnn.UnaryWithParam):
-        # Check if using fast approximation based on activation type
-        if activation_param.op_type in [ttnn.UnaryOpType.SIGMOID, ttnn.UnaryOpType.TANH, ttnn.UnaryOpType.GELU]:
-            # Check for fast mode - the parameter might be passed as 1 or 1.0
-            try:
-                params = activation_param.get_params() if hasattr(activation_param, "get_params") else []
-                if not params:  # Try alternative method to get params
-                    # Activation was created with params, check the string representation
-                    if "params=[1" in str(activation_param):
-                        # Sigmoid fast approximation has very low accuracy
-                        if activation_param.op_type == ttnn.UnaryOpType.SIGMOID:
-                            skip_low_accuracy_fast = True
-                elif len(params) > 0 and (params[0] == 1.0 or params[0] == 1):
-                    # Sigmoid fast approximation has very low accuracy
-                    if activation_param.op_type == ttnn.UnaryOpType.SIGMOID:
-                        skip_low_accuracy_fast = True
-            except Exception:
-                # If params can't be accessed, check string representation
-                if "params=[1" in str(activation_param) and activation_param.op_type == ttnn.UnaryOpType.SIGMOID:
-                    skip_low_accuracy_fast = True
-
-    if skip_low_accuracy_fast:
-        pytest.skip(f"Skipping {activation} - fast approximation has accuracy below 0.9 PCC threshold")
-
-    # Compare results
-    pcc = ttnn.pearson_correlation_coefficient(output, reference)
-    pcc_threshold = 0.96
-
-    # lower threshold for other fast approximations
-    if isinstance(activation_param, ttnn.UnaryWithParam):
-        if activation_param.op_type in [ttnn.UnaryOpType.TANH, ttnn.UnaryOpType.GELU]:
-            if "params=[1" in str(activation_param):
-                pcc_threshold = 0.90  # lower threshold for fast approximations
-                logger.info(f"Using lower PCC threshold {pcc_threshold} for fast approximation")
-
-    assert pcc >= pcc_threshold, f"PCC {pcc:.4f} below threshold {pcc_threshold} for activation {activation}"
+    assert_numeric_metrics(
+        reference,
+        output,
+        check_ulp=False,
+        **tolerances,
+    )
