@@ -4,6 +4,15 @@
 
 """Numeric tolerances for matmul tests, predicted from the device number formats.
 
+Nothing imports this module. The tests hold their limits as literals so that the
+limit being applied is visible at the point it is applied, and so that editing the
+model here cannot quietly move what every test accepts. This module is the record
+of where those literals came from: run its functions by hand to re-derive a table
+when a test's shapes, seeds, data types or activations change, and paste the
+result back. A literal is set to the most permissive value the model gives over
+the cases it covers, rounded outward, so that no case is held to a tighter limit
+than the model asks for.
+
 A matmul on device and the same matmul in PyTorch never agree bit for bit, so a
 test has to accept some difference. Choosing that limit by raising it until the
 test passes produces limits that no longer detect a wrong answer: a limit of
