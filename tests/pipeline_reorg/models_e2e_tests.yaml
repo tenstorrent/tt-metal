@@ -1447,7 +1447,7 @@
     bh_sc1:
       timeout: 75
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
