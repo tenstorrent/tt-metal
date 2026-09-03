@@ -1148,20 +1148,17 @@
         mpirun -np 1 --bind-to none --tag-output -x TT_DIT_CACHE_DIR \
         --wdir "${TT_METAL_HOME}" python3 -m pytest -rs "$@" || rc=1
     }
-    # Bisect against the known baseline: (4,8) Linear sp0/tp1 fsdp=False 8k = PCC 75.5340%.
-    # Topology is already exonerated, so every row here holds Linear and varies one factor.
-    echo "=== [1/5] all_blocks, is_fsdp=True (vs False in the baseline) ==="
-    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_fsdp"
-    echo "=== [2/5] all_blocks, no 8k fabric router config ==="
-    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_no8k"
-    echo "=== [3/5] all_blocks, axes swapped -> sp=8 tp=4 (vs sp=4 tp=8) ==="
-    run all --timeout 800 "$XF" -k "all_blocks and bh_4x8_lin_tp4"
-    # Which block type carries the error. single_blocks keeps 1 double + 1 single and passes,
-    # which says nothing; these two split it.
-    echo "=== [4/5] double_only: all 8 double blocks + 1 single ==="
-    run dbl --timeout 800 "$XF" -k "double_only and bh_4x8_lin_base"
-    echo "=== [5/5] single_only: 1 double + all 48 single blocks ==="
-    run sgl --timeout 800 "$XF" -k "single_only and bh_4x8_lin_base"
+    # The factor bisect and block-type split are already measuring on run 33800305249 (pinned
+    # to the previous commit), so this dispatch tests only the newest and most promising lever:
+    # shard_prompt. test_transformer has only ever run shard_prompt=False, while the pipeline
+    # and the perf test -- the 4x8 configuration #53608 measured and got correct images from --
+    # use shard_prompt=True. test_transformer_profile parametrizes it but asserts nothing, so
+    # shard_prompt=False at sp=4 has no correctness coverage anywhere in the repo.
+    # Baseline to beat: the same row with shard_prompt=False is PCC 75.5340%.
+    echo "=== [1/2] all_blocks, shard_prompt=True ==="
+    run all --timeout 900 "$XF" -k "all_blocks and bh_4x8_lin_shardp"
+    echo "=== [2/2] single_blocks, shard_prompt=True (RMSE was 7.0% with it False) ==="
+    run all --timeout 500 "$XF" -k "single_blocks and bh_4x8_lin_shardp"
     exit $rc
   model: flux.2-dev
   model_family: Flux
