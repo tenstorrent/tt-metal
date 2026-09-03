@@ -959,8 +959,17 @@ def capture_fused_cp_trace(
     trail_row_h2d: list,
     build_talker_embed: bool = True,
     restore_in_trace: bool = True,
+    signpost_warmup: bool = False,
 ) -> FusedCpState:
-    """Capture the entire CP frame as one trace. See :class:`FusedCpState`."""
+    """Capture the entire CP frame as one trace. See :class:`FusedCpState`.
+
+    ``signpost_warmup`` (profiling only, see
+    ``tests/test_qwen3_tts_profile_cp_frame.py``) runs one extra **untraced** pass of
+    the frame body between tracy signposts and returns before capturing. Trace capture
+    records exactly the programs ``_body`` enqueues, so that pass has the same op graph
+    and the same kernel durations as a replay — and unlike a replay it is visible to
+    the profiler's op-to-source mapping.
+    """
     n_codes = config.num_code_groups
     assert len(tok_bufs) == n_codes, "tok_bufs must be pre-allocated before any trace capture"
     hidden_seq = int(talker_hidden_src_tt.shape[2])
@@ -1068,6 +1077,31 @@ def capture_fused_cp_trace(
     warm_tokens = _body()
     ttnn.deallocate(warm_tokens)
     ttnn.synchronize_device(device)
+
+    if signpost_warmup:
+        # Profiling only. One extra untraced pass between signposts, then return
+        # WITHOUT capturing: the capture would re-enqueue all ~4.4k body ops for
+        # nothing here, and every op costs the profiler a zone plus a row in a
+        # multi-hundred-MB device log.
+        from tracy import signpost
+
+        signpost("start")
+        prof_tokens = _body()
+        ttnn.synchronize_device(device)
+        signpost("stop")
+        ttnn.deallocate(prof_tokens)
+        return FusedCpState(
+            trace_id=None,
+            tokens_out=None,
+            tok_bufs=tok_bufs,
+            sampler=sampler,
+            trail_row_tt=trail_row_tt,
+            trail_row_h2d=trail_row_h2d,
+            src_hidden_tt=talker_hidden_src_tt,
+            codec_embed_tt=codec_embed_tt,
+            restores_in_trace=restore_in_trace,
+            builds_talker_embed=build_talker_embed,
+        )
 
     print("  Capturing fused CP frame trace (1 trace for the whole CodePredictor frame)...")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)

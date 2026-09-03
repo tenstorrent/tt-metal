@@ -29,6 +29,13 @@ import torch.nn.functional as F
 import ttnn
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
+try:
+    from tracy import signpost as _signpost
+except ModuleNotFoundError:  # non-tracy build
+
+    def _signpost(*_a, **_k):
+        pass
+
 
 @dataclass
 class DecodeLoopState:
@@ -186,6 +193,13 @@ def ar_decode_loop(
     _check_corrupt = False
     _check_input = False
     _probe_steps = int(os.environ.get("QWEN3_TTS_CP_PROBE_STEPS", "0"))
+    # QWEN3_TTS_PROFILE_CP_FRAME=<step>: signpost the CP frame of exactly that
+    # decode step so a tracy capture of the real demo can be filtered down to the
+    # traced CodePredictor frame (5 layers, prefill seq=2 + 14 decode steps, plus
+    # the projection / final norm / lm_heads / sampler / embedding ops the
+    # single-layer test does not cover). -1 disables. Pick a step past the first
+    # frame so one-time warmup work is excluded.
+    _profile_cp_frame = int(os.environ.get("QWEN3_TTS_PROFILE_CP_FRAME", "-1"))
     _inp_bad = [0, 0, 0, 0]
     _chip_mismatch = [0, 0, 0]
     _corrupt = [0, 0, 0, 0, 0]
@@ -257,8 +271,13 @@ def ar_decode_loop(
             ttnn.copy_host_to_device_tensor(_tok0_host, fused_cp.tok_bufs[0])
             ttnn.copy_host_to_device_tensor(fused_cp.trail_row_h2d[step], fused_cp.trail_row_tt)
             _t_fused_h2d = time.perf_counter()
+            _prof_frame = step == _profile_cp_frame
+            if _prof_frame:
+                _signpost("cp_frame_start")
             ttnn.execute_trace(device, fused_cp.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(device)
+            if _prof_frame:
+                _signpost("cp_frame_stop")
             _t_fused_trace = time.perf_counter()
             if _check_input:
                 # Compare what the fused trace actually built as the CP prefill input
@@ -356,6 +375,9 @@ def ar_decode_loop(
             _decode_sp_agg = {"device_logits": 0.0, "cpu_sample": 0.0}
             t_cp_end = time.time()
         else:
+            _prof_frame = step == _profile_cp_frame
+            if _prof_frame:
+                _signpost("cp_frame_start")
             past_hidden_torch = _mesh_to_torch(talker_hidden_tt)[:, :, -1:, :].float()
             token_id_buf[0, 0] = token_0
             code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1)
@@ -461,6 +483,8 @@ def ar_decode_loop(
             streaming_decoder.add_tokens(torch.tensor(code_row, dtype=torch.long))
         if not use_2cq:
             ttnn.synchronize_device(device)
+        if fused_cp is None and step == _profile_cp_frame:
+            _signpost("cp_frame_stop")
         t_cp_end = time.time()
         _t_after_cp_decode = time.perf_counter()
 
