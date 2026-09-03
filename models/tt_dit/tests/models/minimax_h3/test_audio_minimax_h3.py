@@ -485,8 +485,11 @@ FACTORS = [(1, 1), (4, 0), (8, 1)]
 # (8, 1): at factor 8 each shard holds ~26 of the 207 T-rows -- too few for the HEIGHT_SHARDED
 # depthwise resample conv1d to spread over the core grid, so the DRAM auto-slicer cannot fit its
 # C*K-wide activation block in L1 (it hard-throws instead of taking the C-chunk/MAC fallback).
-# Factor 4 (~52 rows) fits. Production runs the audio decoder unsharded, so this path is unused;
-# left as a known limit of factor-8 audio T-sharding rather than a blocker.
+# Factor 4 (~52 rows) fits. This is a SHORT-CLIP limit of THIS test, not a production issue:
+# MiniMaxH3Pipeline now defaults to factor-8, but real clips are long enough that factor 8 has ample
+# rows/shard (a 15s t2va clip is ~386 rows/shard and decodes fine, ~1.4s), so the pipeline is
+# unaffected. Left as a known limit of factor-8 on very short inputs; un-break it by lengthening this
+# test's clip or making the depthwise take its C-chunk/MAC fallback when a shard is < 1 tile.
 KNOWN_BROKEN: set[tuple[int, int]] = {(8, 1)}
 
 
