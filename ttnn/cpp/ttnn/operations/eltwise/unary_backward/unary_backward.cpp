@@ -1672,13 +1672,43 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
+        // Zero-aware all-dim backward (no branching on host scalar values)
+        Tensor zero_mask_all = ttnn::eqz(input, output_memory_config);
+        Tensor safe_input_all = ttnn::where(zero_mask_all, 1.0f, input, output_memory_config);
+
+        // product of non-zero elements (scalar)
+        Tensor prod_safe_all = ttnn::prod(safe_input_all, std::nullopt, /*keepdim=*/false, output_memory_config);
+
+        // original filled tensor = prod_result * grad broadcasted
+        Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(all_dimension_result);
+
+        // safe filled: product of other elements * grad broadcasted
+        Tensor prod_times_grad_safe = ttnn::multiply(prod_safe_all, grad, std::nullopt, output_memory_config);
+        Tensor fill_tensor_safe = ttnn::fill_first_val_into_tensor<::bfloat16>(
+            prod_times_grad_safe, prod_times_grad_safe.dtype(), prod_times_grad_safe.layout(), prod_times_grad_safe.device(), output_memory_config);
+
+        // count zeros across all dims (numeric mask -> sum)
+        Tensor numeric_zero_mask_all = ttnn::where(zero_mask_all, 1.0f, 0.0f, output_memory_config);
+        ttsl::SmallVector<int64_t> all_dims = {0, 1, 2, 3};
+        Tensor zero_count_all = ttnn::moreh_sum(
+            numeric_zero_mask_all,
+            all_dims,
+            /*keepdim=*/false,
+            ttnn::zeros(prod_safe_all.padded_shape(), prod_safe_all.dtype(), prod_safe_all.layout(), *ttnn_device, output_memory_config),
+            output_memory_config,
+            std::nullopt);
+
+        // build cases without host branching by using scalar conditions (they broadcast)
+        Tensor no_zeros_scalar = ttnn::eqz(zero_count_all, output_memory_config); // scalar true if count==0
+        Tensor one_zero_scalar = ttnn::eqz(ttnn::add(zero_count_all, -1.0f, std::nullopt, output_memory_config), output_memory_config);
+
+        Tensor grad_no_zero = ttnn::multiply(ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        Tensor grad_one_zero = ttnn::where(zero_mask_all, fill_tensor_safe, ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config), output_memory_config);
+        Tensor grad_result = ttnn::where(no_zeros_scalar, grad_no_zero, ttnn::where(one_zero_scalar, grad_one_zero, ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config), output_memory_config), output_memory_config);
+
+        grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
 
@@ -1720,12 +1750,42 @@ std::vector<Tensor> prod_bw(
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
         std::nullopt,
         output_memory_config);
+
+    // Prepare safe product of non-zero elements along the reduced dim (keepdim=true for broadcasting)
+    Tensor zero_mask = ttnn::eqz(input, output_memory_config);
+    Tensor safe_input = ttnn::where(zero_mask, 1.0f, input, output_memory_config);
+    Tensor prod_safe = ttnn::prod(safe_input, dim, /*keepdim=*/true, output_memory_config);
+    Tensor prod_times_grad_safe = ttnn::multiply(
+        prod_safe,
+        (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
+        std::nullopt,
+        output_memory_config);
+    Tensor fill_tensor_safe = ttnn::fill_first_val_into_tensor<::bfloat16>(
+        prod_times_grad_safe, prod_times_grad_safe.dtype(), prod_times_grad_safe.layout(), prod_times_grad_safe.device(), output_memory_config);
+
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
     if (*dim == 3 || *dim == -1) {
-        Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+        // Case: no zeros along dim -> case_no_zero; exactly one zero -> case_one_zero; >1 zeros -> zeros
+        Tensor case_no_zero = ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+
+        Tensor case_one_zero_at_zero = ttnn::where(zero_mask, fill_tensor_safe, ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config), output_memory_config);
+
+        // Count zeros along reduction dim (keepdim=true so masks broadcast correctly)
+        Tensor numeric_zero_mask = ttnn::where(zero_mask, 1.0f, 0.0f, output_memory_config);
+        ttsl::SmallVector<int64_t> sum_dims = {*dim};
+        Tensor zero_count = ttnn::moreh_sum(
+            numeric_zero_mask,
+            sum_dims,
+            /*keepdim=*/true,
+            ttnn::zeros_like(prod_result, prod_result.dtype(), prod_result.layout(), std::nullopt, output_memory_config),
+            output_memory_config,
+            std::nullopt);
+        Tensor no_zero_mask = ttnn::eqz(zero_count, output_memory_config); // keepdim
+        Tensor one_zero_mask = ttnn::eqz(ttnn::add(zero_count, -1.0f, std::nullopt, output_memory_config), output_memory_config);
+
+        Tensor grad_result = ttnn::where(no_zero_mask, case_no_zero, ttnn::where(one_zero_mask, case_one_zero_at_zero, ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config), output_memory_config), output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
