@@ -891,19 +891,41 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
-        // Weight-multicast topology for in1 (gate/up/down). For each N-col
-        // group (fixed gx), the sender is the gy=0 core. Receivers are the
-        // GRID_Y-1 cores at gy=1..GRID_Y-1 sharing the same gx. NoC
-        // multicast destination rectangle is a single NoC column spanning
-        // those receiver rows.
-        const bool is_in1_sender = (gy == 0);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        // GRID_Y == 1: no receivers — point the unused receiver coords at the
-        // sender row (gy=1 doesn't exist); the reader skips the mcast.
-        const CoreCoord first_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, 1} : CoreCoord{gx, 0};
-        const CoreCoord last_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, GRID_Y - 1} : CoreCoord{gx, 0};
-        const auto first_recv_noc = device->worker_core_from_logical_core(first_recv_logical);
-        const auto last_recv_noc = device->worker_core_from_logical_core(last_recv_logical);
+        // ---------------- DRAM-read sender placement ----------------
+        // Every DRAM read here is issued by a "sender" core that multicasts the block
+        // to the cores sharing it: one per N-column for the weights (gate/up/down,
+        // shared down the column) and one per M-row for x (shared across the row).
+        //
+        // Placement matters because these reads are ISSUE-bound, not bandwidth-bound: a
+        // 576 B bfp4 tile needs ~9 cycles of a 64 B/cycle NoC port but ~43 cycles of
+        // RISC time to push into the command buffer, so a sender delivers only
+        // ~13 B/cycle (~20% of its port) and its RISC, not DRAM, is the limit. With the
+        // weight senders all on row 0 and the x senders all on column 0, core (0,0)
+        // owned BOTH streams and serially issued x + gate + down while cores off both
+        // lines sat nearly idle.
+        //
+        // So stagger the two sender sets so no core is in both:
+        //   weight sender for column gx -> row    gx % GRID_Y
+        //   x      sender for row    gy -> column (gy + 1) % GRID_X
+        // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
+        // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
+        const uint32_t in1_sender_row = gx % GRID_Y;
+        const uint32_t in0_sender_col = (gy + 1) % GRID_X;
+        TT_FATAL(
+            !(gy == in1_sender_row && gx == in0_sender_col),
+            "sender placement collision at ({}, {}): a core must not own both the weight and x DRAM read",
+            gx,
+            gy);
+
+        const bool is_in1_sender = (gy == in1_sender_row);
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        // The rectangle spans the WHOLE column, sender included: a multicast rectangle
+        // must be contiguous and the sender is no longer on an edge row, so "everything
+        // but the sender" is not expressible as one rectangle. The non-loopback
+        // multicast drops the sender's own copy (it already holds the block), so
+        // num_dests stays GRID_Y - 1.
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -912,11 +934,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in1_sender_nx = sender_noc.x;
         const uint32_t in1_sender_ny = sender_noc.y;
 
-        // x (in0) multicast topology: per M-row, sender at gx=0, receivers
-        // at gx=1..GRID_X-1.
-        const bool is_in0_sender = (gx == 0);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{1, gy});
+        // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
+        // the whole row for the same reason as the weight column above.
+        const bool is_in0_sender = (gx == in0_sender_col);
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
         const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
