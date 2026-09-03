@@ -490,73 +490,94 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 }
 
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
-    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const {
-    TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one PrefetcherPipe");
+    const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes) const {
+    TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one bank of PrefetcherPipes");
 
     RequestTarget target;
     target.transport = TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-    target.mapping.reserve(prefetcher_pipes.size());
-    target.state_addr_per_sender.reserve(prefetcher_pipes.size());
+    size_t num_pipes = 0;
+    for (const auto& bank : prefetcher_pipes) {
+        num_pipes += bank.pipes.size();
+    }
+    target.mapping.reserve(num_pipes);
+    target.state_addr_per_sender.reserve(num_pipes);
 
-    // Which bank a sender drives is its DRAM-logical x, and recv_index_bases_per_sender resets the
-    // slab base on every bank change -- so a bank whose senders are not adjacent would restart its
-    // second sender's slabs at 0 and deliver both halves the same shard.
-    std::unordered_set<uint32_t> closed_banks;
-    std::optional<uint32_t> open_bank;
+    // Bank-major mapping: a group's pipes stay adjacent and in their own order, which is what
+    // recv_index_bases_per_sender turns into each sender's bank-local slab base (0 for the first
+    // pipe of a bank, the first pipe's receiver count for the second).
+    std::unordered_set<uint32_t> seen_banks;
     CoreRangeSet all_receivers;
     uint32_t total_receivers = 0;
 
-    for (size_t s = 0; s < prefetcher_pipes.size(); ++s) {
+    for (const auto& bank : prefetcher_pipes) {
         TT_FATAL(
-            prefetcher_pipes[s] != nullptr, "QueueTensorPrefetcherRequest was given a null PrefetcherPipe at {}", s);
-        const experimental::PrefetcherPipe& pipe = *prefetcher_pipes[s];
+            seen_banks.insert(bank.bank_id).second,
+            "QueueTensorPrefetcherRequest requires each DRAM bank to appear once, but bank {} appears more than "
+            "once. Pass the groups CreatePrefetcherPipesForTensorPrefetcher returned: a bank's slab numbering is "
+            "shared by its pipes.",
+            bank.bank_id);
         TT_FATAL(
-            experimental::prefetcher_pipe_sender_core_type(pipe) == experimental::SenderCoreType::Dram,
-            "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but pipe {} has a worker sender. Build "
-            "them with CreatePrefetcherPipeForTensorPrefetcher.",
-            s);
-        const uint32_t entry_size = experimental::prefetcher_pipe_fixed_entry_size(pipe);
-        const uint32_t ring_size = experimental::prefetcher_pipe_ring_size(pipe);
-        if (s == 0) {
-            target.fixed_entry_size = entry_size;
-            target.per_recv_capacity_bytes = ring_size;
-        }
-        TT_FATAL(
-            entry_size == target.fixed_entry_size && ring_size == target.per_recv_capacity_bytes,
-            "QueueTensorPrefetcherRequest requires one geometry across the pipe list: pipe {} has entry size {} B and "
-            "ring size {} B, but pipe 0 has {} B and {} B. One request stamps one layout for every sender.",
-            s,
-            entry_size,
-            ring_size,
-            target.fixed_entry_size,
-            target.per_recv_capacity_bytes);
+            bank.pipes.size() == 1 || bank.pipes.size() == 2,
+            "QueueTensorPrefetcherRequest requires 1 or 2 PrefetcherPipes per bank (a bank is driven by one DRISC "
+            "sender, or by two splitting its receivers), but bank {} holds {}.",
+            bank.bank_id,
+            bank.pipes.size());
 
-        const CoreCoord sender = experimental::prefetcher_pipe_sender_core(pipe);
-        const CoreRangeSet& receivers = experimental::prefetcher_pipe_receiver_cores(pipe);
-        const auto bank = static_cast<uint32_t>(sender.x);
-        if (!open_bank.has_value() || *open_bank != bank) {
-            if (open_bank.has_value()) {
-                closed_banks.insert(*open_bank);
+        for (size_t p = 0; p < bank.pipes.size(); ++p) {
+            TT_FATAL(
+                bank.pipes[p] != nullptr,
+                "QueueTensorPrefetcherRequest was given a null PrefetcherPipe at bank {} pipe {}",
+                bank.bank_id,
+                p);
+            const experimental::PrefetcherPipe& pipe = *bank.pipes[p];
+            TT_FATAL(
+                experimental::prefetcher_pipe_sender_core_type(pipe) == experimental::SenderCoreType::Dram,
+                "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but bank {} pipe {} has a worker "
+                "sender. Build them with CreatePrefetcherPipesForTensorPrefetcher.",
+                bank.bank_id,
+                p);
+
+            const CoreCoord sender = experimental::prefetcher_pipe_sender_core(pipe);
+            TT_FATAL(
+                static_cast<uint32_t>(sender.x) == bank.bank_id,
+                "QueueTensorPrefetcherRequest requires a bank's PrefetcherPipes to be driven from that bank, but "
+                "bank {} pipe {} has DRAM sender ({}, {}), which drives bank {}.",
+                bank.bank_id,
+                p,
+                sender.x,
+                sender.y,
+                sender.x);
+
+            const uint32_t entry_size = experimental::prefetcher_pipe_fixed_entry_size(pipe);
+            const uint32_t ring_size = experimental::prefetcher_pipe_ring_size(pipe);
+            if (target.mapping.empty()) {
+                target.fixed_entry_size = entry_size;
+                target.per_recv_capacity_bytes = ring_size;
             }
             TT_FATAL(
-                closed_banks.find(bank) == closed_banks.end(),
-                "QueueTensorPrefetcherRequest requires a bank's PrefetcherPipes to be adjacent in the list, but bank "
-                "{} reappears at pipe {} after another bank. Keep them in BuildTensorPrefetcherSenderMapping order: it "
-                "is what assigns each sender its bank-local slab base.",
-                bank,
-                s);
-            open_bank = bank;
-        }
+                entry_size == target.fixed_entry_size && ring_size == target.per_recv_capacity_bytes,
+                "QueueTensorPrefetcherRequest requires one geometry across every pipe: bank {} pipe {} has entry size "
+                "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
+                "every sender.",
+                bank.bank_id,
+                p,
+                entry_size,
+                ring_size,
+                target.fixed_entry_size,
+                target.per_recv_capacity_bytes);
 
-        all_receivers = all_receivers.merge(receivers);
-        total_receivers += receivers.num_cores();
-        target.mapping.emplace_back(sender, receivers);
-        target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+            const CoreRangeSet& receivers = experimental::prefetcher_pipe_receiver_cores(pipe);
+            all_receivers = all_receivers.merge(receivers);
+            total_receivers += receivers.num_cores();
+            target.mapping.emplace_back(sender, receivers);
+            target.state_addr_per_sender.push_back(
+                static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+        }
     }
     TT_FATAL(
         all_receivers.num_cores() == total_receivers,
-        "QueueTensorPrefetcherRequest requires disjoint receiver sets across the pipe list: {} receivers were listed "
-        "but only {} are distinct.",
+        "QueueTensorPrefetcherRequest requires disjoint receiver sets across every PrefetcherPipe: {} receivers were "
+        "listed but only {} are distinct.",
         total_receivers,
         all_receivers.num_cores());
     return target;
@@ -1091,12 +1112,12 @@ void TensorPrefetcherManager::queue(
 }
 
 void TensorPrefetcherManager::queue(
-    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
-    // target_for validates the list: DRAM senders, one shared geometry, disjoint receivers, and
-    // the bank-adjacency the slab bases depend on.
+    // target_for validates the groups: one to two DRAM senders per bank, each on its own bank, one
+    // shared geometry, and disjoint receivers.
     queue_to_target(target_for(prefetcher_pipes), device_subset, tensors, trace_capture_cq);
 }
 
@@ -1462,7 +1483,7 @@ void QueueTensorPrefetcherRequest(
 
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq) {

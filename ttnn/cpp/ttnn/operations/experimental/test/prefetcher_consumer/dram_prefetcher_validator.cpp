@@ -333,7 +333,7 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes) {
     using namespace tt::tt_metal;
 
-    TT_FATAL(!prefetcher_pipes.pipes.empty(), "prefetcher_pipes must hold at least one pipe");
+    TT_FATAL(!prefetcher_pipes.banks.empty(), "prefetcher_pipes must hold at least one bank");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
@@ -357,6 +357,9 @@ void test_tensor_prefetcher_pipe_validator(
     // No remote CB: a PrefetcherPipe consumer Attaches instead, which hands each receiver core a
     // program-local slot id. The Attach uses the pipes' own entry size, so the device constructor
     // stays on its same-epoch fast path and publishes no padding credits.
+    //
+    // attach() and sender_receiver_core_mapping() both enumerate the pipes bank-major, so a plan's
+    // sender_index (an index into sr_mapping) is also the index of that sender's pipe id.
     const std::vector<uint8_t> pipe_ids = prefetcher_pipes.attach(program);
     TT_FATAL(
         pipe_ids.size() == sr_mapping.size(),

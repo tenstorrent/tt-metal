@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -21,26 +22,49 @@
 
 namespace tt::tt_metal::experimental {
 
-std::vector<std::pair<CoreCoord, CoreRangeSet>> BuildTensorPrefetcherSenderMapping(
+std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    bool dual_senders_per_bank) {
-    auto mapping = build_dram_sender_mapping(&mesh_device, bank_to_receivers, dual_senders_per_bank);
-    validate_dram_senders_across_mesh(&mesh_device, mapping);
-    return mapping;
-}
-
-std::shared_ptr<PrefetcherPipe> CreatePrefetcherPipeForTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    CoreCoord dram_sender_logical,
-    const CoreRangeSet& receivers,
     uint32_t entry_size,
     uint32_t num_entries,
-    BufferType buffer_type) {
+    BufferType buffer_type,
+    bool support_multi_receiver_shards) {
+    TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
     TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
     TT_FATAL(num_entries > 0, "PrefetcherPipe num_entries must be > 0");
-    return prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::make_dram_sender(
-        &mesh_device, dram_sender_logical, receivers, entry_size * num_entries, entry_size, buffer_type);
+
+    // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
+    // receiver-contiguous layout that disallows them is what lets a bank use two senders.
+    const auto mapping = build_dram_sender_mapping(
+        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
+    validate_dram_senders_across_mesh(&mesh_device, mapping);
+
+    // build_dram_sender_mapping emits a bank's senders adjacently and keeps the banks in input
+    // order, so walking both lists in lockstep regroups the flat mapping without re-deriving the
+    // split. A sender's DRAM-logical x is its bank id.
+    std::vector<TensorPrefetcherBankPipes> bank_pipes;
+    bank_pipes.reserve(bank_to_receivers.size());
+    size_t sender = 0;
+    for (const auto& [bank_id, _receivers] : bank_to_receivers) {
+        TensorPrefetcherBankPipes group{.bank_id = bank_id, .pipes = {}};
+        while (sender < mapping.size() && static_cast<uint32_t>(mapping[sender].first.x) == bank_id) {
+            group.pipes.push_back(prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::make_dram_sender(
+                &mesh_device,
+                mapping[sender].first,
+                mapping[sender].second,
+                entry_size * num_entries,
+                entry_size,
+                buffer_type));
+            ++sender;
+        }
+        TT_FATAL(
+            !group.pipes.empty(),
+            "DRAM bank {} was placed no sender: build_dram_sender_mapping must emit each bank's senders adjacently "
+            "and in bank_to_receivers order for the regrouping above to hold.",
+            bank_id);
+        bank_pipes.push_back(std::move(group));
+    }
+    return bank_pipes;
 }
 
 CoreCoord prefetcher_pipe_sender_core(const PrefetcherPipe& pipe) { return pipe.sender_core(); }
