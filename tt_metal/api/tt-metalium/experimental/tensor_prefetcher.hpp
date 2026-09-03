@@ -33,6 +33,7 @@ class MeshCoordinateRangeSet;
 namespace experimental {
 
 class GlobalCircularBuffer;
+class TensorPrefetcherPipes;
 
 // Reserved for future prefetcher-wide options.
 struct TensorPrefetcherConfig {};
@@ -131,6 +132,28 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
+
+// Queue one prefetch request against a set of PrefetcherPipes instead of a GlobalCircularBuffer.
+// The target object is what selects the delivery transport; everything else behaves as documented
+// above, and requests against a GCB and against PrefetcherPipes may be interleaved on one running
+// prefetcher.
+//
+// `prefetcher_pipes` must come from CreatePrefetcherPipesForTensorPrefetcher on the same mesh
+// device. Consumers of the delivered pages call AttachTensorPrefetcherPipes and read through the
+// device-side experimental::PrefetcherPipe.
+//
+// Additional preconditions for this transport, all TT_FATAL with the offending values:
+//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
+//     contiguous shard);
+//   - no streaming rotation (pass an empty `rotation`);
+//   - each tensor's per-receiver bytes-per-block must equal the pipes' `entry_size`. This
+//     transport does not resize mid-flight.
+void QueueTensorPrefetcherRequest(
+    distributed::MeshDevice& mesh_device,
+    const TensorPrefetcherPipes& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
