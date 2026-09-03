@@ -143,7 +143,11 @@ def decode_gddr_module(index: int, temp_word: int, corr_word: int, uncorr_bitmas
 
 # Low bit = complete, high bit = error. 0b00 is IN_PROGRESS, not FAIL.
 def decode_status_bits(two_bits: int) -> str:
-    return {0b01: "SUCCESS", 0b10: "FAIL", 0b11: "FAIL"}.get(two_bits & 0x3, "IN_PROGRESS")
+    if two_bits & 2:
+        return "FAIL"
+    if two_bits & 1:
+        return "SUCCESS"
+    return "IN_PROGRESS"
 
 
 # Per channel: (training, bist). BIST is the same layout shifted by 16.
