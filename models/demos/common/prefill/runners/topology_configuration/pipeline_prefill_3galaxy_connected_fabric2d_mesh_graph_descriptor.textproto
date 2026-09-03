@@ -1,0 +1,70 @@
+# Three Blackhole Galaxies in a line, FABRIC_2D. Modelled on the 4-galaxy fabric2d descriptor; the
+# only difference is three mesh instances and two inter-mesh connections instead of four and three.
+#
+# Written for Kimi-K3, which needs three ranks for a memory reason rather than a throughput one: at
+# ~717 MiB/chip/layer a rank tops out near 44 of the 31.85 GiB/chip, so 93 layers over two ranks
+# (46.5 each) OOMs during weight loading. Three ranks is ~31 layers each.
+#
+# STATUS: THIS DESCRIPTOR DOES NOT WORK — it passes static validation but fails inter-mesh mapping.
+# Static validation is nearly vacuous here (it checks names, channel counts > 0, dim/host divisibility
+# and MGD-1.0 back-compat, never physical reality), so "it parses" means nothing. Placement is decided
+# by the CSP solver in topology_mapper.cpp, which requires the declared mesh-level graph to be a
+# subgraph of the DISCOVERED physical inter-mesh graph, with physical degree >= logical degree at
+# every mesh and a real cable behind every declared edge.
+#
+# Three concrete differences from every working sibling, in the order worth trying:
+#   1. channels { count: 2 } on the inter-mesh connections below. The 2-, 4- and 8-galaxy prefill
+#      descriptors and the in-tree triple_pod_* all use count: 8 RELAXED. Cheapest thing to change.
+#   2. dim_types [RING, RING] in a file named fabric2d. The working fabric2d sibling
+#      (pipeline_prefill_4galaxy_connected_fabric2d_...) deliberately uses [LINE, LINE] and says the
+#      wrap "is dropped here rather than declared and left unused"; the [RING, RING] descriptors say
+#      they MUST be paired with PREFILL_FABRIC_MODE=2d_torus_xy and that a mismatch hangs at fabric
+#      bring-up. This file declares RING/RING while its rank binding sets 2d — the one combination
+#      the other four warn against.
+#   3. An explicit chain (0-1, 1-2) rather than graph_topology ALL_TO_ALL. Explicit connections are
+#      recorded one-way as authored and the adjacency graph is NOT symmetrised, so mesh 2 ends up
+#      with zero exit edges while ALL_TO_ALL emits both directions. The in-tree 3-mesh descriptor
+#      uses ALL_TO_ALL; triple_pod_* uses a full triangle.
+#
+# Note the tree DOES contain 3-mesh descriptors (3_quad_bh_galaxy_3x32x4_torus, triple_pod_32x4_*,
+# triple_pod_16x8_*) — but all use dims [32,4] with host_topology [4,1], i.e. a quad-galaxy pod per
+# mesh, not the [8,4]/[1,1] single-galaxy-per-mesh geometry this pipeline needs.
+#
+# The inter-mesh connections are a LINE (0-1-2), which is what the physical topology discovery
+# reports for these three machines: intermesh degree histogram {1:2, 2:1}, i.e. two endpoints and one
+# middle. Pass the --host slots in cabling order; the middle host must be the middle mesh.
+#
+# dim_types [RING, RING] describes how these galaxies are PHYSICALLY cabled — both axes wrap, which
+# topology discovery confirms as intra-mesh degrees {4:24, 5:8}; a LINE descriptor reports {2:4, 3:16,
+# 4:12} and is rejected. What the model actually runs on is chosen separately by
+# PREFILL_FABRIC_MODE=2d in the rank binding, which configures linear routing over the wrapped
+# wiring. That distinction matters here: Kimi-K3 must not run with Ring routing, because
+# attn_res_gather_softmax deadlocks under Topology::Ring (tenstorrent/tt-metal#54835).
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
