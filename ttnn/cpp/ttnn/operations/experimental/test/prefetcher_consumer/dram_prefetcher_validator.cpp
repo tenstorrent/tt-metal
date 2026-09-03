@@ -330,24 +330,21 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipesHandle& prefetcher_pipes_handle) {
+    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes) {
     using namespace tt::tt_metal;
-    namespace metal_exp = tt::tt_metal::experimental;
 
-    TT_FATAL(prefetcher_pipes_handle.pipes != nullptr, "prefetcher_pipes must not be null");
-    auto& prefetcher_pipes = *prefetcher_pipes_handle.pipes;
+    TT_FATAL(!prefetcher_pipes.pipes.empty(), "prefetcher_pipes must hold at least one pipe");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
 
-    const auto& sr_mapping = prefetcher_pipes.sender_receiver_core_mapping();
-    TT_FATAL(!sr_mapping.empty(), "TensorPrefetcherPipes has no senders");
-    const CoreRangeSet& receiver_cores = prefetcher_pipes.receiver_cores();
+    const auto sr_mapping = prefetcher_pipes.sender_receiver_core_mapping();
+    const CoreRangeSet receiver_cores = prefetcher_pipes.receiver_cores();
     TT_FATAL(receiver_cores.num_cores() > 0, "TensorPrefetcherPipes has no receiver cores");
 
     const ValidatorGeometry geom = compute_validator_geometry(source_tensor, sr_mapping);
-    const uint32_t entry_size = prefetcher_pipes.entry_size();
+    const uint32_t entry_size = prefetcher_pipes.entry_size;
     TT_FATAL(
         geom.page_bytes_per_recv == entry_size,
         "Validator: this tensor delivers {} B per receiver per block, but the PrefetcherPipes were created with "
@@ -360,7 +357,7 @@ void test_tensor_prefetcher_pipe_validator(
     // No remote CB: a PrefetcherPipe consumer Attaches instead, which hands each receiver core a
     // program-local slot id. The Attach uses the pipes' own entry size, so the device constructor
     // stays on its same-epoch fast path and publishes no padding credits.
-    const std::vector<uint8_t> pipe_ids = metal_exp::AttachTensorPrefetcherPipes(program, prefetcher_pipes);
+    const std::vector<uint8_t> pipe_ids = prefetcher_pipes.attach(program);
     TT_FATAL(
         pipe_ids.size() == sr_mapping.size(),
         "Validator: attached {} pipes for {} senders; each receiver plan indexes its sender's pipe id",

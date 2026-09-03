@@ -90,15 +90,14 @@ void test_dram_prefetcher_validator(
 // device-side experimental::PrefetcherPipe.
 //
 // Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
-// its program directly. TensorPrefetcherPipes cannot live in an operation-attribute struct (it is
-// neither copyable nor movable, and the attribute reflection used for hashing and profiler output
-// cannot format a handle to it), and as a test-only op there is nothing to gain from program
-// caching.
+// its program directly. TensorPrefetcherPipes cannot live in an operation-attribute struct (the
+// attribute reflection used for hashing and profiler output cannot format the pipe handles it
+// holds), and as a test-only op there is nothing to gain from program caching.
 void test_tensor_prefetcher_pipe_validator(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipesHandle& prefetcher_pipes_handle);
+    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes);
 
 }  // namespace ttnn::operations::experimental::test
