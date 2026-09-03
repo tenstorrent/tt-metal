@@ -20,6 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -89,6 +90,14 @@ public:
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
 
+    // PrefetcherPipe delivery. Receiver-contiguous batched tensors only, all at the pipes' entry
+    // size; the preconditions are checked here with the offending values in the message.
+    void queue(
+        const experimental::TensorPrefetcherPipes& prefetcher_pipes,
+        const std::optional<MeshCoordinateRangeSet>& device_subset,
+        const std::vector<experimental::TensorPrefetcherInput>& tensors,
+        MeshCommandQueue* trace_capture_cq);
+
     // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
     // prefetcher requests were captured during that trace's capture. Called from the trace
     // replay path so a captured request is re-sent on each trace execution.
@@ -136,19 +145,43 @@ private:
         std::vector<uint32_t> target_sender_indices;
     };
 
+    // Everything the request path needs to know about a delivery target, so serialization does not
+    // have to name the target's type. Built by target_for() from either a DRAM-sender
+    // GlobalCircularBuffer or a set of DRAM-sender PrefetcherPipes.
+    struct RequestTarget {
+        // Sender core -> receivers, in the order that fixes bank-local slab numbering.
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>* mapping = nullptr;
+        // DRISC L1 base of the target's per-sender state (header field target_state_addr).
+        uint32_t state_addr = 0;
+        // Transport for every tensor in the request.
+        TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
+        // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
+        uint32_t per_recv_capacity_bytes = 0;
+        // PrefetcherPipe only: the fixed entry size every tensor must match. 0 for a GCB, which
+        // resizes its remote CB per tensor instead.
+        uint32_t fixed_entry_size = 0;
+    };
+
     void worker_loop();
     void enumerate_dram_senders();
-    std::vector<uint32_t> sender_indices_for_gcb(const experimental::GlobalCircularBuffer& gcb) const;
+    RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
+    RequestTarget target_for(const experimental::TensorPrefetcherPipes& prefetcher_pipes) const;
+    std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
-    // logical page; each entry is either one shared page or a vector in GCB sender-mapping
+    // logical page; each entry is either one shared page or a vector in target sender-mapping
     // order. The header/entry/geometry bytes are identical across senders, while a streaming
-    // page carries only that GCB sender's slice of the per-receiver rotation table.
+    // page carries only that sender's slice of the per-receiver rotation table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
-        const experimental::GlobalCircularBuffer& gcb,
-        const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
+        const RequestTarget& target, const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
+    // Shared body of the two public queue() overloads.
+    void queue_to_target(
+        const RequestTarget& target,
+        const std::optional<MeshCoordinateRangeSet>& device_subset,
+        const std::vector<experimental::TensorPrefetcherInput>& tensors,
+        MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
