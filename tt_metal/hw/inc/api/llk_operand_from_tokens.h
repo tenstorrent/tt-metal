@@ -34,6 +34,9 @@ struct LLKOperandExtractor {
     static_assert(
         binding_token_with_llk_metadata<TokenT>,
         "LLKOperandFrom requires a BindingToken with llk metadata (DFB / Scratchpad / Tensor)");
+    static_assert(
+        Token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat,
+        "LLKOperandFrom: this token has no data format. Did you forgot to set data_format_metadata on ScratchpadSpec?");
 
     // Named constexprs first — the device toolchain rejects feeding a braced
     // TensorShape{...} temporary built from Token.llk_metadata_ directly into
