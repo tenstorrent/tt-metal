@@ -212,6 +212,9 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     if (read_from_input_tensor_kv) {
         reader_defines.emplace_back("READ_FROM_INPUT_TENSOR_KV", "1");
     }
+    if (operation_attributes.kv_tied) {
+        reader_defines.emplace_back("KV_TIED", "1");
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -390,7 +393,11 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
+    // Tied: V is K's own columns, so the writer reads from K's base rather than the section after
+    // it. v_start_addr below is derived from this, so the per-core offsets follow automatically.
+    uint32_t v_base_addr = operation_attributes.kv_tied
+                               ? k_base_addr
+                               : k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
 
     uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
     auto core_grid = q_cores.bounding_box();

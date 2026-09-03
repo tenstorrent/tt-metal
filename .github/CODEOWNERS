@@ -30,8 +30,6 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budget.yaml @roseli-TT @tdowdallTT
 .github/time_budgets/ @roseli-TT @tdowdallTT
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -68,12 +66,11 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ @roseli-TT @tdowdallTT
-tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @roseli-TT
-tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @roseli-TT
+tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot
 tests/scripts/ @tenstorrent/metalium-developers-infra
@@ -83,7 +80,7 @@ tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @ten
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
 # Emule software emulation tests
-tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT
@@ -95,6 +92,7 @@ tools/bringup/ @ctr-martemovTT
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT
 tools/**/scaleout/**/CMakeLists.txt @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/metalium-developers-infra
+tools/scaleout/sweep_rank_binding_solutions.py @Riddy21 @p1-0tr
 tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT
 tools/scaleout/exabox/run_fabric_tests.sh @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nnyamagoudar-TT
 
@@ -122,6 +120,7 @@ tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
+tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
@@ -135,6 +134,7 @@ tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
+tt_metal/hw/inc/api/tensor/ @tenstorrent/metalium-developers-ttnn-core @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
 tt_metal/hw/inc/api/compute/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
@@ -153,7 +153,7 @@ tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @anashTT @mo-tenstorrent @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental impl
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
@@ -184,6 +184,8 @@ tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
+tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
+tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
 tt_metal/logging/ @abhullar-tt @jbaumanTT
 tt_metal/logging/**/CMakeLists.txt @abhullar-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ebanerjeeTT @ncvetkovicTT @lpremovicTT @rtawfik01 @nvelickovicTT @tenstorrent/metalium-api-owners
@@ -258,7 +260,7 @@ tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yug
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr
 tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tt_metal/debug_tools/ @tenstorrent/metalium-developers-triage
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar
@@ -276,6 +278,7 @@ tests/tt_metal/tt_metal/deployment/ @rdjogoTT @ctr-nradojevicTT @ctr-adjokicTT
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
 # nanobind
+ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 ttnn/ttnn/_experimental/moe_compute_utils.py @tenstorrent/metalium-developers-ops-data-movement
 ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads
@@ -337,7 +340,6 @@ ttnn/cpp/ttnn/operations/sliding_window/**/CMakeLists.txt @tenstorrent/metalium-
 # it's the status-quo fallback owner for several ops here that have no
 # team-specific CODEOWNERS rule of their own — not a deliberate, active
 # owner, just what already resolves today.
-tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 ttnn/CMakeLists.txt @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
 ttnn/api/tools/profiler/ @mo-tenstorrent @akerteszTT
 ttnn/cpp/ttnn/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
@@ -348,7 +350,7 @@ ttnn/cpp/ttnn/operations/embedding/ @tenstorrent/metalium-developers-ops-data-mo
 ttnn/cpp/ttnn/operations/embedding/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/embedding_backward/ @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @jonathansuTT
@@ -360,9 +362,13 @@ ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-c
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
+ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/indexer_score/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/isin/ @tenstorrent/metalium-developers-external-experience
@@ -371,6 +377,8 @@ ttnn/cpp/ttnn/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/kda/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/matmul/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/experimental/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/matmul_decode/ @tenstorrent/cse-developer-ttnn
+ttnn/cpp/ttnn/operations/experimental/matmul_decode/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/ @cglagovichTT @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
@@ -479,6 +487,7 @@ tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-develope
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -487,6 +496,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/ @razorback3 @dongjin-na @ayerofi
 tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models
+tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
 tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
@@ -582,7 +592,6 @@ models/experimental/bevformer/ @mbezuljTT @ddjekicTT
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/functional_unet @esmalTT @uaydonat
-models/experimental/grok @yieldthought @uaydonat
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn

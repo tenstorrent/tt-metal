@@ -100,9 +100,10 @@ inline KMcastBBox k_mcast_bbox(
 //       (chunk_global - chunk_local) tiles at q-row (chunk_local - offset).
 // The linear form only misses (a) when boundary_chip != 0 -- exactly the mid-slab, non-chip-0-start case
 // (e.g. the multi-turn rotated prefill). Chunk-aligned (offset == 0, boundary_chip == 0) reduces to linear.
-// No block_cyclic -> plain linear. The both-axes case (SP axis unset, block_cyclic_chunk_local == tp*Sq)
-// keeps the prior linear+straddle form. Shared by create_at (device_index from the coordinate) and override
-// (stored device_index).
+// No block_cyclic -> plain linear. The classic both-axes case (SP axis unset,
+// block_cyclic_chunk_local == tp*Sq) keeps the prior linear+straddle form; fused full-mesh is the exception and
+// uses rotation-exact SP ownership. Shared by create_at (device_index from the coordinate) and override (stored
+// device_index).
 struct DeviceCausalGeometry {
     uint32_t chunk_start_tiles;    // global position of this device's q-row 0 (tiles)
     uint32_t straddle_q_tile;      // q-tile-row at/after which the diagonal jumps (only when this device straddles)
@@ -123,7 +124,13 @@ inline DeviceCausalGeometry device_causal_geometry(
     const uint32_t chunk_local = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
     const uint32_t chunk_global = sp * chunk_local;
 
-    if (args.sp_axis().has_value()) {
+    // A fused full-mesh ring has no named SP axis, but every canonical tensor rank is an SP rank and
+    // block-cyclic ownership is the same rotation-exact mapping as the named-axis case. Do not send it
+    // through the flat both-axes approximation below: rotated starts would assign every causal diagonal
+    // to the wrong tensor rank (and could spuriously mark every rank as straddling).
+    const bool rotation_exact_sp_geometry =
+        args.sp_axis().has_value() || (args.has_fused_ring() && args.fused_ring->full_mesh);
+    if (rotation_exact_sp_geometry) {
         TT_FATAL(
             device_index < sp,
             "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "
@@ -170,6 +177,26 @@ inline uint32_t device_index_for(
         return 0;
     }
     return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.sp_axis());
+}
+
+// The fused full-mesh ring communicates in snake order while K ownership and causal geometry stay in
+// canonical row-major order. Axis mode keeps the historical identity mapping.
+inline uint32_t transport_rank_for(
+    const operation_attributes_t& args, const ttnn::MeshCoordinate& coord, const Tensor& q) {
+    if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
+        return device_index_for(args, coord, q);
+    }
+    TT_FATAL(coord.dims() == 2, "indexer_score fused full-mesh transport mapping requires a 2D coordinate");
+    return ttnn::ccl::snake_ring::index_from_coordinate(
+        coord[0], coord[1], args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
+}
+
+inline uint32_t transport_to_tensor_rank(const operation_attributes_t& args, uint32_t transport_rank) {
+    if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
+        return transport_rank;
+    }
+    return ttnn::ccl::snake_ring::row_major_index(
+        transport_rank, args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
 }
 
 // The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()

@@ -91,12 +91,15 @@ ttnn:
     wh_galaxy: 120
     bh_galaxy: 40
     bh_p100: 805
-    bh_p150b_civ2: 1045
-    wh_n150_civ2: 1205
+    bh_p150b_civ2: 840
+    wh_n150_civ2: 1010
     wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
     bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
     wh_galaxy: 0
@@ -126,12 +129,11 @@ ttnn:
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
   profiler:
-    wh_llmbox: 90
-    wh_galaxy: 50
-    wh_n150_civ2: 60
-    wh_n300_civ2: 60
-    bh_p100a_civ2_viommu: 60
-    bh_p150b_civ2_viommu: 60
+    wh_llmbox: 30
+    wh_n150_civ2: 8
+    wh_n300_civ2: 8
+    bh_p100a_civ2_viommu: 8
+    bh_p150b_civ2_viommu: 8
   demo:
     bh_sc1_high_power: 10
   sweep:
@@ -157,7 +159,8 @@ train:
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
@@ -166,6 +169,7 @@ ttsim:
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
   e2e_tier2:
@@ -186,7 +190,7 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 15
+    bh_sc4: 35
 
 scaleout:
   merge_gate:
@@ -199,6 +203,7 @@ scaleout:
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
     bh_loudbox: 195
+    bh_loudbox_civ2_viommu: 45
     bh_p300: 195
     bh_quietbox_2: 195
   stress:
@@ -236,22 +241,26 @@ scaleout:
 runtime:
   pr_gate:
     wh_n150_civ2: 15
+    github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
+    github_hosted_cpu: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
+    wh_n150: 10
+    bh_p150: 10
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
     sim_bh_galaxy: 10
   unit:
     wh_n150_civ2: 232
-    wh_n300_civ2: 99
+    wh_n300_civ2: 139
     wh_llmbox: 20
     bh_p150b_civ2: 214
     bh_p300: 69
@@ -265,12 +274,21 @@ runtime:
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15
+  profiler:
+    wh_llmbox: 60
+    wh_galaxy: 50
+    wh_n150_civ2: 52
+    wh_n300_civ2: 52
+    bh_p100a_civ2_viommu: 52
+    bh_p150b_civ2_viommu: 52
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
+    bh_p150b_civ2_viommu: 10
   perf_profiler:
     wh_n300_civ2: 5
-    bh_p150_perf: 5
+    wh_n300_perf: 20
+    bh_p150_perf: 25
 
 triage:
   merge_gate:
@@ -302,19 +320,22 @@ llk:
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
+  weekly:
+    sim_wh_n150_xl: 75
+    sim_bh_p150_xl: 240
+    sim_quasar_xl: 180
 
 models:
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
@@ -322,9 +343,9 @@ models:
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 120
+    wh_galaxy_perf: 215
     bh_p150: 27
-    bh_quietbox_2: 255
+    bh_quietbox_2: 260
     bh_galaxy: 78
     bh_sc1: 140
     bh_sc4: 120
@@ -343,14 +364,11 @@ models:
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
-  unit:
-    wh_llmbox: 80
-    wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 61
-    wh_n150: 110
-    wh_galaxy: 235
-    wh_galaxy_perf: 45
+    wh_llmbox: 150
+    wh_n150: 118
+    wh_galaxy: 260
+    wh_galaxy_perf: 65
     bh_p150: 20
     bh_quietbox_2: 390
     bh_galaxy: 75
@@ -358,9 +376,10 @@ models:
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 172
+    wh_llmbox_perf: 191
     wh_n150: 82
     wh_n300: 30
+    wh_galaxy_perf: 80
     bh_p150: 20
     bh_quietbox_2: 60
   unit_tier3:
@@ -374,16 +393,14 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 30
-  perf:
-    wh_galaxy_perf: 55
+    wh_llmbox: 0
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 55
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_galaxy_perf: 125
     bh_galaxy: 470
     bh_sc1: 488
     bh_sc1_high_power: 166
@@ -399,8 +416,10 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
   sweep_tier1:
+    wh_llmbox: 131
     wh_n150: 30
     wh_galaxy: 40
+    wh_galaxy_perf: 55
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30

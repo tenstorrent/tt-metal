@@ -160,13 +160,16 @@ set(HW_JIT_API_HEADERS
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
+    inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/cross_node_dfb_constants.h
+    inc/hostdev/debug_ring_buffer_common.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
+    inc/hostdev/profiler_common.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
@@ -185,6 +188,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
     inc/internal/dataflow/dataflow_cmd_bufs.h
+    inc/internal/dataflow/noc_address_backend_xy.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h
@@ -237,12 +241,14 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/noc.h
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
+    inc/internal/tt-2xx/quasar/noc_address_backend.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h
     inc/internal/tt-2xx/quasar/tensix.h
     inc/internal/tt-2xx/quasar/tensix_types.h
+    inc/internal/tt-1xx/noc_address_backend.h
     inc/internal/tt-1xx/risc_common.h
     inc/internal/tt-1xx/wormhole/c_tensix_core.h
     inc/internal/tt-1xx/wormhole/core_config.h

@@ -89,6 +89,10 @@ void kernel_main() {
 
             tile_regs_commit();
             tile_regs_release();
+            // Handed off to the reader, this buffer's only consumer: it slices the tile into single
+            // rows and pops it. Compute never pops in1_transposed — unlike in0_transposed and
+            // out_transposed below, it is not read back here, and a buffer's read pointer may only
+            // be advanced by one thread.
             dfb_in1_transposed.push_back(onetile);
             dfb_in1.pop_front(onetile);
 
@@ -154,8 +158,6 @@ void kernel_main() {
                 dfb_out.push_back(onetile);
                 dfb_out_transposed.pop_front(onetile);
             }
-
-            dfb_in1_transposed.pop_front(onetile);
 #endif
         }
 #ifdef REPEAT_IN0

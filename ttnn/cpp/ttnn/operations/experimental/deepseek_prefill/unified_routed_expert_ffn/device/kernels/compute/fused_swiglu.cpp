@@ -60,6 +60,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
@@ -182,13 +184,19 @@ FORCE_INLINE void matmul_phase(
     // writes fixed slots and WrPtr does not advance until the push_back after the
     // K-loop, so every K-block re-packs the SAME L1 addresses and PACKER_L1_ACC
     // accumulates physically in place — nothing ties the pushed count to the ring
-    // size. EFF_OUT shrinks only on the final (tail) chunk, and adaptive_chunk keeps
-    // per_core_M a divisor of the compile-time max, so a shrunk block still tiles
-    // the ring evenly. EFF_M == 0 reserves nothing. The K-loop pays for the missing
-    // CB round trip with an explicit packer drain per block.
-    if (EFF_M > 0) {
-        partials_cb.reserve_back(EFF_OUT);
-    }
+    // size. The K-loop pays for the missing CB round trip with an explicit packer
+    // drain per block.
+    //
+    // Reserve the FULL block, never the runtime EFF_OUT. partials_cb is single-
+    // buffered at exactly one max block, so pushing a SHORT block leaves the ring
+    // write pointer off a block boundary and the next full-size block straddles the
+    // end of the CB — and the packs above use an absolute output_tile_index off
+    // get_write_ptr(), so they run past the end instead of wrapping. EFF_OUT does
+    // NOT shrink only on an expert's final chunk: this op runs every local expert in
+    // one kernel, so per_core_M (hence EFF_OUT) drops on each expert's tail chunk and
+    // rises again on the next expert's first chunk. Only [0, EFF_OUT) is ever packed;
+    // the unpacked tail is drained by the pointer-only pop after the copy loop.
+    partials_cb.reserve_back(out_block_num_tiles);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // The reader pushes the FULL compile-time-max activated block (filling only
@@ -270,9 +278,7 @@ FORCE_INLINE void matmul_phase(
         in1_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy below.
-    if (EFF_M > 0) {
-        partials_cb.push_back(EFF_OUT);
-    }
+    partials_cb.push_back(out_block_num_tiles);
 
     // After the K-loop: partials_cb_id has EFF_OUT tiles holding the final
     // accumulated sum. Move them through dst into final_cb_id, applying silu on
@@ -300,7 +306,8 @@ FORCE_INLINE void matmul_phase(
     (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
     // partials so copy_tile reads partials.
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+    copy_init(partials_cb_id);
 #endif
 
     const uint32_t eff_subblocks = EFF_OUT / out_subblock_num_tiles;
@@ -332,6 +339,15 @@ FORCE_INLINE void matmul_phase(
         final_cb.push_back(out_subblock_num_tiles);
 
         tile_regs_release();
+    }
+
+    // Pointer-only drain of the partials tail: slots [EFF_OUT, out_block_num_tiles)
+    // were never packed this chunk. Popping them keeps the single-buffered partials
+    // ring block-aligned across chunks (see the reserve above).
+    if (EFF_OUT < out_block_num_tiles) {
+        const uint32_t partials_pad = out_block_num_tiles - EFF_OUT;
+        partials_cb.wait_front(partials_pad);
+        partials_cb.pop_front(partials_pad);
     }
 
     // The writer drains final_cb at the compile-time-MAX subblock count (it cannot
@@ -391,16 +407,22 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // is all in N (the hidden dim), where a matmul is column-independent — the
     // unwritten weight columns past N_gate_tiles_full corrupt only their OWN output
     // columns, which map 1:1 onto the down K positions the down phase excludes.
-    // Adaptive per_core_M: this core's gate/up work is bounded by the runtime
-    // per_core_M (m_subblocks tile-rows). The x block this core consumes and the
-    // partials/intermed single-block CBs shrink with it; the gate/up WEIGHT
-    // blocks stay full-width (M-independent). The CBs were SIZED on the host to
-    // the compile-time MAX per_core_M, so a smaller runtime count just uses fewer
-    // of the reserved tiles. m_subblocks==0 (this core owns no row this chunk)
-    // reserves/pushes nothing.
+    //
+    // Adaptive per_core_M: this core's gate/up WORK is bounded by the runtime
+    // per_core_M (m_subblocks tile-rows) — MACs, tilize strips, copies and packs
+    // all scale with it. The gate/up WEIGHT blocks stay full-width (M-independent).
+    //
+    // The CB BLOCK SIZE, however, is the compile-time MAX and never varies: every
+    // reserve/push/wait/pop below moves a full max block, and the runtime remainder
+    // is padded with O(1) pointer-only bumps. See the ring-alignment note in
+    // adaptive_chunk.hpp — a block size that changes between experts overshoots
+    // fifo_limit, which never wraps, and the CB pointer runs away into L1.
     const uint32_t EFF_M = m_subblocks;
-    const uint32_t x_block_tiles = m_subblocks * in0_block_w;  // runtime x block (per_core_M rows)
+    const uint32_t x_block_tiles = m_subblocks * in0_block_w;  // runtime x work (per_core_M rows)
     const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+    // Constant CB block sizes (per_core_M_max-derived, from the host CB sizing).
+    constexpr uint32_t X_BLOCK_TILES_MAX = in0_block_num_tiles;
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
     pack_reconfig_data_format(partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -413,16 +435,15 @@ FORCE_INLINE void matmul_phase_fused_gu(
     CircularBuffer partials_up_cb(partials_up_cb_id);
     CircularBuffer gate_intermed_cb(gate_intermed_cb_id);
 
-    // Reserve both partials CBs once for the (effective) per-core block. pack_tile
-    // with output_tile_index writes to absolute slots; WrPtr doesn't advance
-    // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
-    // back in the SAME L1 slots — accumulating physically — which is what
-    // we want, at the price of a packer drain per block. Guarded by EFF_M>0 so an
-    // empty row (m_subblocks==0) never issues a 0-count reserve/push.
-    if (EFF_M > 0) {
-        partials_gu_cb.reserve_back(EFF_OUT);
-        partials_up_cb.reserve_back(EFF_OUT);
-    }
+    // Reserve both partials CBs once for the FULL max block. pack_tile with
+    // output_tile_index writes to absolute slots; WrPtr doesn't advance until
+    // cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land back in the
+    // SAME L1 slots — accumulating physically — which is what we want. No
+    // per-K-block pop+repush needed. Only slots [0, EFF_OUT) are ever written;
+    // the rest of the block is stale and is dropped downstream (the down matmul
+    // MAC-skips rows >= per_core_M and the writer never emits them).
+    partials_gu_cb.reserve_back(EFF_OUT_MAX);
+    partials_up_cb.reserve_back(EFF_OUT_MAX);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
@@ -448,6 +469,20 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+            // The helper consumed/produced only the runtime rows, but the reader
+            // pushed a full max cb_x_rm block and the matmul below pops a full max
+            // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
+            // on the stale rows) so every CB moves a constant-size block.
+            {
+                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+                if (x_pad > 0) {
+                    CircularBuffer x_rm_cb(x_rm_cb_id);
+                    x_rm_cb.wait_front(x_pad);
+                    x_rm_cb.pop_front(x_pad);
+                    x_cb.reserve_back(x_pad);
+                    x_cb.push_back(x_pad);
+                }
+            }
             reconfig_data_format_srca(gate_cb_id);
             matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
             pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
@@ -455,7 +490,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
 #endif
         }
-        x_cb.wait_front(x_block_tiles);
+        x_cb.wait_front(X_BLOCK_TILES_MAX);
         gate_cb.wait_front(in1_block_num_tiles);
         up_cb.wait_front(in1_block_num_tiles);
 
@@ -542,15 +577,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
         // out_subblock_w == 1 it is a single pack.
         drain_packer_before_reaccumulate();
 
-        x_cb.pop_front(x_block_tiles);
+        x_cb.pop_front(X_BLOCK_TILES_MAX);
         gate_cb.pop_front(in1_block_num_tiles);
         up_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy loops.
-    if (EFF_M > 0) {
-        partials_gu_cb.push_back(EFF_OUT);
-        partials_up_cb.push_back(EFF_OUT);
-    }
+    partials_gu_cb.push_back(EFF_OUT_MAX);
+    partials_up_cb.push_back(EFF_OUT_MAX);
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
@@ -575,7 +608,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     pack_reconfig_data_format(gate_intermed_cb_id);
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+    copy_init(partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -595,6 +629,18 @@ FORCE_INLINE void matmul_phase_fused_gu(
         }
         gate_intermed_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
+    }
+    // The copy loop above did real work only for the runtime rows. Settle the rest
+    // of the constant-size block with pointer-only bumps: drop the stale tail of
+    // partials_gu and pad gate_intermed so multiply_phase sees a full max block.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            partials_gu_cb.wait_front(pad);
+            partials_gu_cb.pop_front(pad);
+            gate_intermed_cb.reserve_back(pad);
+            gate_intermed_cb.push_back(pad);
+        }
     }
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
@@ -646,9 +692,9 @@ FORCE_INLINE void binary_activation_phase(
     // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
     // activated tiles this chunk (0 if it owns no row -> nothing to do).
     const uint32_t EFF_OUT = eff_out_tiles;
-    if (EFF_OUT == 0) {
-        return;
-    }
+    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+    // only the activation work below is bounded by the runtime EFF_OUT.
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
     // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
     // it and the SFPU op's fp32-dest template below stay in sync with the
     // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
@@ -665,8 +711,8 @@ FORCE_INLINE void binary_activation_phase(
     CircularBuffer up_partials_cb(up_partials_cb_id);
     CircularBuffer activated_cb(activated_cb_id);
 
-    gate_partials_cb.wait_front(EFF_OUT);
-    up_partials_cb.wait_front(EFF_OUT);
+    gate_partials_cb.wait_front(EFF_OUT_MAX);
+    up_partials_cb.wait_front(EFF_OUT_MAX);
 
     pack_reconfig_data_format(activated_cb_id);
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -692,7 +738,8 @@ FORCE_INLINE void binary_activation_phase(
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;
-    copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+    copy_init(gate_partials_cb_id);
 #endif
 
     for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
@@ -724,8 +771,17 @@ FORCE_INLINE void binary_activation_phase(
         activated_cb.push_back(c);
         tile_regs_release();
     }
-    gate_partials_cb.pop_front(EFF_OUT);
-    up_partials_cb.pop_front(EFF_OUT);
+    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+    // the full max block and mcasts only the runtime rows.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            activated_cb.reserve_back(pad);
+            activated_cb.push_back(pad);
+        }
+    }
+    gate_partials_cb.pop_front(EFF_OUT_MAX);
+    up_partials_cb.pop_front(EFF_OUT_MAX);
 }
 #endif
 
@@ -740,14 +796,12 @@ FORCE_INLINE void multiply_phase(
     CircularBuffer activated_cb(activated_cb_id);
 
     const uint32_t EFF_OUT = eff_out_tiles;
-    // Empty row (no valid tiles): gate_intermed / partials_up were not pushed, so
-    // there is nothing to wait on or drain.
-    if (EFF_OUT == 0) {
-        return;
-    }
+    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+    // only the multiply work below is bounded by the runtime EFF_OUT.
+    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
 
-    gate_cb.wait_front(EFF_OUT);
-    up_cb.wait_front(EFF_OUT);
+    gate_cb.wait_front(EFF_OUT_MAX);
+    up_cb.wait_front(EFF_OUT_MAX);
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
@@ -777,8 +831,17 @@ FORCE_INLINE void multiply_phase(
         tile_regs_release();
         base += out_subblock_num_tiles;
     }
-    gate_cb.pop_front(EFF_OUT);
-    up_cb.pop_front(EFF_OUT);
+    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+    // the full max block and mcasts only the runtime rows.
+    {
+        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+        if (pad > 0) {
+            activated_cb.reserve_back(pad);
+            activated_cb.push_back(pad);
+        }
+    }
+    gate_cb.pop_front(EFF_OUT_MAX);
+    up_cb.pop_front(EFF_OUT_MAX);
 }
 
 }  // namespace
@@ -827,13 +890,13 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(28);
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_out_block_num_tiles = get_compile_time_arg_val(29);
-    // Multi-chunk: the number of chunks is chosen at RUNTIME from the device
-    // token count (see the picker below). num_chunks_max is the compile-time
+    // Multi-chunk: the number of chunks is chosen at RUNTIME from each expert's
+    // device token count (see the picker below). num_chunks_max is the compile-time
     // upper bound (host = ceil(M_tiles_full / min_chunk)) used only to clamp the
     // runtime chunk count defensively. chunk_M_max is the CB-sized maximum
     // chunk (per_core_M_max * GRID_Y); the picker never returns more than this.
     constexpr uint32_t num_chunks_max = get_compile_time_arg_val(30);
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(31);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(31);
     // chunk_M_max is the CB-sized MAXIMUM chunk (per_core_M_max * GRID_Y). The
     // runtime picker (adaptive_chunk::num_chunks) sizes the actual chunk to the
     // device token count and never exceeds this.
@@ -863,6 +926,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_counts_scratch = get_named_compile_time_arg_val("cb_counts_scratch");
     constexpr uint32_t cb_idx_scratch = get_named_compile_time_arg_val("cb_idx_scratch");
+    // This expert's region size in tile-rows; caps the device-provided count.
+    constexpr uint32_t m_tiles_full = get_named_compile_time_arg_val("m_tiles_full");
     // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
     // when x is TILE.
     constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
@@ -885,49 +950,18 @@ void kernel_main() {
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
-    // Wait for the reader (BRISC) to push the per-expert counts/idx into
-    // shared L1. UNPACK reads the L1 via LocalCBInterface and broadcasts
-    // count_value to MATH and PACK via the inter-thread mailbox (MATH cannot
-    // access get_local_cb_interface symbols at link time). Production matmul
-    // uses the same UNPACK→mailbox→MATH/PACK pattern (see
-    // circular_buffer.h::read_tile_value).
+    // Wait for the reader (BRISC) to push the counts/idx into shared L1. They
+    // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
-    uint32_t count_value = 0;
-    UNPACK(({
-        const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
-        const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
-        const volatile tt_l1_ptr uint32_t* counts_ptr =
-            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
-        const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
-        const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        count_value = counts_ptr[global_expert_id];
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
-    }));
-    MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    // count is in TOKEN rows; convert to tile rows (ceil). The picker sizes
-    // chunk_M_tiles (hence per_core_M and the number of chunks) to THIS count,
-    // exactly as the retired host-side picker did — now at runtime, so no
-    // expected-token argument is needed. All three kernels (reader/compute/
-    // writer) run the identical picker on the same count, so they agree on the
-    // row mapping. per_core_M is uniform across cores and chunks; rows past the
-    // count in the tail chunk are left stale by the reader's bounded x mcast and
-    // dropped by the writer's row guards — M is a free dim, so garbage there never
-    // reaches a valid output row (contiguous mapping).
-    const uint32_t count_tiles = (count_value + 31) / 32;
-    const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
-    const uint32_t effective_chunks =
-        effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
-    // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
-    // between copy_tile and pack_tile — not packer-fused via
-    // apply_activation_from_pack. Empirically the packer-fused variant
-    // serialises the pack pipeline against the SFPU, slowing down the
-    // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
-    // for silu; the pack then runs plain (no per-tile SFPU on the pack
-    // thread). Same total compute, better pipelining.
+    // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
+    // copy_tile and pack_tile — not packer-fused via apply_activation_from_pack.
+    // Empirically the packer-fused variant serialises the pack pipeline against
+    // the SFPU, slowing down the gate-intermed write. silu_tile_init() configures
+    // the MATH-side SFPU for silu; the pack then runs plain (no per-tile SFPU on
+    // the pack thread). Same total compute, better pipelining.
+    // Init once — shared across all experts.
 #ifdef FUSED_BINARY_ACT
     // The binary activations init their own SFPU tables (recip for SwiGLU-OAI,
     // tanh for SiTU-GLU) instead of silu's.
@@ -936,112 +970,162 @@ void kernel_main() {
     silu_tile_init();
 #endif
 
-    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
-        // for the tail). The gate/up + multiply phases do per_core_M rows of real
-        // work; the down matmul keeps its full compile-time ring and MAC-skips
-        // rows >= per_core_M (see matmul_phase). re_eff_out_gu = per_core_M *
-        // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
-        // per_core_N_gu since gu_out_subblock_h == 1).
-        const uint32_t re_m_valid = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-        const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
-        //
-        // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
-        // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
-        // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
-        reconfig_data_format(cb_in1_gate, cb_in0_x);
-        matmul_block_init(
-            cb_in0_x,
-            cb_in1_gate,
-            /*transpose=*/0,
-            gu_out_subblock_w,
-            gu_out_subblock_h,
-            g_in0_block_w);
 
-        // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
-        // x push from the reader, so x DRAM mcast bytes are halved (one x read
-        // per K-block feeds both matmuls). Both matmuls accumulate into their
-        // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
-        // silu) and partials_up -> up_intermed are produced by the same fused
-        // function.
-        matmul_phase_fused_gu<
-            g_in0_block_w,
-            g_in0_num_subblocks,
-            g_in0_block_num_tiles,
-            g_in0_subblock_num_tiles,
-            g_in1_num_subblocks,
-            g_in1_block_num_tiles,
-            g_in1_per_core_w,
-            g_num_blocks,
-            gu_out_subblock_h,
-            gu_out_subblock_w,
-            gu_out_subblock_num_tiles,
-            gu_out_block_num_tiles,
-            /*x_cb_id=*/cb_in0_x,
-            /*x_rm_cb_id=*/cb_x_rm,
-            /*tilize_x=*/(x_is_row_major != 0)>(
-            cb_in1_gate,
-            cb_in1_up,
-            cb_partials_gu,
-            cb_partials_up,
-            cb_gate_intermed,
-            cb_up_intermed,
-            /*m_subblocks=*/re_m_valid,
-            /*n_subblocks=*/gu_valid_n_subblocks);
+    // ======================= per-local-expert loop =======================
+    // Run the full gate/up/down FFN for every local expert in this program.
+    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+        // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
+        // cannot read the counts/idx L1 via the CB interface).
+        // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
+        // loop body is skipped entirely.
+        uint32_t count_value = 0;
+        UNPACK(({
+            const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+            const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+            const volatile tt_l1_ptr uint32_t* counts_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
+            const volatile tt_l1_ptr uint32_t* idx_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+            const uint32_t global_expert_id = idx_ptr[local_expert_id];
+            count_value = counts_ptr[global_expert_id];
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+        }));
+        MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        // count is in TOKEN rows; convert to tile rows (ceil), then let the runtime
+        // picker size THIS expert's chunks. The picker derives chunk_M_tiles (hence
+        // per_core_M and the chunk count) from this expert's own count, so no
+        // expected-token argument is needed and each expert's work scales to its
+        // actual load. All three kernels (reader/compute/writer) run the identical
+        // picker on the same count, so they agree on the row mapping; rows past the
+        // count in the tail chunk are zero-filled by the reader and dropped by the
+        // writer.
+        // The count is device-produced and unvalidated, so clamp it to this
+        // program's capacity before deriving the chunk layout — arithmetic, so the
+        // bound holds in Release where ASSERT is a no-op. Reader and writer apply
+        // the identical clamp, keeping the three row mappings in lockstep (see
+        // adaptive_chunk::clamp_count_tiles).
+        const uint32_t count_tiles_raw = (count_value + 31) / 32;
+        const uint32_t count_tiles =
+            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, m_tiles_full);
+        ASSERT(count_tiles == count_tiles_raw);
+        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+
+        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+            // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
+            // for the tail). The gate/up + multiply phases do per_core_M rows of real
+            // work; the down matmul keeps its full compile-time ring and MAC-skips
+            // rows >= per_core_M (see matmul_phase). re_eff_out_gu = per_core_M *
+            // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
+            // per_core_N_gu since gu_out_subblock_h == 1).
+            const uint32_t re_m_valid = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+            const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
+            //
+            // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+            // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+            // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+            reconfig_data_format(cb_in1_gate, cb_in0_x);
+            matmul_block_init(
+                cb_in0_x,
+                cb_in1_gate,
+                /*transpose=*/0,
+                gu_out_subblock_w,
+                gu_out_subblock_h,
+                g_in0_block_w);
+
+            // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
+            // x push from the reader, so x DRAM mcast bytes are halved (one x read
+            // per K-block feeds both matmuls). Both matmuls accumulate into their
+            // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
+            // silu) and partials_up -> up_intermed are produced by the same fused
+            // function.
+            matmul_phase_fused_gu<
+                g_in0_block_w,
+                g_in0_num_subblocks,
+                g_in0_block_num_tiles,
+                g_in0_subblock_num_tiles,
+                g_in1_num_subblocks,
+                g_in1_block_num_tiles,
+                g_in1_per_core_w,
+                g_num_blocks,
+                gu_out_subblock_h,
+                gu_out_subblock_w,
+                gu_out_subblock_num_tiles,
+                gu_out_block_num_tiles,
+                /*x_cb_id=*/cb_in0_x,
+                /*x_rm_cb_id=*/cb_x_rm,
+                /*tilize_x=*/(x_is_row_major != 0)>(
+                cb_in1_gate,
+                cb_in1_up,
+                cb_partials_gu,
+                cb_partials_up,
+                cb_gate_intermed,
+                cb_up_intermed,
+                /*m_subblocks=*/re_m_valid,
+                /*n_subblocks=*/gu_valid_n_subblocks);
 
 #ifdef FUSED_BINARY_ACT
-        // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
-        // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
-        // (weights df -> Float16_b) actually fires.
-        binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
-            cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
-        (void)cb_gate_intermed;
-        (void)cb_up_intermed;
+            // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+            // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
+            // (weights df -> Float16_b) actually fires.
+            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
+                cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
+            (void)cb_gate_intermed;
+            (void)cb_up_intermed;
 #else
-        // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
-        // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
-        // multiply does the format conversion via reconfig_data_format inside
-        // multiply_phase — both unpacker srcs get reset to the input CB
-        // formats.
-        multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
-            cb_gate_intermed, cb_partials_up, cb_activated, re_eff_out_gu);
-        (void)cb_up_intermed;
+            // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
+            // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
+            // multiply does the format conversion via reconfig_data_format inside
+            // multiply_phase — both unpacker srcs get reset to the input CB
+            // formats.
+            multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
+                cb_gate_intermed, cb_partials_up, cb_activated, re_eff_out_gu);
+            (void)cb_up_intermed;
 #endif
 
-        // Phase 4: down matmul, output to cb_out.
-        // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
-        // matmul_block_init does not re-program data formats, so reset the down
-        // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
-        reconfig_data_format(cb_in1_down, cb_in0_down_full);
-        matmul_block_init(
-            cb_in0_down_full,
-            cb_in1_down,
-            /*transpose=*/0,
-            d_out_subblock_w,
-            d_out_subblock_h,
-            d_in0_block_w);
-        matmul_phase<
-            d_in0_block_w,
-            d_in0_num_subblocks,
-            d_in0_block_num_tiles,
-            d_in0_subblock_num_tiles,
-            d_in1_num_subblocks,
-            d_in1_block_num_tiles,
-            d_in1_per_core_w,
-            d_num_blocks,
-            d_out_subblock_h,
-            d_out_subblock_w,
-            d_out_subblock_num_tiles,
-            d_out_block_num_tiles,
-            /*apply_silu_on_final=*/false,
-            /*d_per_core_N=*/d_in1_per_core_w,
-            /*real_k_tiles=*/d_K_down_tiles>(
-            cb_in0_down_full,
-            cb_in1_down,
-            cb_partials_d,
-            cb_out,
-            /*m_subblocks=*/re_m_valid,
-            /*n_subblocks=*/d_valid_n_subblocks,
-            cb_down_bias);
-    }  // end chunk loop
+            // Phase 4: down matmul, output to cb_out.
+            // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
+            // matmul_block_init does not re-program data formats, so reset the down
+            // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
+            reconfig_data_format(cb_in1_down, cb_in0_down_full);
+            matmul_block_init(
+                cb_in0_down_full,
+                cb_in1_down,
+                /*transpose=*/0,
+                d_out_subblock_w,
+                d_out_subblock_h,
+                d_in0_block_w);
+            matmul_phase<
+                d_in0_block_w,
+                d_in0_num_subblocks,
+                d_in0_block_num_tiles,
+                d_in0_subblock_num_tiles,
+                d_in1_num_subblocks,
+                d_in1_block_num_tiles,
+                d_in1_per_core_w,
+                d_num_blocks,
+                d_out_subblock_h,
+                d_out_subblock_w,
+                d_out_subblock_num_tiles,
+                d_out_block_num_tiles,
+                /*apply_silu_on_final=*/false,
+                /*d_per_core_N=*/d_in1_per_core_w,
+                /*real_k_tiles=*/d_K_down_tiles>(
+                cb_in0_down_full,
+                cb_in1_down,
+                cb_partials_d,
+                cb_out,
+                /*m_subblocks=*/re_m_valid,
+                /*n_subblocks=*/d_valid_n_subblocks,
+                cb_down_bias);
+        }  // end chunk loop
+
+#ifdef FUSE_BIAS
+        // Pop this expert's biases so the reader can refill for the next expert.
+        CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+        CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+        CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
+#endif
+    }  // end per-local-expert loop
 }

@@ -13,9 +13,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -64,7 +64,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_Violation_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*CB Boundary Violation: Attempted to access CB 0.*reserved.*");
 }
 
@@ -110,7 +110,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_Violation_Read_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
 }
 
@@ -166,7 +166,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*CB Boundary Violation: Attempted to access CB 0.*");
 }
 
@@ -225,7 +225,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_Wraparound_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Wrapped access is legal and the kernel exits flushed → no sanitizer fires.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -270,7 +270,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_NoActiveWindow_NoViolation) {
 
     // Must NOT abort. If the window check regresses to firing without an active
     // reservation/wait, LaunchProgram SIGABRTs and this test fails.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -318,7 +318,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Reuse of produced data is legal and the kernel exits flushed → no abort.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -375,7 +375,7 @@ TEST_F(UnitMeshFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — globally-allocated CBs are exempt from the boundary window check.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

@@ -5,9 +5,12 @@
 """Per-perf-test CSV schema catalog.
 
 One entry per perf test: its reviewed set of CSV columns, a ``version`` bumped
-when those columns change, and an ``aliases`` map (old -> new) for a column
-renamed in that test. The gate in test_perf_csv_header_gate.py re-derives each
-test's columns and fails on any drift from this catalog.
+when those columns change, an ``aliases`` map (old -> new) for a column
+renamed in that test, and a ``test_name_aliases`` map that always includes the
+current test name mapped to itself. Previous names map to the current name;
+renaming a test in place requires updating this map. The gate in
+test_perf_header_gate.py re-derives each test's columns and fails on any drift
+from this catalog.
 """
 
 
@@ -33,9 +36,12 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_bcast_col_custom": "perf_eltwise_bcast_col_custom"
+        },
     },
-    "perf_eltwise_binary_fpu": {
-        "version": 3,
+    "perf_eltwise_binary": {
+        "version": 4,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -53,6 +59,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary": "perf_eltwise_binary",
+            "perf_eltwise_binary_fpu": "perf_eltwise_binary",
+        },
     },
     "perf_eltwise_binary_sfpu": {
         "version": 3,
@@ -79,9 +89,46 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
-    "perf_eltwise_typecast": {
-        "version": 3,
+    "perf_eltwise_unary_datacopy": {
+        "version": 2,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "dst_index",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
+            "loop_factor",
+            "marker",
+            "num_blocks",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
+            "tile_cnt",
+            "tilize",
+            "unpack_to_dest",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_datacopy": "perf_eltwise_unary_datacopy"
+        },
+    },
+    "perf_eltwise_unary_typecast": {
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -109,6 +156,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_typecast": "perf_eltwise_unary_typecast",
+            "perf_eltwise_typecast": "perf_eltwise_unary_typecast",
+        },
     },
     "perf_eltwise_unary_sfpu": {
         "version": 3,
@@ -138,39 +189,13 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-    },
-    "perf_eltwise_unary_sfpu_int32": {
-        "version": 3,
-        "columns": [
-            "approx_mode",
-            "clamp_negative",
-            "dest_acc",
-            "fast_mode",
-            "formats.input_A",
-            "formats.input_B",
-            "formats.output",
-            "formats.register_A",
-            "formats.register_B",
-            "formats.sfpu_src",
-            "formats.sfpu_dst",
-            "iterations",
-            "loop_factor",
-            "marker",
-            "mathop",
-            "num_faces",
-            "num_faces_A",
-            "num_faces_B",
-            "stable_sort",
-            "tile_cnt",
-            "unpack_to_dest",
-            "unpack_transpose_faces",
-            "unpack_transpose_within_face",
-        ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_eltwise_unary_sfpu": "perf_eltwise_unary_sfpu"},
     },
     "perf_fast_tilize": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -179,6 +204,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "num_faces",
@@ -188,10 +215,13 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_fast_tilize": "perf_fast_tilize"},
     },
     "perf_fast_tilize_full": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -200,6 +230,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "num_faces",
@@ -209,10 +241,13 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_fast_tilize_full": "perf_fast_tilize_full"},
     },
     "perf_fast_untilize": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "formats.input_A",
@@ -222,16 +257,21 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_fast_untilize": "perf_fast_untilize"},
     },
     "perf_fast_untilize_baseline_compare": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -240,12 +280,26 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_fast_untilize_baseline_compare": "perf_fast_untilize_baseline_compare"
+        },
+    },
+    "perf_fused": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
         "version": 3,
@@ -284,9 +338,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_math_matmul": "perf_math_matmul"},
     },
-    "perf_math_transpose": {
-        "version": 3,
+    "perf_transpose_dest": {
+        "version": 4,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -303,6 +358,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_transpose_dest": "perf_transpose_dest",
+            "perf_math_transpose": "perf_transpose_dest",
+        },
     },
     "perf_matmul": {
         "version": 3,
@@ -331,9 +390,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_matmul": "perf_matmul"},
     },
     "perf_pack_dest_bank": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "dest_acc",
             "dst_index",
@@ -344,6 +404,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
             "l1_acc",
             "loop_factor",
             "marker",
@@ -352,15 +414,56 @@ PERF_TEST_SCHEMAS = {
             "num_faces_A",
             "num_faces_B",
             "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
+    },
+    "perf_pack": {
+        "version": 2,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
+            "loop_factor",
+            "marker",
+            "num_blocks",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
+            "relu_config",
+            "tile_cnt",
+            "tilize",
+            "unpack_to_dest",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack": "perf_pack"},
     },
     "perf_pack_untilize": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -369,12 +472,15 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
     "perf_reduce": {
         "version": 3,
@@ -395,6 +501,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_reduce": "perf_reduce"},
     },
     "perf_sfpu_binop_scalar": {
         "version": 3,
@@ -425,52 +532,24 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_math": "formats.sfpu_src",
             "mathop": "binop_mathop",
         },
+        "test_name_aliases": {"perf_sfpu_binop_scalar": "perf_sfpu_binop_scalar"},
     },
-    "perf_sfpu_comp": {
-        "version": 3,
+    "perf_sfpu_ema": {
+        "version": 1,
         "columns": [
+            "alpha_bits",
             "approx_mode",
-            "clamp_negative",
-            "dest_acc",
-            "fast_mode",
-            "formats.input_A",
-            "formats.input_B",
-            "formats.output",
-            "formats.register_A",
-            "formats.register_B",
-            "formats.sfpu_src",
-            "formats.sfpu_dst",
-            "iterations",
-            "loop_factor",
-            "marker",
-            "mathop",
-            "num_faces",
-            "num_faces_A",
-            "num_faces_B",
-            "stable_sort",
-            "tile_cnt",
-            "unpack_to_dest",
-            "unpack_transpose_faces",
-            "unpack_transpose_within_face",
-        ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-    },
-    "perf_sfpu_div_wh": {
-        "version": 3,
-        "columns": [
-            "approx_mode",
+            "beta_bits",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
             "formats.register_A",
             "formats.register_B",
-            "formats.sfpu_src",
             "formats.sfpu_dst",
-            "iterations",
+            "formats.sfpu_src",
             "loop_factor",
             "marker",
-            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
@@ -479,41 +558,15 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
-    "perf_sfpu_erfinv_wh": {
-        "version": 3,
+    "perf_sfpu_reduce": {
+        "version": 5,
         "columns": [
             "approx_mode",
-            "clamp_negative",
-            "dest_acc",
-            "fast_mode",
-            "formats.input_A",
-            "formats.input_B",
-            "formats.output",
-            "formats.register_A",
-            "formats.register_B",
-            "formats.sfpu_src",
-            "formats.sfpu_dst",
-            "iterations",
-            "loop_factor",
-            "marker",
-            "mathop",
-            "num_faces",
-            "num_faces_A",
-            "num_faces_B",
-            "stable_sort",
-            "tile_cnt",
-            "unpack_to_dest",
-            "unpack_transpose_faces",
-            "unpack_transpose_within_face",
-        ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-    },
-    "perf_sfpu_reduce_row_max": {
-        "version": 3,
-        "columns": [
-            "approx_mode",
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -522,6 +575,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "mathop",
@@ -530,10 +585,13 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_sfpu_reduce": "perf_sfpu_reduce"},
     },
     "perf_sfpu_reduce_sdpa": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -542,6 +600,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "mathop",
@@ -550,6 +610,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
         "version": 3,
@@ -581,6 +642,7 @@ PERF_TEST_SCHEMAS = {
             "mathop": "ternary_mathop",
             "value_bits": "ternary_scalar_bits",
         },
+        "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
     "perf_unpack_a_bcast_eltwise": {
         "version": 3,
@@ -602,10 +664,15 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_unpack_a_bcast_eltwise": "perf_unpack_a_bcast_eltwise"
+        },
     },
     "perf_unpack_tilize": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -614,12 +681,15 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "loop_factor",
             "marker",
             "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_unpack_tilize": "perf_unpack_tilize"},
     },
     "perf_unpack_transpose": {
         "version": 3,
@@ -640,14 +710,17 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
 }
 
 
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "broadcast_type",
             "dest_acc",
             "dest_sync",
@@ -660,6 +733,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -672,11 +747,16 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary_broadcast_quasar": "perf_eltwise_binary_broadcast_quasar"
+        },
     },
     "perf_eltwise_binary_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "acc_to_dest",
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -688,7 +768,10 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
+            "input_num_tiles_in_block",
             "input_tile_cnt",
             "loop_factor",
             "marker",
@@ -698,14 +781,20 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_A",
             "num_faces_B",
             "num_tiles_in_block",
+            "output_num_tiles_in_block",
             "output_tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary_quasar": "perf_eltwise_binary_quasar"
+        },
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -717,6 +806,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
@@ -737,6 +828,9 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary_reuse_dest_quasar": "perf_eltwise_binary_reuse_dest_quasar"
+        },
     },
     "perf_eltwise_binary_sfpu_quasar": {
         "version": 3,
@@ -775,6 +869,9 @@ PERF_TEST_SCHEMAS_QSR = {
             "zero_point_bits",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_binary_sfpu_quasar": "perf_eltwise_binary_sfpu_quasar"
+        },
     },
     "perf_eltwise_unary_datacopy_quasar": {
         "version": 3,
@@ -807,6 +904,9 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_datacopy_quasar": "perf_eltwise_unary_datacopy_quasar"
+        },
     },
     "perf_eltwise_unary_sfpu_quasar": {
         "version": 3,
@@ -839,6 +939,18 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_sfpu_quasar": "perf_eltwise_unary_sfpu_quasar"
+        },
+    },
+    "perf_fused_quasar": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_fused_quasar": "perf_fused_quasar"},
     },
     "perf_matmul_quasar": {
         "version": 3,
@@ -869,10 +981,13 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_matmul_quasar": "perf_matmul_quasar"},
     },
     "perf_pack_l1_acc_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -884,6 +999,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
@@ -901,6 +1018,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack_l1_acc_quasar": "perf_pack_l1_acc_quasar"},
     },
     "perf_pack_quasar": {
         "version": 3,
@@ -931,10 +1049,13 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack_quasar": "perf_pack_quasar"},
     },
     "perf_pack_untilize_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -946,6 +1067,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -961,10 +1084,13 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -976,6 +1102,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -994,6 +1122,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_reduce_quasar": "perf_reduce_quasar"},
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
         "version": 2,
@@ -1024,9 +1153,12 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_sfpu_exp_parallel_matmul_quasar": "perf_sfpu_exp_parallel_matmul_quasar"
+        },
     },
-    "perf_transpose_dest_quasar": {
-        "version": 4,
+    "perf_sfpu_where_quasar": {
+        "version": 1,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -1041,6 +1173,41 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "implied_math_format",
+            "loop_factor",
+            "marker",
+            "mathop",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpacker_engine_sel",
+            "vector_mode",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_sfpu_where_quasar": "perf_sfpu_where_quasar"},
+    },
+    "perf_transpose_dest_quasar": {
+        "version": 5,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "data_copy_type",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
@@ -1063,10 +1230,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_transpose_dest_quasar": "perf_transpose_dest_quasar"
+        },
     },
     "perf_unary_broadcast_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "broadcast_type",
             "dest_acc",
             "dest_sync",
@@ -1079,6 +1251,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
@@ -1100,10 +1274,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_unary_broadcast_quasar": "perf_unary_broadcast_quasar"
+        },
     },
     "perf_unpack_reduce_col_tilizeA_strided_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dest_sync",
             "face_c_dim",
@@ -1115,6 +1294,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -1132,10 +1313,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_unpack_reduce_col_tilizeA_strided_quasar": "perf_unpack_reduce_col_tilizeA_strided_quasar"
+        },
     },
     "perf_unpack_tilize_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "data_copy_type",
             "dest_acc",
             "dest_sync",
@@ -1148,6 +1334,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -1163,10 +1351,13 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_unpack_tilize_quasar": "perf_unpack_tilize_quasar"},
     },
     "perf_unpack_unary_operand_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "data_copy_type",
             "dest_acc",
             "dest_sync",
@@ -1179,6 +1370,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "implied_math_format",
             "loop_factor",
             "marker",
@@ -1196,5 +1389,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_unpack_unary_operand_quasar": "perf_unpack_unary_operand_quasar"
+        },
     },
 }

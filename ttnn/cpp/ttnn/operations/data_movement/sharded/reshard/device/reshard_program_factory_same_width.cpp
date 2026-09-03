@@ -184,7 +184,20 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         {"remote_unit_size_padded", remote_unit_size_padded},
     };
 
-    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+    // is_reader splits the two RISCs so each owns its own scratch half.
+    auto make_cta = [&](uint32_t is_reader) {
+        KernelSpec::CompileTimeArgs cta = compile_time_args;
+        if (use_scratch) {
+            cta.insert({"is_reader", is_reader});
+            cta.insert({"remote_units_per_shard", remote_units_per_shard});
+        }
+        return cta;
+    };
+
+    const auto make_worker = [&](const char* name,
+                                 const DataMovementHardwareConfig& hw_config,
+                                 DFBEndpointType endpoint,
+                                 uint32_t is_reader) {
         KernelSpec kernel{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
@@ -195,9 +208,9 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
             }},
             .tensor_bindings = {TensorBinding{
                 .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam}, .accessor_name = kSWRemoteTensorParam}},
-            .compile_time_args = compile_time_args,
+            .compile_time_args = make_cta(is_reader),
             .runtime_arg_schema = {.runtime_arg_names = {offset_arg_name, count_arg_name}},
-            .hw_config = std::move(hw_config),
+            .hw_config = hw_config,
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
         // The unaligned re-striding path is gated by a preprocessor flag rather than a compile-time
@@ -220,9 +233,15 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     // shard (and scratch) DFB. Two role-free touchers over one grid -> assign 1P + 1C.
     spec.kernels = {
         make_worker(
-            kSWReaderKernel, ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER),
+            kSWReaderKernel,
+            ttnn::create_reader_datamovement_config(device->arch()),
+            DFBEndpointType::PRODUCER,
+            /*is_reader=*/1),
         make_worker(
-            kSWWriterKernel, ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER),
+            kSWWriterKernel,
+            ttnn::create_writer_datamovement_config(device->arch()),
+            DFBEndpointType::CONSUMER,
+            /*is_reader=*/0),
     };
 
     // Local sharded DFB, built on the local buffer's borrowed memory so its backing L1 address is
@@ -248,12 +267,11 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         .borrowed_from = TensorParamName{kSWLocalTensorParam},
     }};
     if (use_scratch) {
-        // Scratch DFB used only by the reader path (local_is_output): the entry size is the
-        // remote-aligned stride, so the DFB spans remote rows at their padded stride.
+        // entry_size = remote-aligned stride; 2x entries so the two RISCs get disjoint halves.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = DFBSpecName{kSWScratchDfbName},
             .entry_size = remote_unit_size_padded,
-            .num_entries = remote_units_per_shard,
+            .num_entries = 2 * remote_units_per_shard,
             .data_format_metadata = data_format,
         });
     }

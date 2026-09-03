@@ -113,7 +113,9 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
+        # Quasar is checked first: sim_quasar contains neither 'bh_' nor 'blackhole' and would
+        # otherwise fall through to the wormhole_b0 default.
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'quasar') && 'quasar' || (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
@@ -208,7 +210,8 @@ jobs:
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
-              "scope": "${{ inputs.summary-scope }}"
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": true
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

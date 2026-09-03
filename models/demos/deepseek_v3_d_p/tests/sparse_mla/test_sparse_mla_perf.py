@@ -42,31 +42,35 @@ CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the
     collective-heavy numbers can differ a few percent (see PR #49840 deltas). Both express the same
     per-step critical-path quantity.
 
-Each measured ``forward()`` is profiled as its own region (register callback → run one forward →
-drain). ``runtime_id`` is a globally monotonic per-execution id (assigned per enqueue, cache hit or
-miss — ttnn ``device_operation.hpp``), so every op execution — including the same op across cold
-iterations — gets a distinct id; the max-collapse only merges the per-chip records of one execution.
-Per-forward regions are what attribute ops to each cold iteration (the per-iteration breakdown) and
-replace the old MLA_START signpost split. The run total is the sum of per-forward criticals.
+Each measured ``forward()`` uses production-style traced execution: compile outside capture, capture
+one forward, warm the first replay outside the profiler window, then profile a second replay. Cold
+prefill captures one trace per ``actual_start`` because that scalar changes the command stream; each
+trace is released after its measured replay so trace memory stays bounded. ``runtime_id`` is a globally
+monotonic id for ordinary dispatch, but trace replay reuses the runtime ids stored when the trace was
+captured. Separate profiler regions isolate the warm-up and measured replays, so the max-collapse only
+merges per-chip records from the replay in that region. Per-replay profiler regions also attribute ops
+to each cold iteration (the per-iteration breakdown) and replace the old MLA_START signpost split. The
+run total is the sum of per-replay criticals.
 
 Single test (was a two-test tracy driver+impl split):
   * test_mla_chunked_perf — parametrized over [glm_5_1, glm_5_2] × [warm, cold, long] ×
     [sparse, dense]. Builds the DSA ttMLA (variant from the ``variant`` fixture) and, per scenario,
-    measures one forward over the (zero-init) block-cyclic caches (warm/long) or a chunk loop that
-    fills them (cold), profiling each forward under the realtime profiler. Prints a per-op table and
+    measures one forward over an otherwise zero-filled cached prefix (warm/long) or a chunk loop that
+    fills them (cold), profiling traced replays under the realtime profiler. Prints a per-op table and
     writes a per-(scenario, variant, mode) CSV under generated/profiler/<variant>_<mode>_mla_perf/.
 
 Three scenarios (the test sweeps all three):
   * warm — production step: one `chunk`-token forward at start=cache over a `cache`-length prefix. Both
-    block-cyclic caches (indexer index_kv_cache + KVPE) are left at init — no warm-up forwards; for a perf
-    proxy only op shapes/timing matter, and those are set by the full `total` prefix width the fused ring
-    indexer spans, not the cache contents. Measures a single steady-state chunk.
+    cached prefix in both block-cyclic caches (indexer index_kv_cache + KVPE) remains zero-filled; the
+    compile/capture/replay sequence only rewrites the current chunk. For a perf proxy only op shapes/timing
+    matter, and those are set by the full `total` prefix width the fused ring indexer spans, not the cache
+    contents. Measures a single steady-state replay.
   * cold — full cold prefill: forward chunks start=0,chunk,…,cache with real forwards that grow both
     caches (both by per-chunk block-cyclic slab writes). The measured region spans ALL chunks = the
     total cold-start prefill cost; the final chunk (start=cache) is exactly the `warm` step. Besides the
     aggregate per-op table, cold also emits a per-cache-fill-iteration breakdown (…_cold_by_iter.csv:
     iteration, cache_depth_tokens, total_ns, op_count) showing how the per-chunk critical path grows as
-    the cache fills — recovered by profiling each forward as its own region.
+    the cache fills — recovered by profiling each trace replay as its own region.
   * long — like `warm` but with a 0.5M-token Galaxy cache (512000 = 100 chunks), to profile a single
     chunk over a long prefix. Like the others the cache scales by SP/8, so per-chip depth stays
     Galaxy-equal on every box (LoudBox=128k, QuietBox=64k box-local cache).
@@ -104,9 +108,10 @@ BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk mul
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
 
-NOTE: warm/long leave both block-cyclic caches at zero init rather than warming with real chunks — only
-op shapes/timing matter here, not values, and those come from the full `total` prefix width (allocation),
-not the cache contents; cold instead runs real chunk forwards that fill the caches. The indexer rope
+NOTE: warm/long leave the cached prefix of both block-cyclic caches zero-filled rather than populating it
+with earlier chunks — only op shapes/timing matter here, not values, and those come from the full `total`
+prefix width (allocation), not the cache contents; cold instead runs real chunk forwards that fill the
+caches. The indexer rope
 scales from the HF config (mla.py), so `config.max_seq_len = total` is enough for a 50k+ (and 0.5M)
 context (no manual rope bump).
 """
@@ -162,7 +167,7 @@ _CONFIG_BUILDERS = {
 
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
-# default covers a many-program forward across up to 32 chips; each forward is profiled as its own
+# default covers a many-program replay across up to 32 chips; each replay is profiled as its own
 # (volume-bounded) region so this is a safety ceiling, not the expected wait.
 RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 
@@ -197,8 +202,8 @@ def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
 
 
 # Three profiling scenarios (the test sweeps all three):
-#   warm  — the production step: one chunk over a pre-filled `cache` (indexer K-cache populated
-#           directly, no warm-up forwards). Measures a single steady-state chunk.
+#   warm  — the production step: one chunk over a logical `cache` prefix. The prefix stays zero-filled;
+#           compile/capture/replay only rewrites the current chunk. Measures one steady-state replay.
 #   cold  — full cold prefill: iteratively forward chunks start=0,chunk,…,cache (real forwards that
 #           grow the caches). The measured region spans ALL chunks = total cold-start prefill cost;
 #           the final chunk (start=cache) is exactly the `warm` case.
@@ -315,8 +320,9 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_forma
         )
         head = _git_head()
         manifest = {
-            "schema_version": 3,
+            "schema_version": 4,
             "profiler": "realtime",
+            "execution": "trace_replay",
             "variant": variant,
             "scenario": scenario,
             "attn_mode": attn_mode,
@@ -599,6 +605,57 @@ def _profile_forward(mesh_device, run_fn) -> dict:
     return per_program
 
 
+def _profile_traced_forward(mesh_device, run_fn) -> dict:
+    """Compile and capture ``run_fn``, exclude first-replay jitter, then profile one trace replay.
+
+    A cold run calls this once per ``actual_start`` because the start position is a host scalar captured
+    in the op runtime arguments. Releasing each trace before advancing bounds trace memory to one forward.
+    The returned output allocation must remain alive through replay because the captured commands target
+    its address, even though this perf-only harness does not consume the values.
+    """
+    trace_id = None
+    trace_capture_ended = False
+    trace_out = None
+    compile_out = None
+    try:
+        # Trace capture requires the complete command stream to be compiled and cached first.
+        compile_out = run_fn()
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(compile_out)
+        compile_out = None
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_out = run_fn()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        trace_capture_ended = True
+        ttnn.synchronize_device(mesh_device)
+
+        # The first replay can carry one-time replay overhead. Profile and discard it so the realtime
+        # profiler's asynchronous receiver drains its records before the measured region opens. Trace
+        # replay reuses the runtime ids stored at capture, so a bare synchronize would leave a race in
+        # which late warm-up records could be max-collapsed with the measured replay.
+        _profile_forward(
+            mesh_device,
+            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False),
+        )
+
+        return _profile_forward(
+            mesh_device,
+            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False),
+        )
+    finally:
+        if trace_id is not None:
+            try:
+                if not trace_capture_ended:
+                    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            finally:
+                ttnn.release_trace(mesh_device, trace_id)
+        if trace_out is not None:
+            ttnn.deallocate(trace_out)
+        if compile_out is not None:
+            ttnn.deallocate(compile_out)
+
+
 def _programs_to_frame(per_program: dict, dur_col: str) -> pd.DataFrame:
     """One row per device program: (OP CODE label, critical-path duration)."""
     return pd.DataFrame(
@@ -743,9 +800,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         )
 
     # Block-cyclic indexer key cache (SPARSE only): allocated externally (same ownership as the KVPE cache)
-    # and passed into forward. warm/long leave it (and the KVPE cache) at zero init — for a profiling proxy
-    # the cache CONTENTS don't affect op shapes/timing (the fused ring indexer always covers the full
-    # `total`-length prefix), so representing the `cache` already-processed tokens needs no warm-up write.
+    # and passed into forward. warm/long leave the cached prefix (in it and the KVPE cache) zero-filled —
+    # compile/capture/replay only rewrites the current chunk. For a profiling proxy the cache CONTENTS don't
+    # affect op shapes/timing (the fused ring indexer always covers the full `total`-length prefix), so
+    # representing the `cache` already-processed tokens needs no prefix-population loop.
     # cold fills both caches for real via its own per-chunk block-cyclic slab writes (start=0,chunk,…,cache).
     # DENSE has no indexer (NullIndexer) — ring MLA reads the prefix by logical_n (= total), not by cached
     # index data, so it needs no index cache (index_kv_cache stays None).
@@ -775,9 +833,9 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     )
 
     # cold: forward every chunk start=0,chunk,…,cache (the last, start=cache, is the warm step). warm/long:
-    # one forward at start=cache. Each forward is profiled as its OWN realtime-profiler region: a cached op
-    # reuses its runtime_id across forwards, so per-forward regions are what make the cold per-iteration
-    # sum correct (and replace the old signposted-region split).
+    # one forward at start=cache. Each start is compiled, captured, replay-warmed, then measured by replay
+    # in its OWN realtime-profiler region. Cold needs one capture per start because actual_start is a host
+    # scalar embedded in runtime arguments. Per-replay regions make the cold per-iteration sum correct.
     starts = list(range(0, cache + chunk, chunk)) if is_cold else [cache]
     logger.info(
         f"profiling {workload.system_name} {_profile_case_id(attn_mode, kv_cache_format)}/{scenario} proxy: "
@@ -793,13 +851,11 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     )
 
     def _one_forward(start):
-        out = mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
-        ttnn.deallocate(out)
+        return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
 
-    forwards = []  # one {runtime_id -> {...}} per measured forward (device-collapsed to critical path)
+    forwards = []  # one {runtime_id -> {...}} per measured trace replay (device-collapsed to critical path)
     for start in starts:
-        ttnn.synchronize_device(mesh_device)  # drain prior programs so only this forward contributes records
-        forwards.append(_profile_forward(mesh_device, lambda start=start: _one_forward(start)))
+        forwards.append(_profile_traced_forward(mesh_device, lambda start=start: _one_forward(start)))
 
     dur_col = "DEVICE KERNEL DURATION [ns]"  # kept for downstream compatibility (holds RT critical-path ns)
     frame = pd.concat([_programs_to_frame(pp, dur_col) for pp in forwards], ignore_index=True)
@@ -827,7 +883,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             f"proxy local MLA/index heads={workload.num_attention_heads // workload.tp}/"
             f"{workload.index_n_heads // workload.tp}",
             f"critical-path device-kernel time over the {'prefill' if is_cold else 'chunk'} "
-            f"(realtime profiler; per-program max across chips): "
+            f"(traced replay, realtime profiler; per-program max across chips): "
             f"{total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} device programs",
             "(OP CODE = tracy-style op code mapped from kernel sources; see module docstring)",
             header,
@@ -865,7 +921,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
 
     # cold only: per-cache-fill-iteration breakdown. The aggregate above sums all chunks; this shows how
     # the per-chunk critical path grows as the cache fills (the point of the cold scenario). Each forward
-    # was profiled as its own region, so iteration i is simply forwards[i] — no signpost splitting.
+    # was profiled as its own trace-replay region, so iteration i is simply forwards[i].
     if not is_cold:
         return
     per_op_rows, totals = [], []
@@ -885,7 +941,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     iter_table = "\n".join(
         [
             f"cold per-iteration critical path [{variant.name}/{workload.system_name}] "
-            f"(realtime profiler; last iter == the `warm` step):",
+            f"(traced replay, realtime profiler; last iter == the `warm` step):",
             iter_header,
             "-" * len(iter_header),
             *(f"{i:>4}{d:>12}{t/1e6:>12.3f}{n:>6}" for i, d, t, n in totals),

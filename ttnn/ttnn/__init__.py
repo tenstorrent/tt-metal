@@ -8,7 +8,6 @@ import importlib
 import os
 import pathlib
 import pkgutil
-import re
 import sys
 from types import ModuleType
 
@@ -25,56 +24,24 @@ if "TTNN_CONFIG_PATH" in os.environ:
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
-def load_config_from_dictionary(config, from_file=False):
-    global CONFIG
-    for key, value in config.items():
-        if hasattr(CONFIG, key):
-            if getattr(CONFIG, key) is not None:
-                value = type(getattr(CONFIG, key))(value)
-            setattr(CONFIG, key, value)
-        elif from_file:
-            logger.warning(
-                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
-            )
-        else:
-            raise ValueError(f"Unknown configuration key: {key}")
+def load_config_from_dictionary(config, from_file=False, source=None):
+    try:
+        CONFIG.apply_json_overrides(json.dumps(config, default=str), strict=not from_file, source=str(source or ""))
+    except RuntimeError as e:
+        # Keep raising ValueError as this function always has; TT_THROW surfaces as RuntimeError.
+        raise ValueError(str(e)) from e
 
 
 def load_config_from_json_file(json_path):
-    global CONFIG
-    try:
-        with open(json_path, "r") as f:
-            config = json.load(f)
-        load_config_from_dictionary(config, from_file=True)
-    except Exception as e:
-        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
+    CONFIG.load_from_file(pathlib.Path(json_path))
 
 
 def save_config_to_json_file(json_path):
-    with open(json_path, "w") as f:
-        normalized_config = {}
-        for key in dir(CONFIG):
-            if re.match("^_.+_$", key):
-                continue
-            value = getattr(CONFIG, key)
-            if isinstance(value, pathlib.Path):
-                value = str(value)
-            normalized_config[key] = value
-        json.dump(normalized_config, f, indent=4)
+    CONFIG.save_to_file(pathlib.Path(json_path))
 
 
-if CONFIG_PATH is not None:
-    if CONFIG_PATH.exists():
-        logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
-        load_config_from_json_file(CONFIG_PATH)
-    else:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        save_config_to_json_file(CONFIG_PATH)
-
-if CONFIG_OVERRIDES is not None:
-    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
-    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
-
+# TTNN_CONFIG_PATH and TTNN_CONFIG_OVERRIDES are applied in C++ at _ttnn load, so that pure C++
+# consumers get the same configuration as Python; see ttnn/core/config.cpp.
 logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
@@ -647,6 +614,8 @@ Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
 
 transformer.SparseKVFormat = SparseKVFormat
+
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

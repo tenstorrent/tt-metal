@@ -19,6 +19,8 @@
 
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 150
@@ -34,14 +36,12 @@
 
 - name: ttnn nightly matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 50
     wh_n300_civ2:
       timeout: 50
     bh_p100:
-      timeout: 50
-    bh_p150b_civ2:
       timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -50,13 +50,9 @@
 - name: ttnn nightly fused tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 65
     wh_n300_civ2:
       timeout: 65
     bh_p100:
-      timeout: 65
-    bh_p150b_civ2:
       timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -64,14 +60,12 @@
 
 - name: ttnn nightly reduction tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -96,8 +90,24 @@
     bh_p100:
       timeout: 60
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
+  team: ttnn
+  category: experimental
+
+- name: ttnn attn_res_weighted_reduce_nc unit tests
+  # The test file sits in a directory no group suite globs, so this row is the only thing
+  # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
+  # alone, and every group suite that would otherwise collect it runs -x on SKUs it has
+  # never executed on, where a failure would abort tests belonging to someone else.
+  # The per-test timeout sits below the step timeout so a hang is reported as a
+  # pytest stack dump rather than an opaque step kill, with room left over for the
+  # report to be written.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py -xv --timeout=60'
+  skus:
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
   category: experimental
 
@@ -212,13 +222,9 @@
 - name: ttnn nightly moreh tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
-    wh_n150_civ2:
-      timeout: 45
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 45
-    bh_p150b_civ2:
       timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
@@ -276,9 +282,11 @@
 
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
-      timeout: 40
+      timeout: 50
     wh_n300_civ2:
       timeout: 40
     bh_p100:
@@ -303,6 +311,8 @@
 - name: ttnn nightly data_movement tests (post-commit suite)
   # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 120

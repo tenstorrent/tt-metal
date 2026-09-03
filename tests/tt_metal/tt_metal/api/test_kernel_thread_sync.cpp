@@ -20,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -132,7 +133,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
             make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
     SetProgramRunArgs(program, params);
-    slow_dispatch::LaunchProgram(this->device(), program, true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (const auto& cfg : kernel_configs) {
         std::vector<uint32_t> observed;

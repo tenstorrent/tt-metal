@@ -21,11 +21,26 @@ pytestmark = pytest.mark.use_module_device
 
 
 SHAPES = [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)]
-DIMS = [-1, -2, 0, (-2, -1), (0, -2, -1), None]
+DIMS_PART1 = [(-2, -1), None]
+DIMS_PART2 = [-1, -2, 0, (-2, -1), (0, -2, -1), None]
 
-# Pair (shape, dim) to drop combos with more reduction dims than rank, and
-# (op, correction) since correction is live only for std/var.
-VALID_SHAPE_DIMS = [(s, d) for s in SHAPES for d in DIMS if not (isinstance(d, tuple) and len(d) > len(s))]
+
+# Pair (shape, dim) to drop combos with more reduction dims than rank, and dims that
+# duplicate another dim of the same list at rank 2.
+def _valid_shape_dims(dims, rank2_duplicates):
+    return [
+        (s, d)
+        for s in SHAPES
+        for d in dims
+        if not (isinstance(d, tuple) and len(d) > len(s)) and not (len(s) == 2 and d in rank2_duplicates)
+    ]
+
+
+# At rank 2, dim=(-2, -1) is the same reduction as dim=None, and dim=0 the same as dim=-2.
+VALID_SHAPE_DIMS_PART1 = _valid_shape_dims(DIMS_PART1, rank2_duplicates=[None])
+VALID_SHAPE_DIMS_PART2 = _valid_shape_dims(DIMS_PART2, rank2_duplicates=[0, (-2, -1)])
+
+# Pair (op, correction) since correction is live only for std/var.
 OP_CORRECTION = [
     ("sum", False),
     ("mean", False),
@@ -38,11 +53,7 @@ OP_CORRECTION = [
 ]
 
 
-@pytest.mark.parametrize("op, correction", OP_CORRECTION)
-@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
-@pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS)
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
+def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
     if op in ("var", "std") and correction:
         # Bessel's correction divides by (N - 1) where N is the number of elements
         # reduced. With N == 1 this is a divide-by-zero, producing all-NaN output;
@@ -217,5 +228,21 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
     assert passing, f"{output_msg}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
-# Test that generic reduction ops produce correct results, preserve dtype, and emit the
-# layout documented in nanobind across all supported dtype/layout combinations.
+# Test that generic reduction ops work correctly with a scalar applied to the input.
+# Split into two parts to avoid large test count from full cross product.
+# Simple powers of two run with reduced set of dim parameters.
+@pytest.mark.parametrize("op, correction", OP_CORRECTION)
+@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0])
+@pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART1)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_generic_ops_w_scalar_part1(device, op, scalar, correction, dim, shape, dtype):
+    _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
+
+
+# Non-powers of two and a slightly larger power of two run with full set of dim parameters.
+@pytest.mark.parametrize("op, correction", OP_CORRECTION)
+@pytest.mark.parametrize("scalar", [-2.43, 2.43, 4.0])
+@pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART2)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_generic_ops_w_scalar_part2(device, op, scalar, correction, dim, shape, dtype):
+    _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)

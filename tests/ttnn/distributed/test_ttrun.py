@@ -41,6 +41,7 @@ from ttnn.distributed.ttrun import (
     PHASE2_MOCK_MAPPING_FILENAME,
     PHASE1_CACHE_ID_HEX_LEN,
     RANK_BINDINGS_MAPPING_FILENAME,
+    FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
@@ -302,6 +303,37 @@ class TestPhase2Helpers:
         assert "--output-dir" in cmd
         assert str(output_dir.resolve()) in cmd
 
+    def test_build_generate_rank_bindings_mpi_cmd_fsd_sets_env(self, temp_dir):
+        """FSD path is exported to generate_rank_bindings via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        fsd_path = temp_dir / "fsd.textproto"
+        fsd_path.touch()
+        output_dir = temp_dir / "output"
+        hosts = ["node1", "node2"]
+
+        cmd = build_generate_rank_bindings_mpi_cmd(
+            executable, mgd_path, hosts, output_dir, factory_system_descriptor=fsd_path
+        )
+
+        assert f"{FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR}={fsd_path}" in cmd
+        # It is exported as an env var, not passed as a CLI flag to the tool.
+        assert "--factory-system-descriptor" not in cmd
+
+    def test_build_generate_rank_bindings_mpi_cmd_no_fsd_no_env(self, temp_dir):
+        """Without an FSD, the env var is not injected."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, ["node1"], output_dir)
+
+        assert not any(tok.startswith(f"{FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR}=") for tok in cmd)
+
     def test_build_generate_rank_bindings_mpi_cmd_duplicate_hosts_adds_oversubscribe(self, temp_dir):
         """Phase 1: same hostname listed more than once requires --oversubscribe."""
         executable = temp_dir / "generate_rank_bindings"
@@ -417,6 +449,26 @@ class TestEnvironmentVariables:
         assert env["TEST_VAR"] == "value0"  # From env_overrides
         assert env["GLOBAL_VAR"] == "global_value"  # From global_env
 
+    def test_get_rank_environment_fsd(self, sample_rank_binding_yaml, temp_dir):
+        """FSD path on the config is exported to every rank via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        fsd_path = temp_dir / "fsd.textproto"
+        config.factory_system_descriptor_path = fsd_path
+        binding = config.rank_bindings[0]
+
+        env = get_rank_environment(binding, config)
+
+        assert env[FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR] == str(fsd_path)
+
+    def test_get_rank_environment_no_fsd(self, sample_rank_binding_yaml):
+        """Without an FSD on the config, the env var is absent."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        binding = config.rank_bindings[0]
+
+        env = get_rank_environment(binding, config)
+
+        assert FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR not in env
+
 
 class TestOversubscribeHelpers:
     """--oversubscribe when multiple processes map to one host."""
@@ -526,6 +578,21 @@ class TestLegacyFlow:
             assert result.exit_code == 0
             # Single-process runs should work fine even with multihost args
             # MPI handles single-process runs correctly regardless
+
+    def test_legacy_mode_missing_fsd_errors(self, runner, sample_rank_binding_yaml, temp_dir):
+        """Legacy mode validates the FSD path exists (regression: raw path was stored unvalidated)."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--factory-system-descriptor",
+                str(temp_dir / "does_not_exist.textproto"),
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
 
 
 class TestRankfileInjection:
@@ -725,6 +792,23 @@ class TestPhase1CacheId:
         mgd2.write_bytes(b"bbb")
         hosts = sorted(["n1"])
         assert compute_phase1_cache_id(mgd1, hosts, None) != compute_phase1_cache_id(mgd2, hosts, None)
+
+    def test_fingerprint_changes_when_fsd_supplied_or_changed(self, temp_dir):
+        """Supplying an FSD (and changing its content) invalidates the Phase 1 cache fingerprint."""
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mesh")
+        hosts = sorted(["n1"])
+        fsd_a = temp_dir / "fsd_a.textproto"
+        fsd_b = temp_dir / "fsd_b.textproto"
+        fsd_a.write_bytes(b"fsd-a")
+        fsd_b.write_bytes(b"fsd-b")
+
+        no_fsd = compute_phase1_cache_fingerprint_full(mgd, hosts, None)
+        with_a = compute_phase1_cache_fingerprint_full(mgd, hosts, None, factory_system_descriptor=fsd_a)
+        with_b = compute_phase1_cache_fingerprint_full(mgd, hosts, None, factory_system_descriptor=fsd_b)
+
+        assert no_fsd != with_a  # adding an FSD changes the fingerprint
+        assert with_a != with_b  # different FSD content changes the fingerprint
 
     def test_cache_fingerprint_includes_all_mapped_mgd_contents(self, temp_dir):
         """Multi-MGD mapping fingerprint changes when any referenced .textproto changes."""

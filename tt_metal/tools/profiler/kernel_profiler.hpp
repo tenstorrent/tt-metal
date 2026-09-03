@@ -15,7 +15,7 @@
 #include "ckernel.h"
 #endif
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/hw_thread.h"
 

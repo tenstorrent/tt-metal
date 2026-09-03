@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
 #include "fmt/base.h"
@@ -27,6 +28,9 @@
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
+#include "tt-metalium/mesh_device.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
@@ -87,6 +91,35 @@ inline bool is_emule_device(const IDevice* device) {
     }
 }
 
+// Cores claimed through ServiceCoreManager, or an empty set when no service is running.
+// A claimed core is a free FD dispatch-column core: it has real L1, but the allocator gives it no
+// bank because it sits outside the compute grid, so the bank lookup below cannot speak for it.
+// MeshSocket puts its config buffer on such cores and then reserves that span in the core's own
+// allocator (ServiceCoreManager::reserve_l1_to_top), which is what keeps the two allocators from
+// handing out the same address -- so a shard there is deliberate, not a bad grid.
+//
+// ServiceCoreManager is keyed by ChipId, so a MeshDevice -- the usual caller -- has to be flattened
+// to its local physical devices, the same way validate_circular_buffer_core_ranges() does it. The
+// union produces an answer for the mesh as a whole rather than for one chip, which is as precise
+// as a mesh-wide shard grid can be asked to be; MeshBuffer then re-creates a Buffer per coordinate
+// against that coordinate's own device, and those get an exact per-chip answer.
+std::unordered_set<CoreCoord> claimed_service_cores(const IDevice* device) {
+    const auto& service_cores = MetalContext::instance(extract_context_id(device)).get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> claimed;
+    if (!service_cores.has_any_claims()) {
+        return claimed;
+    }
+    if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(device)) {
+        for (const IDevice* chip : mesh->get_devices()) {
+            const auto chip_claimed = service_cores.claimed_cores(chip->id());
+            claimed.insert(chip_claimed.begin(), chip_claimed.end());
+        }
+    } else {
+        claimed = service_cores.claimed_cores(device->id());
+    }
+    return claimed;
+}
+
 void validate_buffer_parameters(
     DeviceAddr size,
     DeviceAddr page_size,
@@ -94,7 +127,8 @@ void validate_buffer_parameters(
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
-    const AllocatorImpl& allocator) {
+    const AllocatorImpl& allocator,
+    const IDevice* device) {
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
@@ -105,7 +139,8 @@ void validate_buffer_parameters(
         // core survives construction and is only caught later by whichever op happens to resolve a
         // bank id for it -- or not caught at all, in which case the shard lands on a bank that does
         // not exist. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer)
-        // paths.
+        // paths. The one exception is a core claimed via ServiceCoreManager -- see
+        // claimed_service_cores() above.
         //
         // L1_SMALL is checked against the L1 bank map. The two are filled by the same loop over the
         // same logical cores, so they agree on which coordinates are legal, but the L1_SMALL map is
@@ -123,6 +158,21 @@ void validate_buffer_parameters(
             } else if (shard_spec.has_value()) {
                 shard_cores = corerange_to_cores(shard_spec->grid());
             }
+
+            // Reached only for a core the allocator has no bank for, so the ServiceCoreManager
+            // lookup stays off the buffer-construction path every valid shard grid takes.
+            std::optional<std::unordered_set<CoreCoord>> service_cores;
+            auto is_claimed_service_core = [&](const CoreCoord& core) {
+                // Service cores are Tensix, so only L1 can have one. A DRAM coordinate that happens
+                // to match a claimed core is still a DRAM core with no bank behind it.
+                if (bank_type != BufferType::L1) {
+                    return false;
+                }
+                if (!service_cores.has_value()) {
+                    service_cores = claimed_service_cores(device);
+                }
+                return service_cores->contains(core);
+            };
             for (const auto& core : shard_cores) {
                 // Checked separately from the bank lookup below because a DRAM core off row 0 is a
                 // real coordinate -- logical y indexes a DRAM view's subchannels -- it is just not a
@@ -137,11 +187,13 @@ void validate_buffer_parameters(
                         core.y);
                 }
                 TT_FATAL(
-                    allocator.has_bank(bank_type, core),
+                    allocator.has_bank(bank_type, core) || is_claimed_service_core(core),
                     "Invalid shard grid: shard core ({}, {}) has no {} bank on this device, which has "
                     "{} of them. Derive the shard grid from the device (dram_grid_size() for DRAM, "
                     "compute_with_storage_grid_size() for L1) rather than assuming a fixed size -- a "
-                    "harvested device exposes fewer banks than an unharvested one of the same type.",
+                    "harvested device exposes fewer banks than an unharvested one of the same type. An "
+                    "L1 shard core outside the compute grid is legal only while it is claimed via "
+                    "ServiceCoreManager.",
                     core.x,
                     core.y,
                     enchantum::to_string(bank_type),
@@ -377,8 +429,14 @@ Buffer::Buffer(
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
-    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
+    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)),
+    range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
+    // BufferShardingArgs does not know the buffer type; this is the first point where both are visible.
+    TT_FATAL(
+        !this->range_lockstep_allocation_ || buffer_type == BufferType::L1,
+        "range_lockstep_allocation is only supported for L1 buffers, but this buffer is {}",
+        enchantum::to_string(buffer_type));
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
@@ -387,7 +445,14 @@ Buffer::Buffer(
         this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(
-        size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_, *this->allocator_);
+        size,
+        page_size,
+        buffer_type,
+        buffer_layout_,
+        shard_spec_,
+        buffer_distribution_spec_,
+        *this->allocator_,
+        this->device_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -450,14 +515,23 @@ std::shared_ptr<Buffer> Buffer::create(
     buffer->address_ = address;
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
 
-    // Explicit-address (non-owning) L1 buffers skip allocate_impl(), so register their
-    // per-core extent here (removed in deallocate()). Rationale: SANITIZER_CHECKS.md §4.
-    if (is_emule_device(device) && buffer->size_ != 0 &&
-        (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL)) {
-        tt::tt_metal::emule::LiveL1Ranges::add(
-            device->id(),
-            static_cast<uint32_t>(address),
-            static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
+    // Explicit-address (non-owning) buffers skip allocate_impl(), so register their
+    // extent here (removed in deallocate()): per-core for L1 (SANITIZER_CHECKS.md §4),
+    // full size for DRAM — mirroring the allocate_impl() registration.
+    if (is_emule_device(device) && buffer->size_ != 0) {
+        if (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) {
+            tt::tt_metal::emule::LiveL1Ranges::add(
+                device->id(),
+                static_cast<uint32_t>(address),
+                static_cast<uint32_t>(address + buffer->aligned_size_per_bank()),
+                buffer->unique_id_);
+        } else if (buffer_type == BufferType::DRAM) {
+            tt::tt_metal::emule::LiveDramRanges::add(
+                device->id(),
+                static_cast<uint32_t>(address),
+                static_cast<uint32_t>(address + size),
+                buffer->unique_id_);
+        }
     }
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
@@ -530,10 +604,14 @@ void Buffer::allocate_impl() {
                 tt::tt_metal::emule::LiveL1Ranges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),
-                    static_cast<uint32_t>(address_ + aligned_size_per_bank()));
+                    static_cast<uint32_t>(address_ + aligned_size_per_bank()),
+                    unique_id_);
             } else if (buffer_type_ == BufferType::DRAM) {
                 tt::tt_metal::emule::LiveDramRanges::add(
-                    device_->id(), static_cast<uint32_t>(address_), static_cast<uint32_t>(address_ + size_));
+                    device_->id(),
+                    static_cast<uint32_t>(address_),
+                    static_cast<uint32_t>(address_ + size_),
+                    unique_id_);
             }
         }
 
@@ -559,9 +637,12 @@ void Buffer::deallocate() {
         if (emule_device_seen.load(std::memory_order_relaxed)) {
             // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
             // Guard on status: the explicit-call + destructor double-deallocate must remove once.
-            if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0 &&
-                (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL)) {
-                tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+            if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0) {
+                if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
+                } else if (buffer_type_ == BufferType::DRAM) {
+                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
+                }
             }
             allocation_status_ = AllocationStatus::DEALLOCATED;
         }
@@ -592,10 +673,10 @@ void Buffer::deallocate_impl() {
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
             if (is_emule_device(device_)) {
                 if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
                     tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
                 } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
                 }
             }
             allocator_->deallocate_buffer(this);
