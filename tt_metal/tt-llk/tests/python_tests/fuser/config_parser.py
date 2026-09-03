@@ -5,7 +5,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Annotated, List, Optional, Tuple
+from typing import Annotated, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -25,6 +25,7 @@ from pydantic import (
 
 from .fuser_config import FuserConfig, GlobalConfig
 from .operand import OperandRegistry
+from .validator import LoopSchema
 
 FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
@@ -161,6 +162,7 @@ class FuserConfigSchema(BaseModel):
     dest_acc: DestAccumulation = DestAccumulation.No
     loop_factor: Annotated[int, Field(ge=1)] = 16
     quasar_use_dvalid: bool = False
+    loops: Dict[str, LoopSchema] = {}
     operands: List[OperandDefinition] = Field(..., min_length=1)
     operations: List[OperationSchema] = Field(..., min_length=1)
 
@@ -222,7 +224,45 @@ class FuserConfigSchema(BaseModel):
                         f"unpack/math format inference will use {pack_schemas[0].output} as reference",
                     )
 
+        self._resolve_loop_refs()
         return self
+
+    def _resolve_loop_ref(self, loop_spec):
+        if loop_spec is None:
+            return None
+        if isinstance(loop_spec, str):
+            if loop_spec not in self.loops:
+                raise ValueError(
+                    f"loop '{loop_spec}' is not defined in the 'loops' section"
+                )
+            return self.loops[loop_spec]
+        if loop_spec.ref is not None:
+            if loop_spec.ref not in self.loops:
+                raise ValueError(
+                    f"loop '{loop_spec.ref}' is not defined in the 'loops' section"
+                )
+            base = self.loops[loop_spec.ref]
+            merged = {
+                slot: getattr(base, slot)
+                for slot in ("in0", "in1", "dest", "out", "src0", "src1")
+                if getattr(base, slot) is not None
+            }
+            for slot, value in loop_spec.slot_overrides().items():
+                merged[slot] = value
+            return LoopSchema(**merged)
+        return loop_spec
+
+    def _resolve_loop_refs(self):
+        for loop_def in self.loops.values():
+            if loop_def.ref is not None:
+                raise ValueError("'ref' is not allowed in top-level loop definitions")
+        for op in self.operations:
+            for node in op.math:
+                if hasattr(node, "loop") and node.loop is not None:
+                    node.loop = self._resolve_loop_ref(node.loop)
+            for entry in op.pack:
+                if hasattr(entry, "loop") and entry.loop is not None:
+                    entry.loop = self._resolve_loop_ref(entry.loop)
 
     def to_fuser_config(self, test_name: str):
         operands = OperandRegistry()

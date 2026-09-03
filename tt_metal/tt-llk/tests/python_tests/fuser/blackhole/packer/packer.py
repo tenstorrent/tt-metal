@@ -8,14 +8,22 @@ import torch
 from fuser.base_packer import Packer as BasePacker
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
-from fuser.tile_loop import TileLoop
 from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 class Packer(BasePacker):
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.TILE
+
+    per_call_golden = True
+
+    def supports_per_call(self, node) -> bool:
+        return (
+            super().supports_per_call(node)
+            and node.pack_l1_accumulation != L1Accumulation.Yes
+        )
 
     def get_headers(self) -> List[str]:
         return [

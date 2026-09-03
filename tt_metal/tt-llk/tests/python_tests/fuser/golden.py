@@ -153,6 +153,77 @@ class Golden:
             num_faces=num_faces,
         )
 
+    def broadcast_tile_golden(
+        self,
+        tile: torch.Tensor,
+        operation: "L1Operation",
+        node: "FpuNode",
+        operand: "Operand",
+    ) -> torch.Tensor:
+        if node.broadcast_type == BroadcastType.None_:
+            return tile
+
+        tile_shape = operation.tile_shape
+        num_faces = tile_shape.total_num_faces()
+        tile_dims = (tile_shape.total_row_dim(), tile_shape.total_col_dim())
+        tilized = tilize_block(
+            tile,
+            tile_dims,
+            operand.data_format,
+            num_faces,
+            tile_dimensions=tile_dims,
+        )
+        broadcast = get_golden_generator(BroadcastGolden)(
+            node.broadcast_type,
+            tilized,
+            operand.data_format,
+            num_faces,
+            1,
+            tile_shape.face_r_dim,
+        )
+        return untilize_block(
+            broadcast,
+            operand.data_format,
+            tile_dims,
+            tile_dimensions=tile_dims,
+            num_faces=num_faces,
+        ).reshape(tile_dims)
+
+    def transpose_tile_golden(
+        self,
+        tile: torch.Tensor,
+        config: "GlobalConfig",
+        operation: "L1Operation",
+        node: "FpuNode",
+    ) -> torch.Tensor:
+        if node.transpose_faces == Transpose.No and (
+            node.transpose_within_face == Transpose.No
+        ):
+            return tile
+        tile_shape = operation.tile_shape
+        tile_dims = (tile_shape.total_row_dim(), tile_shape.total_col_dim())
+        t_matrix = get_golden_generator(TransposeGolden)
+        result = tile
+        if node.transpose_faces == Transpose.Yes:
+            result = t_matrix.transpose_faces_multi_tile(
+                result,
+                config.sentinel.golden_math_format,
+                1,
+                tilize=True,
+                untilize=True,
+                input_dimensions=tile_dims,
+            )
+        if node.transpose_within_face == Transpose.Yes:
+            result = t_matrix.transpose_within_faces_multi_tile(
+                result,
+                config.sentinel.golden_math_format,
+                1,
+                tilize=True,
+                untilize=True,
+                input_dimensions=tile_dims,
+            )
+        return result.reshape(tile_dims)
+
     def reuse_dest_golden(
         self,
         tensor_a: torch.Tensor,
@@ -220,7 +291,7 @@ class Golden:
             source_tensor,
             config.sentinel.golden_math_format,
             num_faces=operation.tile_shape.total_num_faces(),
-            input_dimensions=node.src_a.dimensions,
+            input_dimensions=operation.max_output_dimensions,
             face_r_dim=operation.tile_shape.face_r_dim,
             tile_shape=operation.tile_shape,
         )

@@ -32,58 +32,65 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         in0: "input_A"
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Exp"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Tanh"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_C"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
 
     pack:
       - output: "output_A"
+        block_size: [32, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_D"
         in1: "output_A"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_D"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCA"
         acc_to_dest: true
         math_fidelity: "LoFi"
-    block_size: [32, 32]
 
     pack:
       - output: "output_B"
+        block_size: [32, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_E"
         in1: "output_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "output_C"
+        block_size: [32, 32]
         packer: "Packer"

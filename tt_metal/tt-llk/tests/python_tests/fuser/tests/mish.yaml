@@ -14,33 +14,38 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         in0: "input_A"
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Exp"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Log1p"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Tanh"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
         # acc_to_dest: true # only for DEST_TO_SRCA
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "mish"
+        block_size: [32, 32]
         packer: "Packer"

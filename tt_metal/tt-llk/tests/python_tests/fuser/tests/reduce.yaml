@@ -18,6 +18,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -27,5 +28,5 @@ operations:
         math_fidelity: "HiFi4"
     pack:
       - output: "reduced_output"
+        block_size: [64, 64]
         packer: "Packer"
-    block_size: [64, 64]

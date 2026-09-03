@@ -7,17 +7,17 @@ from typing import List
 import torch
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
 from fuser.pack_node import PackNode
-from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import PackerReluType
 
 from .packer import Packer
 
 
 class PackUntilize(Packer):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def get_headers(self) -> List[str]:

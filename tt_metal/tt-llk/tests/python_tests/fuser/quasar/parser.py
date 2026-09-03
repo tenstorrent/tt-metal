@@ -83,7 +83,7 @@ _no_transpose_mismatch = reject(
 )
 
 _block_full_width = reject(
-    lambda s, a, b: s._block_size[1] != a.dimensions[1],
+    lambda s, a, b: s.block_size[1] != a.dimensions[1],
     "block width must be same as operand width",
 )
 

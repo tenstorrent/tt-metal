@@ -15,13 +15,14 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         transpose_faces: true
         transpose_within_face: true
         math_fidelity: "LoFi"
-    block_size: [32, 64]
     pack:
       - output: "datacopy_out"
+        block_size: [32, 64]
         packer: "Packer"

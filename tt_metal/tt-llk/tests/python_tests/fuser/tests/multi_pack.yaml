@@ -20,15 +20,17 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "out_plain"
+        block_size: [32, 32]
         packer: "Packer"
       - output: "out_relu"
+        block_size: [32, 32]
         packer: "Packer"
         pack_relu: "ZERO_RELU"

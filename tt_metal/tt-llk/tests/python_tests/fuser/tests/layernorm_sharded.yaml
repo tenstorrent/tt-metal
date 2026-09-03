@@ -73,6 +73,7 @@ operations:
   # Step 1: E[x] partial reduce — row-reduce(AVG) the input
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "x"
         in1: "scaler"
         operation: "Reduce"
@@ -81,15 +82,16 @@ operations:
         reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "ex_partial"
+        block_size: [32, 32]
         packer: "Packer"
         pack_l1_accumulation: 1
 
   # Step 2: x - E[x] — subtract mean (broadcast col)
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "x"
         in1: "ex_partial"
         operation: "Elwsub"
@@ -97,27 +99,29 @@ operations:
         broadcast_type: "COL"
         broadcast_tile: 0
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "xmm"
+        block_size: [32, 32]
         packer: "Packer"
 
   # Step 3: (x - E[x])^2 — self-multiply
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm"
         in1: "xmm"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "xmm2"
+        block_size: [32, 32]
         packer: "Packer"
 
   # Step 4: Var(x) partial reduce — row-reduce(AVG) the squared deviations
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm2"
         in1: "scaler"
         operation: "Reduce"
@@ -126,31 +130,34 @@ operations:
         reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "var_partial"
+        block_size: [32, 32]
         packer: "Packer"
         pack_l1_accumulation: 1
 
   # Step 5: 1/sqrt(Var + eps) — add eps then rsqrt
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "var_partial"
         in1: "eps"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Rsqrt"
         iterations: 32
-    block_size: [32, 32]
     pack:
       - output: "ex2pe"
+        block_size: [32, 32]
         packer: "Packer"
 
   # Step 6: (x - E[x]) * 1/sqrt(Var+eps) — normalize (broadcast col)
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm"
         in1: "ex2pe"
         operation: "Elwmul"
@@ -158,35 +165,37 @@ operations:
         broadcast_type: "COL"
         broadcast_tile: 0
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "normalized"
+        block_size: [32, 32]
         packer: "Packer"
 
   # Step 7: normalized * gamma — scale (broadcast row)
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "normalized"
         in1: "gamma"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "gamma_out"
+        block_size: [32, 32]
         packer: "Packer"
 
   # Step 8: gamma_out + beta — bias (broadcast row)
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "gamma_out"
         in1: "beta"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "output"
+        block_size: [32, 32]
         packer: "Packer"

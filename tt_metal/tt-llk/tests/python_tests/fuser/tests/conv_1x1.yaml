@@ -15,12 +15,13 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "activations"
         in1: "weights"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "conv_out"
+        block_size: [64, 64]
         packer: "Packer"
