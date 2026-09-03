@@ -18,10 +18,10 @@ Planning found a structural blocker the audit did not catch, which splits those 
 | `PagedFillCacheProgramFactory` | `mesh_coords == nullopt` | **PORTED** |
 | `PagedTiledFusedUpdateCacheProgramFactory` | `mesh_coords == nullopt` | deferred — audit Question #1 unresolved |
 | `PagedRowMajorFusedUpdateCacheProgramFactory` | `mesh_coords == nullopt` | deferred — audit Question #1 unresolved |
-| `PagedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord variation |
-| `PagedFillCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord variation |
-| `PagedTiledFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord variation |
-| `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord variation |
+| `PagedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord `ProgramSpec`; fix in review (PR #54988) |
+| `PagedFillCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord run args on the miss; fix in review (PR #54988) |
+| `PagedTiledFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord `ProgramSpec`; fix in review (PR #54988) |
+| `PagedRowMajorFusedUpdateCacheMeshWorkloadFactory` | `mesh_coords.has_value()` | **BLOCKED** — per-coord `ProgramSpec`; fix in review (PR #54988) |
 
 Because each `*MeshWorkloadFactory` binds the same kernel sources as its single-device sibling and
 cannot convert with it, the two ported factories take the **intra-op fork** rung of
@@ -471,31 +471,61 @@ Both legacy mesh idioms need one:
 
 Neither is porter-resolvable from inside the op directory, and neither may be normalised away (the
 brief is explicit: *"neither is the port's to normalise … Preserve both behaviours as they are"*).
-`ttnn/api/ttnn/metal_v2_artifacts.hpp:20-22` names the intended vehicle — *"A future
-`MeshWorkloadSpecFactoryConcept` will return a different (multi-program) artifact type for ops whose
-programs vary across the mesh."*
+
+**Resolution, found after this plan was first written:** the intended vehicle named at
+`ttnn/api/ttnn/metal_v2_artifacts.hpp:20-22` — *"A future `MeshWorkloadSpecFactoryConcept` will
+return a different (multi-program) artifact type"* — is implemented by
+**Diego's mesh-workload branch, [PR #54988](https://github.com/tenstorrent/tt-metal/pull/54988)**, in review at the time of this port.
+It adds `create_mesh_workload_artifacts(..., const MeshCoordinateRangeSet& tensor_coords)` returning
+`MeshWorkloadArtifacts`, whose `programs` vector carries a `{range, spec, run_params}` entry per
+coordinate range — giving per-coordinate specs *and* per-coordinate run args on the cache miss, with
+range omission permitted (which is how the empty-descriptor idiom is expressed). All four mesh
+factories are portable once it merges; the two factories ported in this pass need no change.
+Note also the framing correction recorded in `METAL2_PORT_REPORT.md` → Handoff points #1:
+`fill_cache`'s mesh factory is **not** multi-program — its spec is identical across coordinates and
+only the `noop` run-arg value differs.
 
 **Consequence for this pass:** the four mesh factories stay on `ProgramDescriptorFactoryConcept`, and
 because each shares its kernel sources with the single-device sibling that *is* converting, the five
 kernels those two pairs bind are forked per *Caution: Porting a shared kernel* rung 2. Recorded as a
 Handoff point in `METAL2_PORT_REPORT.md`.
 
-### Carried forward — audit Question #1 blocks the two fused single-device factories
+### Carried forward — audit Question #1: RESOLVED on both channels; no framework dependency
 
-The audit's own open design question ("How should the fused factories' runtime-selected input DFB be
-expressed in a `ProgramSpec`?") is unresolved, and the brief instructs: *"Get an answer before you
-write the fused specs."* Reading `dataflow_buffer_spec.hpp` sharpens the question rather than
-answering it — **PLACEMENT is derived**: *"the DFB's effective node set is the union of its bound
-kernels' `WorkUnitSpec` `target_nodes`"*. So binding both `src1` and `src2` on a `KernelSpec` that
-spans `all_cores_bb` places **both** DFBs across the whole bounding box, whereas legacy allocated
-`c_1` only over `input1_cores` and `c_2` only over `input2_cores`. Since both are
-**`borrowed_from`** an L1-sharded input tensor that has no shard on the other core set, "bind both and
-rely on per-node existence" is not obviously sound, and the alternative (splitting into per-core-set
-`KernelSpec`s) promotes the host-computed `is_input1` **runtime** arg into a compile-time define —
-a schema change the port is not entitled to make unilaterally.
+The audit's open design question ("How should the fused factories' runtime-selected input DFB be
+expressed in a `ProgramSpec`?") is **answered on both channels**, so the brief's instruction — *"Get an
+answer before you write the fused specs"* — is satisfied. The two fused single-device factories remain
+deferred only because this pass had already closed; they need **no framework change** and can be
+ported against `main` today.
 
-The two fused factories are therefore left for a later pass. They are additionally subject to the
-mesh blocker above for their own `*MeshWorkloadFactory` siblings.
+**DFB channel — resolved.** Bind both `src1` and `src2` to every fused `KernelSpec` unconditionally and
+let the kernel select which binding token to construct its `DataflowBuffer` from, using the existing
+`is_input1` runtime arg (`const DFBBindingToken input_dfb = is_input1 ? dfb::src1 : dfb::src2;`).
+Kernel-side this is a pure token substitution — the tiled compute kernel already branches at runtime
+into two compile-time instantiations, so it needs no restructuring at all. Host-side it is legal
+(1 PRODUCER + 1 CONSUMER per node for each DFB) and **free**: a borrowed DFB skips L1 allocation
+(`tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:2519-2521`), so the widened derived placement costs
+no L1, and both borrowed-DFB validation checks are whole-buffer rather than per-node. Critically,
+`is_input1` stays an RTA — no promotion to a `#define`, no arg-schema change. The one delta from legacy
+(each borrowed DFB configured on the half of `all_cores_bb` where legacy left it unconfigured) is inert
+on Gen1 and recorded as Quasar-uplift debt.
+
+**Tensor channel — resolved.** Reader RTA[2] / writer RTA[1] carry `cache_tensor1` on `cores1` and
+`cache_tensor2` on `cores2`. Neither tensor is optional (both are plain `Tensor` members of
+`PagedFusedUpdateCacheInputs`), so this is not a conditional-binding problem. A `TensorBinding`'s base
+address is delivered as an implicit **CRTA** (broadcast to every node), so binding both puts both
+addresses on every core — already correct everywhere, with **no placement delta and no Quasar debt**,
+unlike the DFB half. The ternary does not transfer, because codegen emits a distinct *type* per
+binding (`TensorBindingToken<cta_offset, addr_crta_offset>`, and two bindings necessarily occupy
+distinct slots). Resolution: **branch on `is_input1` with two typed accessors**, via a generic lambda
+so the loop body is written once. The `AbstractTensorAccessorWrapper` alternative was verified to work
+in both NoC directions (`noc_traits.h:140-171` specializes `src_addr` *and* `dst_addr`) but costs an
+un-devirtualizable indirect call per page inside the per-tile loop, so the branch is preferred. Full
+analysis in `METAL2_PORT_REPORT.md` → *Open items for downstream* #1.
+
+**Dependency note:** these two single-device factories need **no framework change** — they can be
+ported today against `main`. Their `*MeshWorkloadFactory` siblings additionally require Diego's
+mesh-workload branch (PR #54988), per the finding above.
 
 ### Other flags
 
