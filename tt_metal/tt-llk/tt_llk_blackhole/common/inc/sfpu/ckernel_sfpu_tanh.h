@@ -18,9 +18,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_tanh_(const int iterations)
 {
     // SFPU microcode
-    sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
-    sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
-    sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut8si si0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut8si si1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut8si si2 = sfpi::l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)

@@ -172,13 +172,13 @@ inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
         // them. Same values as the Blackhole table (l_reg0 = 0x37E7322B, l_reg4 = 0xB12286D8, ...).
-        lut_init(
-            sLut16si(0.1928f, -0.00010443f),
-            sLut16si(0.4939f, -0.1604f),
-            sLut16si(0.6188f, -0.2795f),
-            sLut16si(0.6099f, -0.2635f),
-            sLut16si(0.5402f, -0.1194f),
-            sLut16si(0.5000f, 0.0f));
+        sfpi::lut_init(
+            sfpi::sLut16si(0.1928f, -0.00010443f),
+            sfpi::sLut16si(0.4939f, -0.1604f),
+            sfpi::sLut16si(0.6188f, -0.2795f),
+            sfpi::sLut16si(0.6099f, -0.2635f),
+            sfpi::sLut16si(0.5402f, -0.1194f),
+            sfpi::sLut16si(0.5000f, 0.0f));
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         _init_reciprocal_<false>();

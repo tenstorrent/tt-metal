@@ -49,8 +49,6 @@ inline void tanh_derivative_init() {
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
 }
 
-using namespace sfpi;
-
 // =============================================================================
 // Inline exp for sech² tail: computes exp(-2|x| + ln4) = 4·exp(-2|x|)
 // =============================================================================

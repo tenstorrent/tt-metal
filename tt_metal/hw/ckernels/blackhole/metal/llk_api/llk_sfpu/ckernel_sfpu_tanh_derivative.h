@@ -11,8 +11,6 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "cmath_common.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -27,21 +25,21 @@ inline void calculate_tanh_derivative() {
 
     // tanh'(x) = 1 - (tanh(x))^2
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (!WITH_PRECOMPUTED_TANH) {
             val = sfpi::lut(val, si0, si1, si2);
         }
 
         val = val * (-val) + 1.0f;
-        dst_reg[0] = val;
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = si0;
-    l_reg[LRegs::LReg1] = si1;
-    l_reg[LRegs::LReg2] = si2;
+    sfpi::l_reg[LRegs::LReg0] = si0;
+    sfpi::l_reg[LRegs::LReg1] = si1;
+    sfpi::l_reg[LRegs::LReg2] = si2;
 }
 
 template <bool APPROXIMATION_MODE>
