@@ -1242,9 +1242,7 @@ FORCE_INLINE PreparedMulticastBranchFanout prepare_multicast_branch_fanout(
         branch.e,
         branch.w,
         branch.n,
-        branch.s,
-        FABRIC_2D_MESH_Y_SIZE,
-        FABRIC_2D_MESH_X_SIZE);
+        branch.s);
     const uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
     ASSERT(root_outputs != 0);
     const uint8_t allowed_root_outputs = multicast_branch_allowed_root_outputs(branch);

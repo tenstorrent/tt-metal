@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -79,6 +80,25 @@ TEST(Routing2DCodec, ShapesBeyondTheAddressableRangeAreRejected) {
     EXPECT_FALSE(Codec::shape_fits_route_table(4, Codec::MAX_AXIS_SIZE + 1));
     // Within the per-axis range but too large to pack.
     EXPECT_FALSE(Codec::shape_fits_route_table(64, 64));
+}
+
+TEST(Routing2DCodec, RuntimeShapeMetadataDistinguishesTransposedMeshes) {
+    routing_l1_info_t routing_info{};
+    constexpr uint32_t dst_dev_id = 6;
+
+    routing_info.mesh_y_size = 8;
+    routing_info.mesh_x_size = 4;
+    EXPECT_EQ(dst_dev_id / routing_info.mesh_x_size, 1u);
+    EXPECT_EQ(dst_dev_id % routing_info.mesh_x_size, 2u);
+
+    routing_info.mesh_y_size = 4;
+    routing_info.mesh_x_size = 8;
+    EXPECT_EQ(dst_dev_id / routing_info.mesh_x_size, 0u);
+    EXPECT_EQ(dst_dev_id % routing_info.mesh_x_size, 6u);
+
+    EXPECT_EQ(sizeof(routing_info), 2704u);
+    EXPECT_EQ(offsetof(routing_l1_info_t, mesh_y_size), 2702u);
+    EXPECT_EQ(offsetof(routing_l1_info_t, mesh_x_size), 2703u);
 }
 
 // ---------------------------------------------------------------------------------------------

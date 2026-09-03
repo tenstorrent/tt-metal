@@ -491,7 +491,9 @@ FORCE_INLINE uint32_t select_relay_to_mux_connection(uint16_t dst_chip_id) {
         // The 2D union slot holds the destination-major route table, not per-destination hop counts.
         // NS travel is exactly "destination row differs from ours" (dimension order runs NS first),
         // which the coordinates give directly.
-        const bool needs_ns = (dst_chip_id / FABRIC_2D_MESH_X_SIZE) != routing_table->my_mesh_coord_y;
+        const uint32_t mesh_x_size = routing_table->mesh_x_size;
+        ASSERT(mesh_x_size > 0);
+        const bool needs_ns = (dst_chip_id / mesh_x_size) != routing_table->my_mesh_coord_y;
         if (needs_ns) {
             // is there another way to know whether it's north or south hops?
             if (dst_chip_id < my_chip_id) {

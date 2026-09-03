@@ -239,15 +239,11 @@ void RunSetUnicastRouteTest(
             runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
 
-        // Header sizing and routing mode are configuration-wide; action-map shape and express
-        // enablement are selected for the source mesh.
+        // Header sizing, routing mode, and maximum local express capacity are configuration-wide.
+        // Exact 2D mesh shape is read from this device's routing L1 metadata.
         auto defines = fabric_context.get_fabric_kernel_defines(control_plane);
         if (is_2d_fabric) {
             defines["FABRIC_2D"] = "1";
-            for (const auto& [name, value] :
-                 fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
-                defines[name] = value;
-            }
         }
 
         KernelHandle kernel;
