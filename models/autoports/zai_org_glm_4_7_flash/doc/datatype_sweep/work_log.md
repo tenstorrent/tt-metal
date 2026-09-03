@@ -328,6 +328,12 @@ python .agents/scripts/check_context_contract.py --model-dir models/autoports/za
 
 ## Commit SHAs
 
-Recorded after commit (this file is amended in a follow-up commit per this
-autoport's convention of separating source/evidence commits from the SHA
-record, e.g. `doc/full_model/work_log.md`'s pattern).
+| SHA | contents |
+|---|---|
+| `a25df973873` | plumbing (tt/model.py lm_head_fidelity, tt/optimized_decoder.py router_fidelity), the sweep driver/report/propagation-check scripts, all 10 candidate runs, selected_precision_config.json, context_contract.json datatype_sweep section, README.md/work_log.md (first draft) |
+| `1862605a01b` | DS-007 review response: real gate + pass_fail/decision correction, Pareto-interpretation correction, KV-cache proof-of-consumption fix (real tensor introspection, source_manifest), all 10 candidates rerun for consistency, doc/datatype_sweep/logs/ added, and the smaller claims-that-were-false fixes listed in DS-007 above |
+| (this commit) | records the two SHAs above |
+
+Recorded after commit, per this autoport's convention of separating source/
+evidence commits from the SHA record (e.g. `doc/full_model/work_log.md`'s
+pattern).
