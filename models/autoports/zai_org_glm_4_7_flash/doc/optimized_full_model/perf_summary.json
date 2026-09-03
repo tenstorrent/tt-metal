@@ -1,0 +1,17 @@
+{
+  "workload": {"profile": "single_user_decode", "prompt_len": 128, "gen_len": 128, "batch": 1},
+  "ttft_ms": 334.0,
+  "decode_ms_per_token_e2e": 23.013,
+  "decode_ms_per_token_e2e_model_only_no_sampling": 21.76,
+  "decode_ms_per_token_device": 21.76,
+  "roofline_ms_per_token_estimate": 3.9,
+  "device_vs_e2e_note": "Steady-state traced decode replay has no per-step host dispatch: host_work_counters_over_the_measured_generate.device_synchronizations=1 across the whole 127-step measured run (perf.json), so wall-clock model-only decode (21.76 ms) IS the device-time figure here, not a separate measurement. There is no per-token dispatch gap to reconcile; the sampling (1.12 ms) and one-word-readback (0.133 ms) terms are the only additions between model-only and token-out.",
+  "roofline_derivation": "First-order byte model, not a tt-perf-report-derived figure: dense layer attn+MLP (bf4 attn ~10.9 MB + bf8 dense-MLP ~62.9 MB, once) + 46 MoE layers (bf4 attn ~10.9 MB + bf4 shared-expert ~4.7 MB + 4-of-64 active bf4 routed experts ~18.9 MB + fp32 router ~0.5 MB, per layer) + LM head (bf8, 2048x154880, ~317.2 MB, once) + latent KV-cache read (612 B/token/layer x 47 layers x position 128, ~3.7 MB) = ~2.00 GB/token, divided by a peak DRAM bandwidth of 514.4 GB/s derived from the LM-head row itself (measured 872.4 us at 70.70% DRAM utilization on a 317.235 MB read -> achieved 363.7 GB/s -> peak = 363.7/0.707), which is a useful cross-check because it lands within 1% of Blackhole p150's ~512 GB/s HBM spec.",
+  "roofline_fraction_of_e2e_pct": 17.9,
+  "named_limitations": [
+    "roofline_ms_per_token_estimate is a first-order params x dtype-size model; it excludes tile-padding overhead, layout-conversion intermediates (reshape/slice/transpose/untilize rows, which are a material fraction of decode_model_perf_report.csv), and the router/norm/binary-elementwise glue that also touches DRAM/L1. tt-perf-report's own 'Overall DRAM roofline (modeled ops): 47.0% (240 GB/s)' figure for the 2-layer reduced profile is a more complete per-op accounting but cannot be scaled to 47 layers without re-deriving per-layer-kind proportions from the same capture (attempted once during this stage's review-response pass and abandoned: naive per-op-name call-count classification produced an unreliable per-layer estimate, see work_log.md OFM-011).",
+    "the roofline model uses num_experts_per_tok=4 of n_routed_experts=64 (config.json) and the deployment bf4/bf8 dtype policy from doc/optimized_decoder/README.md; it is not a measured per-op DRAM trace.",
+    "KV-cache bytes are computed at decode position 128 (the profiled prefill length), not amortized over a full generation; this term is small (3.7 MB of ~2.00 GB) at this depth but grows with context.",
+    "this is a single-chip, single-batch (B=1) estimate; no CCL/multichip terms apply on this deployment target."
+  ]
+}

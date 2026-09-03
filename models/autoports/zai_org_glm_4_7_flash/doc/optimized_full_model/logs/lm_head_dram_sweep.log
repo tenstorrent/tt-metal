@@ -1,0 +1,32 @@
+=== --mode baseline --in0-block-w 4 --fidelity hifi2 ===
+RESULT {"mode": "baseline", "in0_block_w": 4, "fidelity": "hifi2", "us_per_call": 883.45}
+=== --mode dram --in0-block-w 8 --fidelity hifi2 ===
+2026-09-02 22:49:55.776 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: Output memory config must be sharded for DRAM sharded program config (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1328: attributes.output_mem_config.is_sharded()
+=== --mode dram --in0-block-w 16 --fidelity hifi2 ===
+2026-09-02 22:50:00.186 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: Output memory config must be sharded for DRAM sharded program config (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1328: attributes.output_mem_config.is_sharded()
+=== --mode dram --in0-block-w 32 --fidelity hifi2 ===
+2026-09-02 22:50:04.595 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: Output memory config must be sharded for DRAM sharded program config (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1328: attributes.output_mem_config.is_sharded()
+=== --mode dram --in0-block-w 64 --fidelity hifi2 ===
+2026-09-02 22:50:09.003 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: Output memory config must be sharded for DRAM sharded program config (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1328: attributes.output_mem_config.is_sharded()
+=== --mode dram --in0-block-w 8 --fidelity lofi ===
+2026-09-02 22:50:13.408 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: Output memory config must be sharded for DRAM sharded program config (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1328: attributes.output_mem_config.is_sharded()
+=== --mode dram --in0-block-w 8 --fidelity hifi2 ===
+RuntimeError: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+=== --mode dram --in0-block-w 16 --fidelity hifi2 ===
+2026-09-02 22:50:35.430 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig: shard_shape[1] / in0_tile.get_width() (8) must be divisible by in0_block_w (16) (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1365: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0
+=== dram bw=1 hifi2 ===
+RuntimeError: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+=== dram bw=2 hifi2 ===
+RuntimeError: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+=== dram bw=4 hifi2 ===
+RuntimeError: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+=== --mode baseline --in0-block-w 4 --fidelity hifi2 ===
+RESULT {"mode": "baseline", "in0_block_w": 4, "fidelity": "hifi2", "us_per_call": 883.8}
+=== --mode baseline --in0-block-w 4 --fidelity lofi ===
+RESULT {"mode": "baseline", "in0_block_w": 4, "fidelity": "lofi", "us_per_call": 878.46}

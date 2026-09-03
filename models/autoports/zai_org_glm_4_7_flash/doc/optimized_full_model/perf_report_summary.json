@@ -1,0 +1,420 @@
+{
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "8e51b6af129a6dad",
+    "tt/generator.py": "466b12c764bb95ff",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/summarize_perf_report.py": "eec4f089f126edda"
+  },
+  "decode_model": {
+    "csv": "decode_model_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 8,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 1264,
+    "ops_per_step": 158.0,
+    "device_us_per_step": 1708.8,
+    "op_to_op_gap_us_per_step": 20360.6,
+    "bound": {
+      "slow_rows": 111,
+      "total_rows": 1264,
+      "slow_us_per_step": 249.2,
+      "slow_pct_of_window": 14.6,
+      "slow_ops": [
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+          "rows": 32
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 768 x 5120",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 32 x 192 x 512",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 32 x 512 x 256",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+          "rows": 15
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 64",
+          "rows": 8
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 1536 x 2048",
+          "rows": 8
+        }
+      ],
+      "note": "`Bound == SLOW` is a tt-perf-report advisory: the row is neither compute nor bandwidth bound. Disclosed, not fixed here; matmul geometry is optimized-full-model (stage 07) work."
+    },
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
+    "top_ops": [
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 872.39,
+        "pct": 51.1,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+        "us_per_step": 132.35,
+        "pct": 7.7,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 52.73,
+        "pct": 3.1,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
+        "us_per_step": 51.68,
+        "pct": 3.0,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SdpaDecodeDeviceOperation",
+        "us_per_step": 49.83,
+        "pct": 2.9,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 10240 x 2048",
+        "us_per_step": 47.29,
+        "pct": 2.8,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 5120 x 2048",
+        "us_per_step": 45.0,
+        "pct": 2.6,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+        "us_per_step": 39.27,
+        "pct": 2.3,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 36.84,
+        "pct": 2.2,
+        "calls_per_step": 13.0
+      },
+      {
+        "op": "UntilizeCodegenDeviceOperation",
+        "us_per_step": 30.57,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 1536 x 2048",
+        "us_per_step": 30.38,
+        "pct": 1.8,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "FillPadDeviceOperation",
+        "us_per_step": 30.23,
+        "pct": 1.8,
+        "calls_per_step": 5.0
+      },
+      {
+        "op": "TransposeDeviceOperation",
+        "us_per_step": 25.76,
+        "pct": 1.5,
+        "calls_per_step": 8.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 24.22,
+        "pct": 1.4,
+        "calls_per_step": 19.0
+      }
+    ]
+  },
+  "decode_tokenout": {
+    "csv": "decode_tokenout_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 8,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 1600,
+    "ops_per_step": 200.0,
+    "device_us_per_step": 2752.7,
+    "op_to_op_gap_us_per_step": 27968.1,
+    "bound": {
+      "slow_rows": 112,
+      "total_rows": 1600,
+      "slow_us_per_step": 258.4,
+      "slow_pct_of_window": 9.4,
+      "slow_ops": [
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+          "rows": 32
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 768 x 5120",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 32 x 192 x 512",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 32 x 512 x 256",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+          "rows": 16
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 2048 x 64",
+          "rows": 8
+        },
+        {
+          "op": "MatmulDeviceOperation 32 x 1536 x 2048",
+          "rows": 8
+        }
+      ],
+      "note": "`Bound == SLOW` is a tt-perf-report advisory: the row is neither compute nor bandwidth bound. Disclosed, not fixed here; matmul geometry is optimized-full-model (stage 07) work."
+    },
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
+    "top_ops": [
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 872.58,
+        "pct": 31.7,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "TopkLargeIndicesDeviceOperation",
+        "us_per_step": 664.89,
+        "pct": 24.2,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 10240",
+        "us_per_step": 132.48,
+        "pct": 4.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "TopkRouteFinishDeviceOperation",
+        "us_per_step": 81.98,
+        "pct": 3.0,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 80.13,
+        "pct": 2.9,
+        "calls_per_step": 23.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 73.18,
+        "pct": 2.7,
+        "calls_per_step": 25.0
+      },
+      {
+        "op": "TopkRoutePrepDeviceOperation",
+        "us_per_step": 68.53,
+        "pct": 2.5,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 52.67,
+        "pct": 1.9,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
+        "us_per_step": 51.89,
+        "pct": 1.9,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SdpaDecodeDeviceOperation",
+        "us_per_step": 49.84,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 10240 x 2048",
+        "us_per_step": 47.32,
+        "pct": 1.7,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 5120 x 2048",
+        "us_per_step": 45.03,
+        "pct": 1.6,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 1536",
+        "us_per_step": 40.58,
+        "pct": 1.5,
+        "calls_per_step": 4.0
+      },
+      {
+        "op": "CopyDeviceOperation",
+        "us_per_step": 40.47,
+        "pct": 1.5,
+        "calls_per_step": 1.0
+      }
+    ]
+  },
+  "prefill": {
+    "csv": "prefill_perf_report.csv",
+    "anchor_op": "MatmulDeviceOperation 32 x 2048 x 154880",
+    "anchor_calls_in_window": 1,
+    "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
+    "total_rows": 110,
+    "ops_per_step": 110.0,
+    "device_us_per_step": 10435.8,
+    "op_to_op_gap_us_per_step": 452.7,
+    "bound": {
+      "slow_rows": 17,
+      "total_rows": 110,
+      "slow_us_per_step": 2210.5,
+      "slow_pct_of_window": 21.2,
+      "slow_ops": [
+        {
+          "op": "MatmulDeviceOperation 128 x 2048 x 1344",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 128 x 768 x 256",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 128 x 192 x 512",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation b={20} x 128 x 512 x 256",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation 128 x 5120 x 2048",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation 128 x 2048 x 10240",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation 128 x 2048 x 1536",
+          "rows": 2
+        },
+        {
+          "op": "MatmulDeviceOperation 128 x 10240 x 2048",
+          "rows": 1
+        }
+      ],
+      "note": "`Bound == SLOW` is a tt-perf-report advisory: the row is neither compute nor bandwidth bound. Disclosed, not fixed here; matmul geometry is optimized-full-model (stage 07) work."
+    },
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
+    "top_ops": [
+      {
+        "op": "SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072",
+        "us_per_step": 3066.18,
+        "pct": 29.4,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048",
+        "us_per_step": 1974.44,
+        "pct": 18.9,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation 32 x 2048 x 154880",
+        "us_per_step": 876.41,
+        "pct": 8.4,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 768 x 256",
+        "us_per_step": 701.05,
+        "pct": 6.7,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "UnaryDeviceOperation",
+        "us_per_step": 465.68,
+        "pct": 4.5,
+        "calls_per_step": 7.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "us_per_step": 450.2,
+        "pct": 4.3,
+        "calls_per_step": 14.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 512 x 256",
+        "us_per_step": 435.61,
+        "pct": 4.2,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "PermuteDeviceOperation",
+        "us_per_step": 323.51,
+        "pct": 3.1,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "us_per_step": 321.85,
+        "pct": 3.1,
+        "calls_per_step": 22.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 5120 x 2048",
+        "us_per_step": 238.2,
+        "pct": 2.3,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 10240 x 2048",
+        "us_per_step": 232.08,
+        "pct": 2.2,
+        "calls_per_step": 1.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "us_per_step": 216.19,
+        "pct": 2.1,
+        "calls_per_step": 9.0
+      },
+      {
+        "op": "MatmulDeviceOperation b={20} x 128 x 192 x 512",
+        "us_per_step": 190.0,
+        "pct": 1.8,
+        "calls_per_step": 2.0
+      },
+      {
+        "op": "MatmulDeviceOperation 128 x 2048 x 10240",
+        "us_per_step": 148.48,
+        "pct": 1.4,
+        "calls_per_step": 2.0
+      }
+    ]
+  }
+}

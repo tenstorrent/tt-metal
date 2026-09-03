@@ -1,0 +1,3 @@
+wsmoke_faults=0 rc=0
+wtrace_faults=0 rc=0
+wfull_faults=0 rc=0

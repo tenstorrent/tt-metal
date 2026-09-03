@@ -1,0 +1,38 @@
+{
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "8e51b6af129a6dad",
+    "tt/generator.py": "466b12c764bb95ff",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/test_full_model_perf.py": "1670117919a43273"
+  },
+  "device": "Blackhole p150-class chip, 1x1 mesh, 11x10 compute grid, 8 DRAM banks",
+  "measured_allocatable_dram_bytes": 33822867456,
+  "measured_allocatable_dram_note": "measured by probe/dram_capacity_probe.py (dram_capacity.json): 32256 MiB in 512 MiB chunks before the allocator refused",
+  "weights_bytes": {
+    "layers": 17589521664,
+    "embedding": 634388480,
+    "lm_head": 337018880,
+    "norm": 4096,
+    "rope": 103813120,
+    "cache_reset_scratch": 124084224,
+    "total": 18788830464
+  },
+  "kv_cache_bytes_batch1_full_context": 5831958528,
+  "kv_cache_context": 202752,
+  "kv_cache_dtype": "DataType.BFLOAT8_B",
+  "kv_cache_bytes_per_token_per_layer": 612,
+  "sampler_penalty_buffers_bytes": 99123200,
+  "sampler_penalty_buffers_note": "SamplingGenerator constructs TTPenalties unconditionally; these int32 [32, vocab] buffers are resident even in a greedy-only run",
+  "total_resident_bytes": 24719912192,
+  "trace_region_bytes": 350000000,
+  "headroom_bytes": 8752955264,
+  "gib": {
+    "weights_total": 17.498,
+    "kv_cache": 5.431,
+    "sampler_penalty_buffers": 0.092,
+    "total_resident": 23.022
+  }
+}

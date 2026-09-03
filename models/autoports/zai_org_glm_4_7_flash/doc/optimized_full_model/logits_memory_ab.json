@@ -1,0 +1,54 @@
+{
+  "source_manifest": {
+    "tt/provenance.py": "3b162e8ac0fe0674",
+    "tt/model.py": "8e51b6af129a6dad",
+    "tt/generator.py": "466b12c764bb95ff",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "probe/logits_memory_ab_probe.py": "80cc43dbb07a484d"
+  },
+  "note": "Reduced 2-layer probe at the full 202752-token cache, batch 1, one decode position. The L1 arm logs ttnn.split 'L1 budget exceeded ... DRAM downgrade' and 'migrating L1 input (9912320 B) to DRAM' inside the captured sampling graph; the DRAM arm does not. Read the deltas against the per-arm spreads, not as exact figures.",
+  "l1": {
+    "decode_logits_memory_config": "L1",
+    "iterations": 64,
+    "traced_model_only_ms": 1.784,
+    "traced_model_only_spread_ms": 0.025,
+    "traced_token_out_ms": 2.916,
+    "traced_token_out_spread_ms": 0.044,
+    "sampling_ms": 1.132,
+    "tokens": [
+      16159,
+      83714,
+      3086,
+      29,
+      10365,
+      70708,
+      46868,
+      48364
+    ]
+  },
+  "dram": {
+    "decode_logits_memory_config": "DRAM",
+    "iterations": 64,
+    "traced_model_only_ms": 1.829,
+    "traced_model_only_spread_ms": 0.027,
+    "traced_token_out_ms": 2.94,
+    "traced_token_out_spread_ms": 0.024,
+    "sampling_ms": 1.111,
+    "tokens": [
+      16159,
+      83714,
+      3086,
+      29,
+      10365,
+      70708,
+      46868,
+      48364
+    ]
+  },
+  "token_out_delta_ms_dram_minus_l1": 0.024,
+  "sampling_delta_ms_dram_minus_l1": -0.021,
+  "same_tokens": true,
+  "decision": "Whichever arm is faster, the choice is only defensible if the tokens match; they do. The shipped default is L1 (decode_logits_in_dram=False) and the other arm is one constructor argument away."
+}

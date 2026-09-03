@@ -1,0 +1,16 @@
+1.  **Analyze the Request:**
+    *   **Topic:** Difference between supervised and unsupervised learning.
+    *   **Constraint:** "In simple terms."
+    *   **Goal:** Provide a clear, relatable explanation that avoids heavy jargon or complex math.
+
+2.  **Deconstruct the Concepts:**
+    *   *Supervised Learning:* The computer learns from labeled data. It has a teacher. It makes predictions based on known outcomes. Examples: Spam filters, house price prediction.
+    *   *Unsupervised Learning:* The computer finds patterns in unlabeled data. No teacher. It explores the data structure. Examples: Customer segmentation, anomaly detection.
+
+3.  **Brainstorm Analogies (The "Simple Terms" Strategy):**
+    *   *Analogy 1: Teaching a child.*
+        *   Supervised: Showing a picture of a cat and saying "This is a cat." Then showing a dog and saying "This is a dog."
+        *   Unsupervised: Showing a pile of pictures and asking the child to group them however they want.
+    *   *Analogy 2: A classroom.*
+        *   Supervised: A teacher with a textbook and answers.
+        *   Unsup
