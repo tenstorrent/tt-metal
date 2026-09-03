@@ -28,6 +28,23 @@ git diff --quiet -- perf_math_matmul.py helpers/profiler.py "$SRC/math_matmul_pe
 
 say "resetting card"; tt-smi -r 2>&1 | tail -2; sleep 10
 
+OBJDUMP=""
+for c in riscv32-tt-elf-objdump riscv32-unknown-elf-objdump riscv64-unknown-elf-objdump \
+         llvm-objdump objdump; do
+    command -v "$c" >/dev/null 2>&1 && { OBJDUMP="$c"; break; }
+done
+[ -n "$OBJDUMP" ] && say "using $OBJDUMP" || say "no objdump found; skipping disassembly"
+
+dump_pack_elf() {
+    local NAME=$1 ELF
+    [ -n "$OBJDUMP" ] || return 0
+    ELF=$(find "$RUNNER_TEMP" -name pack.elf -printf '%T@ %p\n' 2>/dev/null \
+          | sort -rn | head -1 | cut -d" " -f2-)
+    [ -n "$ELF" ] || { echo "  (no pack.elf found)"; return 0; }
+    "$OBJDUMP" -d "$ELF" > "$OUT/${NAME}_pack.asm" 2>/dev/null \
+        && echo "  disassembly -> ${NAME}_pack.asm  ($(wc -l < "$OUT/${NAME}_pack.asm") lines)"
+}
+
 run_pass() {
     local N=$1 NAME="nop$1"
     say "pass $NAME  nops=$N"
@@ -78,6 +95,9 @@ PY
     say "pass $NAME rc=$?  rows=$(wc -l < "$TS_DUMP" 2>/dev/null || echo 0)"
     # Keep the perf CSV: it carries TEXT_SIZE, which proves the binary changed.
     rm -rf "$OUT/$NAME"; cp -r "$LLK/perf_data" "$OUT/$NAME" 2>/dev/null
+    # Keep the pack disassembly: the loop's real address is what we are sweeping,
+    # and text size alone cannot show whether the compiler re-padded.
+    dump_pack_elf "$NAME"
 }
 
 for n in $NOPS; do run_pass "$n"; done
