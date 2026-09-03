@@ -866,11 +866,16 @@
   test_group: module
   skus:
     bh_sc1:
-      # PROVISIONAL -- re-size from the first green run of this leg. Two rows (notrace + traced) at
-      # 20 chunks x 10 iters. Rough estimate from the measured per-chunk medians: traced ~0.9 s/chunk
-      # and untraced a flat ~0.67 s/chunk, so 20 x 10 x (0.9 + 0.67) ~= 5.2 min of measured time plus
-      # weight load and cache warm.
-      timeout: 20
+      # PROVISIONAL -- still unmeasured; re-size from the first green run of this leg. Two rows
+      # (notrace + traced) at 20 chunks x 10 iters. Rough estimate from the measured per-chunk
+      # medians: traced ~0.9 s/chunk and untraced a flat ~0.67 s/chunk, so 20 x 10 x (0.9 + 0.67)
+      # ~= 5.2 min of measured time plus weight load and cache warm.
+      #
+      # Deliberately generous for that first run rather than tight: the estimate above covers the
+      # measured work only, and the neighbouring Mistral legs show ~10 min of weight load and cache
+      # warm on top. A first run killed at the cap measures nothing, so this errs high and comes
+      # down once the run reports its real wall time.
+      timeout: 30
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
