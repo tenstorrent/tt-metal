@@ -64,16 +64,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the W one.
-    // tt::datum_size(...) inside make_rm_plan throws for block-float formats, so only populate it on
-    // paths already gated to BF16/FP32: validate_rm_preconditions for the RM path, and the
-    // tile_h_split fatals in validate_on_program_cache_miss for the TILE H-axis split below.
-    //
-    // TILE H-axis split: the tiled reader and reduce.cpp over `num_h_slices` slices, but ROW_MAJOR
-    // partials written by the RM writer (one row per slice), so it needs the plan too.
-    // use_width_sharding is excluded here and not only on the host: the sharded branch below
-    // reassigns all_cores and the per-core column counts *after* num_cols is computed, and its
-    // runtime args ignore slices entirely, so a direct ttnn::prim::reduce call must not be able to
-    // reach that combination.
+    // TILE H-axis split uses the RM writer for ROW_MAJOR partials, so it needs the plan too.
+    // Width-sharding is excluded: that branch reassigns cores after num_cols and ignores slices.
     const bool tile_h_split = !rm_path && !use_width_sharding && operation_attributes.num_h_slices > 1;
 
     RmPlan plan{};
@@ -89,17 +81,14 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             ReduceOpDim::H);
     }
 
-    // H-axis split geometry: every slice reduces a uniform `slice_Ht` tiles, the last one's overhang
-    // past the end of the reduction axis identity-padded by the reader. The RM path counts H tiles
-    // from the logical H (plan.Ht_rm); the tiled path from the padded H (Ht), matching the tile ids
-    // its reader indexes. Clamped so no slice is empty.
+    // Uniform slice_Ht; the last slice's overhang is identity-padded. RM counts logical H tiles,
+    // TILE counts padded H so the ids match the reader.
     const uint32_t Ht_for_split = rm_path ? plan.Ht_rm : Ht;
     const uint32_t num_h_slices =
         (rm_path || tile_h_split) ? std::min(std::max(operation_attributes.num_h_slices, 1u), Ht_for_split) : 1;
     const uint32_t slice_Ht =
         rm_path ? tt::div_up(plan.Ht_rm, num_h_slices) : (tile_h_split ? tt::div_up(Ht, num_h_slices) : 0);
-    // compute_output_specs sizes the output's H from the unclamped attribute, so the clamp above must
-    // be a no-op; the host already bounds num_h_slices by the H tile count.
+    // Host already bounds num_h_slices; the clamp must be a no-op so output spec and kernels agree.
     TT_FATAL(
         !(rm_path || tile_h_split) || operation_attributes.num_h_slices <= Ht_for_split,
         "Reduce H: num_h_slices {} exceeds the reduction-axis tile count {}; the output spec and the "
@@ -465,7 +454,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             {"scaler_bits", scaler_bits},
             {"use_welford", 0u},
             {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
-            // {1, Ht} is the un-split reduce, which the reader handles with its incremental tile walk.
+            // {1, Ht} is the un-split reduce.
             {"num_h_slices", tile_h_split ? num_h_slices : 1u},
             {"slice_Ht", tile_h_split ? slice_Ht : Ht},
         };
@@ -511,8 +500,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     if (rm_path || tile_h_split) {
         writer_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_reduce_rm_scalar.cpp";
-        // One writer for both layouts; tile_output picks whole-tile pages over (nc, slice) RM pages.
-        // The TILE split always emits ROW_MAJOR partials, so tile_output is false there.
+        // One writer for both layouts. TILE split always emits ROW_MAJOR partials.
         writer_ct_args =
             build_rm_writer_ct_args(plan, operation_attributes.output_layout == Layout::TILE, num_h_slices);
         writer_rta_names = {"rt_count", "rt_start"};
@@ -860,9 +848,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                 TT_THROW("Core not in specified core ranges");
             }
             if (tile_h_split) {
-                // The split reader decomposes (nc, slice, wt) from the global work-unit id itself,
-                // so col_start_tile_id carries that id and curr_col_in_batch is unused. Its ROW_MAJOR
-                // partials leave through the RM writer, which names its per-core span rt_count/rt_start.
+                // Split reader takes the global work-unit id; curr_col_in_batch unused.
+                // RM writer names the same span rt_count/rt_start.
                 AddRuntimeArgsForNode(
                     reader_run_args.runtime_arg_values,
                     core,

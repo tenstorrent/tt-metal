@@ -59,18 +59,8 @@ void kernel_main() {
     auto tensor_accessor = TensorAccessor(tensor::src);
 
     if constexpr (num_h_slices > 1) {
-        //
-        // === H-axis split ===
-        //
-        // Each work unit is a (nc, slice, wt) triple of the (N, C, num_h_slices, W) result, laid out
-        // wt-fastest then slice then nc — the same ordering writer_reduce_rm_scalar.cpp recovers from
-        // its start_output_tile_id. col_start_tile_id carries the global work-unit id
-        // (curr_col_in_batch is unused), so the tile ids come out in closed form rather than from an
-        // incremental walk.
-        //
-        // The (j over the slice's H, k over the W-chunk) nesting matches the un-split path, so the
-        // tile order the compute kernel sees still lines up with its DEST_AUTO_LIMIT chunking.
-        //
+        // Work units are (nc, slice, wt) in wt-fastest order. col_start_tile_id is the global id
+        // (curr_col_in_batch unused). Nesting matches the un-split DEST_AUTO_LIMIT chunking.
         const uint32_t work_start = col_start_tile_id;
         for (uint32_t i = 0; i < num_cols; i += row_chunk) {
             const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
@@ -92,8 +82,7 @@ void kernel_main() {
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
                     } else {
-                        // slice_Ht is rounded up, so the trailing slices can run past the end of the
-                        // reduction axis. Push the SUM identity instead of reading out of bounds.
+                        // slice_Ht is rounded up; pad past Ht with the SUM identity.
                         dataflow_kernel_lib::zero_tile(dfb_in0);
                     }
                     dfb_in0.push_back(onetile);
