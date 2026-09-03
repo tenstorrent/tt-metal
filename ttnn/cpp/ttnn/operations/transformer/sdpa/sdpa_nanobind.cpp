@@ -109,7 +109,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -720,7 +720,7 @@ void bind_sdpa(nb::module_& mod) {
             dim (int): Dimension for ring all-gather.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
             num_links (int): Number of CCL links.
-            cluster_axis (int): Mesh axis for all-gather.
+            cluster_axis (int, optional): Mesh axis for an axis ring. Pass None for one full-mesh snake ring.
             mesh_device (ttnn.MeshDevice): Multi-device mesh.
             topology (ttnn.ccl.Topology): Communication topology.
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.

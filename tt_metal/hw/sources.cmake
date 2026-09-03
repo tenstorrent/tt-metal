@@ -161,6 +161,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
+    inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/cross_node_dfb_constants.h
