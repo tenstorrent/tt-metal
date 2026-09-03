@@ -809,7 +809,8 @@ sfpi_inline void _two_pass_combine_block_to_dst_(std::uint32_t total_reciprocal_
     TT_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, block_n_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, block_n_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG2, 0);
-    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, (block_n_bits ^ 0x80000000) >> 16);
+    constexpr std::uint32_t fp32_sign_bit = 0x80000000;
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, (block_n_bits ^ fp32_sign_bit) >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, block_n_bits & 0xffff);
     TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, 0);
 
