@@ -35,17 +35,20 @@ from matplotlib.patches import FancyArrowPatch
 
 # Lines are MPI-tagged ([1,R]<stderr>:) and the message also carries [pp rank R]; key off the latter
 # so the parser is independent of the MPI tag.
-_CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
+# `slot=` is the concurrent USER slot and is optional: it is absent from older logs, and the group
+# stays None there. Not to be confused with this script's "time slot" (compute + trailing idle).
+_CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)(?: slot=(\d+))?")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
 _E2E = re.compile(r"\[pp rank (\d+)\] E2E_CLOCK first_compute_start=([\d.]+) last_compute_end=([\d.]+)")
 
 
 def parse(path):
-    """-> (starts[rank][chunk] = epoch, last_end[rank] = epoch, measured[rank][chunk] = compute seconds).
+    """-> (starts[rank][chunk], last_end[rank], measured[rank][chunk], users[rank][chunk]).
 
     measured is populated only when the runner ran with PREFILL_SYNC_PER_CHUNK (CHUNK_COMPUTE lines) —
     an exact per-chunk device compute, so the plot needs no downstream-start proxy or last-rank estimate."""
     starts = defaultdict(dict)
+    users = defaultdict(dict)
     measured = defaultdict(dict)
     last_end = {}
     with open(path, errors="ignore") as f:
@@ -53,6 +56,8 @@ def parse(path):
             m = _CHUNK_START.search(line)
             if m:
                 starts[int(m.group(1))][int(m.group(2))] = float(m.group(3))
+                if m.group(4) is not None:
+                    users[int(m.group(1))][int(m.group(2))] = int(m.group(4))
                 continue
             m = _CHUNK_COMPUTE.search(line)
             if m:
@@ -63,7 +68,7 @@ def parse(path):
                 last_end[int(m.group(1))] = float(m.group(3))
     if not starts:
         raise SystemExit(f"no CHUNK_START lines found in {path} (the pipeline loop always logs CHUNK_START)")
-    return starts, last_end, measured
+    return starts, last_end, measured, users
 
 
 def parse_timing_dir(d):
@@ -134,13 +139,22 @@ def main():
         default=None,
         help="plot only the last N chunks (drops producer warmup, matching the summarizer's window)",
     )
+    ap.add_argument(
+        "--color-by",
+        choices=("chunk", "user"),
+        default="chunk",
+        help="chunk (default): a gradient over chunk index, so the pipeline diagonal reads clearly. "
+        "user: colour by concurrent user slot, which is what shows whether users interleave or run "
+        "back to back. Needs a log whose CHUNK_START carries slot=.",
+    )
     args = ap.parse_args()
 
+    users = {}
     if args.timing_dir:
         starts, last_end, measured = parse_timing_dir(args.timing_dir)
         source_label = os.path.basename(os.path.normpath(args.timing_dir))
     elif args.log:
-        starts, last_end, measured = parse(args.log)
+        starts, last_end, measured, users = parse(args.log)
         source_label = args.log.split("/")[-1]
     else:
         ap.error("provide a log path or --timing-dir")
@@ -153,6 +167,12 @@ def main():
     cpos = {c: i for i, c in enumerate(all_chunks)}
     n_chunks = len(all_chunks)
     cmap = plt.get_cmap("turbo", max(n_chunks, 1))
+    by_user = args.color_by == "user"
+    if by_user and not any(users[r] for r in ranks):
+        raise SystemExit("--color-by user needs CHUNK_START lines carrying slot=; this log has none")
+    user_ids = sorted({u for r in ranks for u in users[r].values()}) if by_user else []
+    user_cmap = plt.get_cmap("tab10")
+    user_color = {u: user_cmap(i % 10) for i, u in enumerate(user_ids)}
 
     # Per-chunk compute duration, proxied by the downstream rank's start (it unblocks ~immediately when
     # this rank's output arrives; transport is ~ms). The last rank has no downstream proxy, so its
@@ -195,7 +215,7 @@ def main():
                     ]
                     dur = slot if slot > 0 else median(own)
             comp_end = s + dur
-            color = cmap(cpos[c])
+            color = user_color.get(users.get(rank, {}).get(c), "grey") if by_user else cmap(cpos[c])
             # Compute block (solid). The idle time (comp_end -> next chunk start) is left UNDRAWN, so
             # the white background shows through as the pipeline bubble.
             ax.broken_barh(
@@ -206,11 +226,11 @@ def main():
                 linewidths=0.4,
                 hatch="//" if estimated else None,
             )
-            if n_chunks <= 16:
+            if by_user or n_chunks <= 16:
                 ax.text(
                     (s - origin) + max(dur, 1e-3) / 2,
                     rank,
-                    str(c),
+                    str(users[rank].get(c, "?")) if by_user else str(c),
                     ha="center",
                     va="center",
                     fontsize=7,
@@ -259,6 +279,10 @@ def main():
         handles.append(
             Patch(facecolor="grey", hatch="//", edgecolor="black", label="last rank: compute estimated (median)")
         )
+    if by_user:
+        handles = [Patch(facecolor=user_color[u], edgecolor="black", label=f"user slot {u}") for u in user_ids] + [
+            Patch(facecolor="white", edgecolor="grey", label="idle / waiting (white gap)")
+        ]
     ax.legend(handles=handles, loc="upper left", fontsize=8, framealpha=0.9)
     ax.set_yticks(ranks)
     ax.set_yticklabels([f"rank {r}" for r in ranks])
