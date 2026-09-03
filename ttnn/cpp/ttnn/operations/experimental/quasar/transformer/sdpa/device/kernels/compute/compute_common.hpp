@@ -76,6 +76,9 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     }
     dfb_in0.pop_front(num_tiles);
     dfb_in0.reserve_back(num_tiles);
+    // TEN-4746 pack-side drain: reserve_back->push_back needs a PACR between them (dummy_unpack/UNPACR
+    // can't order the pack side). dummy_pack helper pending creation.
+    dummy_pack(in0);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -291,6 +294,8 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
     dfb_in.pop_front(num_tiles);
     dfb_in.reserve_back(num_tiles);
+    // TEN-4746 pack-side drain (dummy_pack helper pending).
+    dummy_pack(in_dfb);
     dfb_in.push_back(num_tiles);
 }
 
@@ -474,6 +479,8 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
             PACK((llk_pack_reconfig_l1_acc(false)));
             dfb_out.pop_front(num_tiles);
             dfb_out.reserve_back(num_tiles);
+            // TEN-4746 pack-side drain (dummy_pack helper pending).
+            dummy_pack(out_dfb);
             dfb_out.push_back(num_tiles);
         } else {
             dfb_out.push_back(num_tiles);
@@ -566,6 +573,8 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
     }
     dfb_in0.pop_front(num_tiles);
     dfb_in0.reserve_back(num_tiles);
+    // TEN-4746 pack-side drain (dummy_pack helper pending).
+    dummy_pack(in0_dfb);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -599,6 +608,8 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
         dfb_in1.pop_front(num_tiles);
     }
     dfb_in0.reserve_back(num_tiles);
+    // TEN-4746 pack-side drain (dummy_pack helper pending).
+    dummy_pack(in0_dfb);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -1872,6 +1883,9 @@ void sdpa_inner_loop(
                         k_start_tile_for_mask,
                         lw_straddle_col,
                         lw_straddle_jump);
+                    // TEN-4746 pack-side drain (guarded path: the mask apply above can be a no-op, leaving
+                    // reserve_back->push_back bare). dummy_pack helper pending creation.
+                    dummy_pack(dfb_qk_im);
                     dfb_qk_im_obj.push_back(Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(dfb_qk_im, dfb_mask_in, qk_chunk_tiles);

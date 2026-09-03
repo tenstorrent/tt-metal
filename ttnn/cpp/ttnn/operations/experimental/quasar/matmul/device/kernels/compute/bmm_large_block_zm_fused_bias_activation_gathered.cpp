@@ -318,6 +318,8 @@ void kernel_main() {
             // Wait to receive in0 block
             if (block == 0) {
                 input0_cb.reserve_back(in0_block_num_tiles);
+                // TEN-4746 pack-side drain (dummy_pack helper pending).
+                dummy_pack(input0_cb_id);
                 input0_cb.push_back(in0_block_num_tiles);
             }
             input0_cb.wait_front(in0_block_num_tiles);
@@ -483,6 +485,9 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
         sync_buf.reserve_back(1);
+        // TEN-4746 pack-side drain (dummy_pack helper pending). NOTE: sync_buf is a pure-signalling /
+        // credit-only buffer (no tile data) -- confirm with the LLK team whether the hazard even applies here.
+        dummy_pack(sync_cb);
         sync_buf.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(
