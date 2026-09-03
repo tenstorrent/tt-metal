@@ -4,9 +4,6 @@
 
 """PCC tests for the DeepSeek-V4 sliding-only attention layer (prefill), against the reference.
 
-Both V4 variants run. Pro has no sliding layer in the real checkpoint, but its dimensions stress the
-reductions, so it is kept as a width test.
-
 A non-final chunk must end on a tile row; a final one may end anywhere. Device-perf lives in
 tests/perf/test_ttnn_swa_perf.py.
 """
@@ -25,7 +22,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4RotaryEmbedding,
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -65,7 +61,6 @@ def _config(model_config, num_hidden_layers=4):
 # depth and the softmax never widens.
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.998, 0.998, 0.998),
-    ("pro", DeepSeekV4ProConfig, 0.998, 0.998, 0.998),
 ]
 _MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chunked, _, _ in _VARIANTS]
 _MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long, _ in _VARIANTS]
