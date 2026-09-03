@@ -145,6 +145,16 @@ class TTSampling(LightweightModule):
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
 
+    @property
+    def greedy_only(self) -> bool:
+        """True when this model has an on-device route for greedy decoding but not for
+        ranked (top-k / top-p) sampling, because its per-device vocabulary shard is wider
+        than ttnn.topk accepts in one call and same-device chunking is single-device only.
+        Callers should route non-greedy requests to host sampling when this is set."""
+        if self.multi_step_reduction:
+            return False
+        return self.padded_vocab_size // self._get_num_sampling_shards() > TOPK_MAX_WIDTH
+
     def __init__(
         self,
         mesh_device,
@@ -986,22 +996,25 @@ class TTSampling(LightweightModule):
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
-        # Reaching here means a non-greedy request wants the top-k pipeline. A model whose
-        # per-device vocab shard exceeds what ttnn.topk takes in one call has no top-k route:
-        # multi-step reduction (same-device chunking) is single-device only, so nothing here
-        # can cut the shard down. Such a model is only constructed when the greedy
-        # force-argmax path above is available, so fail loudly rather than run ttnn.topk far
-        # outside its intended width -- measured 22.46 ms/token on a 75968-wide shard against
-        # 1.38 ms for argmax and 5.07 ms for host sampling (Qwen3-8B, N300, 32 rows).
-        if not self.multi_step_reduction:
-            shard_width = self.padded_vocab_size // self._get_num_sampling_shards()
-            if shard_width > TOPK_MAX_WIDTH:
-                raise ValueError(
-                    f"No on-device top-k route: per-device vocab shard is {shard_width}, above the "
-                    f"{TOPK_MAX_WIDTH} ttnn.topk takes in one call, and same-device chunking is "
-                    "single-device only. This model was built for the greedy argmax fast path; use "
-                    "greedy decoding (temperature=0), or sample on host for non-greedy requests."
-                )
+        # Reaching here means a non-greedy request wants the top-k pipeline, and this model may
+        # not have one: a per-device vocab shard wider than ttnn.topk takes in one call has no
+        # top-k route, because same-device chunking is single-device only so nothing here can
+        # cut the shard down. Callers should not get here -- `greedy_only` says so before the
+        # request is made, and the model surfaces it as `_on_device_sampling_greedy_only` so a
+        # non-greedy request can be routed to host sampling (pass sampling_params=None and
+        # sample the returned logits) instead of losing the capability. This is the backstop
+        # for a caller that did not check, and it names the way out rather than running
+        # ttnn.topk far outside its intended width: measured 22.46 ms/token on a 75968-wide
+        # shard, against 1.38 for argmax and 5.07 for the host round trip it would replace.
+        if self.greedy_only:
+            raise ValueError(
+                f"On-device sampling on this model is greedy-only: the per-device vocab shard is "
+                f"{self.padded_vocab_size // self._get_num_sampling_shards()}, above the "
+                f"{TOPK_MAX_WIDTH} ttnn.topk takes in one call, and same-device chunking is "
+                "single-device only. Check model._on_device_sampling_greedy_only and, for a "
+                "non-greedy request, call decode_forward with sampling_params=None to get logits "
+                "back and sample on host -- the behaviour before on-device greedy was enabled."
+            )
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)

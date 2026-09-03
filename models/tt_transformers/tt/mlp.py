@@ -312,7 +312,17 @@ class MLP(LightweightModule):
         # Producing directly into w2's layout decouples them and costs nothing extra: the
         # to_memory_config below wanted that layout anyway, so it becomes the no-op its comment
         # already describes rather than a real redistribution.
-        decode_rearranged = mode == Mode.DECODE and not TG and self.prefetcher is None
+        # Gated on the same per-architecture flag as the 8-core decode grids
+        # (use_tuned_decode_grids, set in ModelArgs._set_model_specific_params): this
+        # change exists to decouple the multiply from ff1/ff3's placement, and it only
+        # matters when those matmuls have been moved off the dimension-derived grid.
+        # Models on the default grids keep inheriting w1_out's layout, as before.
+        decode_rearranged = (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and getattr(self.args, "use_tuned_decode_grids", False)
+        )
         mul_mem_cfg = self.args.get_mlp_binary_mult_mem_config(mode) if decode_rearranged else w1_out.memory_config()
         w2_in = ttnn.mul(
             w1_out,

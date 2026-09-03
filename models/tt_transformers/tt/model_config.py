@@ -16,7 +16,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -236,6 +235,18 @@ class ModelOptimizations:
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
                 "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
             }
+            if base_model_name == "Qwen3-8B":
+                # Drop 32-bit accumulation in the three decode attention operators. A 32-bit
+                # running total occupies twice the destination-register space, so 4 tiles fit
+                # per pass where 8 otherwise would. Measured 27.942 -> 27.794 and 27.812
+                # ms/token (two runs, 0.018 apart) on wormhole_b0 at 32k, and top-1 agreement
+                # at 32k is 85.74% with this against 84.18% for the pre-branch configuration,
+                # so it costs nothing measurable at the depth this model serves.
+                # Speed preset only -- the accuracy preset must not inherit a precision
+                # reduction. Prefill deliberately unchanged.
+                settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.HIFI2_NOFP32
+                settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2_NOFP32
+                settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.HIFI2_NOFP32
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -316,13 +327,15 @@ class ModelOptimizations:
                 OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
-                # Decode only: fp32_dest_acc_en=False. A 32-bit running total occupies twice the
-                # destination-register space, so 4 tiles fit per pass where 8 otherwise would.
-                # Measured 27.942 -> 27.794 and 27.812 ms/token (two runs, 0.018 ms apart) on
-                # wormhole_b0 at 32k. Prefill deliberately keeps HIFI2 -- see LI_O_PREFILL below.
-                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2_NOFP32,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NOFP32,
-                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2_NOFP32,
+                # These stay HIFI2 for every model. Dropping 32-bit accumulation in decode
+                # attention (HIFI2_NOFP32) was measured only on Qwen3-8B and now lives in the
+                # performance preset's Qwen3 branch: in _default_settings it was inherited by
+                # the accuracy preset too, for every model that does not override these three
+                # groups (Llama-3.x, Mistral-7B, Phi-3-mini and the >70B branch all fall
+                # through), which is the opposite of what an accuracy preset should do.
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
@@ -588,14 +601,12 @@ class ModelArgs:
         # _set_model_specific_params(); these defaults preserve existing behaviour for
         # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
         self.sdpa_decode_q_chunk_size = 0
-        # Measured on Wormhole at 32k context, 16 q heads / 4 kv heads, head_dim 128: the
-        # operation's automatic choice runs at 0.2408 ms and a chunk of 256 at 0.2309 ms, 4.1%
-        # faster, over 36 calls per token. Every legal value (0/32/64/128/256/512) was measured
-        # 25 times and every one that ran agreed to 4 decimal places against a torch reference,
-        # so this changes scheduling only. Note k_chunk_size=32 silently returns all zeros --
-        # it equals the KV page size and appears to be untested upstream.
-        self.sdpa_decode_k_chunk_size = 256
+        self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
+        # Opt-in for the decode grid/placement tuning measured on Qwen3-8B; set per
+        # architecture in _set_model_specific_params(), read where the grids are chosen
+        # below. Default False keeps every other model on the dimension-derived grids.
+        self.use_tuned_decode_grids = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -812,7 +823,14 @@ class ModelArgs:
             # Measured, 128 rounds: this norm shape (32 x 4096) costs 46.07 us on 32 cores and
             # 39.33 us on 8, and the QKV matmul 0.0666 ms on 32 cores against 0.0600 ms on 8 --
             # both operations get faster, so lowering the count is not a trade.
-            self.attn_input_grid = ttnn.CoreGrid(x=8, y=1)
+            # Gated on use_tuned_decode_grids (set per architecture in
+            # _set_model_specific_params). The fixed constant is faster on the one shape it
+            # was measured on but drops an invariant: dram_shard_core_grid_for_k picks a
+            # core count that divides the tensor evenly, and x=8 does not guarantee that.
+            # It happens to hold for every dim that is a multiple of 256.
+            self.attn_input_grid = (
+                ttnn.CoreGrid(x=8, y=1) if self.use_tuned_decode_grids else self.dram_shard_core_grid_for_k(self.dim)
+            )
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -834,9 +852,17 @@ class ModelArgs:
             # and the elementwise SiLU(ff1)*ff3 inherited that placement, costing more than the
             # matmuls saved (perf_report2.txt). mlp.py now produces that multiply directly into
             # w2's layout instead of inheriting, so the two are no longer coupled.
-            self.mlp_core_grid = (
-                self.dram_shard_core_grid_for_k(self.dim) if self.is_galaxy else ttnn.CoreGrid(x=8, y=1)
-            )
+            # Same gate as attn_input_grid above, and the same trade: measured faster on
+            # Qwen3-8B, but the constant does not carry the even-division guarantee that
+            # dram_shard_core_grid_for_k_and_n provides.
+            if self.is_galaxy:
+                self.mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+            elif self.use_tuned_decode_grids:
+                self.mlp_core_grid = ttnn.CoreGrid(x=8, y=1)
+            else:
+                self.mlp_core_grid = self.dram_shard_core_grid_for_k_and_n(
+                    self.dim, self.hidden_dim // self.num_devices
+                )
 
             self.mlp2_core_grid = (
                 ttnn.CoreGrid(y=1, x=8)
@@ -1143,6 +1169,9 @@ class ModelArgs:
             self.ccl_dtype = ttnn.bfloat8_b
 
             # model specific CCL configs.
+            # Defaults restored to the pre-campaign 10/2 for every model; the tuned 40/3
+            # measured on Qwen3-8B now lives in the per-model table below. Measurement
+            # notes kept here because they describe the sweep, not the default:
             # num_workers_per_link=3 / chunks_per_sync=40 measured in-model on wormhole_b0,
             # 12 combinations swept in one profiled run, 2 decode steps each after discarding
             # a compile step, medians over 145 collective calls per step on device 0:
@@ -1156,12 +1185,12 @@ class ModelArgs:
             # (-3.7%) and the reduce-scatter 1.998 -> 1.953 (-2.3%); whole model 28.037 ->
             # 27.942 ms/token, 35.67 -> 35.79 tok/s/u. That 0.095 ms is 5.6x the 0.017 ms
             # spread between two otherwise identical profiling runs.
-            default_ln_ag = {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3}
-            default_agmm = {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3}
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
-                "chunks_per_sync": 40,
-                "num_workers_per_link": 3,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
@@ -1175,8 +1204,11 @@ class ModelArgs:
                 # 32k context): argmax 1.38 ms/token, topk at that width 22.46 ms, host
                 # round trip 5.07 ms of a 32.75 ms token. Greedy only: a non-greedy
                 # request at this width still has no device route (see TTSampling.forward).
-                "allow_force_argmax": self.num_devices == 1
-                or (self.padded_vocab_size // self.num_devices > TOPK_MAX_WIDTH),
+                # Single-chip only by default. Widening this to any wide-vocab multi-chip
+                # model was measured only on Qwen3-8B, and it changes behaviour for every
+                # such model (Gemma-2/3 at 256000 vocab qualify), so it now lives in the
+                # per-model table below rather than here.
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1202,10 +1234,50 @@ class ModelArgs:
                     },
                 }
             }
+            # Entries above are tuned for Galaxy (TG) with 4 links and only apply there.
+            # This second table holds per-model tuning measured on non-Galaxy hardware, so it
+            # needs its own gate: the Galaxy one below would never reach it. Keyed the same way
+            # (normalised base model name), and consulted only off Galaxy.
+            non_galaxy_ccl_configs = {
+                # Measured on Qwen3-8B / wormhole_b0 N300 / 32k context; see the sweep notes
+                # above for the 12-combination profile and the 14-round head-to-head that
+                # settled 40 against 80. Whole model 28.037 -> 27.942 ms/token.
+                "Qwen3-8B": {
+                    "attn_ln_ag": {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3},
+                    "ffn_ln_ag": {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3},
+                    "attn_agmm": {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3},
+                    "mlp_rs": {
+                        "num_links": self.num_reduce_scatter_links,
+                        "chunks_per_sync": 40,
+                        "num_workers_per_link": 3,
+                        "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    },
+                    "sampling_force_argmax": {
+                        # 151936 vocab -> 75968 per device on N300, past the 65536 ttnn.topk
+                        # takes in one call, so there is no top-k route and the alternative is
+                        # a full logits readback to host every token: 5.07 ms of a 32.83 ms
+                        # token. On-chip argmax costs 1.38; topk at that width costs 22.46.
+                        # Greedy only -- a non-greedy request at this width has no device
+                        # route and falls back to host sampling (see TTSampling.forward).
+                        "allow_force_argmax": True,
+                        "num_links": 1,
+                        "chunks_per_sync": 40,
+                        "num_workers_per_link": 4,
+                        "topology": ttnn.Topology.Linear,
+                    },
+                },
+            }
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
             # Only apply them on Galaxy, otherwise use defaults
             executed_on_galaxy = self.is_galaxy_cluster
-            if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
+            if not executed_on_galaxy and self.base_model_name in non_galaxy_ccl_configs:
+                cfg = non_galaxy_ccl_configs[self.base_model_name]
+                self.model_config["ATTN_LN_AG_CONFIG"] = cfg["attn_ln_ag"]
+                self.model_config["FFN_LN_AG_CONFIG"] = cfg["ffn_ln_ag"]
+                self.model_config["ATTN_AGMM_CONFIG"] = cfg["attn_agmm"]
+                self.model_config["MLP_RS_CONFIG"] = cfg["mlp_rs"]
+                self.model_config["SAMPLING_AG_CONFIG"] = cfg["sampling_force_argmax"]
+            elif executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
                 self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
                 self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
                 self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
@@ -2813,6 +2885,23 @@ class ModelArgs:
             self.sdpa_decode_q_chunk_size = 32
             self.sdpa_decode_k_chunk_size = 64
             self.sdpa_decode_use_default_compute_config = True
+
+        # Qwen3 decode tuning, measured only on Qwen3-8B / Wormhole N300 / 32k context.
+        # Scoped here rather than left in the shared defaults because the whole campaign
+        # ran on one model and one board (22 invocations, all HF_MODEL=Qwen/Qwen3-8B,
+        # MESH_DEVICE=N300) and nothing establishes it helps anything else.
+        if self.model_type is not None and str(self.model_type).lower() in ("qwen3",):
+            # KV chunk of 256: the op's automatic choice runs 0.2408 ms against 0.2309 at
+            # 256, 4.1% faster, over 36 calls per token. Every legal value (0/32/64/128/
+            # 256/512) was measured 25 times and every one that ran agreed to 4 decimal
+            # places against a torch reference, so this changes scheduling only.
+            # Note k_chunk_size=32 silently returns an all-zero tensor -- it equals the KV
+            # page size and appears untested upstream. Not filed; worth filing.
+            self.sdpa_decode_k_chunk_size = 256
+            # Fixed 8-core decode grids and the paired feed-forward output placement,
+            # worth 2.34 ms/token together. Off by default elsewhere: the constant does
+            # not carry the even-tile-division guarantee the dimension-derived helpers do.
+            self.use_tuned_decode_grids = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)

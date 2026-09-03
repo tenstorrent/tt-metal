@@ -167,8 +167,13 @@ class Transformer(LightweightModule):
                 # chunks instead. Build the sampler when the model config permits that path,
                 # so greedy decode stays on device rather than paying a full logits readback
                 # to host every token (5.07 of 32.75 ms/token on Qwen3-8B @ 32k on N300).
-                # Non-greedy requests at this width still have no device route and raise in
-                # TTSampling.forward rather than silently taking the 22.46 ms topk path.
+                # Non-greedy requests at this width still have no device route. That is
+                # surfaced as _on_device_sampling_greedy_only below so a caller can route
+                # them to host sampling (sampling_params=None -> logits back), keeping the
+                # capability; TTSampling.forward raises with the same instruction as a
+                # backstop rather than silently taking the 22.46 ms topk path.
+                # Permission itself is per-model: see non_galaxy_ccl_configs in
+                # model_config.py, which carries the Qwen3-8B entry.
                 vocab_fits_on_device = bool(
                     (getattr(self.args, "model_config", None) or {})
                     .get("SAMPLING_AG_CONFIG", {})
@@ -177,12 +182,19 @@ class Transformer(LightweightModule):
         else:
             vocab_fits_on_device = TTSampling.num_single_device_vocab_splits(padded_vocab_size) is not None
         self._supports_on_device_sampling = prefetcher is None and vocab_fits_on_device
+        # True when on-device sampling exists but covers greedy decoding only, because this
+        # model's per-device vocabulary shard is wider than ttnn.topk takes in one call.
+        # Callers with a non-greedy request should pass sampling_params=None to get logits
+        # back and sample on host, rather than losing that capability -- TTSampling.forward
+        # raises with the same instruction if they do not.
+        self._on_device_sampling_greedy_only = False
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
             )
+            self._on_device_sampling_greedy_only = bool(getattr(self.sampling, "greedy_only", False))
         else:
             self.sampling = None
 
@@ -939,8 +951,13 @@ class Transformer(LightweightModule):
                 # -- their real cost (24 us) is smaller than the standalone harness's own overhead,
                 # so those sweep results were noise. Only this call is large enough to measure that
                 # way. See perf_report7.txt (before) and perf_report10.txt (after).
-                chunks_per_sync=40,
-                num_workers_per_link=4,
+                #
+                # Read from SAMPLING_AG_CONFIG rather than hardcoded, so it is per-model like
+                # every other collective setting. Off Galaxy that table carries a Qwen3-8B
+                # entry with 40/4; every other model gets the 10/2 default it had before,
+                # since this was measured on one model at one transfer size.
+                chunks_per_sync=self.args.model_config["SAMPLING_AG_CONFIG"].get("chunks_per_sync", 10),
+                num_workers_per_link=self.args.model_config["SAMPLING_AG_CONFIG"].get("num_workers_per_link", 2),
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
