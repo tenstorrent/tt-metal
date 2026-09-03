@@ -105,7 +105,7 @@ def test_floor_form_flags_stale_when_measured_below_floor():
     assert "floor stale" not in out
 
 
-def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
+def test_llm_form_withholds_the_ratio_when_measured_exceeds_ceiling():
     out = "\n".join(
         S._roofline_lines(
             {
@@ -118,11 +118,12 @@ def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
             19.4,
         )
     )
-    # 1000/19.4 = 51.5 tok/s > 40 ceiling => flag, not "129%"
-    # Both halves matter. The ROOFLINE row must flag it, and the UTILIZATION row must not publish
-    # the ratio: _bar clamps at full, so 129% drew a saturated bar -- an impossible measurement
-    # rendering as a flawless score.
-    assert "EXCEEDS ceiling" in out and "129%" not in out
+    # 1000/19.4 = 51.5 tok/s > 40 ceiling. The UTILIZATION row must not publish the ratio: _bar
+    # clamps at full, so 129% drew a saturated bar -- an impossible measurement rendering as a
+    # flawless score. Withholding it is the whole remedy; the banner that used to accompany it named
+    # no stage and sat above the first one rendered, so it read as a verdict on the wrong stack.
+    assert "129%" not in out
+    assert "EXCEEDS ceiling" not in out, "the withheld ratio is the remedy; it needs no banner"
 
 
 def test_none_throughput_skips_table():

@@ -2084,6 +2084,13 @@ def _roofline_tables(
     # A MEASUREMENT ABOVE THE CEILING IS NOT A GOOD SCORE. The ceiling is peak bandwidth over the
     # model's bytes -- exceeding it means the pair is inconsistent (a stale target, or a reading from
     # a shallower window), not that the model beat physics.
+    #
+    # IT IS WITHHELD, NOT ANNOUNCED. This used to print its own row at the top of the table, which
+    # read as a verdict on whichever stage happened to be rendered first -- on voxtral it sat above
+    # the encode block while the inconsistent pair was decode's, and the ceiling is PINNED at the
+    # baseline read set by design, so it fired on every capture once a stage got faster than its own
+    # starting bytes. The rows below already decline to draw a ratio they cannot honestly draw; that
+    # is the whole remedy, and it needs no banner.
     _exceeds = bool(measured and theo and measured > theo)
     # TTFT IS THE PROMPT-CONSUMING STAGE'S TIME, and which stage that is follows from what it does --
     # retiring many items per unit -- not from being called "prefill". Resolved after the roofs are
@@ -2149,8 +2156,6 @@ def _roofline_tables(
     # the only number that can be drawn is not the same as being the right one.
     if tag:
         out.append(_row(" " + tag.strip()))
-    if _exceeds:
-        out.append(_row(" \u2717 measured EXCEEDS ceiling \u2014 target stale/suspect (re-profile)"))
     if note and not measured:
         # Wrapped to the LABEL field, not to the page. At W-40 the note ran past the first divider
         # and pushed the column edges out on its own rows.
@@ -3112,9 +3117,7 @@ def render_summary(
     lines.append(title)
     lines.append("=" * len(title))
     if not finalized:
-        lines.append(
-            "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
-        )
+        lines.append("optimizing…")
     else:
         _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time", model, task)
         if _eager:
@@ -3344,34 +3347,38 @@ def render_summary(
     # on a long run is thousands of lines of patch in a document read for its numbers. The diffs are
     # in the kernel log and in git; a report is not a second copy of the tree.
 
-    # --- Limitations / suggested manual next steps (#5c) ---
+    # --- Limitations (#5c) ---
+    # FINDINGS, NOT ADVICE. This section used to close each finding with a suggestion -- inspect
+    # this, consider that, the model "may already be" at its floor. A report that is read to
+    # VALIDATE a run has to be all checkable statements: a suggestion cannot be true or false, so
+    # it cannot be validated, and it crowds the findings it sits between.
     _won_ops = {attempts[i].get("op_signature") for i in _wins}
     _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
     lines.append("")
-    lines.append("Limitations / suggested manual next steps")
+    lines.append("Limitations")
     lines.append("─" * _REPORT_W)
+    # A SECTION WITH NOTHING IN IT SAYS SO. The old filler pointed the reader at another report
+    # instead, which is advice; "none" is the finding.
+    _limits_at = len(lines)
     if _no_gain:
         shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
-        lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
     _measured = [a for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None]
     _any_win = bool(_wins)
     if not _measured and attempts:
         _unmeasured = len(attempts)
         lines.append(
             f"- INCONCLUSIVE — {_unmeasured} attempt(s) were made but NONE produced a valid measurement, "
-            "so no statement about speedup or the ttnn floor is possible. See the per-attempt reasons above."
+            "so no statement about speedup or the ttnn floor is possible."
         )
     elif baseline_ms and final_ms and final_ms >= baseline_ms and _measured and not _any_win:
-        lines.append(
-            "- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel."
-        )
+        lines.append("- No net speedup recorded")
     if residual:
         _rv = residual.get("verdict") or residual.get("summary") or residual.get("reason")
         if _rv:
             lines.append(f"- Roofline residual: {str(_rv)[:200]}")
-    if not _no_gain and not residual and not (baseline_ms and final_ms and final_ms >= baseline_ms):
-        lines.append("- (none flagged automatically — see the per-op device report for remaining headroom.)")
+    if len(lines) == _limits_at:
+        lines.append("- none")
 
     # --- Reproduce these numbers (#6) ---
     lines.append("")

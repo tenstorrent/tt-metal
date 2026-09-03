@@ -212,6 +212,9 @@ _FULLPIPE_BASELINE_1CQ_PATH = _fullpipe_baseline_1cq_path()
 # is reported as a regression regardless (see the regressed branch below), because "within 8%
 # of the best ever" used to read as ok and let real latency ratchet upward unnoticed.
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
+# trace_replay prints this when the timed decode step neither advanced its state nor changed its
+# output. Pinned to the printing side by test_a_decode_that_is_not_decoding_is_not_timed.
+_DECODE_STUCK_MARKER = "TRACE_DECODE_ADVANCE=stuck"
 # Must match the BEFORE bookend (run.py sets 3): AFTER = min over 1-sample readings vs
 # BEFORE = median of 3 manufactured the full noise range as a gain on every run.
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "3")))
@@ -1171,10 +1174,10 @@ def _rebuild_optimize_report(model_root=None) -> None:
             throughput=_read_throughput(),
             finalized=False,
         )
-        when = (
-            f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {n_attempts} lever attempt(s) so far — "
-            "each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed."
-        )
+        # THE STAMP, NOT A DESCRIPTION OF THE FILE. The trailing clause explained the report's own
+        # logging policy to a reader who is here to check numbers; it is the same sentence on every
+        # run of every model and states nothing that can be validated.
+        when = f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {n_attempts} lever attempt(s) so far"
         _key = os.environ.get("PERF_MCP_REPORT_KEY", "optimize")
         _module = os.environ.get("PERF_MCP_REPORT_MODULE")
         if _module:
@@ -2801,6 +2804,12 @@ def _run_full_pipeline_ms():
     if case:
         cmd += ["-k", case]
     per_tokens = []
+    # A decode that never advanced. trace_replay refuses to time it, but the perf test's _try_traced
+    # catches Exception broadly, so the refusal alone would land as TRACE_REPLAY_SKIPPED and quietly
+    # DOWNGRADE to the eager wall -- a number, banked, measured on a step re-running one position.
+    # The marker is printed BEFORE the raise for exactly that reason: it survives the swallow, and
+    # this is what reads it.
+    decode_stuck = ""
     stage_ms = {}
     # EVERY SAMPLE, NOT THE LAST ONE. The headline is the median of _FULLPIPE_SAMPLES readings
     # (`dec` below) precisely because one reading is noise; the per-stage split was a plain
@@ -3034,6 +3043,9 @@ def _run_full_pipeline_ms():
                         # carried as the scalar below.
                 except Exception:  # noqa: BLE001
                     pass
+            # Printed by trace_replay._check_advance; keep the name verbatim on both sides.
+            if _DECODE_STUCK_MARKER in line:
+                decode_stuck = line.strip()
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
@@ -3076,6 +3088,12 @@ def _run_full_pipeline_ms():
                     prefill_path = line.split("TRACE_PREFILL_PATH=", 1)[1].split()[0]
                 except Exception:  # noqa: BLE001
                     pass
+    # BEFORE any number is derived, including the eager fallback. A run whose decode stood still has
+    # no valid reading to offer: the trace refused, and the wall time that would stand in for it
+    # prices the same non-advancing step. Failing the measurement is the honest outcome -- the gate
+    # then reports no reading rather than a fast one.
+    if decode_stuck:
+        return None, None, "decode did not advance between iterations: %s" % decode_stuck, None
     dec = statistics.median(per_tokens) if per_tokens else None
     pf = statistics.median(prefills) if prefills else None
     if dec is not None or pf is not None:

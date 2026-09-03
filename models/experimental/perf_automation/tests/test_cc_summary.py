@@ -53,7 +53,10 @@ def test_empty_log_is_safe(tmp_path):
 def test_live_render_shows_pending_not_delta(tmp_path):
     log = _log(tmp_path, [{"op_signature": "Op", "kernel_kind": "dtype", "measured_ms": 16.42, "beat_baseline": True}])
     out = summary.render_summary(log, baseline_ms=22.94, model="m", finalized=False)
-    assert "finalized when the module converges" in out
+    # The live render must mark itself in progress and must NOT state a baseline->final delta. The
+    # marker used to be a sentence explaining when the delta gets finalized; the report is read to
+    # validate numbers, so it is now just the state.
+    assert "optimizing…" in out
     assert "ms  ->  final" not in out
 
 

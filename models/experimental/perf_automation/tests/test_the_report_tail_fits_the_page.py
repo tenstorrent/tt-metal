@@ -36,7 +36,7 @@ def test_the_legend_is_wrapped_to_the_page():
 
 
 def test_the_tail_sections_are_ruled_like_every_other_section():
-    for heading in ("Limitations / suggested manual next steps", "Reproduce", "Legend"):
+    for heading in ("Limitations", "Reproduce", "Legend"):
         i = _SRC.index('lines.append("%s")' % heading)
         after = _SRC[i : i + 220]
         assert '"─" * _REPORT_W' in after, "%s is not ruled" % heading
