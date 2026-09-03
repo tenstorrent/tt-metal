@@ -303,7 +303,8 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 bool FDMeshCommandQueue::record_watcher_error_in_test_mode(ChipId device_id) {
-    const auto error_message = tt::llrt::internal_::get_watcher_error_message_in_test_mode(device_id);
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto error_message = tt::llrt::internal_::get_watcher_error_message_in_test_mode(context, device_id);
     if (!error_message.has_value()) {
         return false;
     }

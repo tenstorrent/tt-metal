@@ -889,18 +889,20 @@ static void ReadDeviceProfilerResultsImpl(
         constexpr uint8_t maxLoopCount = 10;
         constexpr uint32_t loopDuration_us = 10000;
 
-        const auto& hal = MetalContext::instance().hal();
+        auto& context = MetalContext::instance(extract_context_id(device));
+        const auto& hal = context.hal();
         for (const CoreCoord& core : virtual_cores) {
             bool is_core_done = false;
 
-            const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), core);
+            const HalProgrammableCoreType core_type =
+                tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device->id(), core);
 
             DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
             DeviceAddr control_vector_addr =
                 profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                         dev_msgs::profiler_msg_t::Field::control_vector);
             for (int i = 0; i < maxLoopCount; i++) {
-                const std::vector<std::uint32_t> control_buffer = MetalContext::instance().get_cluster().read_core(
+                const std::vector<std::uint32_t> control_buffer = context.get_cluster().read_core(
                     device->id(), core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                 if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                     is_core_done = true;

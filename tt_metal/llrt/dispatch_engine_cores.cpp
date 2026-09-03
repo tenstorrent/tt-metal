@@ -182,16 +182,18 @@ CoreType resolve_dispatch_core_type(
 namespace {
 
 const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& dispatch_core_config = context.get_dispatch_core_config();
     return env.get_quasar_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
 }
 
 }  // namespace
 
 CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device) {
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    const auto& dispatch_core_config = context.get_dispatch_core_config();
     return tt::tt_metal::resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
 }
 
@@ -238,7 +240,8 @@ bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device) {
     if (device->arch() != tt::ARCH::QUASAR) {
         return false;
     }
-    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(context.get_env()).impl();
     if (env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) {
         return false;
     }

@@ -21,6 +21,8 @@
 
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
@@ -79,24 +81,25 @@ const ll_api::memory& get_risc_binary(
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-tt::tt_metal::CoreCoord logical_core_from_ethernet_core(tt::ChipId chip_id, const tt::tt_metal::CoreCoord& ethernet_core) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-        chip_id, ethernet_core);
+tt::tt_metal::CoreCoord logical_core_from_ethernet_core(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& ethernet_core) {
+    return env.get_cluster().get_logical_ethernet_core_from_virtual(chip_id, ethernet_core);
 }
 
-tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const tt::tt_metal::CoreCoord& virtual_core) {
-    bool is_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, chip_id);
+tt_metal::HalProgrammableCoreType get_core_type(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& virtual_core) {
+    auto& env_impl = env;
+    auto& cluster = env_impl.get_cluster();
+    bool is_eth_core = cluster.is_ethernet_core(virtual_core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
     // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
     if (is_eth_core) {
-        auto active_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
-        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
+        auto active_eth_cores = env_impl.get_control_plane().get_active_ethernet_cores(chip_id);
+        auto inactive_eth_cores = env_impl.get_control_plane().get_inactive_ethernet_cores(chip_id);
+        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(env, chip_id, virtual_core));
+        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(env, chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
         TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
@@ -107,19 +110,21 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const tt::tt
     if (is_inactive_eth_core) {
         return tt_metal::HalProgrammableCoreType::IDLE_ETH;
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_dispatch_core(virtual_core, chip_id)) {
+    if (cluster.is_dispatch_core(virtual_core, chip_id)) {
         return tt_metal::HalProgrammableCoreType::DISPATCH;
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_dram_core(virtual_core, chip_id)) {
+    if (cluster.is_dram_core(virtual_core, chip_id)) {
         return tt_metal::HalProgrammableCoreType::DRAM;
     }
     return tt_metal::HalProgrammableCoreType::TENSIX;
 }
 
-void send_reset_go_signal(tt::ChipId chip, const tt::tt_metal::CoreCoord& virtual_core) {
-    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+void send_reset_go_signal(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip, const tt::tt_metal::CoreCoord& virtual_core) {
+    auto& env_impl = env;
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip, virtual_core);
+    const auto& hal = env_impl.get_hal();
+    const auto& cluster = env_impl.get_cluster();
     uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
@@ -134,14 +139,16 @@ void send_reset_go_signal(tt::ChipId chip, const tt::tt_metal::CoreCoord& virtua
 }
 
 void write_launch_msg_to_core(
+    tt::tt_metal::MetalEnvImpl& env,
     tt::ChipId chip,
     tt::tt_metal::CoreCoord core,
     tt_metal::dev_msgs::launch_msg_t::View msg,
     tt_metal::dev_msgs::go_msg_t::ConstView go_msg,
     bool send_go) {
-    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, core);
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    auto& env_impl = env;
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip, core);
+    const auto& hal = env_impl.get_hal();
+    const auto& cluster = env_impl.get_cluster();
 
     msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
@@ -156,54 +163,58 @@ void write_launch_msg_to_core(
 }
 
 ll_api::memory read_mem_from_core(
-    tt::ChipId chip, const tt::tt_metal::CoreCoord& core, const ll_api::memory& mem, uint64_t local_init_addr) {
+    tt::tt_metal::MetalEnvImpl& env,
+    tt::ChipId chip,
+    const tt::tt_metal::CoreCoord& core,
+    const ll_api::memory& mem,
+    uint64_t local_init_addr) {
+    auto& env_impl = env;
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            &*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
+        uint64_t relo_addr = env_impl.get_hal().relocate_dev_addr(addr, local_init_addr);
+        env_impl.get_cluster().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }
 
 bool test_load_write_read_risc_binary(
+    tt::tt_metal::MetalEnvImpl& env,
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const tt::tt_metal::CoreCoord& core,
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
+    auto& env_impl = env;
+    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
     TT_ASSERT(
-        tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
-        tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
-        tt::tt_metal::MetalContext::instance().get_cluster().is_dispatch_core(core, chip_id) or
+        cluster.is_worker_core(core, chip_id) or cluster.is_ethernet_core(core, chip_id) or
+        cluster.is_dispatch_core(core, chip_id) or
         static_cast<tt_metal::HalProgrammableCoreType>(core_type_idx) == tt_metal::HalProgrammableCoreType::DRAM);
 
-    const auto& jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(
-        core_type_idx, processor_class_idx, processor_type_idx);
+    const auto& jit_build_config = hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx);
     uint64_t local_init_addr = jit_build_config.local_init_addr;
     uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
-    auto core_type = get_core_type(chip_id, core);
+    auto core_type = get_core_type(env, chip_id, core);
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
     bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr =
-            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
+        uint64_t relo_addr = hal.relocate_dev_addr(addr, local_init_addr, local_mem_offset);
         relo_addr += l1_noc_offset;
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
+        cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
     if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip_id);
-        ll_api::memory read_mem = read_mem_from_core(chip_id, core, mem, local_init_addr);
+        cluster.l1_barrier(chip_id);
+        ll_api::memory read_mem = read_mem_from_core(env, chip_id, core, mem, local_init_addr);
         log_debug(tt::LogLLRuntime, "read hex back from the core");
         return mem == read_mem;
     }
@@ -212,6 +223,7 @@ bool test_load_write_read_risc_binary(
 }
 
 bool test_load_multicast_write_risc_binary(
+    tt::tt_metal::MetalEnvImpl& env,
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const tt::tt_metal::CoreCoord& start_core,
@@ -219,22 +231,19 @@ bool test_load_multicast_write_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
-    TT_ASSERT(
-        tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(start_core, chip_id) and
-        tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(end_core, chip_id));
+    auto& env_impl = env;
+    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
+    TT_ASSERT(cluster.is_worker_core(start_core, chip_id) and cluster.is_worker_core(end_core, chip_id));
 
-    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
-                                   .hal()
-                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
-                                   .local_init_addr;
+    uint64_t local_init_addr =
+        hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr =
-            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, false);
+        uint64_t relo_addr = hal.relocate_dev_addr(addr, local_init_addr, false);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().noc_multicast_write(
-            &*mem_ptr, len_words * sizeof(uint32_t), chip_id, start_core, end_core, relo_addr);
+        cluster.noc_multicast_write(&*mem_ptr, len_words * sizeof(uint32_t), chip_id, start_core, end_core, relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "multicast hex to cores {} - {}", start_core.str().c_str(), end_core.str().c_str());
@@ -246,11 +255,16 @@ bool test_load_multicast_write_risc_binary(
     return true;
 }
 
-void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& core, uint32_t address) {
+void write_binary_to_address(
+    tt::tt_metal::MetalEnvImpl& env,
+    const ll_api::memory& mem,
+    tt::ChipId chip_id,
+    const tt::tt_metal::CoreCoord& core,
+    uint32_t address) {
+    auto& cluster = env.get_cluster();
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+        cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
     });
 }
 
@@ -258,16 +272,19 @@ namespace internal_ {
 
 namespace {
 
-bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const tt::tt_metal::CoreCoord& core, int run_state) {
-    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
-    const auto& hal = tt_metal::MetalContext::instance().hal();
+bool check_if_riscs_on_specified_core_done(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId chip_id, const tt::tt_metal::CoreCoord& core, int run_state) {
+    auto& env_impl = env;
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(env, chip_id, core);
+    const auto& hal = env_impl.get_hal();
+    auto& cluster = env_impl.get_cluster();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
     uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        cluster.read_core(
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
@@ -288,16 +305,18 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const tt::tt_meta
     return get_mailbox_is_done(go_msg_addr);
 }
 
-void print_aerisc_training_status(tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+void print_aerisc_training_status(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core) {
+    auto& env_impl = env;
+    const auto& hal = env_impl.get_hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
     if (!hal.get_supports_eth_debug_regs() ||
-        get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        get_core_type(env, device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         return;
     }
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = env_impl.get_cluster();
     const tt_cxy_pair target(device_id, virtual_core);
     auto read_u32 = [&](uint32_t addr) {
         uint32_t v = 0;
@@ -349,11 +368,11 @@ void print_aerisc_training_status(tt::ChipId device_id, const tt::tt_metal::Core
 
 }  // namespace
 
-std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id) {
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() &&
-        tt::tt_metal::MetalContext::instance().watcher_server()) {
-        auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
+std::optional<std::string> get_watcher_error_message_in_test_mode(
+    tt::tt_metal::MetalContext& context, ChipId device_id) {
+    const auto& rtoptions = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl().get_rtoptions();
+    if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() && context.watcher_server()) {
+        auto& watcher = *context.watcher_server();
         if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
             return fmt::format(
                 "Device {}: Aborting wait due to watcher error: {}",
@@ -364,18 +383,24 @@ std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_
     return std::nullopt;
 }
 
-void throw_if_watcher_tripped_in_test_mode(ChipId device_id) {
-    if (auto error_message = get_watcher_error_message_in_test_mode(device_id)) {
+void throw_if_watcher_tripped_in_test_mode(tt::tt_metal::MetalContext& context, ChipId device_id) {
+    if (auto error_message = get_watcher_error_message_in_test_mode(context, device_id)) {
         TT_THROW("{}", *error_message);
     }
 }
 
 void wait_until_cores_done(
-    tt::ChipId device_id, int run_state, std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores, int timeout_ms) {
+    tt::tt_metal::MetalContext& context,
+    tt::ChipId device_id,
+    int run_state,
+    std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores,
+    int timeout_ms) {
+    auto& env = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
+    auto& env_impl = env;
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_impl.get_rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
     // timeout_ms == 0 means infinite wait on sim; on silicon it means use configured operation timeout.
     // Callers that need a bounded wait on sim (e.g. dispatch-core teardown) pass an explicit timeout_ms > 0.
@@ -385,7 +410,7 @@ void wait_until_cores_done(
                 .count();
     }
     while (!not_done_phys_cores.empty()) {
-        throw_if_watcher_tripped_in_test_mode(device_id);
+        throw_if_watcher_tripped_in_test_mode(context, device_id);
 
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -393,11 +418,11 @@ void wait_until_cores_done(
             if (elapsed > timeout_ms) {
                 for (const auto& core : not_done_phys_cores) {
                     // only prints if the core is an active ethernet core
-                    print_aerisc_training_status(device_id, core);
+                    print_aerisc_training_status(env, device_id, core);
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
-                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+                context.on_dispatch_timeout_detected();
 
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
@@ -419,7 +444,7 @@ void wait_until_cores_done(
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end();) {
             const auto& phys_core = *it;
 
-            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
+            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(env, device_id, phys_core, run_state);
             if (is_done) {
                 log_debug(tt::LogMetal, "Device {}: Phys cores just done: {}", device_id, phys_core.str());
                 it = not_done_phys_cores.erase(it);
@@ -438,10 +463,14 @@ void wait_until_cores_done(
     }
 }
 
-void wait_for_idle(ChipId device_id, const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores) {
+void wait_for_idle(
+    tt::tt_metal::MetalContext& context,
+    ChipId device_id,
+    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores) {
     std::unordered_set<tt::tt_metal::CoreCoord> not_done_cores;
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& env_impl = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
+    const auto& hal = env_impl.get_hal();
+    const auto& cluster = env_impl.get_cluster();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         const auto& logical_cores_of_type = logical_cores[index];
@@ -451,10 +480,11 @@ void wait_for_idle(ChipId device_id, const std::vector<std::vector<tt::tt_metal:
             not_done_cores.insert(physical_core);
         }
     }
-    wait_until_cores_done(device_id, tt_metal::dev_msgs::RUN_MSG_GO, not_done_cores);
+    wait_until_cores_done(context, device_id, tt_metal::dev_msgs::RUN_MSG_GO, not_done_cores);
 }
 
 void send_msg_to_eth_mailbox(
+    tt::tt_metal::MetalEnvImpl& env,
     tt::ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
@@ -463,13 +493,15 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& env_impl = env;
+    const auto& hal = env_impl.get_hal();
+    auto& cluster = env_impl.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
     TT_ASSERT(
-        get_core_type(device_id, virtual_core) == tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+        get_core_type(env, device_id, virtual_core) == tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
         "target core for send_msg_to_eth_mailbox {} (virtual) must be an active ethernet core",
         virtual_core.str());
 
@@ -482,13 +514,13 @@ void send_msg_to_eth_mailbox(
     // Check mailbox is empty/ready
     tt_cxy_pair target(device_id, virtual_core);
     uint32_t initial_mailbox_val = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&initial_mailbox_val, target, mailbox_addr);
+    cluster.read_reg(&initial_mailbox_val, target, mailbox_addr);
     uint32_t msg_status = initial_mailbox_val & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
             uint32_t mailbox_val = 0;
-            tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
+            cluster.read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
@@ -511,9 +543,8 @@ void send_msg_to_eth_mailbox(
     // Pad remaining args to zero
     args.resize(max_args, 0);
     uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-        args.data(), tt_cxy_pair(device_id, virtual_core), first_arg_addr);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+    cluster.write_reg(args.data(), tt_cxy_pair(device_id, virtual_core), first_arg_addr);
+    cluster.l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     const uint32_t msg = call | msg_val;
@@ -525,16 +556,15 @@ void send_msg_to_eth_mailbox(
         mailbox_addr,
         msg,
         fmt::join(args, ", "));
-    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-        std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+    cluster.write_reg(std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
+    cluster.l1_barrier(device_id);
 
     // Wait for ack
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {
             uint32_t mailbox_val = 0;
-            tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
+            cluster.read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
@@ -555,8 +585,13 @@ void send_msg_to_eth_mailbox(
 }
 
 void return_to_base_firmware_and_wait_for_heartbeat(
-    tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, int timeout_ms) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    tt::tt_metal::MetalEnvImpl& env,
+    tt::ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    int timeout_ms) {
+    auto& env_impl = env;
+    const auto& hal = env_impl.get_hal();
+    auto& cluster = env_impl.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
@@ -565,13 +600,13 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
 
     uint32_t heartbeat_val = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
+    cluster.read_reg(&heartbeat_val, target, heartbeat_addr);
 
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
     std::this_thread::sleep_for(k_sleep_time);
 
     uint32_t previous_heartbeat_val = 0;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
+    cluster.read_reg(&previous_heartbeat_val, target, heartbeat_addr);
 
     const auto start = std::chrono::steady_clock::now();
 
@@ -579,14 +614,14 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
         // Try sending the stop message again
-        tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
+        tt::llrt::internal_::set_metal_eth_fw_run_flag(env, device_id, virtual_core, false);
         previous_heartbeat_val = heartbeat_val;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
+        cluster.read_reg(&heartbeat_val, target, heartbeat_addr);
         if (timeout_ms > 0) {
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
-                print_aerisc_training_status(device_id, virtual_core);
+                print_aerisc_training_status(env, device_id, virtual_core);
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
                     "Try resetting the board. Minimum tt-firmware version is 18.10.0",
@@ -597,9 +632,12 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     }
 }
 
-void set_metal_eth_fw_run_flag(tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, bool enable) {
+void set_metal_eth_fw_run_flag(
+    tt::tt_metal::MetalEnvImpl& env, tt::ChipId device_id, const tt::tt_metal::CoreCoord& virtual_core, bool enable) {
     constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& env_impl = env;
+    const auto& hal = env_impl.get_hal();
+    auto& cluster = env_impl.get_cluster();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
@@ -609,9 +647,8 @@ void set_metal_eth_fw_run_flag(tt::ChipId device_id, const tt::tt_metal::CoreCoo
                            .offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
                                tt::tt_metal::dev_msgs::mailboxes_t::Field::aerisc_run_flag);
     std::vector<uint32_t> en = {enable};
-    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-        en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+    cluster.write_reg(en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
+    cluster.l1_barrier(device_id);
 }
 
 }  // namespace internal_

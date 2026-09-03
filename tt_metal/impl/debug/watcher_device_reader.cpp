@@ -513,7 +513,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
-                get_riscv_name(hal, llrt::get_core_type(device_id, virtual_core), processor_index));
+                get_riscv_name(hal, llrt::get_core_type(env, device_id, virtual_core), processor_index));
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -526,7 +526,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+            auto programmable_core_type = llrt::get_core_type(env, device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =

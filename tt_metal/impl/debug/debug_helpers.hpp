@@ -90,9 +90,10 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDevicePrintBufAddr(const Hal& hal, ChipId device_id, const CoreCoord& virtual_core) {
+inline uint64_t GetDevicePrintBufAddr(MetalEnvImpl& env, ChipId device_id, const CoreCoord& virtual_core) {
+    const auto& hal = env.get_hal();
     return hal.get_dev_noc_addr(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+        llrt::get_core_type(env, device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
