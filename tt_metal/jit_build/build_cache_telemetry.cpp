@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 
 // --- TelemetryToken ---
 
-TelemetryToken::TelemetryToken(std::string name) : name_(std::move(name)) {}
+TelemetryToken::TelemetryToken(std::string name, std::string unit) : name_(std::move(name)), unit_(std::move(unit)) {}
 
 void TelemetryToken::set_recording_enabled(bool enabled) {
     recording_enabled_.store(enabled, std::memory_order_release);
@@ -207,9 +207,9 @@ void BuildCacheTelemetry::log_compile_summary() const {
         genfiles);
 }
 
-TelemetryToken& BuildCacheTelemetry::register_metric(const std::string& name) {
+TelemetryToken& BuildCacheTelemetry::register_metric(const std::string& name, std::string unit) {
     std::lock_guard lk(owned_tokens_mutex_);
-    owned_tokens_.push_back(std::make_unique<TelemetryToken>(name));
+    owned_tokens_.push_back(std::make_unique<TelemetryToken>(name, std::move(unit)));
     auto* token = owned_tokens_.back().get();
     token->set_recording_enabled(impl_ != nullptr);
     if (impl_) {
@@ -237,8 +237,9 @@ void BuildCacheTelemetry::dump_metrics() const {
         const double mean_val = snap.total / static_cast<double>(snap.count);
         log_info(
             tt::LogBuildKernels,
-            "JIT telemetry [{}]: count={}, total={:.3f}ms, min={:.3f}ms, max={:.3f}ms, mean={:.3f}ms",
+            "JIT telemetry [{}] ({}): count={}, total={:.3f}, min={:.3f}, max={:.3f}, mean={:.3f}",
             token->name(),
+            token->unit(),
             snap.count,
             snap.total,
             snap.min_val,
