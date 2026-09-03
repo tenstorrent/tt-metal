@@ -109,6 +109,12 @@ class TtPrefillRuntime:
     IDs.
     """
 
+    # The transformer this runtime drives. Overridden by a model whose stack is not
+    # `TtPrefillTransformer`: Kimi-K3's blocks are their own class because only 24 of its 93 layers
+    # write a KV slab and its residual is block-structured, so it cannot reuse the shared block. A
+    # class attribute rather than a constructor argument, so every existing caller is unaffected.
+    MODEL_CLS = TtPrefillTransformer
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -182,7 +188,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if TtPrefillTransformer.check_cache_complete(
+            if self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
                 experts_per_chip,
@@ -218,7 +224,7 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
-        self.model = TtPrefillTransformer(
+        self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
             model_cfg=model_cfg,
@@ -360,7 +366,7 @@ class TtPrefillRuntime:
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
+        [1, activation_planes, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
         partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
@@ -373,7 +379,10 @@ class TtPrefillRuntime:
         # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
+        # Dim 1 carries any extra per-token state the model ships across the boundary (DFlash widens
+        # the LAST dim instead, so the two compose). `_prepare_trace` captures this buffer as the
+        # address-stable input, so a wrong plane count here is baked into the replay.
+        zeros = torch.zeros(1, self.activation_planes, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -778,6 +787,16 @@ class TtPrefillRuntime:
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
         # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
         return out if not self.config.is_last_rank else None
+
+    @property
+    def activation_planes(self) -> int:
+        """Planes on dim 1 of the D2D payload this rank RECEIVES.
+
+        1 for every model whose cross-rank state is just the activation. Overridden by a model that
+        also carries per-token state produced upstream; it must agree with the adapter's
+        `pipeline_activation_planes` at this rank's first layer, since that is what sized the socket.
+        """
+        return 1
 
     def release_trace(self) -> None:
         """Free the captured trace segments and the sub-device managers that own them, BEFORE the
