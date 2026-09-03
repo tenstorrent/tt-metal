@@ -235,22 +235,39 @@ struct Storage {
     // SHAPE-ONLY base the library takes wherever the endpoint is irrelevant -- Block,
     // Accumulator, the Tx handles -- which is what keeps those signatures single-parameter.
 protected:
-    // The compile-time form, and the only one anything now uses: an Endpoint carries the
-    // buffer id as a template parameter, so the tile-geometry check below is a
-    // static_assert in every build rather than the runtime ASSERT the other form is left
-    // with. That other form has no callers at all any more -- it survives as the escape
-    // for an id that is not a constant expression, and nothing in tree needs one.
+    // The ONLY constructor: the buffer id arrives as a template argument, because that is
+    // what an Endpoint carries. There used to be a second form taking the id by value, for
+    // an id that was not a constant expression; nothing needed one once every buffer was
+    // declared as an endpoint, and it went. Both of its checks are here, one of them
+    // stronger for the move: geometry is a static_assert rather than a runtime ASSERT.
     template <uint32_t DfbId>
     explicit Storage(DfbTag<DfbId>) : dfb_id(DfbId) {
-        // The CAPACITY check, which cannot be static: the page count is a thing the host
-        // configured and the device reads back at runtime. Same check, same reason and same
-        // guard as the other constructor's -- see there. It is repeated rather than shared
-        // because this form had gone without it, and a buffer declared as an Endpoint (which
-        // arrives through here) would then have lost the one check that turns an undersized
-        // buffer from a hang needing a device reset into a stop at a source line.
+        // THE CAPACITY CHECK, which cannot be static: the page count is a thing the host
+        // configured and the device reads back at runtime.
+        //
+        // A buffer smaller than one block cannot ever satisfy cb_reserve_back, so the kernel
+        // does not fail -- it waits forever, with no assert and no output, and the device
+        // needs a reset. Checking it where the buffer is declared turns that into a stop at
+        // a source line. Greater-or-equal, not equal: a deeper buffer is how a reader runs
+        // ahead of compute, and every prefetch depth in this work is exactly that.
+        //
+        // Assertion-only, and asserts are compiled out unless WATCHER_ENABLED or
+        // LIGHTWEIGHT_KERNEL_ASSERTS is set -- see unified_api_hazards.md, which is why the
+        // test harness turns them on.
+        //
+        // Data movement only: cb_interface does not link on a TRISC, so a live read of it
+        // from a compute projection fails the build. One thread is enough -- the host
+        // configures one dataflow buffer for the core, so every projection would be checking
+        // the same number.
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
         ASSERT(dfb_num_entries(DfbId) >= S::num_entries);
 #endif
+
+        // AND THE TILE GEOMETRY this Shape claims, against what the host actually configured
+        // -- the authority being the constexpr tables the JIT emitted for this build, so the
+        // check cannot drift from what the unpacker will do. Compute only, and UNPACK/MATH at
+        // that, because that is where those tables live: the mirror of the capacity check
+        // being data-movement only. Between them, both ends are covered.
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
         static_assert(
             dfb_tile_rows(DfbId) == S::tile::rows,
@@ -262,48 +279,6 @@ protected:
         static_assert(
             dfb_tile_cols(DfbId) == S::tile::cols,
             "this Storage's tile WIDTH is not the one the host configured for the buffer");
-#endif
-    }
-
-    explicit Storage(uint32_t dfb_id) : dfb_id(dfb_id) {
-        // The host sizes the dataflow buffer and the kernel names the Shape, and until
-        // here nothing made the two meet. A buffer smaller than one block cannot ever
-        // satisfy cb_reserve_back, so the kernel does not fail -- it waits forever, with
-        // no assert and no output, and the device needs a reset. Checking it where the
-        // Storage is built turns that into a stop at a source line.
-        //
-        // Greater-or-equal, not equal: a deeper buffer is how a reader runs ahead of
-        // compute, and every prefetch depth in this work is exactly that.
-        //
-        // Assertion-only, and asserts are compiled out unless WATCHER_ENABLED or
-        // LIGHTWEIGHT_KERNEL_ASSERTS is set -- see unified_api_hazards.md, which is why
-        // the test harness turns them on.
-        //
-        // Data movement only: cb_interface does not link on a TRISC, so a live read of it
-        // from a compute projection fails the build. One thread is enough -- the host
-        // configures one dataflow buffer for the core, so every projection would be
-        // checking the same number.
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
-        ASSERT(dfb_num_entries(dfb_id) >= S::num_entries);
-#endif
-
-        // And the TILE GEOMETRY this Shape claims, against what the host actually configured
-        // -- the authority being the tables the JIT emitted for this build.
-        //
-        // Two places state the same fact: the host through dfb(..., tile=) and the kernel
-        // through Shape's `tile`. Nothing connected them, and both disagreements are silent.
-        // A plain Shape against a 1x32 buffer computes CORRECTLY and then divides a
-        // reduce_mean by 32 instead of 1, because ReduceGeometry::elements() reads the TYPE
-        // and not the buffer. A Shape claiming 1x32 against a full buffer is wrong the other
-        // way. Same shape of hazard as the entry_size/geometry split that preceded it, and as
-        // hazard 21: a contract with two ends and nothing between them.
-        //
-        // Compute only, and UNPACK/MATH at that, because that is where the tables live -- the
-        // mirror of the capacity check above being data-movement only because cb_interface
-        // does not link on a TRISC. Between them, both ends are covered.
-#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY) && defined(ASSERT_ENABLED) && ASSERT_ENABLED
-        ASSERT(dfb_tile_rows(dfb_id) == S::tile::rows);
-        ASSERT(dfb_tile_cols(dfb_id) == S::tile::cols);
 #endif
     }
 
@@ -703,8 +678,8 @@ class ComputeBlock : public ComputeBlock<S, kNoDfb> {
 public:
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
     // Free here, and with no new spelling to adopt: the buffer id is already a template
-    // argument of this form, so the geometry check is a static_assert rather than the
-    // runtime ASSERT that Storage's id-by-argument constructor is limited to.
+    // argument of this form, so the geometry check is a static_assert. Storage's own is
+    // one too, for the same reason -- an endpoint carries its id in the type.
     static_assert(
         dfb_tile_rows(DfbId) == S::tile::rows,
         "this ComputeBlock's tile HEIGHT is not the one the host configured for the buffer -- "
@@ -719,8 +694,8 @@ public:
     // constructible -- and because an Intermediate is what this buffer IS. The shim form
     // has no Storage for a noc call to name, so compute stands at both of its ends, which
     // is exactly the endpoint the host derives for it by elimination. The geometry
-    // static_asserts above are this form's own; the Intermediate adds the capacity ASSERT
-    // that the id-by-argument constructor used to contribute.
+    // static_asserts above are this form's own; the Intermediate is what brings the
+    // capacity ASSERT along with it.
     ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Intermediate<DfbId, S>().store(node)) {}
 
     // A Block is a pushed obligation waiting for its one consumer, not an expression.
