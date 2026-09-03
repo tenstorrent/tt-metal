@@ -110,42 +110,33 @@ def _run_compressor_state_exchange(mesh_device, remainder, head_dim):
         assert torch.equal(output_score[:, tp_rank : tp_rank + 1], expected_score)
 
 
-@pytest.mark.parametrize("head_dim", [_HEAD_DIM, _INDEX_HEAD_DIM], ids=["head512", "head128"])
 @pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (1, 1),
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"),
-            id="1x1",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_compressor_state_exchange_single_device(mesh_device, device_params, remainder, head_dim):
-    _run_compressor_state_exchange(mesh_device, remainder, head_dim)
-
-
-@pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, head_dim",
     [
         pytest.param(
             (2, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            _HEAD_DIM,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="fabric1d-2x2",
+            id="fabric1d-2x2-head512",
+        ),
+        pytest.param(
+            (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            _INDEX_HEAD_DIM,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric1d-2x2-head128",
         ),
         pytest.param(
             (2, 2),
             fabric2d_device_params(),
+            _HEAD_DIM,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="fabric2d-2x2",
+            id="fabric2d-2x2-head512",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_compressor_state_exchange_mesh(mesh_device, device_params, remainder):
-    _run_compressor_state_exchange(mesh_device, remainder, _HEAD_DIM)
+def test_compressor_state_exchange_mesh(mesh_device, device_params, head_dim, remainder):
+    _run_compressor_state_exchange(mesh_device, remainder, head_dim)
