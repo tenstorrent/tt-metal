@@ -109,6 +109,10 @@ public:
         // path is decided by asking UMD for a window over the config buffer (init_sender_tlb), so a caller on a DRAM
         // port without one should configure a window first or every read() pays a ~210 ns reconfigure.
         bool sender_uses_physical_noc_addr = false;
+        // Added to `address` for the host's own write_core() calls only. A Blackhole DRAM core's L1 is not at
+        // NoC address 0 but at hal.get_l1_noc_offset(DRAM), which is the form the host watcher's sanitizer checks;
+        // the kernel and a TLB window over the buffer keep using the bare L1 address.
+        uint64_t host_l1_noc_offset = 0;
     };
 
     /**
@@ -416,7 +420,8 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
-    bool sender_uses_physical_noc_addr_ = false;  // non-worker sender addressing (see ExternalConfigBuffer)
+    bool sender_uses_physical_noc_addr_ = false;
+    uint64_t host_l1_noc_offset_ = 0;  // non-worker sender addressing (see ExternalConfigBuffer)
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
