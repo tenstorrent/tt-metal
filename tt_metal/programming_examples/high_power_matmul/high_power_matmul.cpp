@@ -94,6 +94,14 @@ static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_
         {6, 7},  // 42
         {7, 6},  // 42
         {7, 7},  // 49
+        // Beyond a Wormhole-sized grid. Without these the sweep jumps straight from 7x7 (49
+        // cores) to the appended device maximum, which on Blackhole is 11x10 (110 cores) -- a
+        // gap that hides where power scaling starts to roll off. Each is filtered out below on
+        // devices too small to host it, so Wormhole (max 8x7) still produces exactly the same
+        // grid list as before: 8x7 is already its maximum, and 9x8 / 10x9 are dropped.
+        {8, 7},   // 56
+        {9, 8},   // 72
+        {10, 9},  // 90
     };
 
     std::vector<GridCandidate> result;
