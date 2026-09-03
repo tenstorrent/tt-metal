@@ -49,6 +49,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim
 
 
 def build_verify_inputs(mesh_device, page_table_torch: torch.Tensor, start_pos: int, block_size: int):
@@ -96,8 +97,11 @@ def dflash_verify(
 ):
     """One verify "iteration": candidate_ids = [anchor_token, draft_1, ..., draft_{K-1}]
     (K total), positions [start_pos .. start_pos+K-1], verified in a single
-    ttnn_verify_forward batch call. Returns (posterior, logits_torch) -- posterior[i] is
-    the target's own greedy prediction AFTER consuming candidate_ids[i].
+    ttnn_verify_forward batch call. Returns (posterior, None) -- posterior[i] is the
+    target's own greedy prediction AFTER consuming candidate_ids[i]. Argmax runs ON
+    DEVICE (argmax_last_dim); only the small [1,block_size] result is read to host, not
+    the full-vocab logits -- the second return slot is kept for API compatibility with
+    older callers that used the raw logits for debugging, but is no longer computed.
 
     The very FIRST dflash_verify call after prefill requires start_pos (== the prefill
     KV cache's committed length) to be a multiple of 32 -- see module docstring for the
@@ -120,12 +124,24 @@ def dflash_verify(
     )
     ttnn.deallocate(hidden)
 
-    is_mesh = hasattr(mesh_device, "shape")
-    logits_torch = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]) if is_mesh else ttnn.to_torch(logits)
+    vocab = logits.shape[-1]
+    if logits.shape[2] != block_size:
+        # Defensive: ttnn_verify_forward's docstring promises [1,1,K,vocab], but slice
+        # down on device rather than assume, matching the reshape+slice the previous
+        # host-side implementation did.
+        sliced = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, block_size, vocab])
+        ttnn.deallocate(logits)
+        logits = sliced
+    posterior_tt = argmax_last_dim(logits, block_size)
     ttnn.deallocate(logits)
-    logits_torch = logits_torch.float().reshape(1, -1, logits_torch.shape[-1])[:, :block_size, :]
-    posterior = torch.argmax(logits_torch, dim=-1)
-    return posterior, logits_torch
+
+    is_mesh = hasattr(mesh_device, "shape")
+    posterior_torch = (
+        ttnn.to_torch(ttnn.get_device_tensors(posterior_tt)[0]) if is_mesh else ttnn.to_torch(posterior_tt)
+    )
+    ttnn.deallocate(posterior_tt)
+    posterior = posterior_torch.reshape(1, -1)[:, :block_size].long()
+    return posterior, None
 
 
 def greedy_accept_from_posterior(candidate_ids: list[int], posterior: torch.Tensor):
