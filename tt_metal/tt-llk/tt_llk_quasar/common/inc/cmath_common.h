@@ -7,6 +7,16 @@
 
 #include "ckernel_trisc_common.h"
 
+// [#55076 / 0x19 DIAGNOSTIC -- DO NOT UPSTREAM] See the note in llk_lib/llk_math_matmul.h.
+// __has_include guard so the standalone tt-llk test build is unaffected; WAYPOINT is already a no-op
+// unless WATCHER_ENABLED.
+#if __has_include("api/debug/waypoint.h")
+#include "api/debug/waypoint.h"
+#endif
+#ifndef WAYPOINT
+#define WAYPOINT(x)
+#endif
+
 namespace ckernel::math
 {
 
@@ -142,9 +152,46 @@ inline void _inc_dst_addr_()
 template <ckernel::trisc::DstTileShape TILE_SHAPE>
 inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
+    // [#55076 / 0x19] Drain math + SFPU before repointing the DEST section base.
+    //
+    // This writes DEST_TARGET_REG_CFG_MATH_SEC<TRISC_ID>_Offset, which is the base every in-flight
+    // FPU/SFPU dest access is resolved against. Moving it while math is still in flight retargets
+    // those accesses. The LLK already treats that as requiring a guard everywhere else it touches
+    // this class of CFG register:
+    //   llk_math_common.h:357  _llk_math_dest_section_done_  -> STALLWAIT(STALL_CFG, 0, MATH, WAIT_SFPU)
+    //                                                           before the SAME _set_dest_section_base_
+    //   llk_math_common.h:175  _configure_alu_formats_       -> STALLWAIT(STALL_CFG, 0, WAIT_SFPU, MATH)
+    // but all seven _set_dst_write_addr_ callers had none -- including both matmul paths
+    // (llk_math_matmul.h:512 _llk_math_matmul_tile_, :540 _llk_math_matmul_block_).
+    //
+    // Evidence this is the 0x19 wedge: MATH's last waypoint is MB0, written on entry to
+    // _llk_math_matmul_block_ immediately BEFORE this call, and MB1 (immediately after) never lands.
+    // So MATH stalls inside this function, before the MVMUL MOP is even launched. It also explains
+    // the two properties no DEST-semaphore theory could: it needs >= 3 subblocks (calls 1-2 have no
+    // prior math in flight to collide with; by call 3 the previous subblock's MVMULs still are), and
+    // DPRINT latency masks it (the extra delay lets the math pipe drain before this cfg write).
+    //
+    // Arg form note: on Quasar the wait conditions are 5-bit enum INDICES in separate slots, never a
+    // bitmask -- see qsr_x19_rtl_findings.md §4i. Do not write `p_stall::MATH | p_stall::WAIT_SFPU`.
+    //
+    // RESULT 2026-09-03 10:55: tested ON, hang unchanged (MATH still last-waypoint MB0). It cannot
+    // help: the guard waits on p_stall::MATH, and "math never goes idle" is the very thing that is
+    // stuck -- so it blocks in the same place the unguarded cfg store did. Off by default.
+    constexpr bool kGuardDestSectionBaseWrite = false;
+    if constexpr (kGuardDestSectionBaseWrite)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
+    }
+
+    // [#55076 diagnostic] Split the three steps between MB0 and MB1. dest_register_offset is
+    // thread_local (TRISC local data RAM), so its read cannot time out -- SDW1 being last would
+    // confirm the CFG store is the blocking access, which is the current conclusion.
+    WAYPOINT("SDW0");
     constexpr std::uint32_t tile_shape_idx = ckernel::trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t dst_index          = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    WAYPOINT("SDW1");
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
+    WAYPOINT("SDW2");
 }
 
 /**

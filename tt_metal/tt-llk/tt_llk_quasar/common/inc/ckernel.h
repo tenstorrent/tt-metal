@@ -353,6 +353,12 @@ __attribute__((always_inline)) inline void load_replay_buf(F fn)
 {
     if (len > 0)
     {
+        // [#55076] NOTE: these two were commented out here ("MM Jun 11 / 2025: no longer needed")
+        // but the runtime overload below still calls both. Restoring them did NOT fix the 0x19
+        // (tested 2026-09-03 12:29, still MFNR), so the change is reverted rather than left in a
+        // shared header unvalidated -- but the ASYMMETRY between the two overloads is real and worth
+        // a question to the LLK owner: a replay LOAD needs exactly `len` discrete instructions to
+        // reach the buffer, and disable_gathering() also carries a `fence` (:316).
         // disable_gathering(); // MM Jun 11 / 2025: no longer needed
 
         // Issue instruction to load replay buffer
