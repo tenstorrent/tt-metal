@@ -37,7 +37,7 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (a @ b).item() / denom
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(300)
 def test_stage3_6_full_on_device_pcc(device, model_config) -> None:
     if model_config.plan_anchor_path is None:
         pytest.skip("plan_anchor_path not set — run scripts/prepare_assets.py first")
