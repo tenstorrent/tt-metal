@@ -138,7 +138,8 @@ def _config_summary(model_id: str) -> str:
     model -- so a folder name would be choosing the architecture the loader is written against, for
     exactly the non-transformers checkpoints this module exists to serve.
     """
-    if not os.path.isdir(model_id) or _declares(model_id, ROOT_CONFIG_FILE):
+    local_dir = isinstance(model_id, str) and os.path.isdir(model_id)
+    if not local_dir or _declares(model_id, ROOT_CONFIG_FILE):
         try:
             from transformers import AutoConfig
 
