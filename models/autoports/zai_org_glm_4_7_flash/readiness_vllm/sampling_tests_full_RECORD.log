@@ -1,0 +1,750 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/vllm-tt-plugin
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+collecting ... collected 74 items
+
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape PASSED [  1%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0 PASSED [  2%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n PASSED [  4%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks PASSED [  5%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0 PASSED [  6%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero PASSED [  8%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes PASSED [  9%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled PASSED [ 10%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config PASSED [ 12%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap PASSED [ 13%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap PASSED [ 14%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED [ 16%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words PASSED [ 17%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias PASSED [ 18%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids PASSED [ 20%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens PASSED [ 21%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0] PASSED [ 22%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5] PASSED [ 24%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1] PASSED [ 25%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5] PASSED [ 27%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0] PASSED [ 28%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5] PASSED [ 29%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1] PASSED [ 31%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5] PASSED [ 32%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0] PASSED [ 33%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5] PASSED [ 35%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1] PASSED [ 36%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5] PASSED [ 37%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0] PASSED [ 39%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5] PASSED [ 40%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1] PASSED [ 41%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5] PASSED [ 43%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0] PASSED [ 44%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5] PASSED [ 45%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1] PASSED [ 47%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5] PASSED [ 48%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED [ 50%]
+../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch FAILED [ 51%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding FAILED [ 52%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs PASSED [ 54%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches FAILED [ 55%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42] FAILED [ 56%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123] PASSED [ 58%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999] FAILED [ 59%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0] PASSED [ 60%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1] PASSED [ 62%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0] PASSED [ 63%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied PASSED [ 64%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1] FAILED [ 66%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0] FAILED [ 67%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1] PASSED [ 68%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0] PASSED [ 70%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1] PASSED [ 71%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0] PASSED [ 72%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied PASSED [ 74%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash PASSED [ 75%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7] PASSED [ 77%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10] PASSED [ 78%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19] PASSED [ 79%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32] PASSED [ 81%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37] PASSED [ 82%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches PASSED [ 83%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] PASSED [ 85%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] PASSED [ 86%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] FAILED [ 87%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED [ 89%]
+../vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests PASSED [ 90%]
+../vllm-tt-plugin/tests/tt/test_tile_size.py::test_plugin_tile_matches_ttnn PASSED [ 91%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties PASSED [ 93%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch FAILED [ 94%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_different_presence_penalties PASSED [ 95%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch FAILED [ 97%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties PASSED [ 98%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch FAILED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestBatchIsolation.test_mixed_params_batch __________________
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x77623df33380>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_mixed_params_batch(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch where each request has completely different parameters.
+        """
+        configs = [
+            # Greedy
+            RequestConfig(prompt="Count: ", max_tokens=5, temperature=0),
+            # High temp with seed
+            RequestConfig(
+                prompt="Random: ", max_tokens=5, temperature=2.0, top_k=100, seed=42
+            ),
+            # With repetition penalty
+            RequestConfig(
+                prompt="test test. Say: ",
+                max_tokens=5,
+                temperature=0.5,
+                repetition_penalty=3.0,
+                seed=42,
+            ),
+            # With presence penalty
+            RequestConfig(
+                prompt="List: ",
+                max_tokens=10,
+                temperature=0.5,
+                presence_penalty=2.0,
+                seed=42,
+            ),
+            # top_k=1 (should be greedy-like)
+            RequestConfig(
+                prompt="Word: ", max_tokens=3, temperature=2.0, top_k=1, seed=99
+            ),
+            # Low temp
+            RequestConfig(prompt="Letter: ", max_tokens=3, temperature=0.01, seed=42),
+            # High temp low top_k
+            RequestConfig(
+                prompt="Number: ", max_tokens=3, temperature=2.0, top_k=5, seed=42
+            ),
+            # With frequency penalty
+            RequestConfig(
+                prompt="a a a. Next: ",
+                max_tokens=5,
+                temperature=0.5,
+                frequency_penalty=2.0,
+                seed=42,
+            ),
+            # Combined penalties
+            RequestConfig(
+                prompt="All: ",
+                max_tokens=8,
+                temperature=0.5,
+                repetition_penalty=1.5,
+                presence_penalty=1.0,
+                frequency_penalty=1.0,
+                seed=6,
+            ),
+            # Top-p variation
+            RequestConfig(
+                prompt="TopP: ", max_tokens=8, temperature=1.0, top_p=0.5, seed=7
+            ),
+        ][:max_batch_size]
+
+        # Run twice, with random batch order on second run
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Shuffle configs and results1 together for the second run
+        indices = list(range(len(configs)))
+        random.shuffle(indices)
+        configs = [configs[i] for i in indices]
+        results1 = [results1[i] for i in indices]
+
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Each deterministic config should reproduce
+        for i, (r1, r2) in enumerate(zip(results1, results2)):
+            if configs[i].temperature == 0 or configs[i].seed is not None:
+>               assert r1 == r2, (
+                    f"Request {i} should be deterministic/reproducible.\n"
+                    f"Config:"
+                    f"temp={configs[i].temperature},"
+                    f"seed={configs[i].seed}\n"
+                    f"Run 1: {r1!r}\n"
+                    f"Run 2: {r2!r}"
+                )
+E               AssertionError: Request 5 should be deterministic/reproducible.
+E                 Config:temp=2.0,seed=42
+E                 Run 1: '\\\\\\\\S\n`\n\n'
+E                 Run 2: '\\\\\n\\textbf'
+E               assert '\\\\\\\\S\n`\n\n' == '\\\\\n\\textbf'
+E
+E                 - \\
+E                 - \textbf
+E                 + \\\\S
+E                 + `
+E                 +
+
+../vllm-tt-plugin/tests/tt/test_request_isolation.py:88: AssertionError
+______________________ TestSeedingAndVariety.test_seeding ______________________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df33950>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_seeding(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch with mix of greedy (temp=0) and sampling requests.
+        Greedy should be deterministic, sampling should vary.
+        """
+        prompt = "Random word: "
+
+        # greedy, seeds, seeds
+        seeds = max_batch_size // 3
+        greedy_count = max_batch_size - seeds - seeds
+        configs = []
+        # Greedy requests
+        for i in range(greedy_count):
+            configs.append(RequestConfig(prompt=prompt, max_tokens=10, temperature=0))
+
+        # Sampling requests with different seeds
+        for _ in range(2):
+            for i in range(seeds):
+                configs.append(
+                    RequestConfig(
+                        prompt=prompt,
+                        max_tokens=10,
+                        temperature=1.5,
+                        top_k=50,
+                        seed=i * 100,
+                    )
+                )
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # This tests both prefill and decode
+        all_greedy = results1[:greedy_count] + results2[:greedy_count]
+>       assert_deterministic(
+            all_greedy,
+            "Greedy requests should produce the same output across positions and runs.",
+        )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:50:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', ...]
+explanation = 'Greedy requests should produce the same output across positions and runs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Greedy requests should produce the same output across positions and runs.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 24.
+E       Results: ['Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'S\\S:S\nS\n\\section', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll', 'Squid\nSquid are marine moll']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+________ TestSeedingAndVariety.test_same_seeds_reproduce_across_batches ________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df600b0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_same_seeds_reproduce_across_batches(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        """
+        Same seeds should reproduce even when in different batch positions.
+        """
+        prompt = "Generate: "
+        seeds = list(range(100, 100 + max_batch_size))
+
+        configs = [
+            RequestConfig(
+                prompt=prompt,
+                max_tokens=15,
+                temperature=1.0,
+                top_k=50,
+                seed=seed,
+            )
+            for seed in seeds
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        shuffled_indices = list(range(max_batch_size))
+        random.Random(42).shuffle(shuffled_indices)
+        shuffled_configs = [configs[i] for i in shuffled_indices]
+
+        results2 = run_concurrent_batch(tt_server, tt_model_name, shuffled_configs)
+
+        results_per_seed: list[list[str]] = [[] for _ in range(max_batch_size)]
+        for i in range(max_batch_size):
+            results_per_seed[i].append(results1[i])
+        for i, result in enumerate(results2):
+            results_per_seed[shuffled_indices[i]].append(result)
+
+        for i in range(max_batch_size):
+>           assert_deterministic(
+                results_per_seed[i],
+                "Seed should produce the same output in different batches.",
+            )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:146:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['Sines\n\n### Sines\n\nThe sine function appears everywhere, from geometry', 'SGiven andT\nS\nS S S. T S S']
+explanation = 'Seed should produce the same output in different batches.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce the same output in different batches.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 2.
+E       Results: ['Sines\n\n### Sines\n\nThe sine function appears everywhere, from geometry', 'SGiven andT\nS\nS S S. T S S']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+__________ TestSeedingAndVariety.test_specific_seed_reproducible[42] ___________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df60590>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32, seed = 42
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 42 should reproduce.
+E         Run 1: ' "S\n__(\n\\_\\_/)_\n/'
+E         Run 2: ' "In the beginning, there is the Void.'
+E       assert ' "S\n__(\n\\_\\_/)_\n/' == ' "In the beg... is the Void.'
+E
+E         -  "In the beginning, there is the Void.
+E         +  "S
+E         + __(
+E         + \_\_/)_
+E         + /
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+__________ TestSeedingAndVariety.test_specific_seed_reproducible[999] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df60890>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32, seed = 999
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 999 should reproduce.
+E         Run 1: '00 Comments\n\n I am tired ofS tired'
+E         Run 2: '00 Introduction\n0:14 S1 A conversation'
+E       assert '00 Comments\...red ofS tired' == '00 Introduct... conversation'
+E
+E         - 00 Introduction
+E         - 0:14 S1 A conversation
+E         + 00 Comments
+E         +
+E         +  I am tired ofS tired
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-1] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df61700>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', batch_size = 32, seed = 1
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given tw...egers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 32.
+E       Results: ['Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'SS\n\n#\n# Problem: Given two positive integers n and m,__(n,m) is', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck', 'Sneaking across a frozen lake with his ex in the middle of the night, they get stuck']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-0] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df61940>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', batch_size = 32, seed = 0
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [': I had a conversation with one of my good friends who I thought was a normal guy. He', ': + + (0 + PHP  - `phpunit/...ht was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 32.
+E       Results: [': I had a conversation with one of my good friends who I thought was a normal guy. He', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': + + (0 + PHP  - `phpunit/phpunit` is a testing framework', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He', ': I had a conversation with one of my good friends who I thought was a normal guy. He']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+_____________________ TestSeedingAndVariety.test_topk[32] ______________________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x77623df62930>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', batch_size = 32
+
+    @pytest.mark.parametrize("batch_size", [15, 19, 32])
+    def test_topk(self, tt_server, tt_model_name, batch_size):
+        prompt = "<question>Random letter a-z:</question><answer>"
+        num_greedy = batch_size // 2
+        greedy_config = [
+            RequestConfig(prompt=prompt, max_tokens=10, temperature=0)
+            for _ in range(num_greedy)
+        ]
+
+        topk_configs = [
+            RequestConfig(prompt=prompt, max_tokens=10, top_k=10, temperature=2.0)
+            for _ in range(batch_size - num_greedy)
+        ]
+        joint_configs = greedy_config + topk_configs
+
+        results_1 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)
+        results_2 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)
+
+        # Within each batch:
+        for results in [results_1, results_2]:
+            # Overall
+            greedy_results = results[:num_greedy]
+            non_greedy_results = results[num_greedy:]
+
+>           assert_deterministic(
+                greedy_results, "Greedy requests should produce the same output."
+            )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:326:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>R...mnopqrstuvwxyz\n\\\\\n\n\\\n\n\\\n\n\\\n\n', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', ...]
+explanation = 'Greedy requests should produce the same output.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Greedy requests should produce the same output.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 16.
+E       Results: ['abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz\n\\\\\n\n\\\n\n\\\n\n\\\n\n', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz\n\\\\\n\n\\\n\n\\\n\n\\\n\n', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz\n\\\\\n\n\\\n\n\\\n\n\\\n\n', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a', 'abcdefghijklmnopqrstuvwxyz</answer><question>RandomRandom letter a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+__________ TestRepetitionPenalty.test_repetition_penalty_mixed_batch ___________
+
+self = <tests.tt.test_tt_penalties.TestRepetitionPenalty object at 0x77623df63b30>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_repetition_penalty_mixed_batch(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        prompt = "a a a a a a a a a"
+
+        configs = []
+        for i in range(max_batch_size):
+            if i % 2 == 0:
+                # No penalty
+                configs.append(
+                    RequestConfig(
+                        prompt=prompt,
+                        max_tokens=10,
+                        temperature=0,
+                        repetition_penalty=1.0,
+                    )
+                )
+            else:
+                # High penalty
+                configs.append(
+                    RequestConfig(
+                        prompt=prompt,
+                        max_tokens=10,
+                        temperature=0,
+                        repetition_penalty=2.0,
+                    )
+                )
+
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        no_penalty = [results[i] for i in range(0, max_batch_size, 2)]
+        with_penalty = [results[i] for i in range(1, max_batch_size, 2)]
+
+>       assert_deterministic(no_penalty, "No penalty requests should be identical.")
+
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py:75:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [': / / / / / / / / /', ' a a a a a a a a a a', ' aimport.S.l. of. The', '', ' a a a a a a a a a a', ' a a a a a a a a a a', ...]
+explanation = 'No penalty requests should be identical.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: No penalty requests should be identical.
+E       Expected reproducible outputs.
+E       Got 4 unique results out of 16.
+E       Results: [': / / / / / / / / /', ' a a a a a a a a a a', ' aimport.S.l. of. The', '', ' a a a a a a a a a a', ' a a a a a a a a a a', ' aimport.S.l. of. The', ' a a a a a a a a a a', ' a a a a a a a a a a', ' a a a a a a a a a a', ' a a a a a a a a a a', ' a a a a a a a a a a', ' aimport.S.l. of. The', ' a a a a a a a a a a', ' a a a a a a a a a a', ' a a a a a a a a a a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+____________ TestPresencePenalty.test_presence_penalty_mixed_batch _____________
+
+self = <tests.tt.test_tt_penalties.TestPresencePenalty object at 0x77623df62c30>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_presence_penalty_mixed_batch(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        # Presence penalty is only applied once regardless of the repetition,
+        # so we use a weaker prompt for more even logits
+        prompt = "a b c a b c a b c"
+        configs = []
+        for i in range(max_batch_size):
+            configs.append(
+                RequestConfig(
+                    prompt=prompt,
+                    max_tokens=40,
+                    temperature=0,
+                    presence_penalty=0.0 if i % 2 == 0 else 2.0,
+                )
+            )
+
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        no_penalty = [results[i] for i in range(0, max_batch_size, 2)]
+        with_penalty = [results[i] for i in range(1, max_batch_size, 2)]
+
+>       assert_deterministic(no_penalty, "No penalty requests should be identical.")
+
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [' a. a {\nS.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\', ' a. a {\nS.\\\\S.\\\\S.\\\\S.\\... c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ...]
+explanation = 'No penalty requests should be identical.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: No penalty requests should be identical.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 16.
+E       Results: [' a. a {\nS.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\', ' a. a {\nS.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\', ' a. a {\nS.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a. a {\nS.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\S.\\\\', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+___________ TestFrequencyPenalty.test_frequency_penalty_mixed_batch ____________
+
+self = <tests.tt.test_tt_penalties.TestFrequencyPenalty object at 0x77623df80080>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x77622a9793a0>
+tt_model_name = 'zai-org/GLM-4.7-Flash', max_batch_size = 32
+
+    def test_frequency_penalty_mixed_batch(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        prompt = "a a a a a a a a a"
+
+        configs = []
+        for i in range(max_batch_size):
+            configs.append(
+                RequestConfig(
+                    prompt=prompt,
+                    max_tokens=15,
+                    temperature=0,
+                    frequency_penalty=0.0 if i % 2 == 0 else 2.0,
+                )
+            )
+
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        no_penalty = [results[i] for i in range(0, max_batch_size, 2)]
+        with_penalty = [results[i] for i in range(1, max_batch_size, 2)]
+
+        # Count "a"s in each output
+        no_penalty_a_count = no_penalty[0].count("a")
+        with_penalty_a_count = with_penalty[0].count("a")
+
+        assert no_penalty_a_count > with_penalty_a_count, (
+            f"Frequency penalty should reduce 'a' repetitions: "
+            f"no_penalty={no_penalty_a_count},"
+            f"with_penalty={with_penalty_a_count}"
+        )
+>       assert_deterministic(no_penalty, "No penalty requests should be identical.")
+
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py:196:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' aimport.S.l. of. The. The. The.', ...]
+explanation = 'No penalty requests should be identical.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: No penalty requests should be identical.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 16.
+E       Results: [' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' aimport.S.l. of. The. The. The.', ' aimport.S.l. of. The. The. The.', ' aimport.S.l. of. The. The. The.', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a', ' a a a a a a a a a a a a a a a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]
+FAILED ../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch
+FAILED ../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch
+FAILED ../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch
+======= 11 failed, 62 passed, 1 skipped, 2 warnings in 452.11s (0:07:32) =======
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
