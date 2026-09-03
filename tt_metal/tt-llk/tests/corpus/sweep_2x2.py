@@ -505,6 +505,50 @@ ON_FLAGS = (
     # re-measured on device (same-chip A/B, corr-first); paired CRAQ at
     # the pin-53 re-pinned sims (the instrument that first caught the
     # temporal wrong-code); dg 7708/FAIL-16/0-ERROR re-verified.
+    #
+    # KNOB PROMOTION ROUND 6 (lane LM, 2026-09-03; the INSTALLED pin-56
+    # binary 26328936e13b — conf-only ceremony, sfpi-gcc untouched): the
+    # round-5 wrong-code was FIXED at pins 55/56 (laneKZ chains
+    # regrename-liveness-untrusted, laneLA temporal regrename-temporal-
+    # dest-reuse, laneLB cc-region crossloop-peel-entry-anchored), so all
+    # four refused flags were RE-RUN on the fixed stack.  VERDICT: ALL
+    # FOUR REFUSED AGAIN — this round for PERFORMANCE, not correctness.
+    # The fixes hold: every round-5 wrong-code reproducer PASSES at every
+    # stacked leg on silicon AND both sim oracles (deepseek_top32,
+    # addcmul both TUs, blaze clampedsilu 5 board nodes, LB's 2 atan2
+    # rows); CRAQ 349/349 bh changed-set corr both legs verdict-identical.
+    # Device A/B (p150 chips 0-3, same-chip pairs, 3 reps, corr-first,
+    # laneLM-evidence-20260903) then priced each flag against ON-39 and
+    # bisected every regression to a single flag:
+    #   cc-region-general REFUSED (perf regression, device): isolated
+    #     on39-vs-ccg it slows sign PARITY +39.8%, atan2 WIN +10.0%,
+    #     remainder-fresh +2.2%, fmod-fresh +2.5%, trigonometry-fresh
+    #     +2.0%, acosh-fitted +2.1% (ch and rename-cluster legs +0.00%
+    #     on every one).  The laneLB fix makes atan2 CORRECT (device
+    #     golden 9/9) but the crossloop-hoist all-lanes admission is a
+    #     kernel-cycle LOSS on booked WIN/PARITY rows.
+    #   rename-temporal REFUSED (perf regression, device): isolated
+    #     on39-vs-(chains+temporal) it slows rsqrt-fitted WIN +7.1% and
+    #     isclose-fresh WIN +4.2% (chains-only and chains+rcc legs
+    #     +0.00%).  The laneLA fix makes addcmul CORRECT but the temporal
+    #     renames cost cycles on these rows.
+    #   lreg-rename-chains REFUSED (perf regression, device): isolated
+    #     on39-vs-chains it WINS i1-fitted -6.30% but REGRESSES
+    #     rotate90-fresh WIN +0.93% (14248->14380 x3, rock-solid) — a
+    #     mixed engine, and the laneHY zero-WIN/PARITY-regression rule
+    #     refuses any flag that slows a booked win.  The laneKZ fix makes
+    #     deepseek_top32 CORRECT.
+    #   rename-cc-region REFUSED (no measured benefit + chains-gated):
+    #     cycle-inert (+0.00% on every measured row); its only consumer is
+    #     the refused chains engine, so a leg without chains is inert.
+    # The FIXED v2 rename engine and the FIXED cc-region engine are now
+    # CORRECT but not profitable at this pin; owning lanes owed a
+    # perf-refinement (avoid the rotate90/isclose/atan2 slowdowns), then
+    # re-promotion.  Board UNCHANGED (nothing promoted; the chains
+    # i1-fitted win rides a refused leg and is NOT booked).  Gates:
+    # witness_preflight ALL GREEN at ON-39 on the installed binary;
+    # conf_lint GREEN; dg 7765/FAIL-16/0-ERROR (pin-56 baseline, conf-only
+    # => +0).
     "-mtt-tensix-optimize-ims "
     "-mtt-tensix-optimize-mve-expand"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
@@ -1879,6 +1923,14 @@ KNOB_MODES = {
     # — latent since the engine shipped (the TU is corpus-absent, so
     # this knob's corpus legs stay green; the blaze TU is board-only).
     # laneKL owed the fix (laneKV-evidence-20260901/probes/ice-*).
+    # ROUND 6 (lane LM, 2026-09-03): the ICE is FIXED (laneLB
+    # crossloop-peel-entry-anchored, pin 55) — blaze clampedsilu compiles
+    # 9/9 and the 2 silently-miscompiled atan2 rows are now device-golden.
+    # RE-RUN on the fixed pin-56 binary and REFUSED AGAIN for PERF: device
+    # A/B on39-vs-ccg slows sign PARITY +39.8%, atan2 WIN +10.0%,
+    # remainder/fmod/trig/acosh-fitted ~+2% (laneLM-evidence-20260903).
+    # The all-lanes crossloop-hoist admission is correct but a kernel-cycle
+    # loss on booked wins; owning lane owed a perf-refinement.
     "cc-region-general": "on-plus",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
@@ -1980,6 +2032,14 @@ KNOB_MODES = {
     # addcmul-probe, probes/addcmul-dump-*).  Stays on-plus; the
     # weekly knob leg carries a KNOWN-BAD composition on addcmul-class
     # shapes until the fix lands.
+    # ROUND 6 (lane LM, 2026-09-03): the wrong code is FIXED (laneLA
+    # regrename-temporal-dest-reuse, pin 55) — both addcmul TUs now PASS
+    # golden on silicon + both sim oracles at ON+chains+temporal.  RE-RUN
+    # on the fixed pin-56 binary and REFUSED AGAIN for PERF: device A/B
+    # on39-vs-(chains+temporal) slows rsqrt-fitted WIN +7.1% and
+    # isclose-fresh WIN +4.2% (chains-only and chains+rcc legs +0.00%;
+    # laneLM-evidence-20260903).  The knob leg is no longer a wrong-code
+    # composition, but the temporal renames cost cycles on these rows.
     "rename-temporal": "on-plus",
     # KQ rename-cc-region: default-off Init(0) booking knob; register
     # fields only, the cc-span admission widened to the RTL view's
@@ -1992,6 +2052,14 @@ KNOB_MODES = {
     # laneKV-evidence-20260901/device/ds-*); a cc-region leg without
     # chains is inert, so there is nothing to promote.  KE owed the
     # engine fix; re-promotion follows.
+    # ROUND 6 (lane LM, 2026-09-03): the chains wrong code is FIXED
+    # (laneKZ regrename-liveness-untrusted, pin 55; deepseek_top32 now
+    # PASSES).  Re-measured directly on the fixed pin-56 binary: device
+    # A/B on39-vs-(chains+rcc) is CYCLE-INERT (+0.00% on every measured
+    # row) — the flag delivers no benefit.  And its enabler chains was
+    # itself REFUSED at round 6 (perf: rotate90-fresh WIN +0.93%), so a
+    # cc-region leg still has nothing profitable to compose with.  REFUSED
+    # (no measured benefit + chains-gated; laneLM-evidence-20260903).
     "rename-cc-region": "on-plus",
     # KP residency-merge-rename: default-off Init(0) walk-vocabulary
     # widening whose shipped verdict on every in-vocabulary site is the
