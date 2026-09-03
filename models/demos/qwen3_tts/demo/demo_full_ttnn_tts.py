@@ -32,6 +32,12 @@ import torch
 
 import ttnn
 
+# One codec frame is 80 ms of audio: the codec runs at 12.5 fps (see
+# TTSConfig.trim_codec_frames, "4 frames = 0.32s at 12.5fps"). The HF repo is named
+# "12Hz", which is a rounding of 12.5 — taking 12 literally would give 83.3 ms and a
+# flatteringly lower RTF, so use the exact rate.
+_MS_PER_FRAME_REALTIME = 1000.0 / 12.5
+
 # ---------------------------------------------------------------------------
 # Server-side implementation lives in tt/server.py — re-export the public API
 # so existing call sites (web_demo.py, runner, tests) keep working.
@@ -351,14 +357,47 @@ def run_full_ttnn_tts(
         print("  (TTFT and decode throughput breakdown printed above during generation)")
 
         total_time = time.time() - demo_start
+        audio_sec = len(audio_np) / 24000
+
+        # Real-time factor, three scopes. They differ by an order of magnitude, so
+        # each one is labelled with what it includes — quoting the steady number as
+        # "the RTF" of a one-shot run overstates it by ~6x.
+        #   decode  : the steady per-frame decode rate. What a warm, traced streaming
+        #             server sustains, and the number an AR-loop optimisation moves.
+        #   request : one request on an already-initialised process (speaker embed +
+        #             ICL + prefill + decode), i.e. warmup/trace capture amortised.
+        #   wall    : this invocation end to end, including weight load, model init,
+        #             warmup, trace capture and the host vocoder.
+        print(f"\n{'Real-time factor (RTF = compute / audio, <1 is faster than real time)'}")
+        print("-" * 70)
+        if timings.get("steady_avg_decode_ms", 0) > 0 and audio_sec > 0:
+            _rtf_decode = timings["steady_avg_decode_ms"] / _MS_PER_FRAME_REALTIME
+            print(
+                f"{'  RTF decode (steady, per frame)':<38} {_rtf_decode:>7.2f}"
+                f"   {timings['steady_avg_decode_ms']:.1f} ms vs {_MS_PER_FRAME_REALTIME:.0f} ms/frame"
+            )
+        if audio_sec > 0:
+            print(
+                f"{'  RTF request (warm, no compile)':<38} {inference_time / audio_sec:>7.2f}"
+                f"   {inference_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+            print(
+                f"{'  RTF wall (this invocation)':<38} {total_time / audio_sec:>7.2f}"
+                f"   {total_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+        print("-" * 70)
         print(f"\nOutput saved to: {output_path}")
-        print(f"Audio duration: {len(audio_np) / 24000:.2f}s")
+        print(f"Audio duration: {audio_sec:.2f}s")
         print(f"Total wall time: {total_time:.2f}s")
         print("=" * 80)
 
         result = {
             "prefill_ms": float(compile_timings.get("prefill_ms", 0.0)),
             "steady_ms_per_frame": float(compile_timings.get("steady_avg_decode_ms", 0.0)),
+            "audio_sec": float(len(audio_np) / 24000),
+            "rtf_decode": float(compile_timings.get("steady_avg_decode_ms", 0.0) / _MS_PER_FRAME_REALTIME),
+            "rtf_request": float(inference_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
+            "rtf_wall": float(total_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
             "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
             "num_frames": int(num_frames),
             "output_wav": output_path,
