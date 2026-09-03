@@ -10,57 +10,57 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // RUNTIME ARGS
-    const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
+    const bool is_worker_core = get_arg(args::is_worker_core) == 1;
     // if not worker core, skip
     if (not is_worker_core) {
         return;
     }
 
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(1);
+    // Case 2 (raw pointer): the tensor bindings supply the per-enqueue DRAM base addresses; the
+    // raw bank/offset arithmetic they feed below is unchanged from the legacy kernel.
+    const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
 #ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(2);
+    const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
 #endif
-    const uint32_t dram_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t vc = get_arg_val<uint32_t>(4);
-    const uint32_t dram_reader_index = get_arg_val<uint32_t>(5);
-    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(6);
-    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(7);
-    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
+    const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
+    const uint32_t vc = get_arg(args::vc);
+    const uint32_t dram_reader_index = get_arg(args::dram_reader_index);
+    const uint32_t num_shard_to_write_back = get_arg(args::num_shard_to_write_back);
+    const uint32_t reshard_tensor_start_offset = get_arg(args::reshard_tensor_start_offset);
+    // The write-back plan arrives as a runtime vararg block: one (bytes, noc-x, noc-y) triple per
+    // output storage shard this worker writes into. The count is num_shard_to_write_back, known
+    // only at runtime, so the block stays positional and the writer loop walks it by index.
 
     // COMPILE TIME ARGS
-    constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_num_pages = get_compile_time_arg_val(1);
+    constexpr auto in1_page_size = get_arg(args::in1_page_size);
+    constexpr auto in1_num_pages = get_arg(args::in1_num_pages);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(2);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(3);
+    constexpr auto in1_block_w = get_arg(args::in1_block_w);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(4);
+    constexpr auto num_blocks = get_arg(args::num_blocks);
     // WRITER
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t out_tensor_stride_w_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t out_reshard_tensor_stride_w_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
-    constexpr uint32_t workers_per_bank = get_compile_time_arg_val(9);
-    constexpr uint32_t bank_row_stride_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t reader_width_tiles = get_compile_time_arg_val(11);
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    constexpr auto out_tensor_stride_w_bytes = get_arg(args::out_tensor_stride_w_bytes);
+    constexpr auto out_reshard_tensor_stride_w_bytes = get_arg(args::out_reshard_tensor_stride_w_bytes);
+    constexpr auto per_core_M = get_arg(args::per_core_M);
+    constexpr auto workers_per_bank = get_arg(args::workers_per_bank);
+    constexpr auto bank_row_stride_tiles = get_arg(args::bank_row_stride_tiles);
+    constexpr auto reader_width_tiles = get_arg(args::reader_width_tiles);
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t in3_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(13);
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr auto in3_page_size = get_arg(args::in3_page_size);
+    constexpr auto in3_num_pages = get_arg(args::in3_num_pages);
 #endif
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t dfb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
-    // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
-    // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
+    // in1 buffer's entries are sized to match, so the block size in L1 must use the padded page
+    // stride (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 #ifdef SPLIT_DRAM_BANK
     static_assert(workers_per_bank > 1);
@@ -71,11 +71,11 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out);
-    DataflowBuffer dfb_out_reshard(dfb_id_out_reshard);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_out_reshard(dfb::out_reshard);
 #ifdef FUSE_BIAS
-    DataflowBuffer dfb_in3(dfb_id_in3);
+    DataflowBuffer dfb_in3(dfb::bias);
 #endif
 
     //  READER
@@ -116,8 +116,8 @@ void kernel_main() {
 
     // Reserve 2 blocks up front when num_blocks > 1: the loop's reserve_back at line 133
     // only fires after block 1's writes complete, so the initial reservation must cover
-    // both block 0 and block 1 to avoid writing outside the reserved CB window.
-    // When num_blocks == 1 the CB is single-buffered, so reserve only 1 block.
+    // both block 0 and block 1 to avoid writing outside the reserved buffer window.
+    // When num_blocks == 1 the buffer is single-buffered, so reserve only 1 block.
     constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
     dfb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
@@ -221,6 +221,11 @@ void kernel_main() {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
         }
 
+        // This shard's triple out of the write-back block.
+        const uint32_t per_core_N_reshard_bytes = get_vararg(index_offset);
+        const uint32_t in0_mcast_sender_noc_x = get_vararg(index_offset + 1);
+        const uint32_t in0_mcast_sender_noc_y = get_vararg(index_offset + 2);
+
         UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
 
@@ -228,15 +233,13 @@ void kernel_main() {
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_read_addr_out),
                 dst_ep,
-                per_core_N_reshard_bytes[index_offset],
+                per_core_N_reshard_bytes,
                 {},
-                {.noc_x = in0_mcast_sender_noc_x[index_offset],
-                 .noc_y = in0_mcast_sender_noc_y[index_offset],
-                 .addr = reshard_dest_local_addr});
+                {.noc_x = in0_mcast_sender_noc_x, .noc_y = in0_mcast_sender_noc_y, .addr = reshard_dest_local_addr});
             l1_read_addr_out += out_tensor_stride_w_bytes;
             reshard_dest_local_addr += out_reshard_tensor_stride_w_bytes;
         }
-        l1_read_addr_out_offset += per_core_N_reshard_bytes[index_offset];
+        l1_read_addr_out_offset += per_core_N_reshard_bytes;
 
         index_offset += 3;
     }
