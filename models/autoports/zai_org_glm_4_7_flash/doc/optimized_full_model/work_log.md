@@ -451,7 +451,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | commit | contents |
 |---|---|
 | `70b509b361a` | parent: full-model stage, closing commit |
-| (this commit) | `doc/optimized_full_model/` (README, work log, fresh perf/accuracy/tracy/watcher/qualitative/autoregressive/degenerate-output evidence, `perf_summary.json`, probe scripts including the corrected TopK benchmark); no changes to `tt/*.py` |
+| `b98e7ff6a1b` | `doc/optimized_full_model/` (README, work log, fresh perf/accuracy/tracy/watcher/qualitative/autoregressive/degenerate-output evidence, `perf_summary.json`, probe scripts including the corrected TopK benchmark, and the review-response fixes above); no changes to `tt/*.py` |
 
 No other repo was touched: `vllm` is out of scope for this stage.
 `models/common/sampling/tt_sampling.py` and
