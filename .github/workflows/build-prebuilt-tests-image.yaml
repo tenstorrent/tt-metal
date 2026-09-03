@@ -62,9 +62,11 @@ on:
           Commit to bake the source from, when checkout-source is on. Must be a
           full 40-character sha, not a branch or tag: a movable ref would let a
           re-run recompute the same tag while checking out different source, and
-          overwrite the image with it. Defaults to this workflow's own commit. A
-          caller testing a non-default ref must pass the same one it gave
-          build-artifact, or src/ and artifact/ disagree.
+          overwrite the image with it. Defaults to this workflow's own commit,
+          which is only meaningful when the artifact comes from this run too.
+          Baking another run's artifact (artifact-run-id) alongside a source
+          checkout requires this, since the default would pair this commit's
+          source with someone else's binaries.
       runner-label:
         required: false
         type: string
@@ -117,7 +119,11 @@ on:
         required: false
         type: string
         default: ""
-        description: "Full 40-character commit sha to bake the source from; defaults to this workflow's commit"
+        description: >-
+          Full 40-character commit sha to bake the source from. Required whenever
+          checkout-source is on here, because a dispatched run always takes its
+          artifact from another run, so there is no commit to default to. Unused
+          when checkout-source is off.
       runner-label:
         required: false
         type: string
