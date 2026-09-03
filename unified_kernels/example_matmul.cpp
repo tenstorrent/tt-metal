@@ -28,17 +28,17 @@ void kernel_main() {
 
     u::matmul_init<A, B>(kDfbA, kDfbB, kDfbOut);
 
-    u::Storage<A> a_storage(kDfbA);
-    u::Storage<B> b_storage(kDfbB);
-    u::Storage<Bias> bias_storage(kDfbBias);
-    u::Storage<Out> partials_storage(kDfbPartials);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbA, A> a_storage;
+    u::Input<1, kDfbB, B> b_storage;
+    u::Input<0, kDfbBias, Bias> bias_storage;
+    u::Intermediate<kDfbPartials, Out> partials_storage;
+    u::Output<0, kDfbOut, Out> out_storage;
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const u::LogicalMcast my_row{u::LogicalCoord::yx(me.y, 0), u::Extent::hw(1, kGridWidth)};
     const u::LogicalMcast my_column{u::LogicalCoord::yx(0, me.x), u::Extent::hw(kGridHeight, 1)};
 
-    u::ComputeBlock bias_row = u::noc_load<0>(bias_storage, bias, me.x).wait();
+    u::ComputeBlock bias_row = u::noc_load(bias_storage, bias, me.x).wait();
 
     u::Accumulator<Out, u::AccumulatorMode::Dst> total(partials_storage, out_storage);
     total.clear();
@@ -46,8 +46,8 @@ void kernel_main() {
     for (uint32_t k = 0; k < kKBlocks; ++k) {
         const bool last = (k == kKBlocks - 1);
 
-        u::ComputeBlock a_block = u::noc_load<0>(a_storage, my_row, a, me.y * kKBlocks + k).wait();
-        u::ComputeBlock b_block = u::noc_load<1>(b_storage, my_column, b, me.x * kKBlocks + k).wait();
+        u::ComputeBlock a_block = u::noc_load(a_storage, my_row, a, me.y * kKBlocks + k).wait();
+        u::ComputeBlock b_block = u::noc_load(b_storage, my_column, b, me.x * kKBlocks + k).wait();
 
         u::Block result =
             total.accumulate(u::matmul(a_block, b_block), last, [&](auto sum) { return sum.bias(bias_row).relu(); });

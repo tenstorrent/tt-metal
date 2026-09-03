@@ -41,10 +41,13 @@ void kernel_main() {
 
     u::matmul_init<In0, In1>(kDfbIn0, kDfbIn1, kDfbOut);
 
-    u::Storage<In0> in0_storage(kDfbIn0);
-    u::Storage<In1> in1_storage(kDfbIn1);
-    u::Storage<Out> acc_storage(kDfbAcc);
-    u::Storage<Out> out_storage(kDfbOut);
+    // Endpoints, which is where the DM thread of each transfer is now stated: both operands
+    // are multicast in by data movement, `acc` is compute at both ends, and `out` is drained
+    // by DM thread 0. BMM_IN1_THREAD stays a define because it is a knob the launcher tunes.
+    u::Input<0, kDfbIn0, In0> in0_storage;
+    u::Input<BMM_IN1_THREAD, kDfbIn1, In1> in1_storage;
+    u::Intermediate<kDfbAcc, Out> acc_storage;
+    u::Output<0, kDfbOut, Out> out_storage;
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);
@@ -69,8 +72,11 @@ void kernel_main() {
         for (uint32_t k = 0; k < k_blocks; ++k) {
             const bool finish = (k == k_blocks - 1);
 
-            u::ComputeBlock a = u::noc_load<0, /*pair=*/0>(in0_storage, row, in0, a_base + k).wait();
-            u::ComputeBlock b = u::noc_load<BMM_IN1_THREAD, /*pair=*/1>(in1_storage, col, in1, b_base + k).wait();
+            // Only `pair` is named now -- the thread comes from each buffer's declaration.
+            // The two pairs must differ: with BMM_IN1_THREAD == 0 both broadcasts run on one
+            // thread, and sharing a pair would interleave their ready counters and hang.
+            u::ComputeBlock a = u::noc_load</*pair=*/0>(in0_storage, row, in0, a_base + k).wait();
+            u::ComputeBlock b = u::noc_load</*pair=*/1>(in1_storage, col, in1, b_base + k).wait();
 
             u::Block result = acc.accumulate(u::matmul(a, b), finish);
             if (finish) {

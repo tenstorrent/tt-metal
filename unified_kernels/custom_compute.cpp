@@ -36,14 +36,14 @@ void kernel_main() {
 
     using Blk = u::Shape<1, tiles>;
 
-    u::Storage<Blk> a_storage(kDfbA);
-    u::Storage<Blk> b_storage(kDfbB);
-    u::Storage<Blk> out_storage(kDfbOut);
+    u::Input<0, kDfbA, Blk> a_storage;
+    u::Input<0, kDfbB, Blk> b_storage;
+    u::Output<1, kDfbOut, Blk> out_storage;
 
     u::compute_init(kDfbA, kDfbOut);
 
-    u::ComputeBlock a = u::noc_load<0>(a_storage, a_acc, 0).wait();
-    u::ComputeBlock b = u::noc_load<0>(b_storage, b_acc, 0).wait();
+    u::ComputeBlock a = u::noc_load(a_storage, a_acc, 0).wait();
+    u::ComputeBlock b = u::noc_load(b_storage, b_acc, 0).wait();
 
     u::custom_compute(a, b, [&](uint32_t a_dfb, uint32_t b_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD

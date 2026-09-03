@@ -44,36 +44,36 @@ void kernel_main() {
 
     u::matmul_init<Queries, KeysTransposed>(kDfbQ, kDfbK, kDfbOut);
 
-    u::Storage<Queries> q_storage(kDfbQ);
-    u::Storage<KeysTransposed> k_storage(kDfbK);
-    u::Storage<Values> v_storage(kDfbV);
-    u::Storage<Ones> ones_storage(kDfbOnes);
-    u::Storage<u::Shape<1, 1>> scaler_storage(kDfbScaler);
-    u::Storage<Scores> scores_storage(kDfbScores);
-    u::Storage<Vec> chunk_max_storage(kDfbChunkMax);
-    u::Storage<Scores> prob_storage(kDfbProb);
-    u::Storage<Vec> chunk_sum_storage(kDfbChunkSum);
-    u::Storage<Vec> new_max_storage(kDfbNewMax);
-    u::Storage<Vec> correction_storage(kDfbCorrection);
-    u::Storage<Out> rescaled_storage(kDfbRescaled);
-    u::Storage<Out> weighted_v_storage(kDfbWeightedV);
-    u::Storage<Vec> reciprocal_storage(kDfbReciprocal);
-    u::Storage<Vec> max_storage(kDfbMax);
-    u::Storage<Vec> sum_storage(kDfbSum);
-    u::Storage<Out> acc_storage(kDfbAcc);
-    u::Storage<Out> out_storage(kDfbOut);
+    u::Input<0, kDfbQ, Queries> q_storage;
+    u::Input<0, kDfbK, KeysTransposed> k_storage;
+    u::Input<0, kDfbV, Values> v_storage;
+    u::Input<0, kDfbOnes, Ones> ones_storage;
+    u::Input<1, kDfbScaler, u::Shape<1, 1>> scaler_storage;
+    u::Intermediate<kDfbScores, Scores> scores_storage;
+    u::Intermediate<kDfbChunkMax, Vec> chunk_max_storage;
+    u::Intermediate<kDfbProb, Scores> prob_storage;
+    u::Intermediate<kDfbChunkSum, Vec> chunk_sum_storage;
+    u::Intermediate<kDfbNewMax, Vec> new_max_storage;
+    u::Intermediate<kDfbCorrection, Vec> correction_storage;
+    u::Intermediate<kDfbRescaled, Out> rescaled_storage;
+    u::Intermediate<kDfbWeightedV, Out> weighted_v_storage;
+    u::Intermediate<kDfbReciprocal, Vec> reciprocal_storage;
+    u::Intermediate<kDfbMax, Vec> max_storage;
+    u::Intermediate<kDfbSum, Vec> sum_storage;
+    u::Intermediate<kDfbAcc, Out> acc_storage;
+    u::Output<1, kDfbOut, Out> out_storage;
 
-    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage);
-    u::ComputeBlock column_of_ones = u::noc_load<0>(ones_storage, ones_acc, 0).wait();
-    u::ComputeBlock q = u::noc_load<0>(q_storage, q_acc, 0).wait();
+    u::ComputeBlock scaler = u::fill_reduce_scaler(scaler_storage);
+    u::ComputeBlock column_of_ones = u::noc_load(ones_storage, ones_acc, 0).wait();
+    u::ComputeBlock q = u::noc_load(q_storage, q_acc, 0).wait();
 
     u::RetainedBlock<Vec> running_max;
     u::RetainedBlock<Vec> running_sum;
     u::RetainedBlock<Out> running_out;
 
     for (uint32_t j = 0; j < kKeyChunks; ++j) {
-        u::ComputeBlock k = u::noc_load<0>(k_storage, k_acc, j).wait();
-        u::ComputeBlock v = u::noc_load<0>(v_storage, v_acc, j).wait();
+        u::ComputeBlock k = u::noc_load(k_storage, k_acc, j).wait();
+        u::ComputeBlock v = u::noc_load(v_storage, v_acc, j).wait();
 
         u::ComputeBlock scores = scores_storage.store(u::matmul(q, k));
         u::ComputeBlock chunk_max = chunk_max_storage.store(u::reduce_max<kRows>(scores, scaler));
@@ -106,5 +106,5 @@ void kernel_main() {
     u::ComputeBlock<Out> total_out = running_out.release();
 
     u::ComputeBlock reciprocal = reciprocal_storage.store(u::recip(total_sum));
-    u::noc_store<1>(out_storage, total_out * u::bcast<kRows>(reciprocal), out, 0);
+    u::noc_store(out_storage, total_out * u::bcast<kRows>(reciprocal), out, 0);
 }

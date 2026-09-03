@@ -59,12 +59,12 @@ void kernel_main() {
 
     u::matmul_init<Blk, M>(kDfbX, kDfbM, kDfbOut);
 
-    u::Storage<Blk> x_storage(kDfbX);
-    u::Storage<Blk> cos_storage(kDfbCos);
-    u::Storage<Blk> sin_storage(kDfbSin);
-    u::Storage<M> m_storage(kDfbM);
-    u::Storage<Blk> rot_storage(kDfbRot);
-    u::Storage<Blk> out_storage(kDfbOut);
+    u::Input<0, kDfbX, Blk> x_storage;
+    u::Input<0, kDfbCos, Blk> cos_storage;
+    u::Input<0, kDfbSin, Blk> sin_storage;
+    u::Input<0, kDfbM, M> m_storage;
+    u::Intermediate<kDfbRot, Blk> rot_storage;
+    u::Output<1, kDfbOut, Blk> out_storage;
 
     const auto x_acc = TensorAccessor(tensor::x);
     const auto cos_acc = TensorAccessor(tensor::cos);
@@ -74,18 +74,18 @@ void kernel_main() {
 
     // KERNEL SCOPE: every chunk's matmul re-reads the same rotation tile, so it must not be
     // popped until the kernel ends -- the same rule the reduce scaler and a fused bias obey.
-    u::ComputeBlock m = u::noc_load<0>(m_storage, m_acc, 0).wait();
+    u::ComputeBlock m = u::noc_load(m_storage, m_acc, 0).wait();
 
     for (uint32_t n = 0; n < chunk_count; ++n) {
         const uint32_t c = chunk_begin + n;
-        u::ComputeBlock x = u::noc_load<0>(x_storage, x_acc, c).wait();
-        u::ComputeBlock cos = u::noc_load<0>(cos_storage, cos_acc, c).wait();
-        u::ComputeBlock sin = u::noc_load<0>(sin_storage, sin_acc, c).wait();
+        u::ComputeBlock x = u::noc_load(x_storage, x_acc, c).wait();
+        u::ComputeBlock cos = u::noc_load(cos_storage, cos_acc, c).wait();
+        u::ComputeBlock sin = u::noc_load(sin_storage, sin_acc, c).wait();
 
         // The rotation. kt_dim is 1, so this is per-tile rather than a sum over k.
         u::ComputeBlock rot = rot_storage.store(u::matmul(x, m));
 
         // x * cos + rot * sin, in ONE pass: four leaves, three DST slots.
-        u::noc_store<1>(out_storage, x * cos + rot * sin, out, c);
+        u::noc_store(out_storage, x * cos + rot * sin, out, c);
     }
 }

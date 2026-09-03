@@ -35,15 +35,30 @@ rather than a reader, a writer and a compute kernel maintained in lockstep. The 
 is that the thread assignment stays **visible and deliberate** rather than inferred --
 see below.
 
-### 1.2 Data movement carries an explicit thread parameter
+### 1.2 Data movement carries an explicit thread, declared on the buffer
 
-Every data-movement call names its thread as a template argument, and it is up to the
-programmer to assign them:
+Thread assignment is visible and deliberate, and it is written ONCE -- on the buffer, as
+part of saying which projections stand at its two ends:
 
 ```cpp
-u::ComputeBlock a = u::noc_load<0>(a_storage, a_acc, block).wait();   // read on thread 0
-u::noc_store<1>(out_storage.store(a.exp()), out, block);              // write on thread 1
+u::Input<0, kDfbA, Blk>    a_storage;    // filled by DM thread 0, read by compute
+u::Output<1, kDfbOut, Blk> out_storage;  // filled by compute, drained by DM thread 1
+u::Intermediate<kDfbSq, X> sq_storage;   // compute at both ends: no DM thread to name
+
+u::ComputeBlock a = u::noc_load(a_storage, a_acc, block).wait();   // reads on thread 0
+u::noc_store<1>(out_storage.store(a.exp()), out, block);           // writes on thread 1
 ```
+
+`noc_load` takes the thread from the buffer, so it is not repeated at the call site and the
+two cannot disagree. It also takes an `Input`, so filling a buffer whose other end is compute
+does not compile. The `Block`-leading `noc_store` above still names its thread: a `Block` is
+evidence a buffer was produced into and does not yet carry the endpoint it came from.
+
+Which thread is not a detail -- `thread` also picks the NOC, and on the blocked matmul
+flipping which NOC carries the large operand is worth 1.4x on its own. Declaring it per
+buffer puts that choice where the buffer is, which is where it belongs: it is a property of
+the operand, not of each transfer. The endpoints are also what the HOST needs and where it
+reads them from; see §1.3.
 
 The call compiles away entirely on every other thread, which is what lets the three
 projections share a source.
@@ -53,11 +68,17 @@ gives the programmer fine grain control for manually synchronizing the noc.
 
 ### 1.3 `Block` as the central DFB abstraction
 
-`Storage<S>` is a dataflow buffer: an id plus the `Shape` of one block, checked at
-construction against the depth the host configured. It is agnostic to how many
-back buffers it has, and since it is shared across threads, double-buffering is
-still the right rule of thumb so that DM threads can start fetching the next
-`Block` while compute is using the current.
+A dataflow buffer is declared as one of three ENDPOINT types -- `Input<thread, id, S>`,
+`Output<thread, id, S>`, `Intermediate<id, S>` -- which are the three columns of the table
+above, as types. Each carries the `Shape` of one block, checked against the depth and the
+tile geometry the host configured, and each derives from `Storage<S>`, which is what the
+library takes wherever the endpoint is irrelevant. `Storage` itself cannot be constructed:
+a buffer that did not say which projections stand at its ends could not be checked against
+anything, and the host would have nothing to read.
+
+A buffer is agnostic to how many back buffers it has, and since it is shared across threads,
+double-buffering is still the right rule of thumb so that DM threads can start fetching the
+next `Block` while compute is using the current.
 
 `Block<S>` is **move-only evidence that a Storage was produced into** -- it comes back from
 anything that has already pushed. Move-only so it reaches exactly one consumer; consumers
@@ -76,7 +97,7 @@ initialiser as nothing but the expression:
 
 ```cpp
 u::ComputeBlock<X, kDfbSq> sq = x * x;        // instead of a separate
-                                             //   u::Storage<X> sq_storage(kDfbSq);
+                                             //   u::Intermediate<kDfbSq, X> sq_storage;
                                              //   u::ComputeBlock sq = sq_storage.store(x * x);
 ```
 
@@ -87,11 +108,12 @@ cannot deduce one class template argument while another is supplied -- and `Stor
 checks it against the expression, so a wrong one is a compile error. It takes an expression
 only: a `Block` is a pushed obligation rather than a value, and that constructor is deleted.
 
-Two audiences read that declaration, which is the thing to know before removing one. The
-kernel is also where the HOST discovers each buffer's endpoints -- `derive_roles` in
-`unified_harness.py` parses the source, so that a launcher never restates a thread number the
-kernel already states (a wrong one is silent on Gen1 and a hang on Gen2). A new way to
-declare a buffer has to be taught to that parser in the same change.
+The kernel is also where the HOST discovers each buffer's endpoints: `derive_roles` in
+`unified_harness.py` reads the `Input` and `Output` declarations, so that a launcher never
+restates a thread number the kernel already states -- a wrong one is silent on Gen1 and a
+hang on Gen2. This shim form needs no support there, and neither does any other way
+of declaring an intermediate: what the host reads are the two endpoints that HAVE a
+data-movement end, and an intermediate is whatever is left over.
 
 In an assert build a `Block` that is destroyed without reaching a consumer aborts -- a
 dropped output block is otherwise a silent hang. `RetainedBlock<S>` is the escape for state
@@ -177,7 +199,7 @@ traffic. It receives `L1Entries`: this core's page base, the page size, and the 
 handle will push.
 
 ```cpp
-u::ComputeBlock a = u::noc_load<0>(a_storage, [&](u::L1Entries pages) {
+u::ComputeBlock a = u::noc_load(a_storage, [&](u::L1Entries pages) {
     for (uint32_t p = 0; p < pages.count; ++p) {
         const uint32_t row = i * mt + p / kt;      // strided gather the built-in
         const uint32_t col = b * kt + p % kt;      // overload cannot express

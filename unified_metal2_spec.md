@@ -3,8 +3,8 @@
 Written by reading the tree at `8bb48ab0f1d`. Every claim is sourced to a file and line.
 
 **THE GATE HAS BEEN RUN, on a Wormhole n150, and it passes.** See §7.1, which was written after the
-fact and CORRECTS this document where the two disagree; the probes are in `unified_gate/`. Claims
-still only read off the source, never executed, stay marked UNVERIFIED.
+fact and CORRECTS this document where the two disagree. Claims still only read off the source,
+never executed, stay marked UNVERIFIED.
 
 This is the document `unified_named_args_spec.md` §9 deferred: *"Migrating to the Metal 2.0 host
 API ... is a rewrite of how we build programs ... If it becomes desirable it deserves its own
@@ -397,8 +397,15 @@ Steps 4-6 are the entire justification. Steps 1-3 are the ramp that makes them l
 
 ### 7.1 The gate, run
 
-On a Wormhole n150, against this tree. Sources in `unified_gate/`; the host programs are standalone
-C++ linked straight against `build/lib/libtt_metal.so`, so nothing had to be added to the build.
+On a Wormhole n150, against this tree. The host programs were standalone C++ linked straight
+against `build/lib/libtt_metal.so`, so nothing had to be added to the build.
+
+> **The gate sources have been removed.** They lived in `unified_gate/` and were deleted once the
+> port they were gating had landed and every one of their questions had a suite behind it instead:
+> the whole of `unified_kernels/` is now what Gate A and Gate B were probes for. The results below
+> are the record; the sources are recoverable at `ef02f9a9559`, the last commit that carried them.
+> `gate_a_tokens.cpp`'s compile error is the one worth remembering rather than re-running -- it is
+> why buffer slots reach a kernel as compile-time VALUES and not as `dfb::` tokens.
 
 | probe | question | result |
 |---|---|---|
@@ -485,6 +492,11 @@ and the harness turns them into producer/consumer bindings. §5.1 called this th
 in practice it was about twenty lines. The cost it predicted is real but smaller than
 described: the DM *thread number* has to agree between the role and the kernel's
 `noc_load<0>` / `noc_store<1>`, and nothing states that in one place.
+
+> That last clause is no longer true. The thread is stated in one place now -- the buffer's
+> own declaration, `u::Input<0, kDfbIn, Block1D>` -- and `noc_load` takes it from there. The
+> `dfb_input` / `dfb_output` / `dfb_intermed` helpers remain as an override that nothing
+> cross-checks, and after the conversion no launcher in tree calls one. See §9.3.
 
 **The slot prediction is now CHECKED, and the check is what `dfb::` tokens are actually good
 for.** The harness predicts slots from declaration order (metal's lowest-free-slot rule) and
@@ -809,9 +821,44 @@ sentinel and a set of asserts precisely because none of this was reachable.
    `reduction_tree` and `passcost` on the 2.0 path, and those suites are green with asserts on.
 3. ~~**`role` carries a thread number the kernel also knows** (§5.1).~~ **Answered by not doing it.**
    The worry was a new two-places-must-agree contract, and the answer was to have only one place:
-   `derive_roles` reads the roles off the kernel source, so the host does not restate what the
-   kernel already says. That is better than the launch-time error this question was weighing, and
-   it matters more than it looks -- §5.1 recorded that a wrong endpoint role is SILENT on Gen1.
+   the host reads the roles off the kernel, so it does not restate what the kernel already says.
+   That is better than the launch-time error this question was weighing, and it matters more than
+   it looks -- §5.1 recorded that a wrong endpoint role is SILENT on Gen1.
+
+   **The mechanism has since changed, and the answer got better for it.** `derive_roles` first did
+   this by INFERRING: nine regexes over the `thread` argument of every `noc_load` / `noc_store`
+   spelling, three more for the ways a `u::Storage` could be declared, and a hand-written bracket
+   scanner for the `ComputeBlock<Shape, kDfbFoo>` shim. That parser had to grow with the API --
+   every new overload in `api.h` was a silent update in `unified_harness.py`, and the `cb_` to
+   `dfb_` rename had to land on both sides in one commit or roles stopped being derivable. The
+   kernel now DECLARES the endpoint instead:
+
+       u::Input<0, kDfbIn, Block1D>   in_storage;
+       u::Output<1, kDfbOut, Block1D> out_storage;
+       u::Intermediate<kDfbAcc, Out>  acc_storage;
+
+   which the host reads at a fixed position, and which the API holds the kernel to: `noc_load`
+   takes an `Input` and reads the thread off the type, so the thread is not at the call site to
+   disagree and a buffer used against its role does not compile. Only the two endpoints that HAVE
+   a data-movement end are declared; an INTERMEDIATE is what is left over, which is why the shim
+   form needs no support in the host at all. `derive_roles` went from ~90 lines and fifteen
+   patterns to ten lines and two, and the roles it derives are byte-identical on all 20 kernels
+   and 129 buffers -- checked against the old parser reading the old kernels, before either side
+   was trusted on hardware.
+
+   **One buffer in the tree does not have a single endpoint, and it is the interesting case.**
+   `reduction_tree`'s `tmp0` is produced by compute and then drained either by `noc_store<1>`
+   straight to DRAM (single-stage) or by the gather's `noc_core_write` on thread 0 (two-stage),
+   under opposite `#if`s. The old parser saw both spellings, took the first, and got it wrong
+   half the time -- which is why that launcher was the one place still calling `dfb_output()`
+   to state a role by hand. A declaration cannot hold two threads either, so the thread is now
+   a define the launcher sets (`RT_TMP0_THREAD`), exactly as `MMB_IN0_THREAD` and
+   `BMM_IN1_THREAD` already were, and the kernel `static_assert`s it against the
+   `RT_SINGLE_STAGE` that picks the drain. Two numbers from the launcher that have to agree,
+   with a compile-time check between them, rather than a role the host asserted alone. With
+   that, `dfb_input` / `dfb_output` / `dfb_intermed` have no callers left: they remain as an
+   override, and nothing cross-checks one against the kernel, so a launcher reaching for them
+   is opting out of the guarantee rather than adding to it.
 4. ~~**Does the multicast handshake survive 2.0's semaphore binding?**~~ **Answered: yes, and it is
    checked.** The harness names its semaphores and allocates the six reserved ones above the
    caller's, and `api.h` static_asserts the derived base against `sem::u_mcast_ready0` and the end

@@ -46,6 +46,28 @@ namespace u = tt::unified;
 #define RT_REDUCE(x) u::reduce_sum<kAxis>(x, scaler)
 #endif
 
+// The DM thread that drains tmp0, which is the ONE endpoint in this kernel that depends on
+// the shape: single-stage stores it straight to DRAM on thread 1, while the two-stage tree
+// hands it to the gather's core-to-core write on thread 0. Both spellings are in the source
+// -- under opposite #ifs -- so the thread cannot be read off the transfer, and it is passed
+// as a knob the launcher sets, exactly as MMB_IN0_THREAD and BMM_IN1_THREAD are.
+//
+// The launcher sets two things that have to agree, so the kernel checks them against each
+// other rather than trusting it: RT_TMP0_THREAD is the number, RT_SINGLE_STAGE picks which
+// drain is compiled, and a launcher that changed one without the other fails the build here.
+// The default is the two-stage shape, which is the one a launcher gets by not asking for
+// anything -- and stating it as `#ifndef / #define` is what lets the HOST resolve the value
+// too, since _thread_of reads exactly this form when a launcher passes no override.
+#ifndef RT_TMP0_THREAD
+#define RT_TMP0_THREAD 0
+#endif
+
+#if defined(RT_SINGLE_STAGE)
+static_assert(RT_TMP0_THREAD == 1, "single-stage drains tmp0 straight to DRAM on thread 1");
+#else
+static_assert(RT_TMP0_THREAD == 0, "the gather's core-to-core write drains tmp0 on thread 0");
+#endif
+
 void kernel_main() {
     constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     constexpr uint32_t in_ht = get_arg(args::in_ht);
@@ -73,11 +95,11 @@ void kernel_main() {
     using Reduced = u::reduce_shape<In, kAxis>;
     using Gathered = u::Shape<num_cores_y * Reduced::rows, Reduced::cols>;
 
-    u::Storage<In> in0_storage(kDfbIn0);
-    u::Storage<u::Shape<1, 1>> scaler_storage(kDfbScaler);
-    u::Storage<Reduced> tmp0_storage(kDfbTmp0);
-    u::Storage<Gathered> tmp1_storage(kDfbTmp1);
-    u::Storage<Reduced> out_storage(kDfbOut);
+    u::Input<0, kDfbIn0, In> in0_storage;
+    u::Input<1, kDfbScaler, u::Shape<1, 1>> scaler_storage;
+    u::Output<RT_TMP0_THREAD, kDfbTmp0, Reduced> tmp0_storage;
+    u::Input<0, kDfbTmp1, Gathered> tmp1_storage;
+    u::Output<1, kDfbOut, Reduced> out_storage;
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto out = TensorAccessor(tensor::out);
@@ -94,7 +116,7 @@ void kernel_main() {
     // page, and a ComputeBlock pops in its destructor -- here, the end of the
     // kernel. Inside the loop it would be popped after the first reduction and the
     // next one would wait forever for a refill nobody issues.
-    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage, scaler_bits);
+    u::ComputeBlock scaler = u::fill_reduce_scaler(scaler_storage, scaler_bits);
 
     const auto this_core = u::LogicalCoord::this_core();
 
@@ -108,7 +130,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Column x owns its own input block, the same index its result goes to.
-        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
+        u::ComputeBlock a = u::noc_load(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
         u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(a));
 
@@ -125,7 +147,7 @@ void kernel_main() {
 
         // Every core writes; the root also receives, and waits for the column.
         u::ComputeBlock all_per_core_sums =
-            u::noc_core_write<0>(tmp1_storage, std::move(per_core_sum), root, true, byte_offset).wait(num_cores_y);
+            u::noc_core_write(tmp1_storage, std::move(per_core_sum), root, true, byte_offset).wait(num_cores_y);
 
         if (this_core == root) {
             u::Block result = out_storage.store(RT_REDUCE(all_per_core_sums));

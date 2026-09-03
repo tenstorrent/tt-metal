@@ -24,23 +24,23 @@ void kernel_main() {
 
     u::compute_init(kDfbIn, kDfbOut);
 
-    u::Storage<In> in_storage(kDfbIn);
-    u::Storage<u::Shape<1, 1>> scaler_storage(kDfbScaler);
-    u::Storage<Partial> partial_storage(kDfbPartial);
-    u::Storage<Gathered> gathered_storage(kDfbGathered);
-    u::Storage<Partial> out_storage(kDfbOut);
+    u::Input<0, kDfbIn, In> in_storage;
+    u::Input<1, kDfbScaler, u::Shape<1, 1>> scaler_storage;
+    u::Output<0, kDfbPartial, Partial> partial_storage;
+    u::Input<0, kDfbGathered, Gathered> gathered_storage;
+    u::Output<1, kDfbOut, Partial> out_storage;
 
-    u::ComputeBlock scaler = u::fill_reduce_scaler<1>(scaler_storage);
+    u::ComputeBlock scaler = u::fill_reduce_scaler(scaler_storage);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const u::LogicalCoord root = u::LogicalCoord::yx(0, 0);
     const uint32_t my_slot = me.y * Partial::num_entries * u::dfb_entry_bytes(kDfbGathered);
 
-    u::ComputeBlock block = u::noc_load<0>(in_storage, in, me.y).wait();
+    u::ComputeBlock block = u::noc_load(in_storage, in, me.y).wait();
     u::Block partial = partial_storage.store(u::reduce_sum<kAxis>(block, scaler));
 
     u::ComputeBlock all_partials =
-        u::noc_core_write<0>(gathered_storage, std::move(partial), root, true, my_slot).wait(kNumCores);
+        u::noc_core_write(gathered_storage, std::move(partial), root, true, my_slot).wait(kNumCores);
 
     if (me == root) {
         u::Block result = out_storage.store(u::reduce_sum<kAxis>(all_partials, scaler));

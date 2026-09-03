@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import dfb, dfb_output, run_unified_spec, unified_program_spec
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/reduction_tree.cpp"
 
@@ -63,6 +63,12 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
         # max and mean are only correct single-stage: stage 2 would fold the
         # zeros the packer wrote outside stage 1's result row.
         + ([("RT_SINGLE_STAGE", "1")] if single_stage else [])
+        # tmp0's drain differs by shape -- the single-stage store takes it on thread 1, the
+        # gather's core-to-core write on thread 0 -- and both spellings live in the source
+        # under opposite #ifs, so the kernel cannot state it alone. The kernel declares
+        # tmp0 as u::Output<RT_TMP0_THREAD, ...> and static_asserts this against
+        # RT_SINGLE_STAGE, so the two cannot drift.
+        + [("RT_TMP0_THREAD", "1" if single_stage else "0")]
     )
 
     # Endpoint roles, read straight off the kernel:
@@ -78,9 +84,7 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
     #   out     compute stores it, DM thread 1 drains it
     dfbs = [
         dfb("in0", ht * wt),
-        # tmp0's drain differs by shape -- the gather takes it on thread 0, the single-stage
-        # store on thread 1 -- and both spellings live in the source, so it is stated.
-        dfb_output("tmp0", thread=1 if single_stage else 0, num_entries=wt),
+        dfb("tmp0", num_entries=wt),
         dfb("tmp1", wt * grid_h),
         dfb("scaler", 1),
         dfb("out", wt),

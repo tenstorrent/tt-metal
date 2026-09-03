@@ -276,80 +276,33 @@ def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None, 
     return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None, entry_bytes=entry_bytes, tile=tile)
 
 
-# tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
-# the only place that knows which projection stands at which end of a buffer, so it is the
-# place to read it from.
-_RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
-# The COMPILE-TIME id form: u::Storage<S> s(u::dfb<kDfbFoo>). Handing the id over as a
-# template argument is what lets Storage static_assert its tile geometry instead of
-# ASSERTing it, and it is a third spelling this parser has to know -- the same two-audience
-# tax the ComputeBlock shim paid. A buffer declaration is read by the kernel AND by the
-# host, so every new way to write one lands here too.
-_RE_STORAGE_TAG = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*u::dfb<\s*(\w+)\s*>\s*\)")
-_RE_DFB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::dfb_(\w+)\s*\)")
-# A Storage built straight from the argument rather than through a named constant:
-#   u::Storage<S> s1(get_arg(args::dfb_s1));
-_RE_STORAGE_INLINE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*get_arg\(\s*args::dfb_(\w+)\s*\)\s*\)")
-
-
-# u::ComputeBlock<Shape, kDfbFoo> name = <expression>;
+# THE ENDPOINT DECLARATIONS. A kernel states the two endpoints that HAVE a data-movement
+# end, and the host reads them off the declaration:
 #
-# The shim form: a compute intermediate names its buffer in its own declaration instead of
-# through a u::Storage. It is scanned rather than matched by a regex because the SHAPE may
-# itself carry angle brackets (u::Shape<2, 4>), and the id is the last top-level template
-# argument -- a non-greedy `[^;]*?>` stops at the wrong bracket and would read the shape's
-# `4` as a buffer id. Silently, which is the failure this whole function exists to avoid.
-_RE_COMPUTE_BLOCK_OPEN = re.compile(r"u::ComputeBlock\s*<")
+#     u::Input<0, kDfbIn, Block1D>   in_storage;      thread, buffer, shape
+#     u::Output<1, kDfbOut, Block1D> out_storage;
+#
+# The thread and the buffer id lead the template list ON PURPOSE. They are then at a FIXED
+# position however many angle brackets the shape carries, so these two patterns need no
+# bracket matching and cannot be fooled by a u::Shape<2, 4>.
+#
+# There is no pattern for an INTERMEDIATE, and that is the point: see derive_roles. What used
+# to be here instead -- nine patterns matching the `thread` argument of every noc_load and
+# noc_store spelling, three more for the ways a u::Storage could be declared, and a
+# hand-written bracket scanner for the ComputeBlock shim form -- was a parser that had to
+# grow with the API. Every new overload in tt/unified/api.h was a silent update here, and one
+# rename (cb_ to dfb_) had to land on both sides in the same commit or roles stopped being
+# derivable. The kernel says it now, and the API holds it to what it says.
+# kDfbFoo -> "foo", from the compile-time arg the kernel reads its buffer id out of:
+#
+#     constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+#
+# This is every buffer the kernel knows about, whatever it then declares it as, so it is also
+# what bounds the elimination in derive_roles.
+_RE_DFB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::dfb_(\w+)\s*\)")
 
-
-def _compute_block_dfbs(src):
-    """Yield (variable, dfb constant) for every shim declaration in `src`."""
-    for m in _RE_COMPUTE_BLOCK_OPEN.finditer(src):
-        i = m.end()  # just past the '<'
-        depth, args, start = 1, [], i
-        while i < len(src) and depth:
-            c = src[i]
-            if c == "<":
-                depth += 1
-            elif c == ">":
-                depth -= 1
-                if not depth:
-                    args.append(src[start:i])
-            elif c == "," and depth == 1:
-                args.append(src[start:i])
-                start = i + 1
-            elif c == ";":
-                break  # ran past the declaration; not a shim
-            i += 1
-        if depth or len(args) != 2:
-            continue  # u::ComputeBlock<S> or something unparsed -- not the shim form
-        tail = re.match(r"\s+(\w+)\s*=", src[i:])
-        if tail:
-            yield tail.group(1), args[1].strip()
-
-
-_RE_PRODUCED = re.compile(
-    r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
-)
-_RE_FILLS = re.compile(r"(?:noc_load|fill_reduce_scaler|noc_core_write|noc_core_read)<([^>(]*)>\(\s*(\w+)")
-_RE_DRAINS = re.compile(r"noc_store<([^>(]*)>\(\s*std::move\((\w+)\)")
-_RE_DRAINS_C2C = re.compile(r"noc_core_write<([^>(]*)>\(\s*\w+\s*,\s*std::move\((\w+)\)")
-# The inline form, which is the commoner one: noc_store<1>(out_storage.store(...), out, c).
-_RE_DRAINS_INLINE = re.compile(r"noc_store<([^>(]*)>\(\s*(\w+)\.(?:store|accumulate)\(")
-# An Accumulator's finishing Block belongs to its OUTPUT storage, which is its second
-# constructor argument -- the first is the accumulation buffer the next call re-consumes.
-_RE_ACCUM = re.compile(r"u::Accumulator<[^;]*?>\s+(\w+)\s*\(\s*\w+\s*,\s*(\w+)\s*\)")
-# custom_compute's escape hatch: the routine did the reserve/pack/push itself and hands the
-# harness a bare handle. u::Block<Blk>{out_storage} names its Storage directly.
-_RE_DRAINS_BARE = re.compile(r"noc_store<([^>(]*)>\(\s*u::Block<\w+>\s*\{\s*(\w+)\s*\}")
-# The congruent form, which leads with the Storage the way noc_load does:
-#   noc_store<thread>(out_storage, <expression>, acc, idx)
-# A BARE identifier followed by a comma is what separates it from every other spelling --
-# the Block forms lead with `std::move(`, `u::Block<`, or `<storage>.store(`, none of which
-# is a bare word before a comma. The name captured here is an ordinary Storage variable, so
-# unlike a dfb constant it is already in `storages` and only the ROLE has to be recorded.
-_RE_DRAINS_STORAGE = re.compile(r"noc_store<([^>(]*)>\(\s*(\w+)\s*,")
-
+_RE_EP_INPUT = re.compile(r"u::Input\s*<\s*(\w+)\s*,\s*(\w+)\s*,")
+_RE_EP_OUTPUT = re.compile(r"u::Output\s*<\s*(\w+)\s*,\s*(\w+)\s*,")
 
 _RE_DEFAULT = re.compile(r"#ifndef\s+(\w+)\s*\n#define\s+\1\s+(\d+)")
 
@@ -361,7 +314,7 @@ def _thread_of(text, defines, kernel_source):
     transfer is a thing launchers tune. The harness is passing those defines, so it can
     resolve them; anything it cannot resolve is an error rather than a guess.
     """
-    tok = text.split(",")[0].strip()
+    tok = re.sub(r"/\*.*?\*/", "", text).split(",")[0].strip()
     if tok.isdigit():
         return int(tok)
     if tok in defines:
@@ -379,64 +332,50 @@ def _thread_of(text, defines, kernel_source):
 
 
 def derive_roles(kernel_source, defines):
-    """Work out each buffer's endpoints by reading the kernel.
+    """Each buffer's endpoints, read off the kernel's own declarations.
+
+    Returns {buffer name: (kind, thread)} for every buffer the kernel NAMES -- which is every
+    buffer with a dfb_<name> compile-time arg, however it is declared.
 
     WHY THIS IS NOT A LAUNCHER'S JOB. Metal 2.0 wants a producer and a consumer named per
-    buffer, and the DM half of that is a thread number the KERNEL already states, in the
-    `thread` argument of every noc_load / noc_store. Having a launcher restate it creates a
-    contract with two ends and nothing between them -- and the mismatch is SILENT on Gen1.
-    Verified: binding `out` to thread 0 while the kernel stores it on thread 1 runs, and
-    passes, bit-identical. Gen1 dataflow-buffer state is per core rather than per RISC, so
-    either data-movement kernel can drive it whatever the host declared; the endpoint masks
-    only become load-bearing on Gen2, where they drive the tile counters.
+    buffer, and the data-movement half of that is a thread number the KERNEL already states.
+    Having a launcher restate it creates a contract with two ends and nothing between them --
+    and the mismatch is SILENT on Gen1. Verified: binding `out` to thread 0 while the kernel
+    drives it on thread 1 runs, and passes, bit-identical. Gen1 dataflow-buffer state is per
+    core rather than per RISC, so either data-movement kernel can drive it whatever the host
+    declared; the endpoint masks only become load-bearing on Gen2, where they drive the tile
+    counters. So a wrong thread is invisible today and a hang on the next architecture, which
+    is the worst shape a hazard can have.
 
-    So a wrong thread here is invisible today and a hang on the next architecture, which is
-    the worst shape a hazard can have. Deriving it removes the second end of the contract
-    rather than trying to check it.
+    ONLY INPUT AND OUTPUT ARE DECLARED; AN INTERMEDIATE IS WHAT IS LEFT. That is not
+    shorthand -- it is the whole of what an intermediate is. Compute stands at both of its
+    ends, so it names no thread, there is nothing about it to get wrong, and nothing for the
+    host to check. It also means the only declaration forms this has to know are the two that
+    say something: the ComputeBlock shim form, which declares a buffer with no Storage at all,
+    needs no pattern of its own and no bracket scanner.
 
-    Returns {buffer name: (kind, thread)}. Raises on anything it cannot read.
+    The elimination is bounded by the buffers the kernel NAMES, so a launcher-declared buffer
+    the kernel never mentions -- a misspelling, or one dropped from the kernel -- is still an
+    error in unified_program_spec rather than a silent intermediate that would hang waiting
+    for a producer that is not there.
     """
     src = open(os.path.join(TT_METAL_HOME, kernel_source)).read()
-    # kDfbFoo -> "foo" (from its dfb_<name> compile-time arg), then Storage variable -> "foo".
+    # Comments out first. Several kernels SHOW a declaration in their header comment to
+    # explain themselves, and it would otherwise be read as one.
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+
+    # kDfbFoo -> "foo", from its dfb_<name> compile-time arg.
     dfb_const = dict(_RE_DFB_NAMED.findall(src))
-    storages = {}
-    for var, dfb in _RE_STORAGE.findall(src):
-        if dfb in dfb_const:
-            storages[var] = dfb_const[dfb]
-    for var, dfb in _RE_STORAGE_TAG.findall(src):
-        if dfb in dfb_const:
-            storages[var] = dfb_const[dfb]
-    for var, name in _RE_STORAGE_INLINE.findall(src):
-        storages[var] = name
-    # A shim-declared buffer is a compute intermediate by construction: it has no Storage,
-    # so no noc call can name it, so the role lookup below can only ever land on INTERMED.
-    for var, dfb in _compute_block_dfbs(src):
-        if dfb in dfb_const:
-            storages[var] = dfb_const[dfb]
-    # Block variable -> every Storage it could have come from. A name is reused across
-    # preprocessor branches (`u::Block result` in each), so this is one-to-many rather than
-    # one-to-one, and every candidate gets the role: they all drain the same way.
-    accum_out = dict(_RE_ACCUM.findall(src))
-    produced = {}
-    for block, holder in _RE_PRODUCED.findall(src):
-        produced.setdefault(block, set()).add(accum_out.get(holder, holder))
 
     roles = {}
-    for thread, var in _RE_FILLS.findall(src):
-        roles.setdefault(var, (Dfb.INPUT, _thread_of(thread, defines, kernel_source)))
-    for thread, storage in _RE_DRAINS_BARE.findall(src):
-        roles.setdefault(storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
-    for thread, holder in _RE_DRAINS_INLINE.findall(src):
-        roles.setdefault(accum_out.get(holder, holder), (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
-    for thread, storage in _RE_DRAINS_STORAGE.findall(src):
-        if storage in storages:
-            roles.setdefault(storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
-    for pattern in (_RE_DRAINS, _RE_DRAINS_C2C):
-        for thread, block in pattern.findall(src):
-            for src_storage in produced.get(block, ()):
-                roles.setdefault(src_storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
-
-    return {name: roles.get(var, (Dfb.INTERMED, None)) for var, name in storages.items()}
+    for kind, pattern in ((Dfb.INPUT, _RE_EP_INPUT), (Dfb.OUTPUT, _RE_EP_OUTPUT)):
+        for thread, const in pattern.findall(src):
+            if const in dfb_const:
+                roles[dfb_const[const]] = (kind, _thread_of(thread, defines, kernel_source))
+    for name in dfb_const.values():
+        roles.setdefault(name, (Dfb.INTERMED, None))
+    return roles
 
 
 def unified_program_spec(
@@ -495,8 +434,9 @@ def unified_program_spec(
     ON BUFFER SLOTS. A kernel needs its buffers' slot numbers as compile-time VALUES, not as
     `dfb::` binding tokens: a token is emitted only into the kernels that bind that buffer
     (genfiles.cpp:129), a DFB's two endpoint roles are both spoken for, and a unified kernel
-    declares every Storage on every projection -- so a token spelling does not compile. See
-    unified_gate/gate_a_tokens.cpp, which fails for exactly that reason.
+    declares every endpoint on every projection -- so a token spelling does not compile. That
+    was established by probe rather than by argument; see unified_metal2_spec.md 7.1, which
+    quotes the compile error (the gate sources themselves are gone, at `ef02f9a9559`).
 
     So the slot is passed as a named compile-time arg, and it is PREDICTED here from metal's
     allocator rule: the lowest free slot among buffers sharing cores, in declaration order
@@ -657,10 +597,11 @@ def unified_program_spec(
         if d.kind is None:
             if d.name not in derived:
                 raise ValueError(
-                    f"{kernel_source} declares no u::Storage on a dfb_{d.name} compile-time arg, so its "
-                    f"endpoints "
-                    f"cannot be read off the kernel. Name it as the kernel does, or state the role "
-                    f"explicitly with dfb_input/dfb_output/dfb_intermed."
+                    f"{kernel_source} declares no endpoint and no u::Storage on a dfb_{d.name} "
+                    f"compile-time arg, so its endpoints cannot be read off the kernel. Declare it as "
+                    f"u::Input<thread, kDfb{d.name.title()}, Shape> / u::Output<...> / "
+                    f"u::Intermediate<...>, name it as the kernel does, or state the role explicitly "
+                    f"with dfb_input/dfb_output/dfb_intermed."
                 )
             d.kind, d.thread = derived[d.name]
         spec = ps.DataflowBufferSpec()

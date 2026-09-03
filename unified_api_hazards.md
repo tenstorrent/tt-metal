@@ -80,8 +80,11 @@ without a marker are mechanisms the headers document as the caller's responsibil
     different threads and silently WRONG when they share one, because both then get the
     same pair and the ready counter interleaves (hazard 12). Four things compound:
 
-    - `thread` and `pair` are adjacent small ints at the call site, so `noc_load<0, 1>` and
-      `noc_load<1, 0>` are a transposition apart and both compile.
+    - ~~`thread` and `pair` are adjacent small ints at the call site, so `noc_load<0, 1>`
+      and `noc_load<1, 0>` are a transposition apart and both compile.~~ **DEAD.** The
+      thread is no longer at the call site: it is declared once on the buffer
+      (`u::Input<0, kDfbIn0, In0>`) and `noc_load` reads it off the type, so the template
+      list holds `pair` alone and there are no two ints to transpose.
     - Getting it wrong is a HANG, not an error.
     - The invariant is whole-kernel -- "two concurrent collectives on one thread must
       differ" -- but is expressed at individual call sites, which in `matmul_blocked` sit
@@ -98,11 +101,13 @@ without a marker are mechanisms the headers document as the caller's responsibil
     semaphores with the `noc_core_write` arrival flag and hung. Verified by sabotage: it is
     a build error now.
 
-    **Still open:** the shape. Moving the identity onto the region object -- so the two
-    `LogicalMcast` declarations carry `Handshake::First` / `Handshake::Second` and sit side
-    by side at the top of the kernel -- would put both halves of a whole-kernel invariant
-    in one place, remove the adjacent-ints transposition, and close the range by
-    construction. The redundant `noc_load<0, 0>` / `noc_load<1, 1>` in
+    **Still open:** the shape, minus the transposition. Moving the identity onto the region
+    object -- so the two `LogicalMcast` declarations carry `Handshake::First` /
+    `Handshake::Second` and sit side by side at the top of the kernel -- would put both
+    halves of a whole-kernel invariant in one place and close the range by construction.
+    `pair` is still a bare int stated per call site; what changed is only that it is now the
+    ONLY thing in that template list, which is also the argument for the same treatment: the
+    thread moved onto the buffer it belongs to and stopped being said twice. The redundant `noc_load<0, 0>` / `noc_load<1, 1>` in
     `example_matmul.cpp` (now dropped) is the small evidence that the parameter invites
     noise even from someone who knows what it does.
 
@@ -309,6 +314,28 @@ without a marker are mechanisms the headers document as the caller's responsibil
     buffer that was meant. A wrong number is loud rather than silent -- every projection reads
     the same value, so they agree with each other and disagree with the host, which is wrong
     data or a hang on the first run -- but it is not caught before the run.
+
+20b. ~~**A buffer's declared data-movement thread disagreeing with the transfer that drives
+    it.**~~ **DEAD BY CONSTRUCTION**, and it is the hazard this catalogue's shape predicts:
+    silent on the arch we run, a hang on the next one. Metal 2.0 makes the host name a
+    producer and a consumer per dataflow buffer, and the data-movement half of that is a
+    thread number. While a launcher stated it and the kernel's `noc_load<N>` restated it,
+    the two could differ -- and Gen1 does not care, because circular-buffer state is per
+    core rather than per RISC, so either DM kernel drives it whatever the host declared.
+    Verified: binding `out` to thread 0 while the kernel stored it on thread 1 ran and
+    passed bit-identical. The masks only become load-bearing on Gen2, where they drive the
+    tile-counter credit flow.
+
+    Closed by having the fact said ONCE. A buffer is declared `u::Input<thread, id, S>` or
+    `u::Output<thread, id, S>`, `noc_load` / `noc_store` take the thread off the type rather
+    than from the call site, and the host reads the same declaration -- so there is no second
+    statement to disagree with, and no parser chasing the API to find one. `noc_load` also
+    takes an `Input`, so a buffer used against its role does not compile.
+
+    **What is left, stated exactly:** a buffer declared as an endpoint and then never used by
+    a transfer. The host binds a DM producer that never fills it, which is a hang. Nothing in
+    the kernel can catch that -- it is the absence of code -- so it is the one part of the
+    contract still resting on the launcher and the kernel being written together.
 
 21. ~~**A user semaphore id colliding with the reserved multicast base.**~~ **CHECKED.** The
     harness names its semaphores and allocates the six reserved ones above the caller's, and
