@@ -62,7 +62,11 @@ def device():
 def state_dict():
     from models.demos.qwen3_tts.tt.server import load_weights
 
-    return load_weights()
+    # load_weights returns (main_weights, decoder_weights); CodePredictor wants the
+    # main dict. Passing the tuple through fails in the ctor with
+    # "'tuple' object has no attribute 'items'".
+    main_weights, _decoder_weights = load_weights()
+    return main_weights
 
 
 def test_cp_fused_sdpa_parity(device, state_dict):
