@@ -213,6 +213,40 @@ inline void calculate_sfpu_binary_div(
     }
 }
 
+// Tensor/tensor float floor_div: Markstein quotient (when fp32 DEST) then floor in one pass.
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_binary_floor_div(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
+        sfpi::vFloat result = in0 * r;
+        if constexpr (is_fp32_dest_acc_en) {
+            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+                sfpi::vFloat e = in0 - result * in1;
+                result = result + e * r;
+            }
+            v_endif;
+        }
+
+        v_if(in1 == 0) {
+            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+            v_else {
+                result = std::numeric_limits<float>::infinity();
+                result = sfpi::copysgn(result, in0);
+            }
+            v_endif;
+        }
+        v_endif;
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = _floor_body_(result);
+        sfpi::dst_reg++;
+    }
+}
+
 // SCALAR_RHS_ONCE: dest 1 = scalar, even dests = LHS, dest 3 = reciprocal.
 constexpr std::uint32_t kScalarFloorDivRecipDst = 3;
 
@@ -231,7 +265,6 @@ inline void calculate_sfpu_store_scalar_recip(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_floor_div_scalar(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    static_assert(is_fp32_dest_acc_en);
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vFloat r = sfpi::dst_reg[kScalarFloorDivRecipDst * dst_tile_size_sfpi];
@@ -239,11 +272,13 @@ inline void calculate_sfpu_binary_floor_div_scalar(
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat result = in0 * r;
-        v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-            sfpi::vFloat e = in0 - result * in1;
-            result = result + e * r;
+        if constexpr (is_fp32_dest_acc_en) {
+            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+                sfpi::vFloat e = in0 - result * in1;
+                result = result + e * r;
+            }
+            v_endif;
         }
-        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = _floor_body_(result);
         sfpi::dst_reg++;

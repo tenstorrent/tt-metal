@@ -899,15 +899,21 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
-    const bool use_scalar_float_floor_div = op_type == BinaryOpType::DIV_FLOOR &&
-                                            operation_attributes.scalar.has_value() && a_dtype == DataType::FLOAT32 &&
-                                            tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
+    // Floating DIV_FLOOR: fuse quotient + floor into one SFPU op (skip FLOOR postprocess).
+    // Scalar RHS + FLOAT32 also hoists one reciprocal per tile batch (needs fp32 DEST so the
+    // stored recip is not truncated). Other float dtypes use the fused tile op without the hoist.
+    // INT32 keeps the dedicated div_int32_floor path from OpConfig.
+    const bool use_fused_float_floor_div = op_type == BinaryOpType::DIV_FLOOR &&
+                                           tt::tt_metal::is_floating_point(a_dtype) &&
+                                           tt::tt_metal::hal::get_arch() != tt::ARCH::QUASAR;
+    const bool use_scalar_float_floor_div =
+        use_fused_float_floor_div && operation_attributes.scalar.has_value() && a_dtype == DataType::FLOAT32;
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
     if (use_scalar_float_floor_div) {
-        // The scalar divisor is constant across every lane. Reuse one reciprocal per tile while retaining
-        // the full-precision division path's Markstein quotient correction, then floor in the same SFPU call.
         compute_kernel_defines["BINARY_SFPU_OP"] = "floor_div_binary_scalar_tile";
         compute_kernel_defines["SCALAR_RHS_ONCE"] = "1";
+    } else if (use_fused_float_floor_div) {
+        compute_kernel_defines["BINARY_SFPU_OP"] = "floor_div_binary_tile";
     }
 
     // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
@@ -983,7 +989,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
-        if (op_config.postprocess.has_value() && !use_scalar_float_floor_div) {
+        if (op_config.postprocess.has_value() && !use_fused_float_floor_div) {
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 

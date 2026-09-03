@@ -66,6 +66,19 @@ ALWI void div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_
 
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void floor_div_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary_floor_div,
+        (APPROX, ckernel::BinaryOp::DIV, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void floor_div_binary_scalar_recip_tile(std::uint32_t idst_s, std::uint32_t idst_r) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
