@@ -2065,6 +2065,9 @@ void sdpa_standard_v2(
             dfb_k_range_obj.wait_front(1);
             k_loop_start = ckernel::read_tile_value(dfb_windowed_k_range, 0, 0);
             k_loop_end = ckernel::read_tile_value(dfb_windowed_k_range, 0, 1);
+            // TEN-4746 (#48552): read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_windowed_k_range);
             dfb_k_range_obj.pop_front(1);
         }
 
@@ -2475,10 +2478,15 @@ void sdpa_ring_v2(
             if constexpr (!has_sliding_window) {
                 if (is_causal_iter && k_chunk >= causal_k_limit) {
                     DataflowBuffer(dfb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    // TEN-4746 (#48552): this K chunk is skipped (drained, not matmul'd), so the wait_front->
+                    // pop_front pair is bare and would trap the Quasar unpacker (POP_TILES races past
+                    // WAIT_TILES). dummy_unpack() orders POP after WAIT via an UNPACR_NOP; no-op on WH/BH.
+                    dummy_unpack(dfb_kt_in);
                     sdpa_dfb_pop_front_out_of_line(dfb_kt_in, DHt * Sk_chunk_t);
                     // In-place latent-V never pushes a V entry, so only K^T needs draining.
                     if constexpr (!kt_inplace_v) {
                         DataflowBuffer(dfb_v_in).wait_front(Sk_chunk_t * v_dfb_physical_width_t);
+                        dummy_unpack(dfb_v_in);
                         sdpa_dfb_pop_front_out_of_line(dfb_v_in, Sk_chunk_t * v_dfb_physical_width_t);
                     }
                     KV_chunks_processed_in_iter++;
@@ -2909,10 +2917,15 @@ void sdpa_ring_v2(
              dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
              ++dummy_chunk) {
             DataflowBuffer(dfb_kt_in).wait_front(DHt * Sk_chunk_t);
+            // TEN-4746 (#48552): dummy-KV alignment traffic is drained, never matmul'd, so this bare
+            // wait_front->pop_front would trap the Quasar unpacker. dummy_unpack() orders POP after WAIT
+            // via an UNPACR_NOP; no-op on WH/BH.
+            dummy_unpack(dfb_kt_in);
             sdpa_dfb_pop_front_out_of_line(dfb_kt_in, DHt * Sk_chunk_t);
             // In-place latent-V never pushes a V entry, so there is nothing extra to drain.
             if constexpr (!kt_inplace_v) {
                 DataflowBuffer(dfb_v_in).wait_front(Sk_chunk_t * v_dfb_physical_width_t);
+                dummy_unpack(dfb_v_in);
                 sdpa_dfb_pop_front_out_of_line(dfb_v_in, Sk_chunk_t * v_dfb_physical_width_t);
             }
         }

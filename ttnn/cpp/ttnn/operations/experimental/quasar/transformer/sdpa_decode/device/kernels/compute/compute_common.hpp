@@ -1693,6 +1693,9 @@ void sdpa_inner_loop(
             dfb_k_range_obj.wait_front(1);
             k_chunk_start = ckernel::read_tile_value(dfb_windowed_k_range, 0, 0);
             k_chunk_end = ckernel::read_tile_value(dfb_windowed_k_range, 0, 1);
+            // TEN-4746 (#48552): read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_windowed_k_range);
             dfb_k_range_obj.pop_front(1);
         }
 
@@ -1723,6 +1726,11 @@ void sdpa_inner_loop(
             if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {
                 dfb_k_in_obj.wait_front(k_chunk_tiles);
                 dfb_v_in_obj.wait_front(v_chunk_tiles);
+                // TEN-4746 (#48552): these bare wait_front->pop_front drains (this K/V chunk is skipped, no
+                // matmul consumes it) would trap the Quasar unpacker (POP_TILES races past WAIT_TILES).
+                // dummy_unpack() orders each POP after its WAIT via an UNPACR_NOP; reads nothing, no-op on WH/BH.
+                dummy_unpack(dfb_k_in);
+                dummy_unpack(dfb_v_in);
                 dfb_k_in_obj.pop_front(k_chunk_tiles);
                 dfb_v_in_obj.pop_front(v_chunk_tiles);
 
@@ -1815,6 +1823,10 @@ void sdpa_inner_loop(
                     // Warning: this won't work if dfb_qk_im is double-buffered -- the stamps would land
                     // in the other buffer, leaving the QK scores unmasked.
                     dfb_qk_im_obj.wait_front(Sk_chunk_t * Sq_chunk_t);
+                    // TEN-4746 (#48552): bare wait_front->pop_front (the pop/re-reserve cycle only moves the
+                    // rd/wr ptr, no op consumes the QK tiles) would trap the Quasar unpacker. dummy_unpack()
+                    // orders POP after WAIT via an UNPACR_NOP; reads nothing, no-op on WH/BH.
+                    dummy_unpack(dfb_qk_im);
                     dfb_qk_im_obj.pop_front(Sk_chunk_t * Sq_chunk_t);
                     dfb_qk_im_obj.reserve_back(Sk_chunk_t * Sq_chunk_t);
                     // Chunked-prefill: feed abs K (matches abs q_start_tile so diag stamp lines up).
@@ -2096,6 +2108,10 @@ void sdpa_inner_loop(
         if (KV_chunks_processed_in_iter % 2 == 0) {
             dfb_k_in_obj.wait_front(k_chunk_tiles);
             dfb_v_in_obj.wait_front(v_chunk_tiles);
+            // TEN-4746 (#48552): bare wait_front->pop_front drains (nothing consumes these K/V tiles) would
+            // trap the Quasar unpacker. dummy_unpack() orders each POP after its WAIT via an UNPACR_NOP.
+            dummy_unpack(dfb_k_in);
+            dummy_unpack(dfb_v_in);
             dfb_k_in_obj.pop_front(k_chunk_tiles);
             dfb_v_in_obj.pop_front(v_chunk_tiles);
         }

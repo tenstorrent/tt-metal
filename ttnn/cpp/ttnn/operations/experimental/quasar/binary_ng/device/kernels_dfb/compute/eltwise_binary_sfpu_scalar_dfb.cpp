@@ -177,5 +177,9 @@ void kernel_main() {
     }
 
     // Pop the single reused scalar tile from the RHS DFB.
+    // TEN-4746 (#48552): when num_tiles == 0 both chunk loops zero-trip, so nothing unpacks dfb_post_rhs
+    // between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar unpacker.
+    // dummy_unpack() orders POP after WAIT via an UNPACR_NOP; harmless on the common path, no-op on WH/BH.
+    dummy_unpack(dfb_post_rhs_id);
     dfb_post_rhs.pop_front(1);
 }
