@@ -39,7 +39,7 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (a @ b).item() / denom
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(300)
 def test_checkpoint_trajectory_pcc(device, model_config, checkpoint_path, missing_asset) -> None:
     if model_config.plan_anchor_path is None:
         missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")

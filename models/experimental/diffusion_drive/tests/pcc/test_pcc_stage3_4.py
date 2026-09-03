@@ -34,7 +34,7 @@ def _make_model(anchor_path: str) -> DiffusionDriveModel:
     return DiffusionDriveModel(cfg).eval()
 
 
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("output_key", ["trajectory", "scores"])
 def test_stage3_4_pcc(device, model_config, output_key) -> None:
     if model_config.plan_anchor_path is None:
