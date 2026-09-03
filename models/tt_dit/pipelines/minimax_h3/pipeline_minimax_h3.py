@@ -131,9 +131,10 @@ AUDIO_SHIFT = 3.0
 def _resolve_audio_t_shard(
     requested_factor: int, mesh_shape: tuple[int, ...], tp_axis: int, sp_axis: int
 ) -> tuple[int, int | None]:
-    """Largest factor in (8, 4) that is <= requested and matches a mesh axis (TP before SP), else
-    (1, None) unsharded. Never shards higher than requested."""
-    for factor in (8, 4):
+    """Largest factor in (32, 8, 4) that is <= requested and matches a mesh axis (TP before SP), else
+    (1, None) unsharded. Never shards higher than requested, so the default request of 8 caps the
+    chain at 8; 32 (the quad's inter-host axis) is opt-in via audio_t_factor=32 and unvalidated."""
+    for factor in (32, 8, 4):
         if factor <= requested_factor:
             axis = next((ax for ax in (tp_axis, sp_axis) if mesh_shape[ax] == factor), None)
             if axis is not None:
@@ -315,7 +316,7 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio T-shard factor/axis (default 8, 8->4->1 fallback); logged before decode.
+        # Audio T-shard factor/axis (default 8, 8->4->1 fallback; 32 opt-in); logged before decode.
         self.audio_t_factor, self._audio_t_axis = _resolve_audio_t_shard(
             audio_t_factor, shape, self.tp_axis, self.sp_axis
         )

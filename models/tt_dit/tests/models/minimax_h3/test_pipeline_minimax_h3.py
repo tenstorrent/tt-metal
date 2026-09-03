@@ -89,6 +89,8 @@ SWEEP = [
         (4, (4, 4), 0, 1, (4, 0)),  # equal axes -> prefer TP
         (1, (4, 8), 0, 1, (1, None)),  # explicit unsharded
         (2, (4, 8), 0, 1, (1, None)),  # below the 4/8 chain -> unsharded
+        (32, (4, 32), 0, 1, (32, 1)),  # opt-in 32 on a quad -> the 32-wide inter-host axis
+        (32, (4, 8), 0, 1, (8, 1)),  # requesting 32 on a single galaxy -> falls to 8
     ],
 )
 def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
