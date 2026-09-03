@@ -22,7 +22,7 @@ void bind_compressor_state_exchange(nb::module_& mod) {
             Mesh coordinates on the other axis are independent TP lanes.
 
             All inputs are BFLOAT16 TILE tensors in interleaved memory. Each local mesh shard
-            has shape ``[B, 1, 64, 512]``. The initial states have the same distributed tensor
+            has shape ``[B, 1, 64, head_dim]``. The initial states have the same distributed tensor
             spec as the local states and contain the prior-call state in every SP shard; only
             rank zero's copy is preserved in the result.
 

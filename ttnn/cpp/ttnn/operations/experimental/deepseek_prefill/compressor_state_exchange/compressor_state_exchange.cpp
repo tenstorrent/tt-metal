@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::compressor_state_exc
 namespace {
 
 constexpr uint32_t kStateRows = 64;
-constexpr uint32_t kHeadDim = 512;
+constexpr uint32_t kTileWidth = 32;
 
 void validate_state(const ttnn::Tensor& tensor, std::string_view name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be a device tensor", name);
@@ -28,7 +28,12 @@ void validate_state(const ttnn::Tensor& tensor, std::string_view name) {
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::TILE, "{} must use TILE layout", name);
     TT_FATAL(!tensor.is_sharded(), "{} must use interleaved memory", name);
     TT_FATAL(tensor.logical_shape().rank() == 4, "{} must be rank 4", name);
-    TT_FATAL(tensor.logical_shape()[-1] == kHeadDim, "{} must have head dimension {}", name, kHeadDim);
+    TT_FATAL(
+        tensor.logical_shape()[-1] > 0 && tensor.logical_shape()[-1] % kTileWidth == 0,
+        "{} head dimension must be a positive multiple of {}, got {}",
+        name,
+        kTileWidth,
+        tensor.logical_shape()[-1]);
 }
 
 void validate_pair(
