@@ -309,7 +309,8 @@ def quasar_l1_client_label(sel):
 
     Unpack subports decompose as 4 units x 5 read ports and pack as 4 units x 3 write ports;
     an emulator sweep under a matmul lit units 0-2 on both sides with unit 3 idle, matching
-    that decomposition.
+    that decomposition. The decomposition is positional: which physical unpacker/bank each unit
+    maps to is not RTL-confirmed, so a zero only means the monitored port carried no traffic.
     """
     subport, event = divmod(int(sel), 8)
     if subport < 4:
@@ -372,18 +373,18 @@ PERF_COUNTER_CSV_HEADERS = [
     "Unpacker-to-Math Data Flow Max (%)",
     "Unpacker-to-Math Data Flow Avg (%)",
     # INSTRN_THREAD thread stall rates
-    "Thread 0 Stall Rate Min (%)",
-    "Thread 0 Stall Rate Median (%)",
-    "Thread 0 Stall Rate Max (%)",
-    "Thread 0 Stall Rate Avg (%)",
-    "Thread 1 Stall Rate Min (%)",
-    "Thread 1 Stall Rate Median (%)",
-    "Thread 1 Stall Rate Max (%)",
-    "Thread 1 Stall Rate Avg (%)",
-    "Thread 2 Stall Rate Min (%)",
-    "Thread 2 Stall Rate Median (%)",
-    "Thread 2 Stall Rate Max (%)",
-    "Thread 2 Stall Rate Avg (%)",
+    "Thread 0 Issue Stall Rate Min (%)",
+    "Thread 0 Issue Stall Rate Median (%)",
+    "Thread 0 Issue Stall Rate Max (%)",
+    "Thread 0 Issue Stall Rate Avg (%)",
+    "Thread 1 Issue Stall Rate Min (%)",
+    "Thread 1 Issue Stall Rate Median (%)",
+    "Thread 1 Issue Stall Rate Max (%)",
+    "Thread 1 Issue Stall Rate Avg (%)",
+    "Thread 2 Issue Stall Rate Min (%)",
+    "Thread 2 Issue Stall Rate Median (%)",
+    "Thread 2 Issue Stall Rate Max (%)",
+    "Thread 2 Issue Stall Rate Avg (%)",
     # INSTRN_THREAD pipeline wait metrics
     "SrcA Valid Wait Min (%)",
     "SrcA Valid Wait Median (%)",
@@ -583,7 +584,7 @@ PERF_COUNTER_CSV_HEADERS = [
     *[
         f"{name} {stat} (%)"
         for name in [
-            "Thread 3 Stall Rate",
+            "Thread 3 Issue Stall Rate",
             "Tile Counter Stall Pack Rate",
             "Tile Counter Stall Unpack Rate",
             "Srcs Stall Pack Rate",
@@ -640,7 +641,7 @@ PERF_COUNTER_CSV_HEADERS = [
         ]
         for stat in ("Min", "Median", "Max", "Avg")
     ],
-    *[f"T{t} Instrn Per Non-Stalled Cycle {stat}" for t in range(4) for stat in ("Min", "Median", "Max", "Avg")],
+    *[f"T{t} Instrn Per Issue-Ready Cycle {stat}" for t in range(4) for stat in ("Min", "Median", "Max", "Avg")],
     # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
@@ -872,10 +873,10 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Math Pipeline Utilization",
         "Unpacker-to-Math Data Flow",
         # INSTRN_THREAD metrics
-        "Thread 0 Stall Rate",
-        "Thread 1 Stall Rate",
-        "Thread 2 Stall Rate",
-        "Thread 3 Stall Rate",
+        "Thread 0 Issue Stall Rate",
+        "Thread 1 Issue Stall Rate",
+        "Thread 2 Issue Stall Rate",
+        "Thread 3 Issue Stall Rate",
         "Math Src Data Ready Rate",
         "FPU SFPU Overlap",
         *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
@@ -974,7 +975,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
         "T3 Instrn Issue Rate",
-        *[f"T{t} Instrn Per Non-Stalled Cycle" for t in range(4)],
+        *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
         "Avg HF Cycles Per Instrn",
     ]
 
@@ -1037,10 +1038,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     def _counter_column(counter_name, column):
         counter_name = _resolve(counter_name)
         mask = perf_counter_df["counter type"] == counter_name
-        series = perf_counter_df[mask].set_index(_SERIES_INDEX)[column]
-        # risc_type keeps each NEO reader distinct; averaging repeated launches keeps cross-counter
-        # arithmetic aligned instead of cartesian on duplicate index labels.
-        return series.groupby(level=list(range(series.index.nlevels))).mean()
+        sub = perf_counter_df[mask]
+        # risc_type keeps each NEO reader distinct; the launch cumcount keeps every launch its own
+        # aligned sample (the k-th occurrence of each counter on a reader is the k-th launch), so
+        # cross-counter arithmetic pairs within a launch and Min/Max are real measurements.
+        launch = sub.groupby(_SERIES_INDEX).cumcount()
+        return sub.set_index(_SERIES_INDEX + [launch.rename("launch")])[column]
 
     def get_counter_series(counter_name):
         return _counter_column(counter_name, "value")
@@ -1209,11 +1212,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     per_op_stats["Math Pipeline Utilization"] = _group_to_stat_dict(math_pipe_util)
     per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
 
-    # === Thread stall metrics (threads 0-2 on tt-1xx, 0-3 on Quasar) ===
+    # === Thread issue-stall metrics (0-2 on tt-1xx, 0-3 on Quasar). THREAD_STALLS counts
+    # issue-stage stalls only; math operand waits appear in the DVALID/SRCA stall-reason rates. ===
     for t in range(4):
         name = f"THREAD_STALLS_{t}"
         if has_counter(name):
-            per_op_stats[f"Thread {t} Stall Rate"] = compute_util_metric(name)
+            per_op_stats[f"Thread {t} Issue Stall Rate"] = compute_util_metric(name)
 
     # Pipeline wait metrics
     pipeline_wait_counters = {
@@ -1444,7 +1448,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         if has_counter(instr_name) and has_counter(stall_name):
             instr = get_counter_series(instr_name)
             active = (get_counter_ref_cnt(instr_name) - get_counter_series(stall_name)).clip(lower=1)
-            per_op_stats[f"T{t_idx} Instrn Per Non-Stalled Cycle"] = _group_to_stat_dict(
+            per_op_stats[f"T{t_idx} Instrn Per Issue-Ready Cycle"] = _group_to_stat_dict(
                 (instr / active).replace([float("inf"), -float("inf")], nan)
             )
     for src in ("SRCA", "SRCB"):
@@ -1643,11 +1647,14 @@ def compute_device_only_metrics(
         )
 
     eff_df = pd.DataFrame(efficiency_records)
+    # Every launch is its own pivot row so per-launch ratios (and true Min/Max) survive.
+    eff_df["launch"] = eff_df.groupby(
+        ["run_host_id", "trace_id_count", "core_x", "core_y", "risc", "counter_type"]
+    ).cumcount()
 
-    # risc in the index keeps each Quasar NEO reader as its own row instead of discarding 3 of 4;
-    # mean (not first) averages the windows when one core records multiple launches.
+    # risc keeps each NEO reader its own row; launch keeps each capture window its own row.
     eff_pivot = eff_df.pivot_table(
-        index=["run_host_id", "trace_id_count", "core_x", "core_y", "risc"],
+        index=["run_host_id", "trace_id_count", "core_x", "core_y", "risc", "launch"],
         columns="counter_type",
         values=["value", "ref_cnt"],
         aggfunc="mean",
@@ -1730,14 +1737,15 @@ def compute_device_only_metrics(
         eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
             ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
         ].mean(axis=1, skipna=True)
-    eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
-        lambda x: (
-            (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
-            if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
-            else nan
-        ),
-        axis=1,
-    )
+    if "value_FPU_COUNTER" in eff_pivot.columns:
+        eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
+            lambda x: (
+                (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
+                if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
+                else nan
+            ),
+            axis=1,
+        )
 
     # Thread stall rates (threads 0-2 on tt-1xx, 0-3 on Quasar)
     for t in range(4):
@@ -1745,7 +1753,7 @@ def compute_device_only_metrics(
         ref_col = f"ref_cnt_THREAD_STALLS_{t}"
         if t == 3 and stall_col not in eff_pivot.columns:
             continue
-        eff_pivot[f"Thread {t} Stall Rate"] = eff_pivot.apply(
+        eff_pivot[f"Thread {t} Issue Stall Rate"] = eff_pivot.apply(
             lambda x, s=stall_col, r=ref_col: safe_div(x.get(s, 0), x.get(r, 0)),
             axis=1,
         )
@@ -1865,6 +1873,8 @@ def compute_device_only_metrics(
     # L1 back-pressure
     def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
         def fn(x):
+            if any(k not in x for k in (req0_key, req1_key, grant0_key, grant1_key)):
+                return nan
             r0 = x.get(req0_key, 0)
             r1 = x.get(req1_key, 0)
             g0 = x.get(grant0_key, 0)
@@ -1913,6 +1923,8 @@ def compute_device_only_metrics(
 
     def safe_single_bp(req_key, grant_key):
         def fn(x):
+            if req_key not in x or grant_key not in x:
+                return nan
             r = x.get(req_key, 0)
             g = x.get(grant_key, 0)
             return max(0.0, (r - g) / r * 100) if r > 0 else nan
@@ -1951,6 +1963,8 @@ def compute_device_only_metrics(
 
     def safe_complement(counter_key, total_key):
         def fn(x):
+            if counter_key not in x or total_key not in x:
+                return nan
             v = x.get(counter_key, 0)
             t = x.get(total_key, 0)
             return max(0.0, (t - v) / t * 100) if t > 0 else nan
@@ -1959,6 +1973,8 @@ def compute_device_only_metrics(
 
     def safe_util(counter_key, ref_key):
         def fn(x):
+            if counter_key not in x or ref_key not in x:
+                return nan
             v = x.get(counter_key, 0)
             r = x.get(ref_key, 0)
             return (v / r * 100) if r > 0 else nan
@@ -2021,6 +2037,8 @@ def compute_device_only_metrics(
 
     def safe_bp_single(req_key, grant_key):
         def fn(x):
+            if req_key not in x or grant_key not in x:
+                return nan
             r = x.get(req_key, 0)
             g = x.get(grant_key, 0)
             return max(0.0, (r - g) / r * 100) if r > 0 else nan
@@ -2127,7 +2145,7 @@ def compute_device_only_metrics(
     for t_idx in range(4):
         icol, scol = f"value_THREAD_INSTRUCTIONS_{t_idx}", f"value_THREAD_STALLS_{t_idx}"
         if icol in eff_pivot.columns and scol in eff_pivot.columns:
-            eff_pivot[f"T{t_idx} Instrn Per Non-Stalled Cycle"] = eff_pivot.apply(
+            eff_pivot[f"T{t_idx} Instrn Per Issue-Ready Cycle"] = eff_pivot.apply(
                 lambda x, i=icol, s=scol, r=f"ref_cnt_THREAD_INSTRUCTIONS_{t_idx}": (
                     x[i] / max(1.0, x.get(r, 0) - x[s]) if x.get(r, 0) > 0 else nan
                 ),
@@ -2373,10 +2391,10 @@ def compute_device_only_metrics(
         "FPU Execution Efficiency",
         "Math Pipeline Utilization",
         "Unpacker-to-Math Data Flow",
-        "Thread 0 Stall Rate",
-        "Thread 1 Stall Rate",
-        "Thread 2 Stall Rate",
-        "Thread 3 Stall Rate",
+        "Thread 0 Issue Stall Rate",
+        "Thread 1 Issue Stall Rate",
+        "Thread 2 Issue Stall Rate",
+        "Thread 3 Issue Stall Rate",
         "Math Src Data Ready Rate",
         "FPU SFPU Overlap",
         *[f"Unpacker{u} Busy T{t} Util" for u in (0, 1) for t in range(4)],
@@ -2464,7 +2482,7 @@ def compute_device_only_metrics(
         "T1 Instrn Issue Rate",
         "T2 Instrn Issue Rate",
         "T3 Instrn Issue Rate",
-        *[f"T{t} Instrn Per Non-Stalled Cycle" for t in range(4)],
+        *[f"T{t} Instrn Per Issue-Ready Cycle" for t in range(4)],
         "Avg HF Cycles Per Instrn",
     ]
 

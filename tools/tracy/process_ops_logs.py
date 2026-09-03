@@ -931,7 +931,7 @@ def _enrich_ops_from_device_logs(
 
                 # Thread stall rates
                 for t in range(3):
-                    assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
+                    assign_metric(f"Thread {t} Issue Stall Rate", per_op_stats.get(f"Thread {t} Issue Stall Rate", {}))
 
                 # Pipeline wait metrics
                 pipeline_wait_names = [
@@ -1052,7 +1052,7 @@ def _enrich_ops_from_device_logs(
                     if f"{metric_name} Avg (%)" in device_op or f"{metric_name} Avg" in device_op:
                         continue
                     catch_all_suffix = (
-                        "" if metric_name.endswith(("Instrn Issue Rate", "Instrn Per Non-Stalled Cycle")) else " (%)"
+                        "" if metric_name.endswith(("Instrn Issue Rate", "Instrn Per Issue-Ready Cycle")) else " (%)"
                     )
                     assign_metric(metric_name, metric_dict, suffix=catch_all_suffix)
 
