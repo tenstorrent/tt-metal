@@ -174,6 +174,43 @@ _NONFINITE_EXPECTED = {
 
 assert set(_NONFINITE_EXPECTED) == set(_FLOAT_OPS)
 
+# Signed zero, measured on the pre- and post-rewrite headers alike.
+#
+# `ulp_sweep` deduplicates -0.0 against +0.0, so the exhaustive finite sweep sees
+# only one zero encoding and cannot speak for this at all -- hence a separate
+# test, on the one path where -0.0 actually reaches the LREG (see
+# _SIGNED_ZERO_FORMAT).
+#
+# Two of these rows disagree with torch, and deliberately so:
+# sign(-0.0) -> -1 where IEEE says -0.0, and heaviside(-0.0) -> 0 where
+# -0.0 == 0 would give the 0.5 scalar. Both fall out of SFPSETCC, which
+# tt-isa-documentation specifies only "provided that VC is neither negative zero
+# nor any kind of NaN" -- so the sign-bit read on -0.0 is outside the
+# primitive's contract rather than a hardware fault. test_eltwise_unary_sfpu
+# carries the same two divergences as documented xfails; this test pins them
+# bit-exactly so a rewrite of these kernels cannot move them unnoticed.
+#
+#                        -0.0,  +0.0
+_SIGNED_ZERO_EXPECTED = {
+    "sign": (-1.0, 0.0),
+    "heaviside": (0.0, 0.5),
+    "hardshrink": (0.0, 0.0),
+    "unary_eq": (0.0, 0.0),
+    "unary_ne": (1.0, 1.0),
+    "unary_gt": (0.0, 0.0),
+    "unary_lt": (1.0, 1.0),
+    "unary_ge": (0.0, 0.0),
+    "unary_le": (1.0, 1.0),
+}
+
+assert set(_SIGNED_ZERO_EXPECTED) == set(_FLOAT_OPS)
+
+# The signed-zero divergences partition exactly on unpack_to_dest, which is
+# (input.is_32_bit() and dest_acc == Yes) -- the only path on which the datum
+# skips SrcA and the datacopy and keeps its sign bit. bf16 in / fp32 out would
+# pass vacuously.
+_SIGNED_ZERO_FORMAT = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+
 
 def _flush_subnormals(t: torch.Tensor) -> torch.Tensor:
     """Model the DEST flush-to-zero the golden's fp32 arithmetic does not have.
@@ -460,6 +497,43 @@ def test_nonfinite_stimulus_reaches_device():
     assert classes == {"+inf", "-inf", "nan"}, (
         f"non-finite stimulus delivered classes {sorted(classes)}; "
         f"distinct patterns {sorted(hex(int(b) & 0xFFFF) for b in set(x_bits.tolist()))}"
+    )
+
+
+@wormhole_only
+@pytest.mark.parametrize("op_name", list(_FLOAT_OPS))
+def test_equiv_signed_zero(op_name):
+    """-0.0 and +0.0 on the unpack-to-dest path, bit for bit.
+
+    The exhaustive finite sweep cannot cover this: ulp_sweep dedupes the two
+    zeros. Asserted against _SIGNED_ZERO_EXPECTED rather than the golden, which
+    follows torch and so disagrees with the hardware on sign and heaviside.
+    """
+    # -0.0 and +0.0 first, then ordinary values as controls that the op ran.
+    values = [-0.0, 0.0, -1.5, 1.5] + [7.0] * (_FACE_ELEMENTS - 4)
+    spec_A = StimuliSpec.custom(values=values, seed=0)
+
+    src_A, res, _ = _drive(
+        _FLOAT_OPS[op_name],
+        _SIGNED_ZERO_FORMAT,
+        spec_A,
+        1,
+        DestAccumulation.Yes,
+        want_golden=False,
+    )
+
+    x_bits = _as_bits(src_A.to(torch.float32), DataFormat.Float32)[:2]
+    got_bits = _as_bits(res, _SIGNED_ZERO_FORMAT.output_format)[:2]
+    assert [int(b) & 0xFFFFFFFF for b in x_bits] == [0x80000000, 0x00000000], (
+        f"{op_name}: -0.0 did not survive delivery to the SFPU; got "
+        f"{[hex(int(b) & 0xFFFFFFFF) for b in x_bits]}"
+    )
+    want_bits = _as_bits(
+        torch.tensor(_SIGNED_ZERO_EXPECTED[op_name], dtype=torch.float32),
+        _SIGNED_ZERO_FORMAT.output_format,
+    )
+    _assert_bit_exact(
+        f"{op_name}__signed_zero", x_bits, got_bits, want_bits, x_mask=0xFFFFFFFF
     )
 
 
