@@ -28,15 +28,16 @@ Wall clock per generated token, 32,768-token context, one user, board 0. Lower i
 |---|---|---|
 | start of this work (`fd2c3290563`, benchmark added, nothing tuned) | 36.17 | 27.6 |
 | after the scheduling and fidelity work (`563fe9b9fca`) | 32.71 | 30.6 |
-| after picking the next token on the chip (default) | 29.82 | 33.5 |
-| the same with the pre-slice switch on (see below) | **28.73** | **34.8** |
+| after picking the next token on the chip | 29.82 | 33.5 |
+| after cutting to the real users before the chips exchange scores | **28.70** | **34.8** |
 
 **Cumulative: 36.17 -> 28.73 ms/token, a 20.6% reduction.**
 
-The final figure is the mean of a 20-run soak (range 28.67–28.77). Against a baseline run
+Both final rows are the shipped configuration; they are listed separately because the two
+changes were measured separately. The 28.73 figure is the mean of a 20-run soak (range
+28.67–28.77); 28.70 is a single confirming run of the shipped default. Against a baseline
 paired in the same session (33.14 ms/token), picking the token on the chip is worth
-**3.32 ms/token (10.0%)** by default and **4.41 ms/token (13.3%)** with the pre-slice
-switch.
+**3.32 ms/token (10.0%)**, and cutting before the exchange a further **1.12 ms/token**.
 
 Across user counts, measured before and after that change:
 
@@ -103,17 +104,31 @@ changes behaviour.
 | 4 | decode attention accumulation | `HIFI2_NOFP32` on the three decode attention operators | `ModelOptimizations.performance()`, gated on `Qwen3-8B` | 0.139 ms/token |
 | 5 | per-layer chip-to-chip collectives | 40 chunks per sync, 3 workers per link | `non_galaxy_ccl_configs`, keyed `Qwen3-8B` | 0.095 ms/token |
 | 6 | next-token selection | on the chip (`allow_force_argmax: True`) | same table | 3.32 ms/token |
+| 6a | cut to the real users before the chips exchange scores | `pre_slice_before_gather: True` | same table | 1.12 ms/token |
 | 6b | gather for token selection | 40 chunks per sync, **4** workers per link | same table, `sampling_force_argmax` | 0.07 ms/token |
 | 7 | feed-forward gate weights | 4-bit with low-fidelity arithmetic | framework default in the performance preset | pre-existing |
 | 8 | KV-cache page block | 256 tokens | `PAGE_BLOCK_SIZE` in the benchmark | 0.59% |
 
 Two of these are worth expanding.
 
-**#6 is the largest single win and has an opt-in refinement.** Setting
-`TT_SAMPLING_SLICE_BEFORE_GATHER=1` narrows the scan to the one row that belongs to the
-single user before the chips exchange scores, worth a further **1.09 ms/token**. It is
-opt-in rather than default because it applies only when there is exactly one real user and
-the vocabulary is unpadded.
+**#6a is worth expanding, because the saving is nearly all avoided traffic.** The chip
+computes on 32x32 blocks, so at one user the score block is padded to 32 rows of which
+only row 0 is real. The exchange moved all of them: 9.7 MB to use 0.3 MB. It cannot simply
+be cut first, because a tiled block interleaves its values and row 0 is not a contiguous
+run of memory — no slice is possible below one 32-row tile. Untilizing converts to
+row-by-row order, after which the cut is a real operation, and untilizing the local shard
+is cheap (0.066 ms on 32x75968). So the order becomes untilize, cut, exchange 0.3 MB.
+
+Enabled per model rather than globally. The guards in the code are generic (multi-chip,
+decode, batch under 32, unpadded vocabulary), so a global default would also switch it on
+for Llama-3.1-8B on Galaxy — a different board with 4 links and a ring topology instead of
+1 link and a line — where it has never been run. `TT_SAMPLING_SLICE_BEFORE_GATHER`
+overrides the model's setting either way: `1` forces it on, `0` forces the shipped order,
+unset takes the model default.
+
+Verified as shipped: 28.70 ms/token with it against 29.82 with it forced off, and the two
+runs produced **byte-identical output** — 136,013 characters, 24,369 words, matching
+hashes.
 
 **#8 is a serving parameter, not a model one.** The framework only accepts a page block
 size; it never chooses one. So this speeds up *this benchmark*, and a deployment gets it

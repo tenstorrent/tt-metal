@@ -272,12 +272,17 @@ class TTSampling(LightweightModule):
             self.argmax_chunks_per_sync = sampling_ag_config.get("chunks_per_sync", 10)
             self.argmax_num_workers_per_link = 1
             self.ag_topology = sampling_ag_config["topology"]
+            # Per-model, because the reordering below has only been measured on the model
+            # that asks for it. Default False keeps the shipped order for every other model
+            # that reaches this path on a multi-chip mesh.
+            self._pre_slice_before_gather = sampling_ag_config.get("pre_slice_before_gather", False)
         else:
             self._allow_force_argmax_sampling = False
             self.num_argmax_gather_links = self.num_gather_links
             self.argmax_chunks_per_sync = 10
             self.argmax_num_workers_per_link = 1
             self.ag_topology = ttnn.Topology.Linear
+            self._pre_slice_before_gather = False
 
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
@@ -814,12 +819,19 @@ class TTSampling(LightweightModule):
             # tiled tensor cannot be cut below one 32-row tile, but an untilized one can,
             # and untilizing the local shard first is cheap (measured 0.066 ms on
             # 32x75968). So convert and slice here, and let the gather carry only the
-            # real users. Opt-in while it is being evaluated; the default order is
-            # unchanged. Skipped when a padded vocab tail still needs trimming after the
-            # gather, or on the sub-core-grid path, where op placement is constrained.
+            # real users. Enabled per model rather than globally: measured on Qwen3-8B /
+            # N300 / 32k (1.09 ms/token, and 257/257 identical tokens at batch 1, 2 and 4),
+            # and not run on any other board or topology. Skipped when a padded vocab tail
+            # still needs trimming after the gather, or on the sub-core-grid path, where op
+            # placement is constrained.
+            # Per-model by default (see _pre_slice_before_gather above).
+            # TT_SAMPLING_SLICE_BEFORE_GATHER overrides that either way when set: "1" forces
+            # the reordering on, "0" forces the shipped order, unset takes the model's setting.
+            _pre_slice_env = os.environ.get("TT_SAMPLING_SLICE_BEFORE_GATHER")
+            pre_slice_requested = self._pre_slice_before_gather if _pre_slice_env is None else _pre_slice_env == "1"
             pre_sliced = False
             if (
-                os.environ.get("TT_SAMPLING_SLICE_BEFORE_GATHER", "0") == "1"
+                pre_slice_requested
                 # Decode only. In prefill the 32 rows are sequence positions, not users:
                 # the caller picks row (last_token_idx % 32) to get the token for the last
                 # prompt position, so cutting to row 0 removes the row it needs (it fails

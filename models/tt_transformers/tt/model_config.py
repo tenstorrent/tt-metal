@@ -1260,6 +1260,18 @@ class ModelArgs:
                         # Greedy only -- a non-greedy request at this width has no device
                         # route and falls back to host sampling (see TTSampling.forward).
                         "allow_force_argmax": True,
+                        # Untilize and cut the local shard to the real users BEFORE the chips
+                        # exchange it, instead of gathering all 32 tile-padded rows and cutting
+                        # after. A tiled tensor cannot be cut below one 32-row tile, but an
+                        # untilized one can, and untilizing the local shard is cheap (0.066 ms
+                        # on 32x75968). At batch 1 the gather carries 0.3 MB instead of 9.7.
+                        # Worth 1.09 ms/token (29.817 -> 28.728, 20-run soak, ranges disjoint),
+                        # with 257/257 identical tokens at batch 1, 2 and 4.
+                        # Per-model rather than global: the only other model permitted on this
+                        # path with more than one chip is Llama-3.1-8B on Galaxy, which is a
+                        # different board, 4 links and a ring rather than 1 link and a line, and
+                        # was never measured.
+                        "pre_slice_before_gather": True,
                         "num_links": 1,
                         "chunks_per_sync": 40,
                         "num_workers_per_link": 4,
