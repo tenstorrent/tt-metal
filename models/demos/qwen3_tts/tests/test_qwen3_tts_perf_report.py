@@ -61,6 +61,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.qwen3_tts.tests import qwen3_tts_profile_demo_common as _common
 from models.demos.qwen3_tts.tests.qwen3_tts_profile_demo_common import (
     allocate_talker_kv,
     build_fused_cp_profile_buffers,
@@ -74,6 +75,14 @@ from models.demos.qwen3_tts.tests.qwen3_tts_profile_demo_common import (
     run_talker_decode_untraced,
     upload_prefill_embeds,
 )
+
+# Rebound rather than imported by name. These two are pytest fixtures, referenced only
+# as test parameters, so `from ... import profile_device, demo_model` looks like a pair
+# of unused imports and the repo's autoflake hook (--remove-all-unused-imports over
+# models/) deletes them on commit — leaving "fixture 'profile_device' not found" at run
+# time. An assignment is not an import, so it survives.
+profile_device = _common.profile_device
+demo_model = _common.demo_model
 
 try:
     from tracy import signpost
