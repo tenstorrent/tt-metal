@@ -27,10 +27,6 @@ private:
 public:
     static_assert(TILE_INDEX < TILE_COUNT, "Reduction auxiliary tile index is outside the serialized recipe");
 
-    static constexpr std::uint32_t cb_id = reduce_plan_args::extract(
-        configuration,
-        reduce_plan_args::auxiliary_configuration::cb_id_shift,
-        reduce_plan_args::auxiliary_configuration::cb_id_mask);
     static constexpr ReduceAuxiliaryTileType type = static_cast<ReduceAuxiliaryTileType>(reduce_plan_args::extract(
         configuration,
         reduce_plan_args::auxiliary_configuration::tile_type_shift,
@@ -49,19 +45,32 @@ public:
         "A zero auxiliary tile must use zero value bits and zero valid elements");
 };
 
-/** Constexpr view over the auxiliary tiles owned by one reduce call. */
-template <std::uint32_t CTA_OFFSET, std::uint32_t TILE_COUNT>
-struct ReduceAuxiliaryTilesArgs {
-    static constexpr std::uint32_t num_tiles = TILE_COUNT;
+/** Constexpr view over the sequence-level auxiliary CB recipe. */
+template <std::uint32_t CTA_OFFSET>
+struct ReduceAuxiliaryArgs {
+private:
+    static constexpr std::uint32_t header = get_compile_time_arg_val(CTA_OFFSET);
+
+public:
+    static constexpr std::uint32_t cb_id = reduce_plan_args::extract(
+        header, reduce_plan_args::auxiliary_header::cb_id_shift, reduce_plan_args::auxiliary_header::cb_id_mask);
+    static constexpr std::uint32_t num_tiles = reduce_plan_args::extract(
+        header,
+        reduce_plan_args::auxiliary_header::tile_count_shift,
+        reduce_plan_args::auxiliary_header::tile_count_mask);
+    static constexpr std::uint32_t tiles_offset = reduce_plan_args::auxiliary_tiles_offset(CTA_OFFSET);
 
     template <std::uint32_t TILE_INDEX>
-    using Tile = ReduceAuxiliaryTileArgs<CTA_OFFSET, TILE_INDEX, num_tiles>;
+    using Tile = ReduceAuxiliaryTileArgs<tiles_offset, TILE_INDEX, num_tiles>;
 
     static constexpr std::uint32_t num_compile_time_args() {
-        return num_tiles * reduce_plan_args::auxiliary_tile_word_count;
+        return reduce_plan_args::auxiliary_compile_time_arg_count(num_tiles);
     }
 
     static constexpr std::uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
+
+    static_assert(cb_id != reduce_plan_args::no_cb_id, "Reduction auxiliary CB ID uses the reserved no-CB value");
+    static_assert(num_tiles > 0, "Reduction auxiliary recipe must contain at least one tile");
 };
 
 /**
@@ -145,18 +154,17 @@ public:
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_shift,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_mask);
+    static constexpr std::uint32_t auxiliary_tile_offset = reduce_plan_args::extract(
+        chunk_and_auxiliary,
+        reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_offset_shift,
+        reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_offset_mask);
     static constexpr std::uint32_t auxiliary_tile_count = reduce_plan_args::extract(
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_count_shift,
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_count_mask);
     static constexpr std::uint32_t post_scale_bits = word<reduce_plan_args::CallWord::PostScaleBits>();
 
-    static constexpr std::uint32_t auxiliary_tiles_offset = reduce_plan_args::call_auxiliary_tiles_offset(CTA_OFFSET);
-    using AuxiliaryTiles = ReduceAuxiliaryTilesArgs<auxiliary_tiles_offset, auxiliary_tile_count>;
-
-    static constexpr std::uint32_t num_compile_time_args() {
-        return reduce_plan_args::call_compile_time_arg_count(auxiliary_tile_count);
-    }
+    static constexpr std::uint32_t num_compile_time_args() { return reduce_plan_args::call_compile_time_arg_count(); }
 
     static constexpr std::uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 
@@ -190,24 +198,10 @@ public:
         "A non-accumulating call must use accumulation index zero");
 };
 
-// Locate a call by walking the independently sized records which begin at
-// FIRST_CALL_CTA_OFFSET. This is only an addressing utility: it neither reads a
-// call count nor infers call behavior from CALL_INDEX.
+// Address one fixed-size call without interpreting the call count or deriving
+// any call behavior from its position.
 template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
-struct ReduceCallAt {
-private:
-    using Previous = typename ReduceCallAt<FIRST_CALL_CTA_OFFSET, CALL_INDEX - 1>::type;
-
-public:
-    using type = ReduceCallArgs<Previous::next_compile_time_args_offset()>;
-};
-
-template <std::uint32_t FIRST_CALL_CTA_OFFSET>
-struct ReduceCallAt<FIRST_CALL_CTA_OFFSET, 0> {
-    using type = ReduceCallArgs<FIRST_CALL_CTA_OFFSET>;
-};
-
-template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
-using ReduceCallAtT = typename ReduceCallAt<FIRST_CALL_CTA_OFFSET, CALL_INDEX>::type;
+using ReduceCallAtT =
+    ReduceCallArgs<FIRST_CALL_CTA_OFFSET + CALL_INDEX * reduce_plan_args::call_compile_time_arg_count()>;
 
 }  // namespace ttnn::kernel_lib

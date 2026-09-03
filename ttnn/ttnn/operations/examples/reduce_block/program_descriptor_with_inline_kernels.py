@@ -3,7 +3,7 @@
 
 """A small ProgramDescriptor example driven entirely by the host reduce planner.
 
-Both a standalone reduction and a cross-CB accumulating reduction use the same
+Both a standalone reduction and a cross-call accumulating reduction use the same
 compute source. The example places its own iteration count first, then asks the
 reduce plan to append a call count followed by complete, independently decodable
 calls. It issues those calls back to back; a fused kernel may instead place
@@ -152,99 +152,12 @@ ALWI void arm_persistent_inputs() {
 
 template <typename Call>
 ALWI void issue_call() {
-    static_assert(Call::path == ttnn::kernel_lib::ReducePath::Tiled,
-                  "This tiled example cannot execute a dense row-major plan");
-
     if constexpr (
         Call::input_policy != compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop &&
         Call::input_policy != compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
         arm_input<Call>();
     }
-
-    DataflowBuffer auxiliary(Call::auxiliary_cb_id);
-    auxiliary.wait_front(Call::auxiliary_tile_count);
-
-    constexpr auto shape =
-        compute_kernel_lib::ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
-    constexpr auto layout =
-        Call::row_stride == 0
-            ? compute_kernel_lib::ReduceInputMemoryLayout::contiguous()
-            : compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    constexpr auto chunk =
-        compute_kernel_lib::ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
-
-    auto post_scale = [](uint32_t dst_index) {
-        if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
-            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
-            compute_kernel_lib::detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
-        }
-    };
-
-    if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
-        compute_kernel_lib::reduce<
-            Call::reduce_type,
-            Call::reduce_dim,
-            Call::input_cb_id,
-            Call::auxiliary_cb_id,
-            Call::output_cb_id,
-            Call::input_policy,
-            Call::reconfig_mode,
-            Call::fp32_mode,
-            Call::algorithm,
-            Call::within_tile,
-            Call::reduce_factor>(
-                shape,
-                layout,
-                compute_kernel_lib::NoAccumulation{},
-                post_scale,
-                Call::partial_mode,
-                chunk);
-    } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
-        compute_kernel_lib::reduce<
-            Call::reduce_type,
-            Call::reduce_dim,
-            Call::input_cb_id,
-            Call::auxiliary_cb_id,
-            Call::output_cb_id,
-            Call::input_policy,
-            Call::reconfig_mode,
-            Call::fp32_mode,
-            Call::algorithm,
-            Call::within_tile,
-            Call::reduce_factor>(
-                shape,
-                layout,
-                compute_kernel_lib::Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index)
-                    .with_reload(Call::reload_mode),
-                post_scale,
-                Call::partial_mode,
-                chunk);
-    } else {
-        static_assert(
-            Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
-            "Unknown reduction accumulation mode");
-        compute_kernel_lib::reduce<
-            Call::reduce_type,
-            Call::reduce_dim,
-            Call::input_cb_id,
-            Call::auxiliary_cb_id,
-            Call::output_cb_id,
-            Call::input_policy,
-            Call::reconfig_mode,
-            Call::fp32_mode,
-            Call::algorithm,
-            Call::within_tile,
-            Call::reduce_factor>(
-                shape,
-                layout,
-                compute_kernel_lib::Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index)
-                    .with_reload(Call::reload_mode),
-                compute_kernel_lib::NoOp{},
-                Call::partial_mode,
-                chunk);
-    }
-
-    auxiliary.pop_front(Call::auxiliary_tile_count);
+    compute_kernel_lib::reduce<Call>();
 }
 
 // This walk belongs to the example kernel, not the reduce library. A fused
@@ -287,31 +200,11 @@ _AUXILIARY_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 namespace {
-constexpr uint32_t kernel_iters = get_compile_time_arg_val(0);
-constexpr uint32_t reduce_args_offset = 1;
-constexpr uint32_t num_calls = get_compile_time_arg_val(reduce_args_offset);
-constexpr uint32_t first_call_args_offset =
-    reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
-static_assert(num_calls > 0, "A reduction plan must contain at least one call");
-static_assert(kernel_iters > 0, "The kernel iteration count must be positive");
-
-template <uint32_t CALL_INDEX>
-using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, CALL_INDEX>;
-
-template <uint32_t CALL_INDEX = 0>
-FORCE_INLINE void prepare_call_auxiliaries() {
-    if constexpr (CALL_INDEX < num_calls) {
-        using Call = CallAt<CALL_INDEX>;
-        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Call>();
-        prepare_call_auxiliaries<CALL_INDEX + 1>();
-    }
-}
+using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
 }  // namespace
 
 void kernel_main() {
-    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-        prepare_call_auxiliaries();
-    }
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 }
 """
 
@@ -419,10 +312,6 @@ def _input_cb_ids(count):
     return ids[:count]
 
 
-def _find_cb_requirement(call, role):
-    return next(requirement for requirement in call.plan.cb_requirements if requirement.role == role)
-
-
 def _make_sequence_plan(
     input_tensor,
     output_tensor,
@@ -473,13 +362,15 @@ def _make_sequence_plan(
 
 
 def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg=None):
-    compile_time_args = [kernel_iters]
-    sequence.append_to(compile_time_args)
+    compute_compile_time_args = [kernel_iters]
+    sequence.append_to(compute_compile_time_args)
+    auxiliary_compile_time_args = []
+    sequence.auxiliary.append_to(auxiliary_compile_time_args)
     reader = ttnn.KernelDescriptor(
         kernel_source=_AUXILIARY_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=compile_time_args,
+        compile_time_args=auxiliary_compile_time_args,
         runtime_args=[],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -487,16 +378,14 @@ def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg
         kernel_source=_PLANNED_REDUCE_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=compile_time_args,
+        compile_time_args=compute_compile_time_args,
         config=compute_cfg or ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
     return [reader, compute]
 
 
 def _planned_cbs(input_bindings, output_tensor, sequence, accumulation_dtype):
-    auxiliary_pages = max(
-        _find_cb_requirement(call, _PLANNER.ReduceCbRole.AUXILIARY).page_count for call in sequence.calls
-    )
+    auxiliary_pages = len(sequence.auxiliary.tiles)
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor) for cb_id, tensor in input_bindings]
     cbs.extend(
         [
