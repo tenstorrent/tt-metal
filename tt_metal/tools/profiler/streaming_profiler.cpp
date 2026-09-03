@@ -860,7 +860,10 @@ bool StreamingProfiler::launch_relay(
             mesh_device,
             distributed::MeshCoreCoord{coord, CoreCoord(drisc_phys.x, drisc_phys.y)},
             (rtopts.get_streaming_profiler_fifo_mb() << 20) / kPageSize * kPageSize,
-            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_uses_physical_noc_addr = true});
+            distributed::D2HSocket::ExternalConfigBuffer{
+                .address = cfg_l1,
+                .sender_uses_physical_noc_addr = true,
+                .host_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM)});
         ctx.sockets[sk]->set_page_size(kPageSize);
 
         // Zero the relay core's own profiler ring: the relay is built with PROFILE_KERNEL, firmware writes zone

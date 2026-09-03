@@ -266,7 +266,7 @@ void D2HSocket::write_socket_metadata(
             config_data.data(),
             static_cast<uint32_t>(config_data.size() * sizeof(uint32_t)),
             tt_cxy_pair(device->id(), virt),
-            config_buffer_address_);
+            config_buffer_address_ + host_l1_noc_offset_);
     } else {
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -341,9 +341,12 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         // Mesh Device not owned - use dynamic TLBs through UMD.
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
-        pcie_writer_ = [sender_device_id, sender_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
+        const uint64_t host_l1_noc_offset = host_l1_noc_offset_;
+        pcie_writer_ = [sender_device_id, sender_virtual_core, host_l1_noc_offset](
+                           void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
-            cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
+            cluster.write_core(
+                data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr + host_l1_noc_offset);
         };
     }
 }
@@ -437,6 +440,7 @@ D2HSocket::D2HSocket(
         l1_alignment);
     config_buffer_address_ = external_config.address;
     sender_uses_physical_noc_addr_ = external_config.sender_uses_physical_noc_addr;
+    host_l1_noc_offset_ = external_config.host_l1_noc_offset;
     init_common(mesh_device);
 }
 
