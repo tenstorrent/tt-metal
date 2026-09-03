@@ -200,7 +200,8 @@ ProgramRunArgs FftRadixPassFactory::override_runtime_arguments(
     const FftRadixPassParams& attrs,
     const FftRadixPassTensorArgs& tensor_args,
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>&) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    (void)mesh_dispatch_coordinate;
     namespace shared = stockham_spec;
     const auto work = work_geometry(tensor_args.input_real);
     KernelRunArgs writer_args{.kernel = shared::WRITER};

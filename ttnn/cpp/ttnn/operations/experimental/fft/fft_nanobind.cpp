@@ -49,17 +49,17 @@ PrimPrecision parse_precision(const std::string& s) {
 
 using TensorPair = std::tuple<ttnn::Tensor, ttnn::Tensor>;
 
-TensorPair fft_real_trampoline(const ttnn::Tensor& input_real, std::string precision) {
+TensorPair fft_real_trampoline(const ttnn::Tensor& input_real, const std::string& precision) {
     return ttnn::operations::experimental::fft(input_real, parse_precision(precision));
 }
 
 TensorPair fft_complex_trampoline(
-    const ttnn::Tensor& input_real, const ttnn::Tensor& input_imag, std::string precision) {
+    const ttnn::Tensor& input_real, const ttnn::Tensor& input_imag, const std::string& precision) {
     return ttnn::operations::experimental::fft(input_real, input_imag, parse_precision(precision));
 }
 
 TensorPair ifft_trampoline(
-    const ttnn::Tensor& spectrum_real, const ttnn::Tensor& spectrum_imag, std::string precision) {
+    const ttnn::Tensor& spectrum_real, const ttnn::Tensor& spectrum_imag, const std::string& precision) {
     return ttnn::operations::experimental::ifft(spectrum_real, spectrum_imag, parse_precision(precision));
 }
 
@@ -101,7 +101,8 @@ TensorPair complex_mul_trampoline(
     return ttnn::operations::experimental::complex_mul(a_real, a_imag, b_real, b_imag);
 }
 
-TensorPair fft_three_pass_real_trampoline(const ttnn::Tensor& input_real, uint32_t full_N, std::string precision) {
+TensorPair fft_three_pass_real_trampoline(
+    const ttnn::Tensor& input_real, uint32_t full_N, const std::string& precision) {
     return ttnn::operations::experimental::fft_three_pass(input_real, full_N, parse_precision(precision));
 }
 
@@ -109,20 +110,20 @@ TensorPair fft_three_pass_complex_trampoline(
     const ttnn::Tensor& input_real,
     const ttnn::Tensor& input_imag,
     uint32_t full_N,
-    std::string precision,
+    const std::string& precision,
     bool inverse) {
     return ttnn::operations::experimental::fft_three_pass(
         input_real, input_imag, full_N, parse_precision(precision), inverse);
 }
 
 // Bluestein — arbitrary-N (not just pow-2) DFT.
-TensorPair bluestein_fft_real_trampoline(const ttnn::Tensor& input_real, uint32_t N, std::string precision) {
+TensorPair bluestein_fft_real_trampoline(const ttnn::Tensor& input_real, uint32_t N, const std::string& precision) {
     return ttnn::operations::experimental::bluestein_fft(
         input_real, /*input_imag=*/std::nullopt, N, parse_precision(precision));
 }
 
 TensorPair bluestein_fft_complex_trampoline(
-    const ttnn::Tensor& input_real, const ttnn::Tensor& input_imag, uint32_t N, std::string precision) {
+    const ttnn::Tensor& input_real, const ttnn::Tensor& input_imag, uint32_t N, const std::string& precision) {
     return ttnn::operations::experimental::bluestein_fft(input_real, input_imag, N, parse_precision(precision));
 }
 

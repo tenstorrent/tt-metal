@@ -19,7 +19,7 @@ namespace ttnn::experimental::prim {
 
 struct ApplyTwiddlesXlFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const ApplyTwiddlesXlParams& operation_attributes,
+        const ApplyTwiddlesXlParams& attrs,
         const ApplyTwiddlesXlTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value);
 };

@@ -48,7 +48,7 @@ RebankRmMergeDeviceOperation::spec_return_value_t RebankRmMergeDeviceOperation::
     const ttnn::Shape out_shape{ttnn::SmallVector<uint32_t>{rows / cpm, N1 * cpm}};
 
     TensorLayout layout(in.dtype(), PageConfig(in.layout()), in.memory_config());
-    return tt::tt_metal::TensorSpec(std::move(out_shape), std::move(layout));
+    return tt::tt_metal::TensorSpec(out_shape, std::move(layout));
 }
 
 RebankRmMergeDeviceOperation::tensor_return_value_t RebankRmMergeDeviceOperation::create_output_tensors(

@@ -54,7 +54,7 @@ RebankRmDeviceOperation::spec_return_value_t RebankRmDeviceOperation::compute_ou
     const ttnn::Shape out_shape{ttnn::SmallVector<uint32_t>{B_total * (N / chunk), chunk}};
 
     TensorLayout layout(in.dtype(), PageConfig(in.layout()), in.memory_config());
-    return tt::tt_metal::TensorSpec(std::move(out_shape), std::move(layout));
+    return tt::tt_metal::TensorSpec(out_shape, std::move(layout));
 }
 
 RebankRmDeviceOperation::tensor_return_value_t RebankRmDeviceOperation::create_output_tensors(

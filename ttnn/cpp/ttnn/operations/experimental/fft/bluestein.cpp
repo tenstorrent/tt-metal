@@ -68,7 +68,7 @@ constexpr uint32_t kBluesteinRebankThreshold = 64u * 1024u;
 //   2. Call rebank_rm on the pow-2-aligned tensor (CB = 8 KB).
 //   3. Row-slice off the extra rows introduced by the zero-padding (CB = 256 KB).
 // For small source pages the standard ttnn::reshape is used (metadata or small CB).
-static ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
+ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
     const auto& s = t.padded_shape();
     const uint32_t src_cols = static_cast<uint32_t>(s[-1]);
     const uint32_t elem_bytes = (t.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
@@ -76,8 +76,8 @@ static ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
     if (src_cols * elem_bytes <= kBluesteinRebankThreshold) {
         // Small source page: standard reshape (metadata-only or small-CB kernel).
         uint32_t total = 1u;
-        for (int d = 0; d < static_cast<int>(s.size()); ++d) {
-            total *= static_cast<uint32_t>(s[d]);
+        for (const auto dim : s) {
+            total *= static_cast<uint32_t>(dim);
         }
         const uint32_t new_rows = total / new_cols;
         return ttnn::reshape(t, ttnn::Shape{ttnn::SmallVector<uint32_t>{new_rows, new_cols}});
@@ -114,7 +114,7 @@ static ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
 
     auto* dev = t.device();
     TT_FATAL(dev != nullptr, "shrink_reshape: tensor has no device.");
-    const auto mc = t.memory_config();
+    const auto& mc = t.memory_config();
 
     // Append (B_total, src_pow2 - src_cols) zeros via concat along dim=1.
     // CB = 2 × src_pow2 × elem_bytes ≤ 1 MB (for src_pow2 ≤ 131072 fp32).
@@ -163,7 +163,7 @@ static ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
 //
 // Case B (P not divisible by 1024): pad to next multiple of 1024 first,
 // apply the above, then slice back to (B, P).
-static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
+std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
     const ttnn::Tensor& ar,
     const ttnn::Tensor& ai,
     const ttnn::Tensor& br,
@@ -184,7 +184,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
     auto br_f = shrink_reshape(br, 1024u);
     auto bi_f = shrink_reshape(bi, 1024u);
 
-    const auto mc = ar.memory_config();
+    const auto& mc = ar.memory_config();
 
     if (total_rows <= b_safe) {
         // Small enough: one complex_mul call.
@@ -227,7 +227,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
     return {ttnn::reshape(cr_f, orig), ttnn::reshape(ci_f, orig)};
 }
 
-static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
+std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
     const ttnn::Tensor& ar, const ttnn::Tensor& ai, const ttnn::Tensor& br, const ttnn::Tensor& bi) {
     const auto& sh = ar.padded_shape();
     const uint32_t P = static_cast<uint32_t>(sh[-1]);
@@ -240,7 +240,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
         B *= static_cast<uint32_t>(sh[d]);
     }
 
-    const auto mc = ar.memory_config();
+    const auto& mc = ar.memory_config();
 
     if (P % 1024u == 0u) {
         return complex_mul_chunked(ar, ai, br, bi, B, P);
@@ -304,7 +304,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
 //     4. rebank_rm_merge(., M/1024) → (B, M),            CB = 2×4 KB = 8 KB
 //   This avoids creating any tensor with a page > 4 KB in L1.
 //   Requires N%1024==0 and (M-N)%1024==0 (guaranteed when M is pow-2 and N%1024==0).
-static ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
+ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
     const auto& s = t.padded_shape();
     const uint32_t B = static_cast<uint32_t>(s[0]);
     const uint32_t N = static_cast<uint32_t>(s[-1]);
@@ -314,7 +314,7 @@ static ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
 
     auto* dev = t.device();
     TT_FATAL(dev != nullptr, "zero_pad_to_m: tensor has no device.");
-    const auto mc = t.memory_config();
+    const auto& mc = t.memory_config();
     const uint32_t elem_bytes = (t.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
 
     // Fast path for large M and 1024-aligned N (avoids large-CB concat).
@@ -365,7 +365,7 @@ static ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
 //
 // PRECONDITION: N % 1024 == 0, M must be a power of 2 (Bluestein always
 // satisfies this: M = next_pow2(2N-1) ≥ 2048), M >= N.
-static ttnn::Tensor trim_to_n(const ttnn::Tensor& t, uint32_t N) {
+ttnn::Tensor trim_to_n(const ttnn::Tensor& t, uint32_t N) {
     const auto& s = t.padded_shape();
     const uint32_t B = static_cast<uint32_t>(s[0]);
     const uint32_t M = static_cast<uint32_t>(s[-1]);
@@ -385,7 +385,7 @@ static ttnn::Tensor trim_to_n(const ttnn::Tensor& t, uint32_t N) {
         B);
 
     const uint32_t n_chunks = N / 1024u;
-    const auto mc = t.memory_config();
+    const auto& mc = t.memory_config();
     const uint32_t elem_bytes = (t.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
 
     // (B, M) → (B·m_chunks, 1024).  CB = 8 KB via rebank_rm.

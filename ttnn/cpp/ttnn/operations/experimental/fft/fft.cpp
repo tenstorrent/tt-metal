@@ -118,7 +118,7 @@ constexpr uint32_t kRebankThresholdBytes = 64u * 1024u;  // 64 KB
 
 // Reshape or rebank a (B_total, N) tensor to (B_total * N/chunk, chunk).
 // Uses rebank_rm when the source page exceeds the L1 safe limit.
-static ttnn::Tensor reshape_or_rebank(const ttnn::Tensor& t, uint32_t rows, uint32_t chunk) {
+ttnn::Tensor reshape_or_rebank(const ttnn::Tensor& t, uint32_t rows, uint32_t chunk) {
     const auto& s = t.padded_shape();
     const uint32_t N = static_cast<uint32_t>(s[-1]);
     const uint32_t elem_bytes = (t.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
@@ -423,7 +423,7 @@ bool bluestein_eligible(const ttnn::Tensor& t) {
 //   (3) Swap outputs: return (W_im, W_re).  No negation required.
 //
 // Precondition: spectrum_imag must be provided (complex spectrum).
-static std::tuple<ttnn::Tensor, ttnn::Tensor> small_pow2_ifft(
+std::tuple<ttnn::Tensor, ttnn::Tensor> small_pow2_ifft(
     const ttnn::Tensor& spectrum_real, const ttnn::Tensor& spectrum_imag, uint32_t N, FFTPrecision /*precision*/) {
     const auto& sh = spectrum_real.padded_shape();
     uint32_t B = 1u;

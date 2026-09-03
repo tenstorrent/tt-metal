@@ -15,6 +15,7 @@
 #include <tuple>
 
 #include <optional>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "fft_radix_pass_device_operation_types.hpp"
@@ -23,12 +24,12 @@ namespace ttnn::experimental::prim {
 
 struct FftRadixPassFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const FftRadixPassParams& operation_attributes,
+        const FftRadixPassParams& attrs,
         const FftRadixPassTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value);
 
     static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
-        const FftRadixPassParams& operation_attributes,
+        const FftRadixPassParams& attrs,
         const FftRadixPassTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
