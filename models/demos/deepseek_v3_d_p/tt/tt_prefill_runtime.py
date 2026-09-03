@@ -709,12 +709,18 @@ class TtPrefillRuntime:
             # host from actual_start, and there is no actual_start to compute it from. An unrefreshed
             # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
             # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
-            # scale into the packed record (or deriving it on-device) is follow-up work.
-            assert self._trace_metadata.llama4_scale is None, (
-                "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
-                "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
-                "through the host-scalar path until the scale is carried in the metadata record"
-            )
+            # scale into the packed record (or deriving it on-device) is follow-up work
+            # (https://github.com/tenstorrent/tt-metal/issues/55126).
+            #
+            # An explicit raise rather than an assert, unlike most guards in this tree: `python -O`
+            # strips asserts, and stripping THIS one does not crash -- it re-enables the silent
+            # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
+            if self._trace_metadata.llama4_scale is not None:
+                raise RuntimeError(
+                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
+                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
+                    "through the host-scalar path until the scale is carried in the metadata record"
+                )
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)

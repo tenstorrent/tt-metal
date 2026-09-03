@@ -781,18 +781,23 @@
 
 - name: "Mistral-Small-4-119B prefill block accuracy 5k"
   cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
     '
   test_type: mistral4_prefill_block
   test_tags: [mistral4, block]
   test_group: module
   skus:
     bh_sc1:
-      # 2.0 min on run 33425317777, the shared-harness row (smoke, perf, pcc x determinism x
-      # iterations); 6 is ~3x.
-      timeout: 6
+      # PROVISIONAL -- must be re-sized from a CI run before merge. The previous 6 was measured on a
+      # run where every row skipped (the non_balanced CI skip had no Mistral exemption), so it timed
+      # nothing. The `-k` pins the two PCC rows, random and pretrained, at iter1; the full matrix is
+      # 24 runnable rows and would not fit any sane budget.
+      timeout: 20
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
