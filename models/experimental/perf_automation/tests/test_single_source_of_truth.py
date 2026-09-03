@@ -98,6 +98,12 @@ _OWNERS = {
                 # means no ceiling, which is the rule this registry exists to enforce.
                 "_anchored_ceiling_bytes",
                 "_anchored_ceiling_facts",
+                # SAME GROUND, SAME RULE. The per-stage stop bar prices each stack against its own
+                # roof, and _stage_roofs takes the unit because a stage's compute floor is linear in
+                # the tokens one unit retires. It reads the anchor's record through the two names
+                # above and DEFAULTS NOTHING -- no recoverable unit means no bar, and the run is not
+                # blocked by a ceiling nobody could compute.
+                "_stages_short_of_achievable",
                 # THE OBSERVED UNIT SUPERSEDES THE FILE, and this is the single point every consumer
                 # of the facts passes through. perf_target_inputs.json records what a TABLE keyed on
                 # the HF pipeline_tag guessed at setup, before anything ran -- and a tag names the

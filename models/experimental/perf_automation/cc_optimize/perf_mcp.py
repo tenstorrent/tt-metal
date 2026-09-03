@@ -6463,6 +6463,92 @@ def _ceiling_armed(target, rep: dict) -> tuple:
     return True, ""
 
 
+def _stages_short_of_achievable() -> list:
+    """Stages measured SLOWER than the slow end of their own achievable band, worst first.
+
+    THE MINIMUM BAR FOR A FINISHED RUN. Stopping was decided against the headline alone, and the
+    headline is ONE stage -- so a run could be cleared while every other stack sat multiples above
+    its own ceiling. voxtral 2026-09-03 finished with the recurring stage at 10.99 ms against a
+    21-28 ms band (past it, which is fine) while the prompt stage sat at 182.44 against 26-35 and
+    the audio stage at 38.49 against its own. Nothing in the gate looked at either.
+
+    Beating the band is expected and is not caught here. Being ABOVE it is.
+
+    The roofs come from summary._stage_roofs -- the one place that turns pinned bytes and peak FLOPs
+    into a per-stage roof, and the same call the report renders from, so the gate and the report can
+    never disagree about the bar. Read from THIS run's own state (baseline profile, throughput,
+    stage_ms), not from the newest directory under runs/: roofline_provenance.collect globs for one
+    and on this machine it resolves to a run five days old.
+
+    The band fractions are perf_target's own, read off the published band rather than assumed -- an
+    MoE bands at 37.5-50%, not 60-80%, and the dense pair would hold it to a bar its hardware cannot
+    reach. band[0] is the LOW rate, so roof/that fraction is the SLOWEST time still inside the band,
+    which is what "at least achievable" means.
+
+    A stage this cannot price does not appear, so a capture that marked no stages, or a model with
+    no ceiling inputs, yields [] and the gate behaves exactly as it did before.
+    """
+    try:
+        _thr = _read_throughput() or {}
+        _theo = float(_thr.get("theoretical_rate") or 0.0)
+        _band = _thr.get("band") or []
+        _lof = (float(_band[0]) / _theo) if (_theo > 0 and len(_band) == 2 and _band[0]) else 0.60
+        # THE BYTES AND THE UNIT COME FROM THEIR OWNERS, not off the throughput snapshot. That
+        # snapshot is rewritten from a file inside the model directory the optimize loop reverts, so
+        # reading it here can resurrect a stale vintage -- a 16-layer 3.33 GB one came back twice in
+        # one run and printed a ceiling beside a full-model measurement. The anchor is write-once and
+        # keyed by the unit, and _anchored_ceiling_facts refuses to default that unit.
+        # TWO SOURCES, ASKED IN ORDER, because they carry different halves. The facts FILE holds the
+        # bytes and the block map but does NOT carry a unit -- verified against a live run, where it
+        # returns weight_bytes/total_params/stage_roots and no unit at all. Only the anchor records
+        # which unit the bytes were pinned under. Taking `file or anchor` therefore resolves to the
+        # file and loses the unit, and the bar silently never applies: the worst outcome available,
+        # since a bar that never fires looks exactly like a bar that always passes.
+        _facts = _load_perf_target_inputs() or {}
+        _unit = str(_facts.get("unit") or "").strip()
+        if not _unit:
+            _unit = str((_anchored_ceiling_facts() or {}).get("unit") or "").strip()
+        _ab = _anchored_ceiling_bytes(_facts)
+        _bw = float(_thr.get("peak_bw_gbps") or 0.0)
+        if not (_lof > 0 and _ab and _bw and _unit):
+            return []
+        _sms = read_stage_ms() or {}
+        if not _sms:
+            return []
+        _roofs = _summary_mod()._stage_roofs(
+            int(_ab),
+            _bw,
+            int(_thr.get("tp_degree") or 1),
+            _unit,
+            _read_baseline_profile(),
+            _sms,
+            model=(_MODEL_ROOT.name if _MODEL_ROOT else "model"),
+            task=os.environ.get("PERF_MCP_TASK", "main"),
+        )
+        out = []
+        for _name, _r in (_roofs or {}).items():
+            _ms = _sms.get(_name)
+            _roof = _r.get("compute_ms") if _r.get("binds") == "compute" else _r.get("memory_ms")
+            if not (isinstance(_ms, (int, float)) and isinstance(_roof, (int, float))):
+                continue
+            if not (_ms > 0 and _roof > 0):
+                continue
+            _ceiling = float(_roof) / _lof
+            if float(_ms) > _ceiling:
+                out.append(
+                    {
+                        "stage": str(_name),
+                        "measured_ms": round(float(_ms), 4),
+                        "achievable_ms": round(_ceiling, 4),
+                        "over_by_ms": round(float(_ms) - _ceiling, 4),
+                        "binds": _r.get("binds"),
+                    }
+                )
+        return sorted(out, key=lambda r: -r["over_by_ms"])
+    except Exception:  # noqa: BLE001 -- a bar that cannot be read must never block a run
+        return []
+
+
 def stage_of_op(op, profile) -> str:
     """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
 
@@ -6696,6 +6782,13 @@ def termination_check() -> dict:
             can_stop = True
         else:
             pt_status["band_stop_disarmed"] = _why
+    # EVERY STACK REACHES ITS OWN BAND, OR THE RUN IS NOT DONE. Last, because it is a veto: the
+    # headline band above may set can_stop=True on the strength of ONE stage, and the whole point is
+    # that clearing the recurring stage says nothing about the others. Beating a band is fine; being
+    # above it is what blocks. Empty for a capture that marks no stages, so nothing changes there.
+    _short = _stages_short_of_achievable()
+    if _short:
+        can_stop = False
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
     next_target = (
@@ -6741,6 +6834,11 @@ def termination_check() -> dict:
     _persist_target(next_target)
     return {
         "can_stop": can_stop,
+        # WHICH STACKS STILL OWE THE BAND, and by how much. A veto the caller cannot see reads as
+        # "the gate refuses and will not say why", which is the shape of every silent failure this
+        # module has had. Empty list means every priced stack is inside its band, or none could be
+        # priced -- the two are distinguished by whether the report shows per-stage roofs at all.
+        "stages_short_of_achievable": _short,
         "halt": bool(halt),
         "halt_reason": halt.get("reason") if halt else None,
         "device_ms": dev,
