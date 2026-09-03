@@ -870,7 +870,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
+    auto t0_compile = std::chrono::steady_clock::now();
     auto compiled = compile(out_dir, settings, state_changed);
+    auto compile_elapsed_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_compile).count();
+    static auto& tok_compile = BuildCacheTelemetry::inst().register_metric("JitBuildState::compile");
+    tok_compile.record(compile_elapsed_ms);
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
