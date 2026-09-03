@@ -199,6 +199,134 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather):
     assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor), 0.99)
 
 
+@pytest.mark.parametrize("m, k, n", [(1, 1024, 4096), (4, 1024, 4096), (8, 1024, 4096)])
+def test_matmul_decode_row_major_height_sharded_replicated(device, m, k, n):
+    """ROW_MAJOR HEIGHT_SHARDED A on B's grid: full K replicated per core, M = shard height."""
+    torch.manual_seed(0)
+    num_inputB_cores = n // 64
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    torch_input_tensor_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a.to(torch.float32) @ torch_input_tensor_b.to(torch.float32)
+
+    # HEIGHT_SHARDED volume is num_cores * shard. Repeat the replica so each core holds [m, k].
+    torch_input_tensor_a_replicated = torch_input_tensor_a.repeat(num_inputB_cores, 1)
+
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k),
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (k, n // num_inputB_cores),
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a_replicated,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_memory_config
+    )
+
+    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b)
+    assert output_tensor.shape[-2] == m
+    assert output_tensor.shape[-1] == n
+    assert output_tensor.layout == ttnn.TILE_LAYOUT
+    assert output_tensor.tile == ttnn.Tile((1, 32))
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor), 0.99)
+
+
+def test_matmul_decode_row_major_height_sharded_rejects_mismatched_grid(device):
+    torch.manual_seed(0)
+    m, k, n = 1, 1024, 4096
+    num_inputB_cores = n // 64
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    a_grid = num_cores_to_rectangle_core_range_set(32, device)
+    b_grid = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k),
+        core_grid=a_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (k, n // num_inputB_cores),
+        core_grid=b_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch.randn((m * 32, k), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch.randn((k, n), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+    with expect_raises(RuntimeError, match="core grid"):
+        ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b)
+
+
+def test_matmul_decode_row_major_height_sharded_rejects_ring_gather(device):
+    torch.manual_seed(0)
+    m, k, n = 1, 1024, 4096
+    num_inputB_cores = n // 64
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    grid = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (k, n // num_inputB_cores),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch.randn((m, k), dtype=torch.bfloat16).repeat(num_inputB_cores, 1),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch.randn((k, n), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+    with expect_raises(RuntimeError, match="ring_gather"):
+        ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, ring_gather=True)
+
+
 @pytest.mark.parametrize("k, n", [(1024, 4096)])
 @pytest.mark.parametrize("num_inputA_cores", [32])
 @pytest.mark.parametrize("ring_gather", [False, True])

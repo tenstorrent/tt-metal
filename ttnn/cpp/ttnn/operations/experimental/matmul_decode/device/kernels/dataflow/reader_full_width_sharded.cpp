@@ -13,6 +13,9 @@
 
 // Gathers width(K)-sharded A onto every core via two-hub gather/broadcast.
 //
+// IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [M, K] on this core.
+// Fill full_in0 from the local shard as 1x32 tiles (K-major) instead of the hub gather.
+//
 // in1 (weights) arrive one of two ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
@@ -48,13 +51,19 @@ void kernel_main() {
     constexpr uint32_t split_H = get_compile_time_arg_val(14);
     constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_M_tiles = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_K_tiles = get_compile_time_arg_val(18);
 
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const uint32_t role = get_arg_val<uint32_t>(2);
     const uint32_t is_in1_receiver = get_arg_val<uint32_t>(3);
 
+#ifdef IN0_REPLICATED
+    constexpr uint32_t full_num_tiles = in0_M_tiles * in0_K_tiles;
+#else
     constexpr uint32_t full_num_tiles = num_senders * shard_num_tiles;
+#endif
     const uint32_t shard_size_bytes = shard_num_tiles * tile_size_bytes;
 
     // NOC_1 uses an inverted coordinate system.
@@ -83,6 +92,25 @@ void kernel_main() {
     in1_cb.push_back(in1_page_tiles);
 #endif
     full_in0_cb.reserve_back(full_num_tiles);
+
+#ifdef IN0_REPLICATED
+    // A is already the full [M, K] replica on this core (ROW_MAJOR, 1x32-tile faces along K).
+    // Restoring the post-broadcast full_in0 layout compute expects: K-major 1x32 tiles
+    // (tile k occupies rows [0, M) at dst k*M .. k*M+M-1).
+    {
+        const uint32_t src_base = in0_cb.get_read_ptr();
+        const uint32_t dst_base = full_in0_cb.get_write_ptr();
+        for (uint32_t k = 0; k < in0_K_tiles; ++k) {
+            for (uint32_t m = 0; m < in0_M_tiles; ++m) {
+                const uint32_t src = src_base + (m * in0_K_tiles + k) * tile_size_bytes;
+                const uint32_t dst = dst_base + (k * in0_M_tiles + m) * tile_size_bytes;
+                noc_async_write(src, get_noc_addr(dst), tile_size_bytes);
+            }
+        }
+        noc.async_write_barrier();
+    }
+    full_in0_cb.push_back(full_num_tiles);
+#else
 
     const bool is_hub0 = (role == 1);
     const bool is_hub1 = (role == 2);
@@ -135,6 +163,7 @@ void kernel_main() {
 
     done_sem.wait(2);
     full_in0_cb.push_back(full_num_tiles);
+#endif  // IN0_REPLICATED
 
 #ifdef ENABLE_GLOBAL_CB
     if (is_in1_receiver) {

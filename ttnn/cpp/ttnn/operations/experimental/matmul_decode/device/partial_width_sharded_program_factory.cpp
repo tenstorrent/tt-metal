@@ -74,14 +74,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
     const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
-    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in0_tile_desc{in0_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
@@ -92,8 +92,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         in1_tile_size,
         out_tile_size);
 
-    const uint32_t inputA_tile_height = inputA_tile.get_height();
-    const uint32_t inputA_tile_width = inputA_tile.get_width();
+    const uint32_t inputA_tile_height = in0_tile.get_height();
+    const uint32_t inputA_tile_width = in0_tile.get_width();
     const uint32_t inputB_tile_height = inputB_tile.get_height();
     const uint32_t inputB_tile_width = inputB_tile.get_width();
     const uint32_t output_tile_height = output_tile.get_height();
@@ -121,7 +121,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "Output tensor tile width {} must be equal to the tile width 32",
         output_tile_width);
 
-    log_debug(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", inputA_tile);
+    log_debug(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", in0_tile);
 
     IDevice* device = input_tensor_a.device();
 
@@ -715,20 +715,19 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
     const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
-    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in0_tile_desc{in0_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
-    const uint32_t inputA_tile_height = inputA_tile.get_height();
+    const uint32_t inputA_tile_height = in0_tile.get_height();
     TT_FATAL(
-        inputA_tile.get_width() == tt::constants::TILE_WIDTH &&
-            inputB_tile.get_height() == tt::constants::TILE_HEIGHT &&
+        in0_tile.get_width() == tt::constants::TILE_WIDTH && inputB_tile.get_height() == tt::constants::TILE_HEIGHT &&
             inputB_tile.get_width() == tt::constants::TILE_WIDTH &&
             output_tile.get_width() == tt::constants::TILE_WIDTH && inputA_tile_height == output_tile.get_height(),
         "matmul_decode partial ring gather: unexpected tile geometry");

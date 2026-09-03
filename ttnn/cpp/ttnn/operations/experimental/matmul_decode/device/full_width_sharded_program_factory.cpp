@@ -10,6 +10,7 @@
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
+#include "tt-metalium/tile.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -80,19 +81,24 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
 
+    const bool in0_rm_hs = operation_attributes.in0_row_major_height_sharded;
+    TT_FATAL(
+        !in0_rm_hs || !operation_attributes.ring_gather,
+        "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with ring_gather");
+
     const tt::DataFormat in0_data_format = datatype_to_dataformat_converter(input_tensor_a.dtype());
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
     const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
     // Tiny tiles can give in0/in1/out different geometries; each CB needs its own tile descriptor.
-    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in0_tile_desc{in0_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
@@ -103,8 +109,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         in1_tile_size,
         out_tile_size);
 
-    const uint32_t inputA_tile_height = inputA_tile.get_height();
-    const uint32_t inputA_tile_width = inputA_tile.get_width();
+    const uint32_t inputA_tile_height = in0_tile.get_height();
+    const uint32_t inputA_tile_width = in0_tile.get_width();
     const uint32_t inputB_tile_height = inputB_tile.get_height();
     const uint32_t inputB_tile_width = inputB_tile.get_width();
     const uint32_t output_tile_height = output_tile.get_height();
@@ -133,7 +139,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         "Output tensor tile width {} must be equal to the tile width 32",
         output_tile_width);
 
-    log_debug(tt::LogOp, "MatmulDecode: inputA_tile: {}", inputA_tile);
+    log_debug(tt::LogOp, "MatmulDecode: inputA_tile: {}", in0_tile);
 
     uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
@@ -152,7 +158,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
     TT_FATAL(
         inputB_core_range_set == output_core_range_set,
-        "Input tensor A and output tensor must have the same core range set");
+        "Input tensor B and output tensor must have the same core range set");
+    if (in0_rm_hs) {
+        TT_FATAL(
+            inputA_core_range_set == inputB_core_range_set,
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires A's core grid {} to match B's core grid {}",
+            inputA_core_range_set.str(),
+            inputB_core_range_set.str());
+    }
 
     auto all_compute_cores = inputA_core_range_set.merge(output_core_range_set);
     auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
@@ -170,7 +183,16 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     TT_FATAL(
         inputA_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
         "Input tensor A must have a width that is divisible by the tile width");
-    uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
+    if (in0_rm_hs) {
+        TT_FATAL(
+            inputA_shard_shape[1] == static_cast<uint32_t>(operation_attributes.K),
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires shard width {} to equal K {}",
+            inputA_shard_shape[1],
+            operation_attributes.K);
+    }
+    // Replicated RM A already holds full K on every core. Compute still indexes 1-wide 1x32
+    // tiles (K-major after the reader restripe), matching the gathered TILE layout.
+    uint32_t inA_K_tiles_per_core = in0_rm_hs ? 1u : inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     uint32_t inB_N_tiles_per_core;
     if (use_global_cb || packed.has_value()) {
@@ -213,7 +235,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t sync_cb_index = CBIndex::c_4;
     const uint32_t remote_cb_index = CBIndex::c_31;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
+        .total_size = M_tiles * (in0_rm_hs ? K_tiles : inA_K_tiles_per_core) * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = in0_cb_index,
@@ -385,6 +407,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         split_H,
         in1_page_num_tiles,
         num_k_blocks,
+        M_tiles,
+        K_tiles,
     };
 
     // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
@@ -443,6 +467,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         };
         if (use_global_cb) {
             reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+        }
+        if (in0_rm_hs) {
+            reader_kernel_desc.defines.emplace_back("IN0_REPLICATED", "1");
         }
 
         reader_kernel_desc.runtime_args.reserve(cores.size());
@@ -565,20 +592,19 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
     const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
     const auto& output_tile = output_tensor.tensor_spec().tile();
-    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const tt::tt_metal::Tile in0_tile = in0_tile_for_compute(input_tensor_a);
+    const uint32_t in0_tile_size = in0_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
-    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in0_tile_desc{in0_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
-    const uint32_t inputA_tile_height = inputA_tile.get_height();
+    const uint32_t inputA_tile_height = in0_tile.get_height();
     TT_FATAL(
-        inputA_tile.get_width() == tt::constants::TILE_WIDTH &&
-            inputB_tile.get_height() == tt::constants::TILE_HEIGHT &&
+        in0_tile.get_width() == tt::constants::TILE_WIDTH && inputB_tile.get_height() == tt::constants::TILE_HEIGHT &&
             inputB_tile.get_width() == tt::constants::TILE_WIDTH &&
             output_tile.get_width() == tt::constants::TILE_WIDTH && inputA_tile_height == output_tile.get_height(),
         "matmul_decode ring gather: unexpected tile geometry");
