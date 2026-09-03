@@ -242,6 +242,72 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
 
 }  // namespace
 
+// These focused capacity tests use one synthetic submesh, so connection discovery
+// never queries the control plane and no device or fabric initialization is needed.
+TEST(PipelineBuilderCapacityTest, SpreadsHostEndpointsAcrossAvailableChips) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}, {0, 1, 0, 1}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 1}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+
+    EXPECT_EQ(result.node_to_submesh.at("s0"), 0);
+    EXPECT_TRUE(result.resolved_edges.empty());
+    EXPECT_NE(std::tie(result.h2d_entry_row, result.h2d_entry_col), std::tie(result.d2h_exit_row, result.d2h_exit_col));
+    ASSERT_TRUE(result.h2d_core_slot.has_value());
+    ASSERT_TRUE(result.d2h_core_slot.has_value());
+    EXPECT_EQ(*result.h2d_core_slot, 0);
+    EXPECT_EQ(*result.d2h_core_slot, 0);
+}
+
+TEST(PipelineBuilderCapacityTest, FoldsHostEndpointsIntoDistinctSlots) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 2}};
+
+    const GraphLayoutResult result = resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities);
+
+    EXPECT_EQ(std::tie(result.h2d_entry_row, result.h2d_entry_col), std::tie(result.d2h_exit_row, result.d2h_exit_col));
+    ASSERT_TRUE(result.h2d_core_slot.has_value());
+    ASSERT_TRUE(result.d2h_core_slot.has_value());
+    EXPECT_EQ(*result.h2d_core_slot, 0);
+    EXPECT_EQ(*result.d2h_core_slot, 1);
+}
+
+TEST(PipelineBuilderCapacityTest, RejectsInsufficientHostEndpointCapacity) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> capacities{{"s0", 1}};
+
+    try {
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, capacities));
+        FAIL() << "expected capacity exhaustion";
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("pipeline-core capacity exhausted"), std::string::npos);
+        EXPECT_NE(message.find("stage 's0'"), std::string::npos);
+        EXPECT_NE(message.find("required slots 2"), std::string::npos);
+        EXPECT_NE(message.find("declared capacity 1"), std::string::npos);
+        EXPECT_NE(message.find("h2d"), std::string::npos);
+        EXPECT_NE(message.find("d2h"), std::string::npos);
+    }
+}
+
+TEST(PipelineBuilderCapacityTest, RejectsMissingOrZeroStageCapacity) {
+    const std::vector<std::string> nodes{"s0"};
+    const std::vector<EdgeInputTuple> edges;
+    const std::vector<std::vector<ChipTuple>> submesh_chips{{{0, 0, 0, 0}}};
+
+    EXPECT_THROW(
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, {{"other_stage", 1}})),
+        std::runtime_error);
+    EXPECT_THROW(
+        static_cast<void>(resolve_graph_layout(nodes, edges, submesh_chips, {}, {{"s0", 0}})), std::runtime_error);
+}
+
 // Resolve and validate the canonical blaze pipeline ring for whatever MGD is loaded:
 // one stage per host-rank submesh at its native shape, full loopback ring, single
 // resolve_graph_layout call (the exact API tt-blaze build_topology* drives).
