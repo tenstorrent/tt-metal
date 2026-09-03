@@ -1864,9 +1864,12 @@
 
 - name: DiffusionDrive unit tests
   cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface
+    export TT_METAL_WATCHER=30
     # The checkpoint is a raw .pth on the Hub, not a pre-staged MLPerf asset, so this
     # job fetches it; prepare_assets.py downloads into the workspace, not HF_HUB_CACHE.
+    # HF_HOME is deliberately NOT set: the container already points HF_HUB_CACHE at
+    # /mnt/MLPerf/huggingface/hub, and overriding HF_HOME only redirects the xet
+    # cache/logs onto that same :ro mount, which fails with EROFS.
     export HF_HUB_OFFLINE=0
     python3 models/experimental/diffusion_drive/scripts/prepare_assets.py
     # A missing asset is now a failure, not a skip -- the real-checkpoint gate below
@@ -1878,8 +1881,7 @@
   model: diffusiondrive
   model_family: DiffusionDrive
   skus:
-    # 2.5 min measured end-to-end on BH p150a (prepare_assets + all 47 pcc/sanity
-    # tests); the rest is headroom for the one-off 730 MB asset download.
+    # 5:49 measured end-to-end on WH N300 in CI (47 tests + 730 MB asset fetch).
     wh_n300:
       timeout: 10
       tier: 3
