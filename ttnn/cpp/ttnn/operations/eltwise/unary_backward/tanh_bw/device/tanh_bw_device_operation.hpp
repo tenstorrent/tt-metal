@@ -29,7 +29,11 @@ struct TanhBwDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // No compute_program_hash: the default hashes tensor_args, which is what covers
+    // preallocated_input_grad. The program factory bakes the output buffer's TensorAccessorArgs
+    // (IsDram among them) into the writer's compile-time args, and the host wrapper derives
+    // output_memory_config from the input, so a custom hash omitting that tensor collides across
+    // DRAM and L1 outputs. GeluBwDeviceOperation relies on the default for the same reason.
 };
 
 Tensor launch_tanh_bw(
