@@ -86,6 +86,27 @@ class CodePredictor(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Separate config for the weight matmuls so their fidelity can be walked
+        # without touching the RMSNorm reductions (which compound over depth and
+        # want the high-fidelity fp32 path — foundations §5/§7).
+        #
+        # HiFi3 is the default, not HiFi4: tt-metal itself warns that "on Wormhole
+        # with fp32 accumulation, output accuracy can be worse with HiFi4 than
+        # HiFi3 due to a hardware bug. Prefer using HiFi3 with fp32 accumulation
+        # on Wormhole." (compute_kernel_config.cpp:66) — and HiFi3 is 3 math passes
+        # instead of 4. QWEN3_TTS_CP_MM_FIDELITY=hifi4|hifi3|hifi2|lofi to A/B.
+        _mm_fid = {
+            "hifi4": ttnn.MathFidelity.HiFi4,
+            "hifi3": ttnn.MathFidelity.HiFi3,
+            "hifi2": ttnn.MathFidelity.HiFi2,
+            "lofi": ttnn.MathFidelity.LoFi,
+        }[os.environ.get("QWEN3_TTS_CP_MM_FIDELITY", "hifi3").lower()]
+        self.mm_kcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=_mm_fid,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.sdpa_kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -607,7 +628,7 @@ class CodePredictor(LightweightModule):
             xqkv_s = ttnn.linear(
                 x_s,
                 lw["wqkv_ds"],
-                compute_kernel_config=self.kcfg,
+                compute_kernel_config=self.mm_kcfg,
                 program_config=self._cp_qkv_dramshard_progcfg,
                 memory_config=self._cp_qkv_out_memcfg,
             )
@@ -647,7 +668,7 @@ class CodePredictor(LightweightModule):
                 x,
                 lw["wqkv_kvgi"],
                 dtype=self.act_dtype,
-                compute_kernel_config=self.kcfg,
+                compute_kernel_config=self.mm_kcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(x)
@@ -667,7 +688,7 @@ class CodePredictor(LightweightModule):
             ttnn.deallocate(k_s)
             v = v_s
         else:
-            xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+            xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
             ttnn.deallocate(x)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv,
@@ -808,7 +829,7 @@ class CodePredictor(LightweightModule):
             o_s = ttnn.linear(
                 attn_wo,
                 lw["o_ds"],
-                compute_kernel_config=self.kcfg,
+                compute_kernel_config=self.mm_kcfg,
                 program_config=self._cp_wo_dramshard_progcfg,
                 memory_config=self._cp_wo_out_memcfg,
             )
@@ -925,7 +946,7 @@ class CodePredictor(LightweightModule):
                 attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(attn_out)
 
-            o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+            o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
             ttnn.deallocate(attn_concat)
         if self.tp_size > 1:
             o = self._all_reduce(o, fast)
@@ -965,14 +986,14 @@ class CodePredictor(LightweightModule):
         gate_o = ttnn.linear(
             h2_sharded,
             lw["gate_ds"],
-            compute_kernel_config=self.kcfg,
+            compute_kernel_config=self.mm_kcfg,
             program_config=self._cp_gate_up_dramshard_progcfg,
             memory_config=self._cp_gate_up_out_memcfg,
         )
         up_o = ttnn.linear(
             h2_sharded,
             lw["up_ds"],
-            compute_kernel_config=self.kcfg,
+            compute_kernel_config=self.mm_kcfg,
             program_config=self._cp_gate_up_dramshard_progcfg,
             memory_config=self._cp_gate_up_out_memcfg,
         )
@@ -990,7 +1011,7 @@ class CodePredictor(LightweightModule):
         mlp_o_sharded = ttnn.linear(
             gated_d,
             lw["down_ds"],
-            compute_kernel_config=self.kcfg,
+            compute_kernel_config=self.mm_kcfg,
             program_config=self._cp_down_dramshard_progcfg,
             memory_config=self._cp_down_out_memcfg,
         )
@@ -1042,7 +1063,7 @@ class CodePredictor(LightweightModule):
                 self.input_proj,
                 bias=self.input_proj_bias if self.input_proj_bias is not None else None,
                 dtype=self.act_dtype,
-                compute_kernel_config=self.kcfg,
+                compute_kernel_config=self.mm_kcfg,
             )
             own_h = True
         else:
@@ -1106,7 +1127,7 @@ class CodePredictor(LightweightModule):
 
         # Apply lm_head over full hidden (caller indexes last position).
         lm_idx = generation_step - 1
-        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+        logits = ttnn.matmul(h_norm, self.lm_heads[lm_idx], dtype=self.act_dtype, compute_kernel_config=self.mm_kcfg)
         ttnn.deallocate(h_norm)
         return logits, updated_kvs
 
