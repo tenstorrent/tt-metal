@@ -208,8 +208,6 @@ A run is always the longest one a constant page-id step can describe, which is n
 | Row-major ND sharded | whole shard if only one shard dimension exceeds a page, else that dimension's extent | only if more than one does |
 | Tile block sharded | one shard row | yes, for the whole shard |
 
-`AbstractTensorAccessorWrapper` exposes both calls, with `end_page_id` always required since the wrapper hides which layout it holds.
-
 ## Tensor Accessor iterators
 You can use TensorAccessor iterators to speed up and/or simplify iteration over pages in a tensor.
 [Tensor Accessor iterators documentation.](./tensor_accessor_iterator.md)
