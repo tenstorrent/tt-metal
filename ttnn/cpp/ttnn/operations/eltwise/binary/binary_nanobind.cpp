@@ -917,6 +917,62 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 }
 
 template <ttnn::unique_string Name, typename Fn>
+void bind_clamped_silu_glu(nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+            limit (float): the clamp limit. Bounds the gate half from above only and the up half at
+                both ends. Must be positive.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores to run on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Runs as a single multiply and allocates no intermediates, so any output memory
+            config is accepted alongside a core restriction.
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        math);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        fn,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("limit"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+}
+
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite_with_rtol_atol(
     nb::module_& mod,
     const std::string& description,
@@ -2199,6 +2255,12 @@ void py_module(nb::module_& mod) {
         R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
         R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
         &ttnn::situ_glu);
+
+    detail::bind_clamped_silu_glu<"clamped_silu_glu">(
+        mod,
+        R"doc(Computes DeepSeek-V4's clamped SiLU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \mathrm{silu}\left(\min(\mathrm{gate}_i, \verb|limit|)\right) \cdot \mathrm{clamp}(\mathrm{up}_i, -\verb|limit|, \verb|limit|))doc",
+        &ttnn::clamped_silu_glu);
 
     detail::bind_binary_composite<"nextafter">(
         mod,

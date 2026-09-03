@@ -1008,4 +1008,50 @@ Tensor situ_glu(
     return ttnn::multiply(situ_a, up_half, std::nullopt, effective_out);
 }
 
+Tensor clamped_silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float limit,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using namespace operations::unary;
+
+    // At limit <= 0 the gate half is the constant silu(limit).
+    TT_FATAL(limit > 0.0f, "clamped_silu_glu: limit must be positive, got {}", limit);
+
+    auto cores = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    if (!cores.has_value()) {
+        // Unrestricted, multiply falls back to get_sub_device_ids().front(), which is the whole grid
+        // only while the device is unpartitioned. Once a custom manager is loaded that is sub-device
+        // 0, an arbitrary strip, and landing there silently is never what a caller means.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "clamped_silu_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
+            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
+
+    // Spans apply in list order: the gate's clamp precedes its SILU.
+    const EltwiseUnaryWithParam gate_acts[] = {{UnaryOpType::MINIMUM, limit}, {UnaryOpType::SILU}};
+    const EltwiseUnaryWithParam up_acts[] = {{UnaryOpType::CLAMP_TSS, -limit, limit}};
+    return ttnn::multiply(
+        gate,
+        up,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        /*post_activations=*/{},
+        gate_acts,
+        up_acts,
+        /*fast_and_approximate_mode=*/std::nullopt,
+        cores,
+        std::nullopt);
+}
+
 }  // namespace ttnn

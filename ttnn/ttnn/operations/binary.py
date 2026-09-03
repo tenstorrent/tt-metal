@@ -261,6 +261,18 @@ def _golden_function_situ_glu(gate, up, beta1, beta2, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.situ_glu, golden_function=_golden_function_situ_glu)
 
 
+def _golden_function_clamped_silu_glu(gate, up, limit, *args, **kwargs):
+    import torch
+
+    gate_c = torch.clamp(gate.to(torch.float32), max=limit)
+    up_c = torch.clamp(up.to(torch.float32), min=-limit, max=limit)
+    # fp32: rounding to the input dtype would make a ULP comparison measure the golden's rounding.
+    return torch.nn.functional.silu(gate_c) * up_c
+
+
+ttnn.attach_golden_function(ttnn.clamped_silu_glu, golden_function=_golden_function_clamped_silu_glu)
+
+
 def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
