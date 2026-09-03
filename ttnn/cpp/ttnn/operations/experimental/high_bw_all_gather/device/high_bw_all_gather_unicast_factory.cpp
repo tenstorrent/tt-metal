@@ -614,6 +614,18 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // The output stride is already the maximum per-rank slot width. Runtime prefixes patch their active
     // bank-owned page ranges below without changing that stride or the compiled worker topology.
     const bool output_bank_owned_schedule = can_use_bank_owned(workers_per_dir);
+    log_warning(
+        tt::LogOp,
+        "HIGH_BW_ALL_GATHER_CONFIG links={} workers_per_direction={} available_worker_cores={} bank_owned={} "
+        "packet_size={} input_page_size={} output_bytes={} bytes_per_link={}",
+        num_links,
+        workers_per_dir,
+        available_worker_cores.num_cores(),
+        output_bank_owned_schedule,
+        packet_size,
+        input_page_size,
+        total_output_bytes,
+        per_link_bytes);
     const uint32_t slice_step = output_bank_owned_schedule ? num_dram_banks : 1;
     // Runtime controls change the selected source base and active page count, but every rank retains its
     // maximum output slot. Its stripe width is therefore structural and can stay baked into the iterator,

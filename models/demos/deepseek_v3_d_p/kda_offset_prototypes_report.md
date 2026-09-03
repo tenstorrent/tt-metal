@@ -509,26 +509,42 @@ Fabric 1D:
 
 | Path | Median warm trace latency | Offset overhead | Relative to no offset |
 | --- | ---: | ---: | ---: |
-| No-offset baseline | 9.531 ms | — | 1.000× |
-| Full reshard, `high_bw_all_gather` | 12.268 ms | 2.737 ms | 1.287× |
-| Sequential tail | 13.658 ms | 4.127 ms | 1.433× |
+| No-offset baseline | 9.533 ms | — | 1.000× |
+| Full reshard, `high_bw_all_gather` | 12.331 ms | 2.798 ms | 1.293× |
+| Sequential tail | 13.829 ms | 4.297 ms | 1.451× |
 
 These are medians across five independent sessions. Each session reports the
 median of five samples of ten synchronized trace replays; compilation and host
 validation are excluded. The five session medians in milliseconds were:
 
-- no offset: `[9.536, 9.531, 9.533, 9.527, 9.531]` (range 9.527–9.536);
+- no offset: `[9.534, 9.530, 9.533, 9.533, 9.531]` (range 9.530–9.534);
 - high-bandwidth full reshard:
-  `[12.329, 12.268, 12.281, 12.216, 12.213]` (range 12.213–12.329);
-- sequential tail: `[13.806, 13.792, 13.658, 13.577, 13.544]`
-  (range 13.544–13.806).
+  `[12.331, 12.289, 12.273, 12.346, 12.352]` (range 12.273–12.352);
+- sequential tail: `[13.829, 13.781, 13.767, 13.903, 13.920]`
+  (range 13.767–13.920).
+
+Temporary factory instrumentation records the final worker selection after the
+heuristic and any sub-core-grid reduction. Both gathers use the bank-owned
+schedule and all 110 available worker cores were visible to the selector:
+
+| Gather | Output allocation per device | Bytes per link | Links | Workers per direction per link |
+| --- | ---: | ---: | ---: | ---: |
+| Input hidden, before KDA | 73,400,320 B (70 MiB) | 36,700,160 B (35 MiB) | 2 | 8 |
+| TP-sharded output, after KDA | 18,350,080 B (17.5 MiB) | 9,175,040 B (8.75 MiB) | 2 | 4 |
+
+The selector is therefore not under-provisioning this experiment: the 70 MiB
+exchange crosses the 32 MB/link threshold and selects the maximum eight-worker
+tier, while the 17.5 MiB exchange selects four workers. Each direction also
+uses a mux core when the worker count exceeds one. The runtime nevertheless
+warns that the 4352-byte Fabric packet size is suboptimal for 2048-byte pages
+and recommends 8192-byte packets; packet size remains a separate tuning lead.
 
 The benchmark is
 [`test_synthetic_kimi_k3_offset_prototype_perf`](tests/kda/perf/test_layer_perf.py).
 On this SP2 topology, switching from the earlier generic-gather measurement
 (11.562 ms) to the high-bandwidth implementation did not reduce end-to-end
-latency: the new calibrated median is 0.706 ms higher. High-bandwidth full
-reshard remains 1.391 ms faster than the current sequential-tail proof on this
+latency: the new calibrated median is 0.769 ms higher. High-bandwidth full
+reshard remains 1.499 ms faster than the current sequential-tail proof on this
 box.
 
 This is **not** a Galaxy SP8×TP4 performance result. The host exposes eight
