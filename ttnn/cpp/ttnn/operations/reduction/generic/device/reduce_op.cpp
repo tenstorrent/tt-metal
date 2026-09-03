@@ -87,27 +87,16 @@ Tensor reduce_min(
         true);
 }
 
-// --- H-axis split tuning knobs. Both are per-path; the RM values reproduce merged behavior. ---
-//
-// (1) Don't split at all below this many tiles on the reduction axis: the extra dispatch and the
-// partials round trip cost more than the added parallelism buys. The RM path stages row pages
-// through compute_kernel_lib::tilize (one CB page per logical row), so its per-tile cost is higher
-// and it breaks even sooner; the TILE path async_reads whole tiles, so its un-split baseline is
-// already cheap and the split must clear a higher bar.
+// Minimum H tiles required to take the H-axis split.
 static constexpr uint32_t k_min_ht_for_split_rm = 16;    // ~H >= 512 rows
-static constexpr uint32_t k_min_ht_for_split_tile = 32;  // ~H >= 1024 rows
+static constexpr uint32_t k_min_ht_for_split_tile = 20;  // ~H >= 640 rows
 
-// (2) Never split so finely that one core reduces fewer than this many tiles. Every extra slice
-// adds a row to the partials and a work unit to stage 2, so past some point thinner slices stop
-// paying back. 1 == "as thin as needed to fill the grid", which is exactly today's behavior since
-// slices_at_min_work then degenerates to Ht. Raising it trades cores for per-core work.
-static constexpr uint32_t k_min_ht_per_slice_rm = 1;    // merged behavior - do not change
-static constexpr uint32_t k_min_ht_per_slice_tile = 1;  // deliberately neutral; tune from here
+static constexpr uint32_t k_min_ht_per_slice_rm = 1;
+static constexpr uint32_t k_min_ht_per_slice_tile = 1;
 
-// Number of H-axis slices to split the reduction into. 1 means "don't split".
-// `min_ht_per_slice` is a floor on tiles-per-slice, so it can only reduce the slice count below the
-// grid-filling value: oversubscribing the grid would add partial rows and stage-2 work without
-// adding parallelism.
+// H-axis slice count; 1 leaves the reduce un-split.
+// Fill the grid, but never so thinly that a slice has fewer than min_ht_per_slice tiles. Extra
+// slices past that would add partial rows and stage-2 work without more parallelism.
 static uint32_t compute_h_slices(
     uint32_t col_groups, uint32_t Ht, uint32_t grid_cores, uint32_t min_ht_for_split, uint32_t min_ht_per_slice) {
     if (col_groups == 0 || col_groups >= grid_cores || Ht < min_ht_for_split) {
@@ -364,9 +353,7 @@ Tensor reduce(
     }
 
     // H-axis split: the un-split RM-H path uses only NC*Wt cores, so tall-H shapes starve the grid.
-    // Split the reduction axis into S segments — stage 1 → (N,C,S,W) FP32 partials, stage 2 →
-    // collapse the slice axis with the user scaler and final dtype. Sum over H is the sum of the
-    // per-slice sums, so mean's 1/N applies once, in stage 2.
+    // Stage 1 emits (N,C,S,W) FP32 partials; stage 2 collapses the slice axis with the user scaler.
     if (use_rm_dense_h) {
         const auto& logical = input_tensor.logical_shape();
         const auto& padded = input_tensor.padded_shape();
@@ -421,24 +408,22 @@ Tensor reduce(
         }
     }
 
-    // Same H-axis split for TILE input: the un-split tiled H path also parallelizes only over
-    // NC*Wt columns. Stage 1 keeps the tiled reader + reduce.cpp but emits (N,C,S,W) FP32
-    // ROW_MAJOR partials — a TILE partial would put up to TILE_HEIGHT slices inside one page,
-    // which independent cores cannot write. Stage 2 is then the same RM dense H collapse the
-    // ROW_MAJOR split already uses.
+    // Same split for TILE input: un-split also parallelizes only over NC*Wt. Stage 1 keeps the
+    // tiled reader/compute but emits ROW_MAJOR FP32 partials — a TILE partial would pack slices
+    // into one page. Stage 2 is the RM dense H collapse. Block-float rides along as whole tiles.
     if (prepared_input.layout() == tt::tt_metal::Layout::TILE && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM) && !negate &&
         both_interleaved && !prepared_input.shard_spec().has_value() && prepared_input.logical_shape().rank() == 4 &&
         (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-         prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32)) {
+         prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+         tt::tt_metal::is_block_float(prepared_input.dtype()))) {
         const auto& logical = prepared_input.logical_shape();
         const auto& padded = prepared_input.padded_shape();
         const uint32_t tile_h = prepared_input.tensor_spec().tile().get_height();
         const uint32_t tile_w = prepared_input.tensor_spec().tile().get_width();
         const uint32_t NC = logical[0] * logical[1];
         const uint32_t Wt = (padded[3] + tile_w - 1) / tile_w;
-        // Derived from the padded H, matching the factory's Ht: the reader's overhang guard
-        // (ht >= Ht) indexes real tiles, so host and kernel must agree on the tile count.
+        // Padded H, matching the factory's Ht so the reader's ht >= Ht guard indexes real tiles.
         const uint32_t Ht = (padded[2] + tile_h - 1) / tile_h;
         const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
 
@@ -449,7 +434,7 @@ Tensor reduce(
             compute_h_slices(col_groups, Ht, grid_cores, k_min_ht_for_split_tile, k_min_ht_per_slice_tile);
 
         if (num_h_slices >= 2) {
-            // Stage 1: tiled H reduce, S slices, unit scaler, ROW_MAJOR FP32 partials.
+            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR FP32 partials.
             const Tensor partials = ttnn::prim::reduce(
                 prepared_input,
                 tt::tt_metal::ReduceOpMath::SUM,
@@ -467,8 +452,7 @@ Tensor reduce(
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
-            // Stage 2: collapse the slice axis with the user scaler and final dtype. TILE input
-            // defaults to TILE output; only an explicit ROW_MAJOR request changes that.
+            // Stage 2: collapse the slice axis. TILE in defaults to TILE out.
             return ttnn::prim::reduce(
                 partials,
                 tt::tt_metal::ReduceOpMath::SUM,
