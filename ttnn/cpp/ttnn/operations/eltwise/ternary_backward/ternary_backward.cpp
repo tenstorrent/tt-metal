@@ -49,16 +49,27 @@ std::vector<Tensor> addcdiv_bw(
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
+
+    // grad_a = grad * value / tensor2.
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad, value, std::nullopt, output_mem_config),
         ttnn::reciprocal(tensor2, output_mem_config),
         std::nullopt,
         output_mem_config);
+    // At tensor2 == 0 the sign is the sign of the numerator (grad * value) and the
+    // result is NaN when that numerator is zero.
+    Tensor grad_a_numerator = ttnn::multiply(grad, value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
-        ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
+        ttnn::where(
+            ttnn::eqz(grad_a_numerator, output_mem_config),
+            t_nan,
+            ttnn::multiply(ttnn::sign(grad_a_numerator, output_mem_config), t_inf, std::nullopt, output_mem_config),
+            output_mem_config),
         grad_a,
         output_mem_config));
+
+    // grad_b = -grad * value * tensor1 / tensor2^2.
     Tensor tmp = ttnn::multiply(
         ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config),
         tensor1,
@@ -69,9 +80,15 @@ std::vector<Tensor> addcdiv_bw(
         ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
+    // At tensor2 == 0 the sign is the sign of the numerator (-grad * value * tensor1)
+    // and the result is NaN when that numerator is zero.
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
-        ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),
+        ttnn::where(
+            ttnn::eqz(tmp, output_mem_config),
+            t_nan,
+            ttnn::multiply(ttnn::sign(tmp, output_mem_config), t_inf, std::nullopt, output_mem_config),
+            output_mem_config),
         grad_b,
         output_mem_config));
     return grad_tensor;

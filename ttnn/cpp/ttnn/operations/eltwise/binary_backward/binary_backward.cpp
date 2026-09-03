@@ -303,10 +303,18 @@ std::vector<Tensor> xlogy_bw(
     Tensor grad2_result = ttnn::multiply(grad_tensor, div_result, std::nullopt, output_mem_config);
     grad2_result = where(
         ttnn::eqz(other, output_mem_config),
-        ttnn::multiply(
-            ttnn::sign(grad_tensor, output_mem_config),
-            std::numeric_limits<float>::infinity(),
-            std::nullopt,
+        where(
+            ttnn::eqz(input_a, output_mem_config),
+            std::nanf(""),
+            ttnn::multiply(
+                ttnn::multiply(
+                    ttnn::sign(grad_tensor, output_mem_config),
+                    ttnn::sign(input_a, output_mem_config),
+                    std::nullopt,
+                    output_mem_config),
+                std::numeric_limits<float>::infinity(),
+                std::nullopt,
+                output_mem_config),
             output_mem_config),
         grad2_result,
         output_mem_config);
