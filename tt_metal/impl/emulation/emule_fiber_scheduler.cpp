@@ -143,7 +143,7 @@ struct FiberSchedulerImpl {
     unsigned cb_poll_waiters_ = 0;       // as socket_poll_waiters_, but for CB probes (peer-fed)
     std::exception_ptr first_eptr_;
 
-    std::atomic<uint64_t> progress_{0};      // fiber completions + published pages (tier 2)
+    std::atomic<uint64_t> progress_{0};      // fiber completions + completed work units (tier 2)
     std::atomic<uint64_t> resumptions_{0};   // swap-ins (tier 2 livelock signal)
 
     // Raw-L1-store lost-wakeup recovery watermarks (guarded by mu_; per-run — reset
@@ -646,9 +646,9 @@ void FiberScheduler::yield() {
     swapcontext(&f->ctx, &t_sched);          // mu_ held -> worker loop; resumes mu_-UNLOCKED
 }
 
-void FiberScheduler::note_publish(unsigned pages) {
-    p_->progress_.fetch_add(pages ? pages : 1, std::memory_order_relaxed);
-}
+void FiberScheduler::note_progress(unsigned units) { p_->progress_.fetch_add(units, std::memory_order_relaxed); }
+
+void FiberScheduler::note_publish(unsigned pages) { note_progress(pages ? pages : 1); }
 
 // ---- register / run ----
 

@@ -282,6 +282,7 @@ extern "C" void __emule_fiber_note_cb_poll_wait(unsigned cb_id, unsigned n) {
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
 extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
+extern "C" void __emule_fiber_note_progress(unsigned units) { efib::FiberScheduler::instance().note_progress(units); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }

@@ -91,6 +91,7 @@ public:
     void quiescence_park();              // defer to quiescence: re-queue lowest-priority, released at quiescence
     void wake(const void* key);
     void yield();
+    void note_progress(unsigned units);
     void note_publish(unsigned pages);
 
     FiberScheduler(const FiberScheduler&) = delete;

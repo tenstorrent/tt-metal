@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -314,6 +315,53 @@ TEST_F(EmuleHostWait, CompletedRunLeavesNoWatchdogBehind) {
     spawn_fiber([&ran] { ran.fetch_add(1); }, 17, "post_gap_program");
     ASSERT_EQ(sched.run_persistent(), RunOutcome::Completed);
     EXPECT_EQ(ran.load(), 1u);
+}
+
+TEST_F(EmuleHostWait, ComputeProgressKeepsLongBusyFiberAlive) {
+    arm_fast_watchdog();
+    std::atomic<uint64_t> result{0};
+    spawn_fiber(
+        [&result] {
+            auto& sched = FiberScheduler::instance();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(4500);
+            uint64_t value = 1;
+            do {
+                for (unsigned i = 0; i < 100000; ++i) {
+                    value = value * 1664525u + 1013904223u;
+                }
+                sched.note_progress(1);
+            } while (std::chrono::steady_clock::now() < deadline);
+            result.store(value | 1u, std::memory_order_relaxed);
+        },
+        22,
+        "long_compute_with_progress");
+
+    EXPECT_EQ(FiberScheduler::instance().run_persistent(), RunOutcome::Completed);
+    EXPECT_NE(result.load(std::memory_order_relaxed), 0u);
+    disarm_fast_watchdog();
+}
+
+TEST_F(EmuleHostWait, InfiniteBusyFiberWithoutProgressTripsWatchdog) {
+    arm_fast_watchdog();
+    EXPECT_DEATH(
+        {
+            std::atomic<uint64_t> result{0};
+            spawn_fiber(
+                [&result] {
+                    uint64_t value = 1;
+                    for (;;) {
+                        for (unsigned i = 0; i < 100000; ++i) {
+                            value = value * 1664525u + 1013904223u;
+                        }
+                        result.store(value, std::memory_order_relaxed);
+                    }
+                },
+                23,
+                "infinite_compute_without_progress");
+            (void)FiberScheduler::instance().run_persistent();
+        },
+        "no global progress");
+    disarm_fast_watchdog();
 }
 
 // Outcome flags are per-launch: a stale host_wait_ frees the NEXT dispatch's keepalives under it.
