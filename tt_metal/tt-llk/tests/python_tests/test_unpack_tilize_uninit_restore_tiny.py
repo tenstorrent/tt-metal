@@ -4,9 +4,11 @@
 """Tiny-tile (face_r_dim < 16) cross-op restore test for `_llk_unpack_tilize_uninit_`.
 
 This is the Phase 2 companion to ``test_unpack_tilize_uninit_restore.py``. Phase 1
-covers the ``num_faces`` (tile-descriptor Z-dim) restore for full 16-row faces.
-Phase 2 covers the orthogonal axis the PR actually changed on Wormhole: the
-``Tile_x_dim_cntx0`` restore, which is computed as
+covers the ``num_faces`` axis for full 16-row faces, where the tile-descriptor
+Z-dim must be *preserved* across tilize+uninit rather than restored — on Wormhole
+tilize neither writes nor reverts that word (tt-llk#1161). Phase 2 covers the
+orthogonal axis that uninit does own on Wormhole: the ``Tile_x_dim_cntx0``
+restore, which is computed as
 ``canonical_unpA_tile_x_dim_cntx(face_r_dim)`` and therefore only differs from the
 old hardcoded ``16 | (16 << 16)`` value when ``face_r_dim < 16``.
 

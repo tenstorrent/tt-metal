@@ -99,8 +99,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     drain_cfg_writes();
 
     const std::uint32_t post_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    const std::uint32_t post_z_dim     = post_desc_word >> 16;
-    const std::uint32_t post_y_dim     = post_desc_word & 0xffff;
+    const std::uint32_t post_z_dim     = UPPER_HALFWORD(post_desc_word);
+    const std::uint32_t post_y_dim     = LOWER_HALFWORD(post_desc_word);
     const std::uint32_t post_tile_x    = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
 
 #ifdef ARCH_WORMHOLE
@@ -115,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // BH tilize init writes the descriptor, so uninit must re-establish the
     // tilize operand's baseline; y_dim is still not tilize's to touch.
     LLK_ASSERT(post_z_dim == tilize_num_faces, "BH tilize uninit must re-establish descriptor Z-dim = tilize operand num_faces");
-    LLK_ASSERT(post_y_dim == (pre_desc_word & 0xffff), "tilize uninit must not disturb the descriptor Y-dim");
+    LLK_ASSERT(post_y_dim == LOWER_HALFWORD(pre_desc_word), "tilize uninit must not disturb the descriptor Y-dim");
 #endif
 
     // Silence unused-variable warnings on the arch whose asserts do not use these.
