@@ -768,20 +768,21 @@ auto coalesceFabricEvents(
 
                 if (i + 2 >= markers.size() ||
                     (!std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) &&
-                     !std::holds_alternative<EMD::FabricRoutingFields2D>(EMD(markers[i + 1].data).getContents())) ||
+                     !std::holds_alternative<EMD::FabricRoutingMetadataUnavailable2D>(
+                         EMD(markers[i + 1].data).getContents())) ||
                     !std::holds_alternative<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()) ||
                     std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()).noc_xfer_type !=
                         EMD::NocEventType::WRITE_) {
                     log_warning(
                         tt::LogMetal,
                         "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
-                        "missing routing fields event and/or local write.",
+                        "missing routing metadata event and/or local write.",
                         markers[i].op_name);
                     i += 1;
                     continue;
                 }
 
-                fabric_event_markers.fabric_routing_fields_marker = markers[i + 1];
+                fabric_event_markers.fabric_routing_metadata_marker = markers[i + 1];
                 fabric_event_markers.local_noc_write_marker = markers[i + 2];
 
                 // if local noc write is to a fabric mux (i.e. worker core), add marker for fabric mux
@@ -1007,7 +1008,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                 auto fabric_event_markers = std::get<FabricEventMarkers>(marker_it);
 
                 auto first_fabric_write_marker = fabric_event_markers.fabric_write_markers[0];
-                auto fabric_routing_fields_marker = fabric_event_markers.fabric_routing_fields_marker;
+                auto fabric_routing_metadata_marker = fabric_event_markers.fabric_routing_metadata_marker;
                 auto local_noc_write_marker = fabric_event_markers.local_noc_write_marker;
 
                 EMD::FabricPacketType routing_fields_type;
@@ -1041,32 +1042,28 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     {"timestamp", local_noc_write_marker.timestamp},
                 };
 
-                // extract routing metadata from routing fields event
+                // Extract routing metadata when the packet format supports it.
                 switch (routing_fields_type) {
                     case EMD::FabricPacketType::REGULAR: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields1D>(EMD(fabric_routing_fields_marker.data).getContents());
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_metadata_marker.data).getContents());
                         auto [start_distance, range] =
                             get_routing_start_distance_and_range(fabric_routing_fields_event.routing_fields_value);
                         fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
                         break;
                     }
                     case EMD::FabricPacketType::LOW_LATENCY: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields1D>(EMD(fabric_routing_fields_marker.data).getContents());
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_metadata_marker.data).getContents());
                         auto [start_distance, range] = get_low_latency_routing_start_distance_and_range(
                             fabric_routing_fields_event.routing_fields_value);
                         fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
                         break;
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields2D>(EMD(fabric_routing_fields_marker.data).getContents());
-                        fabric_event_json["fabric_send"] = {
-                            {"ns_hops", fabric_routing_fields_event.ns_hops},
-                            {"e_hops", fabric_routing_fields_event.e_hops},
-                            {"w_hops", fabric_routing_fields_event.w_hops},
-                            {"is_mcast", fabric_routing_fields_event.is_mcast}};
+                        std::get<EMD::FabricRoutingMetadataUnavailable2D>(
+                            EMD(fabric_routing_metadata_marker.data).getContents());
+                        fabric_event_json["fabric_send"] = {{"routing_metadata_available", false}};
                         break;
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::DYNAMIC_MESH: {

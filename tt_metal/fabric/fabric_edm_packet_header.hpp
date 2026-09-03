@@ -1213,16 +1213,9 @@ using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSI
 using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
 #endif
 
-// 2D Mesh routing fields struct
-// This struct contains routing STATE (hop_index union) for 2D packet headers.
-// All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
-// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh).
-// Dead to the fabric since the legacy 2D codec was removed; kept because tools/profiler/
-// fabric_event_profiler.hpp still decodes hop programs with these constants.
+// Legacy 2D mesh routing state. Dead to the fabric since the indexed action-map codec replaced the hop program.
+// Retained temporarily as packet-layout/type plumbing until the remaining legacy users are migrated.
 struct LowLatencyMeshRoutingFields {
-    // Type alias to reference centralized constants
-    using MeshRoutingFields = RoutingFieldsConstants::Mesh;
-
     // Routing state (the actual data members)
     union {
         uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
@@ -1287,9 +1280,8 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 // Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
 //              routing_fields:4 + dst_start:4 + mcast_params:8)
 //
-// routing_fields (hop_index / branch_east_offset / branch_west_offset) is retained despite being dead
-// to the fabric: tools/profiler/fabric_event_profiler.hpp still decodes branch_*_offset, and the
-// profiler is out of scope. Reclaiming those 4 more bytes is blocked on that decision.
+// routing_fields (hop_index / branch_east_offset / branch_west_offset) remains as temporary packet-layout/type
+// plumbing. Reclaim it once the remaining legacy users are migrated.
 // The 60 B base plus the maximum 68 B action map fills a 128 B header exactly.
 static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
