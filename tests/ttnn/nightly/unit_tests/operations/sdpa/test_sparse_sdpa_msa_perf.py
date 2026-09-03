@@ -96,16 +96,15 @@ def test_msa_perf_prod_single_chip_gqa(device, kv_dtype, expected_ms):
     assert tuple(out.shape) == (1, H, S, d)
 
 
-def _paged_msa_memory_config(device, page_size, width, shard_height=None, shard_width=None):
+def _paged_msa_memory_config(device, page_size, width, shard_height=None):
     shard_height = page_size if shard_height is None else shard_height
-    shard_width = width if shard_width is None else shard_width
     cores = [
         ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(device.dram_grid_size().x)
     ]
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
         nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape=[1, 1, shard_height, shard_width],
+            shard_shape=[1, 1, shard_height, width],
             grid=ttnn.CoreRangeSet(cores),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
@@ -115,14 +114,10 @@ def _paged_msa_memory_config(device, page_size, width, shard_height=None, shard_
 
 @run_for_blackhole()
 @pytest.mark.parametrize("kv_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize(
-    "page_size,shard_height,shard_width",
-    [(32, 32, 128), (64, 32, 128), (32, 32, 64)],
-    ids=["page32", "page64_shard32", "page32_halfrow_shards"],
-)
+@pytest.mark.parametrize("page_size,shard_height", [(32, 32), (64, 32)], ids=["page32", "page64_shard32"])
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_height, shard_width):
+def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_height):
     """Paged tile remapping must preserve production MSA throughput and numerical output."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for sparse_sdpa_msa perf checks (needs IOMMU)")
@@ -142,7 +137,7 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
     tt_idx = upload(indices.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
     tt_k = upload(k.to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
     tt_v = upload(v.to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
-    paged_mem = _paged_msa_memory_config(device, page_size, d, shard_height, shard_width)
+    paged_mem = _paged_msa_memory_config(device, page_size, d, shard_height)
     tt_paged_k = upload(
         k.reshape(T // page_size, 1, page_size, d).to(torch.bfloat16), kv_dtype, ttnn.TILE_LAYOUT, paged_mem
     )
@@ -190,9 +185,7 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
     paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
     ratio = paged_ms / contiguous_ms
     logger.info(
-        f"sparse_sdpa_msa {kv_dtype} page={page_size} shard={shard_height}x{shard_width} perf: "
-        f"contiguous={contiguous_ms:.3f} ms, "
+        f"sparse_sdpa_msa {kv_dtype} page={page_size} shard={shard_height} perf: contiguous={contiguous_ms:.3f} ms, "
         f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
     )
-    max_ratio = 1.04 if shard_width < d else 1.10
-    assert ratio <= max_ratio, f"paged sparse_sdpa_msa regressed production device time by {(ratio - 1) * 100:.2f}%"
+    assert ratio <= 1.10, f"paged sparse_sdpa_msa regressed production device time by {(ratio - 1) * 100:.2f}%"
