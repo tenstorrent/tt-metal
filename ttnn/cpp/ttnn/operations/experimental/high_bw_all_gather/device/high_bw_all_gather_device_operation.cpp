@@ -372,9 +372,6 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
-    // Metadata slot select has NO host-side value to recheck -- the reader reads it per dispatch. The
-    // container was proven on the miss path, and the presence flag is hashed, so a hit cannot arrive here
-    // with a different form than it compiled for.
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
         TT_FATAL(
