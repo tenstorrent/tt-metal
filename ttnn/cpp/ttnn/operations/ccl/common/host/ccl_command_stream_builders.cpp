@@ -52,7 +52,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
     for (size_t i = 0; i < num_slices; i++) {
         result.push_back(compute_slice_size_and_offset(i));
     }
-    return std::vector<std::pair<size_t, size_t>>(result.begin(), result.end());
+    return result;
 }
 
 // // Outer vector = per worker command stream, inner vector = commands

@@ -38,8 +38,12 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t num_senders = get_compile_time_arg_val(4);
     constexpr uint32_t print_stride = get_compile_time_arg_val(5);
-    // TensorAccessor compile-time args start at index 6.
-    constexpr auto tensor_args = TensorAccessorArgs<6>();
+    // Streaming mode: the prefetcher delivers each receiver's blocks ring-rotated, so the
+    // block at FIFO position `blk` is physical block (ring_pos + blk) mod num_blocks. In
+    // batched mode FIFO position blk == physical block blk.
+    constexpr uint32_t streaming = get_compile_time_arg_val(6);
+    // TensorAccessor compile-time args start at index 7.
+    constexpr auto tensor_args = TensorAccessorArgs<7>();
 
     // ---- Runtime args ----
     // Host derives `n_col_start` (= ring_pos * n_per_recv_tiles) and
@@ -55,6 +59,7 @@ void kernel_main() {
     const uint32_t total_n_tiles = get_arg_val<uint32_t>(rt_idx++);  // N / TILE_WIDTH (full tensor)
     const uint32_t n_per_recv_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t n_col_start = get_arg_val<uint32_t>(rt_idx++);  // ring_pos * n_per_recv_tiles
+    const uint32_t lead_block = get_arg_val<uint32_t>(rt_idx++);   // streaming: physical block at FIFO position 0
     (void)num_senders;                                             // total_n_tiles now comes directly from the host
 
     const auto accessor = TensorAccessor(tensor_args, bank_base_addr);
@@ -83,9 +88,10 @@ void kernel_main() {
             // Read expected tiles via TensorAccessor. Per tt_metal/impl/buffers/prefetcher_matmul_design.md §3,
             // page row h = tiles (blk*kw + h, n_col_start + n) for n in [0, n_per_recv). One
             // accessor call per tile keeps bank-routing logic out of this kernel.
+            const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
             uint32_t scratch_cursor = scratch_addr;
             for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
-                const uint32_t k_row = blk * k_block_w_tiles + h;
+                const uint32_t k_row = phys_blk * k_block_w_tiles + h;
                 const uint32_t row_page_base = k_row * total_n_tiles + n_col_start;
                 for (uint32_t n = 0; n < n_per_recv_tiles; ++n) {
                     const uint64_t src_noc = accessor.get_noc_addr(row_page_base + n);

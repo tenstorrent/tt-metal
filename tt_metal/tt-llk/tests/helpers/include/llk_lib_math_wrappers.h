@@ -13,7 +13,9 @@
 #include "experimental/llk_math_reduce_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_reduce.h"
 #include "llk_math_transpose_dest.h"
+#include "tensor_shape.h"
 
 using ckernel::PackMode;
 
@@ -62,9 +64,9 @@ inline bool _llk_math_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const 
 }
 
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_reinit_wrapper_()
+inline void _llk_math_reduce_block_max_row_reinit_wrapper_(const ckernel::TensorShape& tensor_shape)
 {
-    _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
+    _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 }
 
 #elif defined(ARCH_BLACKHOLE)
@@ -109,7 +111,7 @@ inline bool _llk_math_skip_bh_tilize_workaround_wrapper_(const std::uint32_t unp
 }
 
 template <[[maybe_unused]] std::uint32_t block_ct_dim, [[maybe_unused]] bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_reinit_wrapper_()
+inline void _llk_math_reduce_block_max_row_reinit_wrapper_([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod_reinit_minimal();
 }

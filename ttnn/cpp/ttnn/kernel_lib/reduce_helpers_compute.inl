@@ -6,12 +6,12 @@
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
-#include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
@@ -38,18 +38,33 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     binary_max_int32_tile(a, b, out);
 }
 
-// SFPU SUM fold (Int32 cross-tile add). add_int_tile is exact 2's-complement and wraps on
-// overflow, matching torch's Int32 sum semantics.
+// SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
+// accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
+// it with ARCH_QUASAR to avoid template lookup failures.
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile_init();
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile_init();
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+#endif
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile<format>(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile<format>(a, b, out);
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile(a, b, out);
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+#endif
+    }
 }
 
 // Pool-type dispatched cross-tile fold init (MAX -> binary_max, SUM -> add_int).
@@ -108,28 +123,6 @@ ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
 
 }  // namespace detail
 
-// HiFi4 fidelity for matmul-based reduce (higher precision than kernel default)
-constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
-
-// Matmul wrappers that use REDUCE_MATMUL_FIDELITY instead of MATH_FIDELITY
-ALWI void reduce_with_matmul_init(uint32_t in0_dfb_id, uint32_t in1_dfb_id) {
-    state_configure(in1_dfb_id, in0_dfb_id);
-    MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_dfb_id, in1_dfb_id, 0)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_dfb_id, in1_dfb_id, 0)));
-}
-
-ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t c_in_old_srca) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_dfb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_dfb_id)));
-    reduce_with_matmul_init(in0_dfb_id, in1_dfb_id);
-}
-
-ALWI void reduce_matmul_tiles(
-    uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
-    UNPACK((llk_unpack_AB_matmul(in0_dfb_id, in1_dfb_id, in0_tile_index, in1_tile_index)));
-    MATH((llk_math_matmul<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(idst)));
-}
-
 // =============================================================================
 // ReduceDataFormatReconfigMode Helper Functions
 // =============================================================================
@@ -164,15 +157,18 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, uint32_t scaler_dfb_id) {
-    // Reconfigure SRCA data format from old_dfb_id to input_dfb_id (similar to copy_tile_to_dst_init_short_with_dt)
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, input_dfb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, input_dfb_id)));
+    constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, false>();
+    const uint32_t srca_dfb_id = swap_operands ? scaler_dfb_id : input_dfb_id;
+
+    // Reconfigure SRCA data format from old_dfb_id to the correct SrcA format
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, srca_dfb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, srca_dfb_id)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
 
     // Reconfigure math for reduce operation
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(input_dfb_id, scaler_dfb_id)));
 
     // Skip packer reconfiguration - it remains valid from initial reduce_init call
 }
@@ -191,7 +187,6 @@ template <
     ReduceDim reduce_dim,
     DataFormat reduce_format,
     typename AccumulateT,
-    bool use_matmul = false,
     bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
@@ -199,7 +194,8 @@ ALWI void reload_accumulator_if_needed(
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_dfb.wait_front(onetile);
-            const uint32_t prev_srca_cb = use_matmul ? scaler_dfb_id : input_dfb_id;
+            constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
+            const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
 
             // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
             // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
@@ -225,8 +221,6 @@ ALWI void reload_accumulator_if_needed(
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
                 detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
-            } else if constexpr (use_matmul) {
-                reduce_with_matmul_init_with_dt(input_dfb_id, scaler_dfb_id, accumulate.config.cb_accumulator);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -270,6 +264,7 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -337,10 +332,7 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    // is_sfpu wins over use_matmul: SUM/AVG on REDUCE_ROW would normally use matmul, but Int32 SUM
-    // has no FPU/matmul support, so it takes the SFPU path instead (matmul would force a float accumulate).
-    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
-    constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>() && !is_sfpu;
+    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -351,8 +343,9 @@ ALWI void reduce(
     }());
 
     // Apply reconfig based on mode
+    constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
     if constexpr (reconfig_input(reconfig_mode)) {
-        if constexpr (use_matmul) {
+        if constexpr (swap_operands) {
             reconfig_data_format(scaler_dfb_id, input_dfb_id);
         } else {
             reconfig_data_format(input_dfb_id, scaler_dfb_id);
@@ -365,8 +358,6 @@ ALWI void reduce(
     if constexpr (is_sfpu) {
         init_sfpu(input_dfb_id, output_dfb_id);
         copy_tile_to_dst_init_short(input_dfb_id);
-    } else if constexpr (use_matmul) {
-        reduce_with_matmul_init(input_dfb_id, scaler_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
@@ -409,7 +400,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -495,7 +486,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, use_matmul, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Wt > 1) {
@@ -523,27 +514,15 @@ ALWI void reduce(
                     } else if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         input_dfb.wait_front(onetile);
-                        if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
-                        } else {
-                            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
-                        }
+                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
                         input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
-                        if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
-                        } else {
-                            reduce_tile<reduce_type, reduce_dim>(
-                                input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
-                        }
+                        reduce_tile<reduce_type, reduce_dim>(
+                            input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
-                        if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
-                        } else {
-                            reduce_tile<reduce_type, reduce_dim>(
-                                input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
-                        }
+                        reduce_tile<reduce_type, reduce_dim>(
+                            input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                     }
                 }
 
@@ -628,7 +607,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     if (Ht > 1) {
@@ -727,8 +706,8 @@ ALWI void reduce(
     // Cleanup
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
-    } else if constexpr (!use_matmul) {
-        reduce_uninit<>();
+    } else {
+        reduce_uninit();
     }
 }
 

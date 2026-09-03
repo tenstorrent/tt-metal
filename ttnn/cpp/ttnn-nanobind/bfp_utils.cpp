@@ -29,7 +29,7 @@ static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
     const nb::ndarray<nb::array_api, const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
     bool row_major_input,
     bool is_exp_a) {
-    tt::stl::Span<const float> data_span(input.data(), input.size());
+    ttsl::Span<const float> data_span(input.data(), input.size());
     auto packed = pack_fn(data_span, row_major_input, is_exp_a, std::nullopt);
 
     auto* result = new uint32_t[packed.size()];
@@ -48,7 +48,7 @@ static nb::ndarray<nb::numpy, float, nb::ndim<1>> unpack_impl(
     const nb::ndarray<nb::array_api, const uint32_t, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
     bool row_major_output,
     bool is_exp_a) {
-    tt::stl::Span<const uint32_t> data_span(input.data(), input.size());
+    ttsl::Span<const uint32_t> data_span(input.data(), input.size());
     auto unpacked = unpack_fn(data_span, row_major_output, is_exp_a, std::nullopt);
 
     auto* result = new float[unpacked.size()];

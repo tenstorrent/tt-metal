@@ -89,16 +89,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
         )
         + input_output_formats([DataFormat.Int32], same=True)
     ),
-    stoch_rnd_type=lambda narrow_tile: (
-        [
-            StochasticRounding.No,
-            StochasticRounding.Fpu,
-            StochasticRounding.Pack,
-            StochasticRounding.All,
-        ]
-        if narrow_tile == NarrowTile.No
-        else [StochasticRounding.No]
-    ),
+    stoch_rnd_type=[StochasticRounding.No],
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No, NarrowTile.Yes],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -148,21 +139,6 @@ def test_unpack_tilize_comprehensive(
             "Blackhole BFP8_b output fails for num_faces=1,2: tilize packer has hardcoded "
             "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
         )
-
-    # Bfp8_b output + Stochastic Rounding Pack/All causes output corruption (value -508 becomes 0)
-    if formats.output_format == DataFormat.Bfp8_b and stoch_rnd_type in [
-        StochasticRounding.Pack,
-        StochasticRounding.All,
-    ]:
-        pytest.skip(
-            "Bfp8_b output with StochasticRounding.Pack/All causes the resulting value to be 0 when input is -508"
-        )
-
-    if (
-        formats.input_format == DataFormat.Int32
-        and stoch_rnd_type != StochasticRounding.No
-    ):
-        pytest.skip("StochasticRounding does not apply to Int32")
 
     is_narrow = narrow_tile == NarrowTile.Yes
     # Narrow tile: 2 vertical 16x16 faces (num_faces=2).

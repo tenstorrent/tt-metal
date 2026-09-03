@@ -182,6 +182,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
         Wt,                    // Wt
         NC,                    // NC
         post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+        0u,                    // enable_fp32_sfpu: always 0 (fp32 mean HW is forced to the two-step W-then-H path)
     };
 
     const std::string compute_kernel =

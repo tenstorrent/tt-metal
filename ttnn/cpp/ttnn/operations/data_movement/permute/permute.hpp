@@ -11,10 +11,10 @@ namespace ttnn {
 
 ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value = 0.0f);
 
-ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, float pad_value = 0.0f);
+ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value = 0.0f);
 
 }  // namespace ttnn

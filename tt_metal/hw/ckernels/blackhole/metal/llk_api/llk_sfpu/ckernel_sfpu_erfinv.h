@@ -23,7 +23,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // function)
 
     // Compute log(1 - x^2)
-    sfpi::vFloat log_value = calculate_log_body<false, false, false>(sfpi::vConst1 - x * x, 0);
+    sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:

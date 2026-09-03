@@ -290,7 +290,8 @@ the LFC exception (BH P300).
 ## Blackhole weight-cache modes
 
 Different BH runners host their model-weight cache in different places.
-The mapping lives in [`.github/blackhole_demo_systems.yaml`](../.github/blackhole_demo_systems.yaml)
+The mapping lives as a `weights-cache-mode` field on each SKU entry in
+[`.github/sku_config.yaml`](../.github/sku_config.yaml)
 and is consumed by [`models-e2e-tests-impl.yaml`](../.github/workflows/models-e2e-tests-impl.yaml)
 / [`models-unit-tests-impl.yaml`](../.github/workflows/models-unit-tests-impl.yaml)
 when each tier job spins up its container.
@@ -341,11 +342,10 @@ checkpoint directory) rather than the `<org>/<name>` hub id, because
 the LFC cache is laid out as a flat checkpoint tree, not the HF hub
 cache structure.
 
-If you add a new BH SKU that isn't covered above, register its
-cache mode in `.github/blackhole_demo_systems.yaml` before adding tier
-yaml entries for it — otherwise the impl yaml will fall back to the
-default mount and the job will fail at container start on hosts
-without `/mnt/MLPerf`.
+If you add a new BH SKU that isn't covered above, add a `weights-cache-mode`
+field to its entry in `.github/sku_config.yaml` before adding tier yaml
+entries for it — otherwise the impl yaml will fall back to the default mount
+and the job will fail at container start on hosts without `/mnt/MLPerf`.
 
 ---
 
@@ -663,4 +663,4 @@ pipeline filtered to your tier + type + the new `model:` identifier
 | `.github/time_budget.yaml` | Verify or extend the budget for the SKU you target. |
 | Legacy `t3k_*` / `galaxy_*` / `blackhole_demo_tests.yaml` | **Remove** any old entries for this model — duplicate scheduling wastes runners and produces conflicting signal. |
 | `models/model_targets.yaml` | Add (model, SKU, batch_size) entries with perf + accuracy targets. |
-| `.github/blackhole_demo_systems.yaml` | Only if you're adding a brand-new BH SKU — register its weight-cache mode here before adding tier yaml entries. |
+| `.github/sku_config.yaml` | Only if you're adding a brand-new BH SKU — add a `weights-cache-mode` field to its SKU entry before adding tier yaml entries. |

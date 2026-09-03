@@ -15,11 +15,31 @@ namespace sparse_sdpa {
 // NoC's load, a shallow ring beats both the plain burst and the old deep single-NoC ring).
 constexpr uint32_t K_TRID_RING = 4;
 
-// Gather the K rows for chunk index positions [lo, hi) on `noc`, capping outstanding reads with a depth-D
-// trid ring: idx_ptr[base + p] -> k_cb at byte offset p * k_row_bytes, for p in [lo, hi). Used by the
-// reader for its half [half, valid) and by the writer for its half [0, half). `page_offset` selects the
-// batch slot of an indexed KV cache (cache_batch_idx * T); 0 for a single [1,1,T,K_DIM] cache.
-template <typename Accessor>
+// Maps a natural KV index to its physical page in a shard-major, block-cyclic cache.
+template <uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
+FORCE_INLINE uint32_t logical_to_chunked_physical(uint32_t n) {
+    const uint32_t block_idx = n / ChunkLocal;
+    const uint32_t slab = block_idx / Sp;
+    const uint32_t shard = block_idx - slab * Sp;
+    return n + shard * ShardStrideGap - slab * SlabStrideGap;
+}
+
+template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
+FORCE_INLINE uint32_t logical_to_physical_page(uint32_t page) {
+    if constexpr (BlockCyclic) {
+        return logical_to_chunked_physical<ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(page);
+    } else {
+        return page;
+    }
+}
+
+template <
+    bool BlockCyclic,
+    uint32_t ChunkLocal,
+    uint32_t Sp,
+    uint32_t ShardStrideGap,
+    uint32_t SlabStrideGap,
+    typename Accessor>
 FORCE_INLINE void trid_ring_gather(
     Noc& noc,
     const Accessor& kv,
@@ -39,8 +59,9 @@ FORCE_INLINE void trid_ring_gather(
             experimental::async_read_barrier_with_trid(noc, trid);  // free this trid slot before reuse
         }
         experimental::set_read_trid(noc, trid);
-        noc.async_read(
-            kv, k_cb, k_row_bytes, {.page_id = page_offset + idx_ptr[base + p]}, {.offset_bytes = p * k_row_bytes});
+        const uint32_t page =
+            logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(idx_ptr[base + p]);
+        noc.async_read(kv, k_cb, k_row_bytes, {.page_id = page_offset + page}, {.offset_bytes = p * k_row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {

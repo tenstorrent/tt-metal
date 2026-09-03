@@ -23,11 +23,10 @@ jobs:
 
   ttnn-unit-tests:
     needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     secrets: inherit
     with:
       enabled-skus: wh_n150_civ2
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.ci-test-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       timeout-minutes-override: 45
-      merge-gate-call: false

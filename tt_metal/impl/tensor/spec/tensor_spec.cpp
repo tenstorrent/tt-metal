@@ -156,7 +156,7 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
 }
 
 TensorSpec TensorSpec::sharded_across_dims(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
     for (auto dim : dims) {
         shard_shape[dim] = 1;
@@ -166,7 +166,7 @@ TensorSpec TensorSpec::sharded_across_dims(
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     const auto& padded_shape = this->padded_shape();
     Shape shard_shape = Shape().to_rank(padded_shape.rank());
     for (auto dim : dims) {
@@ -239,10 +239,18 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
-            tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
+            tensor_layout_ = TensorLayout(
+                tensor_layout_.get_data_type(),
+                tensor_layout_.get_page_config(),
+                *upd_mem_config,
+                tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
+        tensor_layout_ = TensorLayout(
+            tensor_layout_.get_data_type(),
+            tensor_layout_.get_page_config(),
+            populate_nd_shard_spec_from_legacy(),
+            tensor_layout_.get_alignment());
     }
 }
 
@@ -282,6 +290,13 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     const auto& mem_config = memory_config();
     const auto& nd_shard_spec = mem_config.nd_shard_spec().value();
     const auto& nd_shard_shape = nd_shard_spec.shard_shape;
+
+    // CONTIGUOUS_1D has no legacy equivalent: its shard->bank placement (adjacent shards packed onto the same bank)
+    // is not expressible as any legacy WIDTH/HEIGHT/BLOCK_SHARDED layout. Don't fabricate a (garbled) legacy spec --
+    // leave the tensor ND-sharding-only.
+    if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
+        return std::nullopt;
+    }
 
     // Trying to flatten ND shard shape into 2D
     std::array<uint32_t, 2> shard_shape = {1, nd_shard_shape[-1]};

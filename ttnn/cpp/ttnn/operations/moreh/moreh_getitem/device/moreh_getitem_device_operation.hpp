@@ -16,7 +16,7 @@
 namespace ttnn::operations::moreh::moreh_getitem {
 struct MorehGetItemOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<uint32_t> index_dims;
+        const ttsl::SmallVector<uint32_t> index_dims;
         // const CoreRange core_range;
         const MemoryConfig memory_config;
     };
@@ -59,7 +59,7 @@ namespace ttnn::prim {
 ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const ttnn::SmallVector<uint32_t>& index_dims,
+    const ttsl::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config);
 }

@@ -6,9 +6,29 @@
 
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
-#include <string>
 
 #include <umd/device/types/arch.hpp>
+
+namespace {
+// True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
+// bit-masking convention used across the DRAM-view helpers below.
+bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
+    return (dram_harvesting_mask & (1u << channel)) != 0;
+}
+
+// Number of harvested DRAM channels with index strictly below `channel`. Maps a physical DRAM
+// channel to its compacted/logical index via (physical - harvested_before): UMD presents only
+// non-harvested channels, compacted, so a physical channel with a gap must be shifted down.
+size_t harvested_before(uint32_t dram_harvesting_mask, size_t channel) {
+    size_t count = 0;
+    for (size_t c = 0; c < channel; ++c) {
+        if (is_dram_channel_harvested(dram_harvesting_mask, c)) {
+            ++count;
+        }
+    }
+    return count;
+}
+}  // namespace
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
@@ -78,13 +98,24 @@ size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     return this->dram_view_address_offsets.at(dram_view);
 }
 
-size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+size_t metal_SocDescriptor::get_physical_channel_for_dram_view(int dram_view) const {
     TT_ASSERT(
         dram_view < this->dram_view_channels.size(),
         "dram_view={} must be within range of dram_view_channels.size={}",
         dram_view,
         this->dram_view_channels.size());
     return this->dram_view_channels.at(dram_view);
+}
+
+size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+    const size_t physical_channel = get_physical_channel_for_dram_view(dram_view);
+    const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
+    TT_ASSERT(
+        !is_dram_channel_harvested(dram_harvesting_mask, physical_channel),
+        "dram_view={} refers to harvested physical DRAM channel {}",
+        dram_view,
+        physical_channel);
+    return physical_channel - harvested_before(dram_harvesting_mask, physical_channel);
 }
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
@@ -179,10 +210,15 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_view_address_offsets.clear();
     this->dram_bank_endpoint_coords.clear();
 
+    const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
+
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         size_t channel = dram_view["channel"].as<size_t>();
-        if (channel >= get_grid_size(tt::CoreType::DRAM).x) {
-            // DRAM can be harvested and we don't create unique soc desc for diff harvesting
+        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
+            continue;
+        }
+        const size_t logical_channel = channel - harvested_before(dram_harvesting_mask, channel);
+        if (logical_channel >= get_grid_size(tt::CoreType::DRAM).x) {
             break;
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
@@ -197,7 +233,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
                     eth_endpoint);
             }
             tt::umd::CoreCoord eth_dram_endpoint_coord =
-                get_dram_core_for_channel(channel, eth_endpoint, tt::CoordSystem::TRANSLATED);
+                get_dram_core_for_channel(logical_channel, eth_endpoint, tt::CoordSystem::TRANSLATED);
             eth_dram_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
             eth_endpoints.push_back(eth_endpoint);
         }
@@ -212,7 +248,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
                     worker_endpoint);
             }
             tt::umd::CoreCoord worker_endpoint_coord =
-                get_dram_core_for_channel(channel, worker_endpoint, tt::CoordSystem::TRANSLATED);
+                get_dram_core_for_channel(logical_channel, worker_endpoint, tt::CoordSystem::TRANSLATED);
 
             worker_dram_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
             worker_endpoints.push_back(worker_endpoint);
@@ -227,11 +263,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         size_t preferred_subchannel = worker_endpoints[0];
         std::vector<CoreCoord> bank_endpoints;
         bank_endpoints.reserve(num_subchannels);
-        auto preferred_coord = get_dram_core_for_channel(channel, preferred_subchannel, tt::CoordSystem::TRANSLATED);
+        auto preferred_coord =
+            get_dram_core_for_channel(logical_channel, preferred_subchannel, tt::CoordSystem::TRANSLATED);
         bank_endpoints.push_back({preferred_coord.x, preferred_coord.y});
         for (size_t sub = 0; sub < num_subchannels; sub++) {
             if (sub != preferred_subchannel) {
-                auto coord = get_dram_core_for_channel(channel, sub, tt::CoordSystem::TRANSLATED);
+                auto coord = get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
                 bank_endpoints.push_back({coord.x, coord.y});
             }
         }

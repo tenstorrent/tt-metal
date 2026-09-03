@@ -198,9 +198,18 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[target_block_index]);
     std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    auto it = std::find(segregated_list.begin(), segregated_list.end(), target_block_index);
-    TT_ASSERT(it != segregated_list.end(), "Block not found in size segregated list");
-    segregated_list.erase(it);
+    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
+    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
+    // assuming it.
+    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
+    TT_ASSERT(
+        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
+        "Size segregated list must be sorted by block address");
+    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), target_block_index, by_address);
+    TT_ASSERT(it != segregated_list.end() && *it == target_block_index, "Block not found in size segregated list");
+    if (it != segregated_list.end() && *it == target_block_index) {
+        segregated_list.erase(it);
+    }
 
     size_t offset = start_address - block_address_[target_block_index];
     // Allocated addresses cache is invalidated by allocate_in_block
@@ -543,11 +552,16 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
     std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    for (size_t i = 0; i < segregated_list.size(); i++) {
-        if (segregated_list[i] == block_to_shrink) {
-            segregated_list.erase(segregated_list.begin() + i);
-            break;
-        }
+    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
+    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
+    // assuming it.
+    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
+    TT_ASSERT(
+        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
+        "Size segregated list must be sorted by block address");
+    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), block_to_shrink, by_address);
+    if (it != segregated_list.end() && *it == block_to_shrink) {
+        segregated_list.erase(it);
     }
 
     // Shrink the block

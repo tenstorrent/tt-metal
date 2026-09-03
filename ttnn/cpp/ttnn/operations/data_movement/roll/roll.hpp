@@ -8,8 +8,8 @@ namespace ttnn {
 
 ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& shifts,
-    const ttnn::SmallVector<int>& input_dims,
+    const ttsl::SmallVector<int>& shifts,
+    const ttsl::SmallVector<int>& input_dims,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 ttnn::Tensor roll(

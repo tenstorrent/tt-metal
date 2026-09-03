@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -122,6 +123,16 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         };
     };
 
+    // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
+    DataMovementHardwareConfig brisc_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        brisc_hw = DataMovementGen2Config{};
+    } else {
+        brisc_hw = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
     KernelSpec brisc{
         .unique_id = COPY_LOCAL_BRISC,
         .source = kernel_source,
@@ -129,17 +140,19 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .compile_time_args = compile_time_args,
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
-        // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
-        .hw_config =
-            DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::UNSPECIFIED,
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    }},
+        .hw_config = std::move(brisc_hw),
     };
 
+    // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
+    DataMovementHardwareConfig ncrisc_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        ncrisc_hw = DataMovementGen2Config{};
+    } else {
+        ncrisc_hw = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+        };
+    }
     KernelSpec ncrisc{
         .unique_id = COPY_LOCAL_NCRISC,
         .source = kernel_source,
@@ -147,15 +160,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .compile_time_args = compile_time_args,
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
-        // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
-        .hw_config =
-            DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::UNSPECIFIED,
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                    }},
+        .hw_config = std::move(ncrisc_hw),
     };
 
     // Common runtime args (broadcast to all nodes).
@@ -169,10 +174,8 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
     // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, ...]
     uint32_t start_shard_id = 0;
     for (const auto& core : cores_vec) {
-        brisc_run_args.runtime_arg_values.push_back(
-            ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"first_shard_id", start_shard_id}}});
-        ncrisc_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"first_shard_id", start_shard_id + shard_id_stride / 2}}});
+        brisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id;
+        ncrisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id + shard_id_stride / 2;
         ++start_shard_id;
     }
 

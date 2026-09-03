@@ -257,39 +257,111 @@ struct OperandState
     PackOperandState pack;
 };
 
-enum class Operation : std::uint8_t
+enum class Operation : std::uint32_t;
+
+class OperationUtil
 {
-    UnpackA,
-    UnpackABMatmul,
-    UnpackUntilize,
-    EltwiseUnaryDatacopy,
-    Matmul,
-    Pack,
-    PackUntilize
+public:
+    enum class NativeThread : std::uint32_t
+    {
+        TRISC0 = 0,
+        TRISC1 = 1,
+        TRISC2 = 2,
+        TRISC3 = 3
+    };
+
+    enum class ExecutionUnit : std::uint32_t
+    {
+        UNPACK = 0,
+        MATH   = 1,
+        SFPU   = 2,
+        PACK   = 3
+    };
+
+    enum class ExpectUninit : bool
+    {
+        No  = false,
+        Yes = true
+    };
+
+    // [31:30] THREAD | [29:28] EXU | [27] UNINIT | [26:0] ID
+    static constexpr std::size_t THREAD_WIDTH = 2;
+    static constexpr std::size_t EXU_WIDTH    = 2;
+    static constexpr std::size_t UNINIT_WIDTH = 1;
+    static constexpr std::size_t ID_WIDTH     = 27;
+
+    static_assert(THREAD_WIDTH + EXU_WIDTH + UNINIT_WIDTH + ID_WIDTH == 32, "Operation fields must exactly fill the 32-bit underlying type");
+
+    static constexpr std::size_t ID_SHAMT     = 0;
+    static constexpr std::size_t UNINIT_SHAMT = ID_SHAMT + ID_WIDTH;
+    static constexpr std::size_t EXU_SHAMT    = UNINIT_SHAMT + UNINIT_WIDTH;
+    static constexpr std::size_t THREAD_SHAMT = EXU_SHAMT + EXU_WIDTH;
+
+    static constexpr std::uint32_t ID_MASK     = ((0x1u << ID_WIDTH) - 1) << ID_SHAMT;
+    static constexpr std::uint32_t UNINIT_MASK = ((0x1u << UNINIT_WIDTH) - 1) << UNINIT_SHAMT;
+    static constexpr std::uint32_t EXU_MASK    = ((0x1u << EXU_WIDTH) - 1) << EXU_SHAMT;
+    static constexpr std::uint32_t THREAD_MASK = ((0x1u << THREAD_WIDTH) - 1) << THREAD_SHAMT;
+
+    static constexpr std::uint32_t make(ExecutionUnit exu, NativeThread thread, ExpectUninit expect_uninit, std::uint32_t id)
+    {
+        return (ckernel::to_underlying(thread) << THREAD_SHAMT) | (ckernel::to_underlying(exu) << EXU_SHAMT) |
+               (static_cast<std::uint32_t>(expect_uninit) << UNINIT_SHAMT) | (id << ID_SHAMT);
+    }
+
+    static constexpr NativeThread thread(Operation operation)
+    {
+        return static_cast<NativeThread>((bits(operation) & THREAD_MASK) >> THREAD_SHAMT);
+    }
+
+    static constexpr ExecutionUnit unit(Operation operation)
+    {
+        return static_cast<ExecutionUnit>((bits(operation) & EXU_MASK) >> EXU_SHAMT);
+    }
+
+    static constexpr ExpectUninit expect_uninit(Operation operation)
+    {
+        return static_cast<ExpectUninit>((bits(operation) & UNINIT_MASK) >> UNINIT_SHAMT);
+    }
+
+    static constexpr std::uint32_t id(Operation operation)
+    {
+        return (bits(operation) & ID_MASK) >> ID_SHAMT;
+    }
+
+private:
+    static constexpr std::uint32_t bits(Operation operation)
+    {
+        return ckernel::to_underlying(operation);
+    }
 };
 
-template <Operation op>
-struct OperationMustUninit : std::false_type
+enum class Operation : std::uint32_t
 {
+    None = 0,
+
+    // UNPACK EXU (TRISC0)
+    UnpackA        = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::No, 1),
+    UnpackABMatmul = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::No, 2),
+    UnpackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::Yes, 3),
+
+    // MATH EXU (TRISC1)
+    EltwiseUnaryDatacopy = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 1),
+    Matmul               = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 2),
+
+    // PACK EXU (TRISC2)
+
+    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
+    Pack         = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::No, 1),
+    PackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::Yes, 2),
 };
 
-template <>
-struct OperationMustUninit<Operation::PackUntilize> : std::true_type
+enum class OperationStatus : std::uint32_t
 {
+    None,
+    Initialized,
+    Executed,
+    Uninitialized
 };
-
-template <>
-struct OperationMustUninit<Operation::Pack> : std::true_type
-{
-};
-
-template <>
-struct OperationMustUninit<Operation::UnpackUntilize> : std::true_type
-{
-};
-
-template <Operation op>
-inline constexpr bool operation_must_uninit = OperationMustUninit<op>::value;
 
 struct OperationState
 {
@@ -297,16 +369,12 @@ struct OperationState
 
     // aligned to max alignment so that content of buffer
     // is accessible through T* irrespective of the alignment of T
-    alignas(alignof(max_align_t)) char buffer[BUFFER_SIZE];
-
-    Operation operation;
-
-    // enabled by operation_init if the operation must be uninitializer
-    // disabled by operation_uninit
-    bool expect_uninit;
+    alignas(alignof(max_align_t)) char buffer[BUFFER_SIZE] {};
+    OperationStatus status = OperationStatus::None;
+    Operation operation    = Operation::None;
 };
 
-enum class FsmState : std::uint32_t
+enum class FsmStateType : std::uint32_t
 {
     Initial,
     Configured,
@@ -314,6 +382,12 @@ enum class FsmState : std::uint32_t
     Executed,
     Uninitialized,
     Reconfigured
+};
+
+struct FsmState
+{
+    FsmStateType type   = FsmStateType::Initial;
+    Operation operation = Operation::None; // Metadata for INIT and EXECUTE and UNINIT
 };
 
 struct UnwindContext

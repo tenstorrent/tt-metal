@@ -5,14 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-
-	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb_id = get_compile_time_arg_val(0);
     constexpr bool write_to_dram = get_compile_time_arg_val(1);
     constexpr bool unaligned = get_compile_time_arg_val(2);
     constexpr uint32_t unit_size = get_compile_time_arg_val(3);
@@ -30,19 +29,41 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
-    CircularBuffer shard_cb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_dfb_id);
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
-    for (uint32_t i = 0; i < num_writes; ++i) {
-        uint32_t bank_id = args[args_idx++];
-        uint32_t addr = dst_addr + args[args_idx++];
-        uint32_t units_to_transfer = args[args_idx++];
-        uint32_t write_size = units_to_transfer * unit_size;
-        CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
-        l1_read_addr += write_size;
+    uint32_t l1_read_addr = shard_dfb.get_read_ptr() + read_offset;
+    if constexpr (unaligned) {
+        // The local (input) shard stores each row at local_unit_size_padded stride and the remote
+        // (output) shard at remote_unit_size_padded stride, and unit_size < either padded stride.
+        // A single contiguous write per transfer would pack padding bytes as data and mis-stride
+        // rows, so write each row on its own: advance the local source by its padded stride and the
+        // remote destination by its padded stride, copying only the unit_size real bytes. Both
+        // strides are aligned, so every per-row NOC write hits an aligned address. No scratch is
+        // needed here (unlike the reader): the local source is read directly with its L1 address.
+        for (uint32_t i = 0; i < num_writes; ++i) {
+            uint32_t bank_id = args[args_idx++];
+            uint32_t addr = dst_addr + args[args_idx++];
+            uint32_t units_to_transfer = args[args_idx++];
+            for (uint32_t j = 0; j < units_to_transfer; ++j) {
+                CoreLocalMem<uint32_t> src(l1_read_addr);
+                noc.async_write(src, bank, unit_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+                l1_read_addr += local_unit_size_padded;
+                addr += remote_unit_size_padded;
+            }
+        }
+        noc.async_write_barrier();
+    } else {
+        for (uint32_t i = 0; i < num_writes; ++i) {
+            uint32_t bank_id = args[args_idx++];
+            uint32_t addr = dst_addr + args[args_idx++];
+            uint32_t units_to_transfer = args[args_idx++];
+            uint32_t write_size = units_to_transfer * unit_size;
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+            l1_read_addr += write_size;
+        }
+        noc.async_write_barrier();
     }
-    noc.async_write_barrier();
 }

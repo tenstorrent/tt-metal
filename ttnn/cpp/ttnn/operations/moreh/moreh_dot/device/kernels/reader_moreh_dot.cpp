@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -82,21 +82,21 @@ void kernel_main() {
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
     const auto in1_tile_bytes = get_tile_size(cb_id_in1);
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         bool last_tile = i == (start_id + num_tiles - 1);
-        cb_in0.reserve_back(onetile);
-        l1_write_addr_in0 = cb_in0.get_write_ptr();
-        noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        l1_write_addr_in0 = dfb_in0.get_write_ptr();
+        noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
 
-        cb_in1.reserve_back(onetile);
-        l1_write_addr_in1 = cb_in1.get_write_ptr();
-        noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in1.reserve_back(onetile);
+        l1_write_addr_in1 = dfb_in1.get_write_ptr();
+        noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
 
         noc.async_read_barrier();
 
@@ -105,7 +105,7 @@ void kernel_main() {
             mask_tile_in_reader(l1_write_addr_in1, mask_w, mask_h);
         }
 
-        cb_in0.push_back(onetile);
-        cb_in1.push_back(onetile);
+        dfb_in0.push_back(onetile);
+        dfb_in1.push_back(onetile);
     }
 }

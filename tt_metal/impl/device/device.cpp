@@ -63,10 +63,12 @@
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <impl/dispatch/dispatch_telemetry.hpp>
 
 namespace tt::tt_metal {
 
@@ -81,7 +83,7 @@ Device::Device(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
     uint32_t /*completion_queue_reader_core*/,
@@ -91,6 +93,121 @@ Device::Device(
     TT_FATAL(env != nullptr, "env is nullptr");
     TT_FATAL(context != nullptr, "context is nullptr");
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+}
+
+void Device::initialize_smc_dispatch_telemetry_control() {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
+    smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
+        context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+    smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
+}
+
+void Device::invalidate_smc_dispatch_telemetry_control() {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+    tt::tt_metal::invalidate_smc_dispatch_telemetry_control(*tt_device);
+}
+
+void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
+    uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    TT_FATAL(
+        cq_id < dispatch_telemetry_types::RESERVED_CQ_SPACE,
+        "CQ id {} exceeds reserved SMC dispatch telemetry CQ space",
+        cq_id);
+
+    smc_dispatch_telemetry_control_.cq_dispatch_core_coords[cq_id] = coords;
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
+}
+
+void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    bool slow_dispatch_currently_enabled =
+        (smc_dispatch_telemetry_control_.flags &
+         static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED)) != 0;
+    if (slow_dispatch_currently_enabled == enabled) {
+        return;
+    }
+
+    if (enabled) {
+        smc_dispatch_telemetry_control_.flags |=
+            static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED);
+    } else {
+        smc_dispatch_telemetry_control_.flags &=
+            ~static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED);
+    }
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
@@ -111,10 +228,6 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
         MetalEnvAccessor(*env_).impl().get_control_plane().get_inactive_ethernet_cores(this->id_);
     return inactive_ethernet_cores.contains(logical_core);
-}
-
-uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
-    return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
 }
 
 std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
@@ -144,7 +257,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    ttsl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     auto& dispatch_core_manager = context_->get_dispatch_core_manager();
@@ -440,7 +553,7 @@ bool Device::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
     // Every initialization call should enable program cache
@@ -551,6 +664,7 @@ bool Device::initialize(
     }
 
     this->initialized_ = true;
+    this->initialize_smc_dispatch_telemetry_control();
 
     return true;
 }
@@ -560,6 +674,8 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
+
+    this->invalidate_smc_dispatch_telemetry_control();
 
     tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
 
@@ -572,6 +688,9 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+    this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
+    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
 
     // Clean up shared memory stats provider
     this->shm_stats_provider_.reset();
@@ -752,7 +871,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/) const {
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
@@ -798,23 +917,6 @@ void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocation
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
-bool Device::has_noc_mcast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "has_noc_mcast_txns is deprecated for device");
-    return false;
-}
-
-uint8_t Device::num_noc_unicast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "num_noc_unicast_txns is deprecated for device");
-    return 0U;
-}
-
-uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast_data) const {
-    if (unicast_data) {
-        TT_FATAL(false, "noc_data_start_index is deprecated for unicast mode for device");
-    }
-    return 0U;
-}
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
@@ -833,7 +935,7 @@ SubDeviceManagerId Device::create_sub_device_manager(
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    ttsl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
     TT_FATAL(false, "create_sub_device_manager is deprecated for device");
     return SubDeviceManagerId{0U};
 }
@@ -862,7 +964,7 @@ const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
     return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void Device::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 
@@ -876,74 +978,97 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
-    if (this->optimal_dram_bank_to_logical_worker_assignment_.empty()) {
-        uint32_t full_grid_size_x = this->grid_size().x;
-        uint32_t full_grid_size_y = this->grid_size().y;
-
-        auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        // Get physical coordinates of DRAM Controller NOC end-points
-        uint32_t num_dram_banks = this->num_dram_channels();
-
-        const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
-        bool noc_translation_enabled = true;
-        if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
-            noc_translation_enabled =
-                MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
-                    this->id());
-        }
-        bool dram_is_virtualized =
-            noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
-        const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
-        std::vector<CoreCoord> dram_phy_coords;
-        for (int i = 0; i < num_dram_banks; ++i) {
-            auto dram_core = this->dram_core_from_dram_channel(i, noc);
-            if (dram_is_virtualized) {
-                tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
-                    tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
-                dram_core = CoreCoord(umd_dram_coord.x, umd_dram_coord.y);
-            }
-            dram_phy_coords.push_back(dram_core);
-        }
-        // Get all logical cores in the worker grid
-        std::vector<CoreCoord> all_worker_cores_logical;
-        for (int i = 0; i < num_cores_x; ++i) {
-            for (int j = 0; j < num_cores_y; ++j) {
-                all_worker_cores_logical.push_back(CoreCoord(i, j));
-            }
-        }
-        // Get the physical rows and cols  (y, x) in the worker grid
-        std::vector<uint32_t> worker_phy_y;
-        worker_phy_y.reserve(num_cores_y);
-        for (int i = 0; i < num_cores_y; ++i) {
-            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
-            worker_phy_y.push_back(core_phy.y);
-        }
-        std::vector<uint32_t> worker_phy_x;
-        worker_phy_x.reserve(num_cores_x);
-        for (int i = 0; i < num_cores_x; ++i) {
-            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
-            worker_phy_x.push_back(core_phy.x);
-        }
-        // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
-        auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
-            this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
-
-        const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
-        // Convert to physical worker coordinates to logical. This gets returned to the user.
-        for (auto physical_worker_core : physical_worker_cores) {
-            tt::umd::CoreCoord logical_coord_translated =
-                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
-            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
-                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
-            TT_ASSERT(
-                logical_coord_translated.core_type == CoreType::TENSIX,
-                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
-                "invalid",
-                logical_coord_translated.str());
-        }
+    const auto noc_tag = static_cast<std::uint8_t>(noc);
+    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+        return this->optimal_dram_bank_to_logical_worker_assignment_;
     }
+    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+
+    uint32_t full_grid_size_x = this->grid_size().x;
+    uint32_t full_grid_size_y = this->grid_size().y;
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // Get physical coordinates of DRAM Controller NOC end-points
+    uint32_t num_dram_banks = this->num_dram_channels();
+
+    const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
+    bool noc_translation_enabled = true;
+    if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
+        noc_translation_enabled =
+            MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
+    }
+    bool dram_is_virtualized =
+        noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
+    const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
+    std::vector<CoreCoord> dram_phy_coords;
+    for (int i = 0; i < num_dram_banks; ++i) {
+        auto dram_core = this->dram_core_from_dram_channel(i, noc);
+        if (dram_is_virtualized) {
+            tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
+                tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+            dram_core = CoreCoord(umd_dram_coord.x, umd_dram_coord.y);
+        }
+        dram_phy_coords.push_back(dram_core);
+    }
+    // Physical NOC0 x/y for each logical worker column/row in compute_with_storage_grid_size() (used by placement).
+    std::vector<uint32_t> worker_phy_y;
+    worker_phy_y.reserve(num_cores_y);
+    for (int i = 0; i < num_cores_y; ++i) {
+        auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
+        worker_phy_y.push_back(core_phy.y);
+    }
+    std::vector<uint32_t> worker_phy_x;
+    worker_phy_x.reserve(num_cores_x);
+    for (int i = 0; i < num_cores_x; ++i) {
+        auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
+        worker_phy_x.push_back(core_phy.x);
+    }
+    // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
+    auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
+        this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
+
+    // Map each physical placement to the unique logical worker in compute_with_storage_grid_size().
+    // Do not use soc_desc.translate_coord_to(NOC0, LOGICAL): that numbers all Tensix cores including
+    // dispatch columns. Also do not split x/y lookups via worker_phy_x/y alone: (phys_x, phys_y) must
+    // match physical_worker_core_from_logical_core((lx, ly)) as a pair.
+    for (const auto& physical_worker_core : physical_worker_cores) {
+        bool found = false;
+        uint32_t logical_x = 0;
+        uint32_t logical_y = 0;
+        for (uint32_t ly = 0; ly < num_cores_y && !found; ++ly) {
+            for (uint32_t lx = 0; lx < num_cores_x; ++lx) {
+                const auto phy = this->physical_worker_core_from_logical_core(CoreCoord(lx, ly));
+                if (phy.x == physical_worker_core.x && phy.y == physical_worker_core.y) {
+                    logical_x = lx;
+                    logical_y = ly;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        TT_FATAL(
+            found,
+            "Optimal DRAM-worker placement produced physical core ({}, {}) that does not map to any logical "
+            "worker in compute_with_storage_grid_size ({}, {})",
+            physical_worker_core.x,
+            physical_worker_core.y,
+            num_cores_x,
+            num_cores_y);
+        TT_FATAL(
+            logical_x < num_cores_x && logical_y < num_cores_y,
+            "Optimal DRAM worker logical core ({}, {}) is outside compute_with_storage_grid_size ({}, {})",
+            logical_x,
+            logical_y,
+            num_cores_x,
+            num_cores_y);
+        this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
+    }
+    this->optimal_dram_bank_to_logical_worker_assignment_noc_ = noc_tag;
+    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ = compute_with_storage_grid_size;
     return this->optimal_dram_bank_to_logical_worker_assignment_;
 }
 

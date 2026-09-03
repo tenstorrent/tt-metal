@@ -1721,9 +1721,9 @@ public:
 
         // Check all possible directions
         for (const auto& direction : FabricContext::routing_directions) {
-            size_t routing_planes = tt::tt_metal::MetalContext::instance()
-                                        .get_control_plane()
-                                        .get_num_available_routing_planes_in_direction(node_id, direction);
+            size_t routing_planes =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_num_usable_routing_planes(
+                    node_id, direction);
             if (routing_planes > 0) {  // Only consider directions that have routing planes
                 min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
             }
@@ -1747,7 +1747,7 @@ public:
                 master_seed = std::random_device()();
                 for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
                     distributed_context->send(
-                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
                         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
                     );
@@ -1755,7 +1755,7 @@ public:
                 log_info(tt::LogTest, "Master seed sent: {}", master_seed);
             } else {
                 distributed_context->recv(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                     tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
                     tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
                 );

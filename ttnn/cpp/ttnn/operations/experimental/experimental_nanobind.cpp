@@ -82,11 +82,13 @@
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/moe_hash_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
@@ -153,6 +155,8 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
+    deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
+    deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(mod);
     deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(mod);
     deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 

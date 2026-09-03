@@ -38,8 +38,8 @@ template <
     uint32_t sticks_per_chunk,
     uint32_t in_idx_cb_id>
 void fill_indexes(uint32_t init_index) {
-    experimental::CB idx_cb(in_idx_cb_id);
-    volatile tt_l1_ptr IndexType* idx_ptr = reinterpret_cast<volatile tt_l1_ptr IndexType*>(idx_cb.get_write_ptr());
+    DataflowBuffer idx_dfb(in_idx_cb_id);
+    volatile tt_l1_ptr IndexType* idx_ptr = reinterpret_cast<volatile tt_l1_ptr IndexType*>(idx_dfb.get_write_ptr());
     uint32_t kernel_idx = 0;
 
     for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -125,8 +125,8 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t row_stride = dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
 
     // initialize the index CB
-    experimental::CB idx_cb(in_idx_cb_id);
-    idx_cb.reserve_back(1);
+    DataflowBuffer idx_dfb(in_idx_cb_id);
+    idx_dfb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
         kernel_h,
@@ -137,14 +137,14 @@ ALWI void initialize_return_indices_data() {
         is_large_kernel,
         sticks_per_chunk,
         in_idx_cb_id>(init_index);
-    idx_cb.push_back(1);
+    idx_dfb.push_back(1);
 
     // initialize the increment CBs
     // TODO we used to fill the 16 bit values two at a time, but this technically resulted in overflow with odd
     // c dimensions so for now we do it one at a time for both 16 and 32 bit indexes
     if constexpr (indexes_32_bit) {
-        auto fill_inc_32 = [&](experimental::CB& inc_cb, uint32_t inc) __attribute__((always_inline)) {
-            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
+        auto fill_inc_32 = [&](DataflowBuffer& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
+            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_dfb.get_write_ptr());
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     ptr[k * TILE_WIDTH + c] = inc;
@@ -152,37 +152,37 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        experimental::CB right_inc_cb(right_inc_cb_id);
-        right_inc_cb.reserve_back(1);
-        fill_inc_32(right_inc_cb, right_inc);
-        right_inc_cb.push_back(1);
+        DataflowBuffer right_inc_dfb(right_inc_cb_id);
+        right_inc_dfb.reserve_back(1);
+        fill_inc_32(right_inc_dfb, right_inc);
+        right_inc_dfb.push_back(1);
 
-        experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
-        down_left_wrap_inc_cb.reserve_back(1);
-        fill_inc_32(down_left_wrap_inc_cb, down_left_wrap_inc);
-        down_left_wrap_inc_cb.push_back(1);
+        DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
+        down_left_wrap_inc_dfb.reserve_back(1);
+        fill_inc_32(down_left_wrap_inc_dfb, down_left_wrap_inc);
+        down_left_wrap_inc_dfb.push_back(1);
 
-        experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
-        up_left_wrap_inc_cb.reserve_back(1);
-        fill_inc_32(up_left_wrap_inc_cb, up_left_wrap_inc);
-        up_left_wrap_inc_cb.push_back(1);
+        DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
+        up_left_wrap_inc_dfb.reserve_back(1);
+        fill_inc_32(up_left_wrap_inc_dfb, up_left_wrap_inc);
+        up_left_wrap_inc_dfb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
-            intra_kernel_right_inc_cb.reserve_back(1);
-            fill_inc_32(intra_kernel_right_inc_cb, intra_kernel_right_inc);
-            intra_kernel_right_inc_cb.push_back(1);
+            DataflowBuffer intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
+            intra_kernel_right_inc_dfb.reserve_back(1);
+            fill_inc_32(intra_kernel_right_inc_dfb, intra_kernel_right_inc);
+            intra_kernel_right_inc_dfb.push_back(1);
 
-            experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
-            intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
-            fill_inc_32(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
-            intra_kernel_down_left_wrap_inc_cb.push_back(1);
+            DataflowBuffer intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
+            intra_kernel_down_left_wrap_inc_dfb.reserve_back(1);
+            fill_inc_32(intra_kernel_down_left_wrap_inc_dfb, intra_kernel_down_left_wrap_inc);
+            intra_kernel_down_left_wrap_inc_dfb.push_back(1);
         }
     } else {
-        auto fill_inc = [&](experimental::CB& inc_cb, uint32_t inc) __attribute__((always_inline)) {
+        auto fill_inc = [&](DataflowBuffer& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
             uint16_t inc_16 = (uint16_t)inc;
             uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
-            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
+            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_dfb.get_write_ptr());
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
                     ptr[k * HALF_TILE_WIDTH + c] = inc_32_bit;
@@ -190,31 +190,31 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        experimental::CB right_inc_cb(right_inc_cb_id);
-        right_inc_cb.reserve_back(1);
-        fill_inc(right_inc_cb, right_inc);
-        right_inc_cb.push_back(1);
+        DataflowBuffer right_inc_dfb(right_inc_cb_id);
+        right_inc_dfb.reserve_back(1);
+        fill_inc(right_inc_dfb, right_inc);
+        right_inc_dfb.push_back(1);
 
-        experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
-        down_left_wrap_inc_cb.reserve_back(1);
-        fill_inc(down_left_wrap_inc_cb, down_left_wrap_inc);
-        down_left_wrap_inc_cb.push_back(1);
+        DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
+        down_left_wrap_inc_dfb.reserve_back(1);
+        fill_inc(down_left_wrap_inc_dfb, down_left_wrap_inc);
+        down_left_wrap_inc_dfb.push_back(1);
 
-        experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
-        up_left_wrap_inc_cb.reserve_back(1);
-        fill_inc(up_left_wrap_inc_cb, up_left_wrap_inc);
-        up_left_wrap_inc_cb.push_back(1);
+        DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
+        up_left_wrap_inc_dfb.reserve_back(1);
+        fill_inc(up_left_wrap_inc_dfb, up_left_wrap_inc);
+        up_left_wrap_inc_dfb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
-            intra_kernel_right_inc_cb.reserve_back(1);
-            fill_inc(intra_kernel_right_inc_cb, intra_kernel_right_inc);
-            intra_kernel_right_inc_cb.push_back(1);
+            DataflowBuffer intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
+            intra_kernel_right_inc_dfb.reserve_back(1);
+            fill_inc(intra_kernel_right_inc_dfb, intra_kernel_right_inc);
+            intra_kernel_right_inc_dfb.push_back(1);
 
-            experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
-            intra_kernel_down_left_wrap_inc_cb.reserve_back(1);
-            fill_inc(intra_kernel_down_left_wrap_inc_cb, intra_kernel_down_left_wrap_inc);
-            intra_kernel_down_left_wrap_inc_cb.push_back(1);
+            DataflowBuffer intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
+            intra_kernel_down_left_wrap_inc_dfb.reserve_back(1);
+            fill_inc(intra_kernel_down_left_wrap_inc_dfb, intra_kernel_down_left_wrap_inc);
+            intra_kernel_down_left_wrap_inc_dfb.push_back(1);
         }
     }
 }
@@ -256,11 +256,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for MPWI");
     constexpr uint32_t max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB out_cb(out_cb_id);
-    experimental::CB out_idx_cb(out_idx_cb_id);
-    experimental::CB pack_tmp_cb(pack_tmp_cb_id);
-    experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer in_dfb(in_cb_id);
+    DataflowBuffer out_dfb(out_cb_id);
+    DataflowBuffer out_idx_dfb(out_idx_cb_id);
+    DataflowBuffer pack_tmp_dfb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_dfb(pack_idx_tmp_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -273,13 +273,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
 
         uint32_t write_offset = 0;
         if constexpr (reader_id == 0) {
-            in_cb.reserve_back(1);
+            in_dfb.reserve_back(1);
         }
         // page zeroing is only necessary for tiled block output format so that scale is not affected by
         // junk/padding data
         if constexpr (zero_pages && reader_id == 0) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page(noc, in_cb);
+                zero_out_page(noc, in_dfb);
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -291,7 +291,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
                     noc.async_read(
                         self_ep,
-                        in_cb,
+                        in_dfb,
                         read_bytes * w_multiple,
                         experimental::local_addr(read_offset),
                         {.offset_bytes = write_offset});
@@ -303,9 +303,9 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 if (push_chunk) {
                     if constexpr (reader_id == 0) {  // push a chunk
                         noc.async_read_barrier();
-                        in_cb.push_back(1);
+                        in_dfb.push_back(1);
                         if (!kernel_complete) {
-                            in_cb.reserve_back(1);
+                            in_dfb.reserve_back(1);
                             write_offset = 0;
                         }
                     } else {
@@ -321,31 +321,31 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             uint32_t output_faces =
                                 c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                            out_cb.reserve_back(output_faces);
-                            out_idx_cb.reserve_back(output_faces);
+                            out_dfb.reserve_back(output_faces);
+                            out_idx_dfb.reserve_back(output_faces);
 
-                            pack_tmp_cb.wait_front(1);
+                            pack_tmp_dfb.wait_front(1);
                             noc.async_read(
                                 self_ep,
-                                out_cb,
+                                out_dfb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM,
-                                experimental::local_addr(pack_tmp_cb.get_read_ptr()),
+                                experimental::local_addr(pack_tmp_dfb.get_read_ptr()),
                                 {});
 
-                            pack_idx_tmp_cb.wait_front(1);
+                            pack_idx_tmp_dfb.wait_front(1);
                             constexpr uint32_t BYTES_PER_ELEM_IDX = indexes_32_bit ? 4 : 2;
                             noc.async_read(
                                 self_ep,
-                                out_idx_cb,
+                                out_idx_dfb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM_IDX,
-                                experimental::local_addr(pack_idx_tmp_cb.get_read_ptr()),
+                                experimental::local_addr(pack_idx_tmp_dfb.get_read_ptr()),
                                 {});
                             noc.async_read_barrier();
-                            pack_tmp_cb.pop_front(1);
-                            pack_idx_tmp_cb.pop_front(1);
+                            pack_tmp_dfb.pop_front(1);
+                            pack_idx_tmp_dfb.pop_front(1);
 
-                            out_cb.push_back(output_faces);
-                            out_idx_cb.push_back(output_faces);
+                            out_dfb.push_back(output_faces);
+                            out_idx_dfb.push_back(output_faces);
                         }
                     }
                 }
@@ -436,10 +436,10 @@ void kernel_main() {
 
     // fill the clear cb
     if constexpr (reader_id == 0) {
-        experimental::CB clear_value_cb(clear_value_cb_id);
-        fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-        clear_value_cb.push_back(1);
-        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+        DataflowBuffer clear_value_dfb(clear_value_cb_id);
+        fill_with_val(clear_value_dfb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+        clear_value_dfb.push_back(1);
+        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
     }
 
     if constexpr (reader_id == 0) {
@@ -473,28 +473,28 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        experimental::CB in_scalar_cb(in_scalar_cb_id_0);
-        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
-        in_scalar_cb.push_back(1);
+        DataflowBuffer in_scalar_dfb(in_scalar_cb_id_0);
+        fill_with_val(in_scalar_dfb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+        in_scalar_dfb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
 
-    experimental::CB in_shard_cb(in_shard_cb_id);
-    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
-    experimental::CB in_reader_indices_cb(in_reader_indices_cb_id);
+    DataflowBuffer in_shard_dfb(in_shard_cb_id);
+    const uint32_t in_l1_read_base_addr = in_shard_dfb.get_read_ptr();
+    DataflowBuffer in_reader_indices_dfb(in_reader_indices_cb_id);
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             load_config_tensor_if_in_dram<
                 reader_dram_addr,
                 reader_page_size,
                 reader_tensor_args_index,
-                in_reader_indices_cb_id>(Noc(), in_reader_indices_cb, core_nhw_index);
+                in_reader_indices_cb_id>(Noc(), in_reader_indices_dfb, core_nhw_index);
 
         } else {
-            in_reader_indices_cb.wait_front(1);
+            in_reader_indices_dfb.wait_front(1);
         }
     }
-    uint32_t reader_indices_l1_addr = in_reader_indices_cb.get_read_ptr();
+    uint32_t reader_indices_l1_addr = in_reader_indices_dfb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 

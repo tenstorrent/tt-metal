@@ -9,7 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -30,8 +30,8 @@ void kernel_main() {
     constexpr auto cb_tilize = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    CircularBuffer cb_tilize_exp(cb_tilize);
-    CircularBuffer cb_out_exp(cb_out);
+    DataflowBuffer dfb_tilize_exp(cb_tilize);
+    DataflowBuffer dfb_out_exp(cb_out);
 
     unary_op_init_common(cb_in, cb_out);
 
@@ -46,7 +46,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
         // transpose input
-        cb_tilize_exp.wait_front(1);
+        dfb_tilize_exp.wait_front(1);
 
         transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
@@ -56,16 +56,16 @@ void kernel_main() {
         tile_regs_commit();
 
         // pack and untilize
-        cb_out_exp.reserve_back(1);
+        dfb_out_exp.reserve_back(1);
 
         tile_regs_wait();
         pack_untilize_dest<1>(cb_out);  // pack call
         tile_regs_release();
 
-        cb_out_exp.push_back(1);
+        dfb_out_exp.push_back(1);
 
         pack_untilize_uninit(cb_out);
 
-        cb_tilize_exp.pop_front(1);
+        dfb_tilize_exp.pop_front(1);
     }
 }

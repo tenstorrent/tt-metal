@@ -94,6 +94,64 @@ class TtVADPerceptionTransformer:
         self.map_num_vec = map_num_vec
         self.map_num_pts_per_vec = map_num_pts_per_vec
 
+        # Caches for the static spatial_shapes / level_start_index tensors
+        # built per forward. Same values every time; trace-replay-blocking
+        # `torch.tensor + ttnn.from_torch` upload only needed once.
+        self._encoder_spatial_shapes_cache = {}  # keyed by tuple of (h, w) per level
+        self._decoder_spatial_shapes_cache = {}  # keyed by (bev_h, bev_w)
+        self._decoder_level_start_index_cache = None  # ttnn.zeros((1,)) uint32 TILE
+        self._map_decoder_level_start_index_cache = None  # ttnn.zeros((1,)) bfloat16 TILE
+
+        # Persistent device buffers for the only dynamic per-call uploads in
+        # the warm path (shift / can_bus, built from img_metas). Allocated on
+        # first call; in-place updated via copy_host_to_device_tensor on
+        # subsequent calls. When `_skip_dynamic_upload` is True the inline
+        # update is bypassed (caller must seed buffers before begin_trace_capture).
+        self._shift_buffer = None
+        self._can_bus_buffer = None
+        self._skip_dynamic_upload = False
+
+        # Encoder's level_start_index is a constant (0,) uint32 tensor. ttnn.zeros
+        # does a host->device write of the fill, which is forbidden inside trace
+        # capture — build once and reuse.
+        self._encoder_level_start_index_cache = None
+
+    def update_dynamic_inputs(self, img_metas, bev_h, bev_w, grid_length=[0.512, 0.512]):
+        """Build shift / can_bus on host and write them into persistent device buffers.
+
+        First call allocates the buffers via ttnn.from_torch. Subsequent calls reuse
+        the same device handles and update contents via copy_host_to_device_tensor —
+        the trace replay reads from these handles. Must be called outside any
+        trace-capture / execute_trace region.
+        """
+        delta_x = np.array([each["can_bus"][0] for each in img_metas])
+        delta_y = np.array([each["can_bus"][1] for each in img_metas])
+        ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in img_metas])
+        grid_length_y = grid_length[0]
+        grid_length_x = grid_length[1]
+        translation_length = np.sqrt(delta_x**2 + delta_y**2)
+        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
+        bev_angle = ego_angle - translation_angle
+        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
+        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = shift_y * self.use_shift
+        shift_x = shift_x * self.use_shift
+        shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0)
+        can_bus_torch = torch.tensor([each["can_bus"] for each in img_metas], dtype=torch.float32)
+
+        if self._shift_buffer is None:
+            self._shift_buffer = ttnn.from_torch(
+                shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+            self._can_bus_buffer = ttnn.from_torch(
+                can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            shift_host = ttnn.from_torch(shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            can_bus_host = ttnn.from_torch(can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(shift_host, self._shift_buffer)
+            ttnn.copy_host_to_device_tensor(can_bus_host, self._can_bus_buffer)
+
     def attn_bev_encode(
         self,
         params,
@@ -112,26 +170,19 @@ class TtVADPerceptionTransformer:
 
         bev_queries = ttnn.unsqueeze(bev_queries, 1)
         bev_queries = ttnn.repeat(bev_queries, (1, bs, 1))
+        # The previous code roundtripped bev_queries through torch (line 117 +
+        # 154) as a side effect of using `.new_tensor(...)` to build shift /
+        # can_bus. The roundtrip also re-created bev_queries as a fresh
+        # TILE / DRAM INTERLEAVED tensor; replicate that explicitly.
+        bev_queries = ttnn.to_layout(bev_queries, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         bev_pos = ttnn.reshape(bev_pos, [bev_pos.shape[0], bev_pos.shape[1], bev_pos.shape[2] * bev_pos.shape[3]])
         bev_pos = ttnn.permute(bev_pos, (2, 0, 1))
-        bev_queries = ttnn.to_torch(bev_queries)
-        # obtain rotation angle and shift with ego motion
-        delta_x = np.array([each["can_bus"][0] for each in kwargs["img_metas"]])
-        delta_y = np.array([each["can_bus"][1] for each in kwargs["img_metas"]])
-        ego_angle = np.array([each["can_bus"][-2] / np.pi * 180 for each in kwargs["img_metas"]])
-        grid_length_y = grid_length[0]
-        grid_length_x = grid_length[1]
-        translation_length = np.sqrt(delta_x**2 + delta_y**2)
-        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
-        bev_angle = ego_angle - translation_angle
-        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
-        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
-        shift_y = shift_y * self.use_shift
-        shift_x = shift_x * self.use_shift
-
-        shift = bev_queries.new_tensor([shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
-
-        shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # Populate persistent shift / can_bus device buffers from img_metas. Bypassed
+        # when a caller has already seeded the buffers (e.g. trace capture / replay).
+        if not self._skip_dynamic_upload:
+            self.update_dynamic_inputs(kwargs["img_metas"], bev_h, bev_w, grid_length)
+        # Clone so the encoder's ttnn.deallocate(shift) does not free the persistent buffer.
+        shift = ttnn.clone(self._shift_buffer)
 
         if prev_bev is not None:
             if prev_bev.shape[1] == bev_h * bev_w:
@@ -147,13 +198,11 @@ class TtVADPerceptionTransformer:
                     tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h * bev_w, 1, -1))
                     prev_bev[:, i] = tmp_prev_bev[:, 0]
 
-        # add can bus signals
-        can_bus = bev_queries.new_tensor([each["can_bus"] for each in kwargs["img_metas"]])
-        can_bus = ttnn.from_torch(can_bus, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        # [:, :]
-        bev_queries = ttnn.from_torch(bev_queries, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # add can bus signals (sourced from the persistent buffer; see update_dynamic_inputs)
+        # Clone so downstream ops can't free the persistent buffer.
+        can_bus = ttnn.clone(self._can_bus_buffer)
 
-        can_bus = can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
+        can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
         can_bus = ttnn.relu(can_bus)
         can_bus = ttnn.linear(can_bus, params.can_bus_mlp["1"].weight, bias=params.can_bus_mlp["1"].bias)
         can_bus = ttnn.relu(can_bus)
@@ -189,12 +238,23 @@ class TtVADPerceptionTransformer:
             feat_flatten.append(feat)
 
         feat_flatten = ttnn.concat(feat_flatten, 2)
-        spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device="cpu")
-        spatial_shapes = ttnn.from_torch(
-            spatial_shapes, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
+        # spatial_shapes is built from the feat shapes which are static across
+        # warm calls — cache the device tensor.
+        ss_key = tuple(spatial_shapes)
+        spatial_shapes_dev = self._encoder_spatial_shapes_cache.get(ss_key)
+        if spatial_shapes_dev is None:
+            spatial_shapes_t = torch.as_tensor(list(ss_key), dtype=torch.long, device="cpu")
+            spatial_shapes_dev = ttnn.from_torch(
+                spatial_shapes_t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+            self._encoder_spatial_shapes_cache[ss_key] = spatial_shapes_dev
+        spatial_shapes = spatial_shapes_dev
 
-        level_start_index = ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if self._encoder_level_start_index_cache is None:
+            self._encoder_level_start_index_cache = ttnn.zeros(
+                (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        level_start_index = self._encoder_level_start_index_cache
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
         bev_embed = self.encoder(
             bev_queries,
@@ -305,10 +365,18 @@ class TtVADPerceptionTransformer:
         bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
 
         if self.decoder is not None:
-            spatial_shapes = torch.tensor([[bev_h, bev_w]], device="cpu")
-            spatial_shapes = ttnn.from_torch(
-                spatial_shapes, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+            dec_key = (bev_h, bev_w, "bfloat16")
+            spatial_shapes = self._decoder_spatial_shapes_cache.get(dec_key)
+            if spatial_shapes is None:
+                spatial_shapes_t = torch.tensor([[bev_h, bev_w]], device="cpu")
+                spatial_shapes = ttnn.from_torch(
+                    spatial_shapes_t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+                self._decoder_spatial_shapes_cache[dec_key] = spatial_shapes
+            if self._decoder_level_start_index_cache is None:
+                self._decoder_level_start_index_cache = ttnn.zeros(
+                    (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
             inter_states, inter_references = self.decoder(
                 query=query,
                 key=None,
@@ -318,7 +386,7 @@ class TtVADPerceptionTransformer:
                 reg_branches=reg_branches,
                 cls_branches=cls_branches,
                 spatial_shapes=spatial_shapes,
-                level_start_index=ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device),
+                level_start_index=self._decoder_level_start_index_cache,
                 **kwargs,
             )
             inter_references_out = inter_references
@@ -328,10 +396,18 @@ class TtVADPerceptionTransformer:
 
         if self.map_decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
-            spatial_shapes = torch.tensor([[bev_h, bev_w]], device="cpu")
-            spatial_shapes = ttnn.from_torch(
-                spatial_shapes, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+            map_key = (bev_h, bev_w, "bfloat16_map")
+            spatial_shapes = self._decoder_spatial_shapes_cache.get(map_key)
+            if spatial_shapes is None:
+                spatial_shapes_t = torch.tensor([[bev_h, bev_w]], device="cpu")
+                spatial_shapes = ttnn.from_torch(
+                    spatial_shapes_t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+                self._decoder_spatial_shapes_cache[map_key] = spatial_shapes
+            if self._map_decoder_level_start_index_cache is None:
+                self._map_decoder_level_start_index_cache = ttnn.zeros(
+                    (1,), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
             map_inter_states, map_inter_references = self.map_decoder(
                 query=map_query,
                 key=None,
@@ -341,7 +417,7 @@ class TtVADPerceptionTransformer:
                 reg_branches=map_reg_branches,
                 cls_branches=map_cls_branches,
                 spatial_shapes=spatial_shapes,
-                level_start_index=ttnn.zeros((1,), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device),
+                level_start_index=self._map_decoder_level_start_index_cache,
                 **kwargs,
             )
             map_inter_references_out = map_inter_references

@@ -350,13 +350,21 @@ void kernel_main() {
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_cb_addr_data_format>();
 
-    done_sem.set(0);
-
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         if (is_reduce_core) {
-            done_sem.set(0);
+            // done_sem is zero-initialized by the dispatcher before the kernel
+            // launches, so the k == 0 iteration needs no reset. Resetting it here
+            // at k == 0 would race the worker cores' done_sem.up() increments:
+            // those increments are ungated at k == 0 (the start_sem handshake
+            // below only orders k > 0), so a reset could clobber an increment that
+            // already landed and stall the done_sem.wait(num_cores) below forever.
+            // For k > 0 the reset clears the previous iteration's count and is
+            // ordered ahead of the increments by the start_sem multicast/wait.
+            if (k > 0) {
+                done_sem.set(0);
+            }
             start_sem.set(k + 1);
 
             if constexpr (num_cores > 1) {

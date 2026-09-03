@@ -146,18 +146,19 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        from helpers.tile_shape import cpp_tensor_shape
+
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        tensor_shape = cpp_tensor_shape(compute_unit.src_a.tile_shape)
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.unpack_transpose_within_face.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
         return (
             f"_llk_unpack_A_init_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
+            f"    {transpose_faces}, {transpose_within_face}, {tensor_shape}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
 

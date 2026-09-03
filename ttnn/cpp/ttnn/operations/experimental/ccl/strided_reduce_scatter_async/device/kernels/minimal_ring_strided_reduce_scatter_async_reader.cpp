@@ -26,6 +26,7 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -125,7 +126,7 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
-    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> mm_op_ready_sem(get_arg_val<uint32_t>(arg_idx++));
     uint32_t mm_sem_target = 0;
 #endif
 
@@ -192,7 +193,7 @@ void kernel_main() {
                 // signals guarantees all N-full-blocks covering this chunk are ready.
                 const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += sem_increment;
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+                mm_op_ready_sem.wait_min(mm_sem_target);
 #endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
@@ -356,7 +357,7 @@ void kernel_main() {
         out_ready_sem_target = 0;
 
 #ifdef FUSE_MM_OP_SIGNALER
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_op_ready_sem.set(0);
         mm_sem_target = 0;
 #endif
     }

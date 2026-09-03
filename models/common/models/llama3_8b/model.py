@@ -704,6 +704,7 @@ class EagerLlamaExecutor:
         prompt_lens=None,
         empty_slots=None,
         start_pos=None,
+        sampling_params=None,
     ):
         return self._engine.compile_prefill(
             tokens=tokens,
@@ -712,6 +713,7 @@ class EagerLlamaExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
+            sampling_params=sampling_params,
         )
 
     def compile_decode(
@@ -863,6 +865,7 @@ class TracedLlamaExecutor:
         prompt_lens=None,
         empty_slots=None,
         start_pos=None,
+        sampling_params=None,
     ):
         return self._engine.compile_prefill(
             tokens=tokens,
@@ -871,6 +874,7 @@ class TracedLlamaExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
+            sampling_params=sampling_params,
         )
 
     def compile_decode(

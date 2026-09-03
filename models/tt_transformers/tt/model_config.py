@@ -504,6 +504,7 @@ class ModelArgs:
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+            "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
         }.items()
     }
 
@@ -3530,6 +3531,7 @@ class ModelArgs:
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
+            "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")

@@ -152,9 +152,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 }
 
 sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
-    sfpi::vFloat low = -126.99999237060546875f;
     // Handle underflow
-    sfpi::vec_min_max(low, z);
+    z = sfpi::max(z, -0x7e.ffff8p0f);
 
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
@@ -169,9 +168,9 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
     sfpi::vFloat r = k * LN2_LO + r_hi;
 
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        r, sfpi::vConst1, sfpi::vConst1, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
+        r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::NoDebias) + k_int);
+    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
 
     // Handle overflow
     v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
@@ -201,8 +200,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     v_endif;
 
     // Transform to z = (m - 1) / (m + 1)
-    sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+    sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
+    sfpi::vFloat m_minus_1 = m - 1.0f;
     // 1/t: initial guess 1.003f - 0.244f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 - t*y).
     sfpi::vFloat recip = 1.003f - 0.244f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
@@ -213,7 +212,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     sfpi::vFloat z2 = z * z;
     // Polynomial approximation using odd powers
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
     sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);

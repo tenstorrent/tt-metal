@@ -169,3 +169,5 @@ models/experimental/petr/resources/*.pth
 4x4_multi_mesh_rank_binding.yaml
 tray_to_pcie_device_mapping.yaml
 LTX-2/
+
+.DS_Store

@@ -67,8 +67,7 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     if (is_merge_core) {
         dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
     }

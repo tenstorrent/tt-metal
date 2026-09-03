@@ -97,7 +97,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 }
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
+    tt::ARCH, const DeviceComputeKernelConfig& compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,
@@ -106,12 +106,23 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
         compute_kernel_config.dst_full_sync_en);
 }
 
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
-    return tt::tt_metal::experimental::ComputeHardwareConfig{
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
+    tt::ARCH arch, const ComputeKernelConfig& config) {
+    if (arch == tt::ARCH::QUASAR) {
+        return tt::tt_metal::experimental::ComputeGen2Config{
+            .math_fidelity = config.math_fidelity,
+            .fp32_dest_acc_en = config.fp32_dest_acc_en,
+            .dst_full_sync_en = config.dst_full_sync_en,
+            .math_approx_mode = config.math_approx_mode,
+            // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+        };
+    }
+    return tt::tt_metal::experimental::ComputeGen1Config{
         .math_fidelity = config.math_fidelity,
         .fp32_dest_acc_en = config.fp32_dest_acc_en,
         .dst_full_sync_en = config.dst_full_sync_en,
         .math_approx_mode = config.math_approx_mode,
+        // Omitted fields use defaults: bfp8_pack_precise, unpack_to_dest_mode
     };
 }
 

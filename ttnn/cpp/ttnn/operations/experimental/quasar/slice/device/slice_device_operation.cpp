@@ -176,7 +176,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
+    ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     if (args.use_tensor_args) {
         TT_FATAL(

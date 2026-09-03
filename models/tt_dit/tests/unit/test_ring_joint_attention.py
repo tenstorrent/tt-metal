@@ -84,6 +84,7 @@ def run_ring_joint_sdpa_model_config(
     use_column_major_ccl,
     use_wormhole_compute_kernel_config,
     pcc_threshold=0.999,
+    fp32_dest_acc_en: bool = False,
 ):
     """
     Run ring_joint_scaled_dot_product_attention matching all model-specific
@@ -154,7 +155,7 @@ def run_ring_joint_sdpa_model_config(
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
     else:
         # Wan / Mochi use init_device_compute_kernel_config
@@ -162,7 +163,7 @@ def run_ring_joint_sdpa_model_config(
             submesh.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
         )
 
@@ -328,6 +329,7 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -385,7 +387,7 @@ def run_ring_joint_sdpa(
         submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -580,6 +582,7 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    fp32_dest_acc_en: bool = False,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -623,6 +626,7 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -632,6 +636,7 @@ benchmark_model_input_shapes = {
     "mochi": (1, 24, 44520, 118, 128),
     "flux": (1, 24, 4096, 512, 128),
     "sd35": (1, 38, 4096, 333, 64),
+    "ltx_s2": (1, 32, 38760, 0, 128),  # LTX-2.3 distilled stage-2 self-attn (empty joint)
 }
 
 parallel_config_map = {
@@ -655,6 +660,7 @@ parallel_config_map = {
         "mochi": (0, 8, 1, 4),
         "flux": (0, 8, 1, 4),
         "sd35": (0, 4, 1, 4),
+        "ltx_s2": (0, 8, 1, 4),
     },
     "bh_qb_ge": {
         "wan_14b_720p": (0, 2, 1, 2),
@@ -1212,6 +1218,7 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
         [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_glx"]["mochi"], (128, 512), (0.9994, 7e-5)],
         [benchmark_model_input_shapes["flux"], parallel_config_map["bh_glx"]["flux"], (64, 512), (0.9997, 3e-5)],
         [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_glx"]["sd35"], (128, 512), (0.9997, 4e-5)],
+        [benchmark_model_input_shapes["ltx_s2"], parallel_config_map["bh_glx"]["ltx_s2"], (192, 512), (0.999, 1e-4)],
     ],
     ids=[
         "wan_14b_720p",
@@ -1219,6 +1226,7 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
         "mochi",
         "flux",
         "sd35",
+        "ltx_s2",
     ],
 )
 

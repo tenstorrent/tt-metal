@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -103,7 +104,8 @@ void kernel_main() {
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_sync_address = get_semaphore(termination_sync_id);
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -111,6 +113,8 @@ void kernel_main() {
 
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    Noc noc;
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
@@ -173,8 +177,8 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
     if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        Semaphore<> termination_sync(termination_sync_id);
+        termination_sync.wait(num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
@@ -193,7 +197,7 @@ void kernel_main() {
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
     // moving l tensor
-    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
     //  now s and m
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -201,12 +205,15 @@ void kernel_main() {
 
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+        noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+        noc,
+        dest_page_base_addr_m,
+        packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
+        aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
@@ -226,7 +233,8 @@ void kernel_main() {
     const size_t fabric_mux_buffer_index_address2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
     const uint8_t fabric_mux_channel_id2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
 
-    uint32_t termination_sync_address2 = get_semaphore(get_arg_val<uint32_t>(fabric_idx_2_ref++));
+    uint32_t termination_sync_id2 = get_arg_val<uint32_t>(fabric_idx_2_ref++);
+    uint32_t termination_sync_address2 = get_semaphore(termination_sync_id2);
     uint32_t local_fabric_mux_status_address2 = get_semaphore(get_arg_val<uint32_t>(fabric_idx_2_ref++));
     uint32_t local_flow_control_address2 = get_semaphore(get_arg_val<uint32_t>(fabric_idx_2_ref++));
     uint32_t local_teardown_address2 = get_semaphore(get_arg_val<uint32_t>(fabric_idx_2_ref++));
@@ -278,8 +286,8 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle2);
 
     if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address2);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        Semaphore<> termination_sync2(termination_sync_id2);
+        termination_sync2.wait(num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x2, fabric_mux_y2, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
@@ -298,7 +306,7 @@ void kernel_main() {
     packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
-    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -307,9 +315,12 @@ void kernel_main() {
     dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+        noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+        noc,
+        dest_page_base_addr_m,
+        packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
+        aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);

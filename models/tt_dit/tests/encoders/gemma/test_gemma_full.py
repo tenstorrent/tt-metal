@@ -186,18 +186,13 @@ def test_gemma_encoder(*, mesh_device):
         mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
     )
 
-    # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
-    # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
-    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
-
-    # Load only the connector weights from the 46GB checkpoint.
-    conn_state = {}
-    with safe_open(ckpt, "pt") as f:
-        for k in f.keys():
-            if k.startswith(CONNECTOR_PREFIXES):
-                conn_state[k] = f.get_tensor(k)
-    logger.info(f"connector weights: {len(conn_state)} tensors")
-    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    # checkpoint_name=None above keeps the 22B transformer and VAE out of this test, but it also
+    # leaves the encoder pair keying a cache of its own that the pipeline never reads. Naming the
+    # real checkpoint puts this test on the exact tensorbins the product loads, and letting the
+    # pair source its own weights means the test cannot fill that cache from anything else.
+    # TP follows the T5 pattern (axis-1 width): TP=1 on 1x1, TP=4 on 2x4, set inside the loader.
+    pipe.gemma_encoder_pair.checkpoint_name = ckpt
+    pipe.gemma_encoder_pair.ensure_loaded()
 
     # Reference embeds (HF Gemma-3 + diffusers LTX2TextConnectors), local to this test.
     v_ref, a_ref = _encode_prompts_reference(ckpt, gemma, [PROMPT])
@@ -265,14 +260,9 @@ def test_prof_gemma_ltx_devicetime(mesh_device, device_params):
         pytest.skip("LTX checkpoint not found")
 
     pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
-    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
-
-    conn_state = {}
-    with safe_open(ckpt, "pt") as f:
-        for k in f.keys():
-            if k.startswith(CONNECTOR_PREFIXES):
-                conn_state[k] = f.get_tensor(k)
-    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    # Profile the cache the pipeline actually loads — see test_gemma_encoder.
+    pipe.gemma_encoder_pair.checkpoint_name = ckpt
+    pipe.gemma_encoder_pair.ensure_loaded()
 
     # Flush after each decoder layer plus the feature extractor and each connector — keeps every
     # window well under Tracy's 1000-zone buffer.

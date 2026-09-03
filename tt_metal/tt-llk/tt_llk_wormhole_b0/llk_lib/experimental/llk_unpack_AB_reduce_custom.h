@@ -12,7 +12,9 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -54,16 +56,20 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile is num_faces faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile)
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
+ *
+ * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile).
  *
  * This function should NOT be used as a substitute for native reduce unpacking LLK initialization.
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
-inline void _llk_unpack_AB_reduce_block_max_row_init_()
+inline void _llk_unpack_AB_reduce_block_max_row_init_(const ckernel::TensorShape& tensor_shape)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
     if constexpr (is_fp32_dest_acc_en)
     {
         // Set necessary config regs for MOVB2D hi16/lo16 to work
@@ -73,8 +79,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_()
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);       // Unpack a single face of a scaler
-    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0); // Unpack a whole tile of an operand
+    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);         // Unpack a single face of a scaler
+    TT_SETADCXX(p_setadc::UNP_A, tensor_shape.total_tensor_size() - 1, 0x0); // Unpack all faces of an operand
 
     // save the following state that is going to be modified:
     // tile y and z dims for both unpackers
@@ -107,7 +113,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses
-    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);

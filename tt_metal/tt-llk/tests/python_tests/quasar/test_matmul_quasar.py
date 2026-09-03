@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -27,6 +27,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -48,20 +49,20 @@ from helpers.utils import passed_test
 kt_dims = [1, 2, 4]
 
 
-def matmul_dimensions_dest_sync(dest_acc_modes):
+def _matmul_dest_acc_sync(dest_acc_modes):
     return [
-        (
-            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-            dest_acc,
-            dest_sync,
-        )
+        (dest_acc, dest_sync)
         for dest_sync in (DestSync.Half, DestSync.Full)
         for dest_acc in dest_acc_modes
-        for max_tiles in (
-            DEST_SYNC_TILE_LIMITS[dest_sync]
-            // (2 if dest_acc == DestAccumulation.Yes else 1),
-        )
+    ]
+
+
+def _matmul_dimensions(dest_acc, dest_sync):
+    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
+        2 if dest_acc == DestAccumulation.Yes else 1
+    )
+    return [
+        ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
         for mt_dim in range(1, max_tiles + 1)
         for nt_dim in range(1, max_tiles // mt_dim + 1)
         for kt_dim in kt_dims
@@ -101,10 +102,15 @@ _ARCH = get_chip_architecture()
             MathFidelity.HiFi4,
         ]
     ),
-    dimensions_dest_acc_dest_sync=lambda format: (
-        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
+    dest_acc_dest_sync=lambda format: (
+        _matmul_dest_acc_sync((DestAccumulation.Yes,))
         if format.input_format == DataFormat.Int8
-        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
+        else _matmul_dest_acc_sync((DestAccumulation.Yes, DestAccumulation.No))
+    ),
+    dimensions=runtime(
+        lambda dest_acc_dest_sync: _matmul_dimensions(
+            dest_acc_dest_sync[0], dest_acc_dest_sync[1]
+        )
     ),
     implied_math_format=lambda format: (
         [ImpliedMathFormat.Yes]
@@ -125,7 +131,8 @@ _ARCH = get_chip_architecture()
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dimensions_dest_acc_dest_sync,
+    dest_acc_dest_sync,
+    dimensions,
     format,
     implied_math_format,
     register_format_hint,
@@ -141,9 +148,8 @@ def test_matmul(
         register_format_hint=register_format_hint,
     )
 
-    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
-        dimensions_dest_acc_dest_sync
-    )
+    dest_acc, dest_sync_mode = dest_acc_dest_sync
+    input_A_dimensions, input_B_dimensions = dimensions
 
     torch_format = format_dict[format.output_format]
 
@@ -255,11 +261,12 @@ def test_matmul(
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
+        ],
+        runtimes=[
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             NUM_FACES(num_faces, num_faces, num_faces),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
             format.input_format,

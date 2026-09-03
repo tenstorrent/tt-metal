@@ -84,42 +84,44 @@ void populate_runtime_arguments(
         const auto packed_scalar_eps =
             any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
 
-        // NOTE: do not pass Buffer* here. packed_scalar_eps depends on the eps
-        // operation_attribute and changes between calls; using BufferBinding
-        // would skip create_descriptor() on cache hits and leave eps stale.
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                packed_scalar_eps,
-                input_tensor.buffer()->address(),
-                start_tile_id,
-                num_tiles_per_core,
-                cHtWt,
-                aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
-                aHt * aWt * static_cast<uint32_t>(aC > 1),
-                cN,
-                cC,
-                cHt,
-                cWt});
+            {packed_scalar_eps,
+             input_tensor.buffer(),
+             start_tile_id,
+             num_tiles_per_core,
+             cHtWt,
+             aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
+             aHt * aWt * static_cast<uint32_t>(aC > 1),
+             cN,
+             cC,
+             cHt,
+             cWt});
 
-        const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
-        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
-        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs writer_runtime_args = {
-            batch_mean_tensor.buffer()->address(),  //  batch mean
-            batch_var_tensor.buffer()->address(),   //  batch var
-            weight_addr,                            // weight
-            bias_addr,                              // bias
-            c.buffer()->address(),                  // output
-            start_tile_id,
-            num_tiles_per_core,
-            cHtWt,
-            bHt * bWt * bC * static_cast<uint32_t>(bN > 1),
-            bHt * bWt * static_cast<uint32_t>(bC > 1),
-            cN,
-            cC,
-            cHt,
-            cWt};
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+        std::variant<uint32_t, tt::tt_metal::Buffer*> weight_arg = 0u;
+        if (weight_has_value) {
+            weight_arg = weight_tensor->buffer();
+        }
+        std::variant<uint32_t, tt::tt_metal::Buffer*> bias_arg = 0u;
+        if (bias_has_value) {
+            bias_arg = bias_tensor->buffer();
+        }
+        writer_desc.emplace_runtime_args(
+            core,
+            {batch_mean_tensor.buffer(),  //  batch mean
+             batch_var_tensor.buffer(),   //  batch var
+             weight_arg,                  // weight
+             bias_arg,                    // bias
+             c.buffer(),                  // output
+             start_tile_id,
+             num_tiles_per_core,
+             cHtWt,
+             bHt * bWt * bC * static_cast<uint32_t>(bN > 1),
+             bHt * bWt * static_cast<uint32_t>(bC > 1),
+             cN,
+             cC,
+             cHt,
+             cWt});
 
         auto counter = start_tile_id % cHtWt;
         auto freq = cHtWt;

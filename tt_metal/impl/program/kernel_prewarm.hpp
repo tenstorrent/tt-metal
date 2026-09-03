@@ -71,8 +71,13 @@ bool capture_only_skip_gcc(const std::string& kernel_base_name);
 // (the pre-compiled bundle when present): captured recipes store weakened firmware as a bare filename,
 // and the prewarm link needs to resolve it back to a full path under that root. On a cold cache it
 // only arms capture (no batch); a batch launches once per process.
+// |root_dir| is the build env's source-tree root: recipes captured by a sibling tree are skipped, since
+// build_key does not distinguish trees and their recipes' absolute paths compile the wrong headers.
 void maybe_launch_prewarm(
-    const std::string& out_kernel_root, const std::string& firmware_root, std::uint64_t build_key);
+    const std::string& out_kernel_root,
+    const std::string& firmware_root,
+    std::uint64_t build_key,
+    const std::string& root_dir);
 
 // Off-device prewarm: compile every kernel recipe in the manifest into the JIT cache, for all
 // build_keys the manifest holds, WITHOUT opening a device. |out_root| is JitBuildEnv::out_root_ (what

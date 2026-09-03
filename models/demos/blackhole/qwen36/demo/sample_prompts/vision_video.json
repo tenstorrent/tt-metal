@@ -1,0 +1,15 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
+                    "num_frames": 16
+                },
+                {"type": "text", "text": "Describe this video."}
+            ]
+        }
+    ]
+]

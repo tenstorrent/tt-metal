@@ -19,6 +19,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -355,10 +356,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     Group<KernelSpec> kernels;
 
     if (!skip_untilize) {
-        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-            get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
-        (void)packer_l1_acc;
-
         KernelSpec compute{
             .unique_id = COMPUTE,
             .source = std::filesystem::path(kComputeKernelPath),
@@ -376,13 +373,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config =
-                ComputeHardwareConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
-                },
+            .hw_config = ttnn::to_compute_hardware_config(
+                input_tensor.device()->arch(), operation_attributes.compute_kernel_config),
         };
         kernels.push_back(std::move(compute));
     }
@@ -402,14 +394,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  uint32_t reader_block_start_offset,
                                  DataMovementProcessor processor,
                                  NOC noc) {
+        DataMovementHardwareConfig reader_hw;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            reader_hw = DataMovementGen2Config{};
+        } else {
+            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
+        }
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .role = DataMovementRoleHint::UNSPECIFIED,
-                    .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
-                },
+            .hw_config = std::move(reader_hw),
         };
 
         // Tensor bindings: OUT always (scatter-write target).  IN directly only on
@@ -585,9 +579,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     if (!skip_untilize) {
         KernelRunArgs compute_args{.kernel = COMPUTE};
         for (size_t core_id = 0; core_id < cores.size(); ++core_id) {
-            compute_args.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = NodeCoord{cores[core_id].x, cores[core_id].y},
-                .args = {{"total_blocks", static_cast<uint32_t>(number_of_blocks_per_core[core_id])}}});
+            compute_args.runtime_arg_values["total_blocks"][NodeCoord{cores[core_id].x, cores[core_id].y}] =
+                static_cast<uint32_t>(number_of_blocks_per_core[core_id]);
         }
         run_args.kernel_run_args.push_back(std::move(compute_args));
     }
@@ -606,10 +599,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 read_index = is_rm_orientation ? core.y : core.x;
             }
             const NodeCoord node{core.x, core.y};
-            reader0_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
-            reader1_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
+            reader0_args.runtime_arg_values["config_read_index"][node] = read_index;
+            reader1_args.runtime_arg_values["config_read_index"][node] = read_index;
         }
     }
     run_args.kernel_run_args.push_back(std::move(reader0_args));

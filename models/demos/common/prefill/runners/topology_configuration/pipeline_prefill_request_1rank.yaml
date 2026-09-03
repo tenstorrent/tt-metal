@@ -1,0 +1,10 @@
+# REQUEST mode (unbounded, H2D-driven), 1 rank. No PREFILL_STANDALONE => request loop. rank0 builds the
+# H2D service + waits; drive it with prefill_producer.py on this host. Cache sized to 11 chunks.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+global_env:
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"

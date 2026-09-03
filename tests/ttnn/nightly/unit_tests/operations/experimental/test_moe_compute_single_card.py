@@ -42,7 +42,6 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     auto_output_width_shard_dim,
-    get_tilize_drain_core,
     effective_matmul_ring_size,
 )
 
@@ -155,11 +154,23 @@ def _run_moe_compute_single_card_test(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core: the op uses `max_tilize_cores[0]` from the per-arch layout
-    # table (`get_layout()` in moe_compute_program_factory.cpp). WH full-grid -> (6,9);
-    # BH 11x10 -> (10,9). Harvested grids are skipped above, so y>=10 always holds here.
-    drain_core_coord = get_tilize_drain_core()
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
+    # Drain tilize core: use dynamic core placement API to get the drain core
+    # instead of hardcoding per-arch coordinates. This works on both WH and BH
+    # and adapts to harvested grids (when supported).
+    drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+    )
+    tilize_drain_core = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+            )
+        }
+    )
 
     expert_mapping = gen_expert_mapping(
         num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
@@ -396,22 +407,14 @@ def _run_moe_compute_single_card_test(
         }
     )
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
         mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
     )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
-
-    # Arch- and sim-aware PCC floor (see #41827).
-    # ttsim has known partial fidelity (e.g. pack_untilize_dest), so the floor on sim is
-    # lower than on real silicon. Take the min with the helper's default so we don't
-    # accidentally relax a tighter threshold that might land later.
-    # WH and BH currently share the same floor; differentiate here when they diverge.
-    _on_simulator = bool(os.environ.get("TT_METAL_SIMULATOR"))
-    _arch_floor = 0.84 if _on_simulator else 0.984
-    base_pcc_threshold = min(base_pcc_threshold, _arch_floor)
+    base_pcc_threshold = min(base_pcc_threshold, 0.984)
 
     per_expert_tokens_all_passed = validate_per_expert_tokens(
         mesh_device,

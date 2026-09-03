@@ -9,10 +9,12 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -30,7 +32,7 @@ struct UnaryDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
 
-        tt::stl::hash::hash_t to_hash() const;
+        ttsl::hash::hash_t to_hash() const;
     };
 
     struct tensor_args_t {
@@ -50,8 +52,18 @@ struct UnaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // unary's compute_program_hash excludes the tensor volume, so one cached program is shared across
+    // shapes. The Buffer* rt-arg bindings trip the cache-hit fast path (patch addresses, skip rebuild),
+    // which would freeze the per-core work-split (tile counts, start ids) at the first-miss volume.
+    // Re-apply every per-core runtime arg for the current tensors on each hit.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::unary

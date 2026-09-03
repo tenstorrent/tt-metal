@@ -28,7 +28,7 @@ inline void _calculate_tanh_derivative_(const int iterations)
             val = lut(val, l0, l1, l2);
         }
 
-        val              = val * (-val) + sfpi::vConst1;
+        val              = val * (-val) + 1.0f;
         sfpi::dst_reg[0] = val;
 
         sfpi::dst_reg++;

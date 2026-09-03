@@ -10,8 +10,8 @@
 
 namespace {
 
-ttnn::SmallVector<uint32_t> create_repetition_vector(const ttnn::Tensor& tensor, std::span<const int32_t> shape) {
-    ttnn::SmallVector<uint32_t> expansion_vector(shape.size());
+ttsl::SmallVector<uint32_t> create_repetition_vector(const ttnn::Tensor& tensor, std::span<const int32_t> shape) {
+    ttsl::SmallVector<uint32_t> expansion_vector(shape.size());
     auto tensor_shape = tensor.logical_shape();
     const auto source_rank = tensor_shape.rank();
     const auto new_rank = shape.size();

@@ -117,9 +117,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
              {"host_dst_pcie_addr", host_dst_pcie_addr},
              {"l1_staging_addr", l1_staging_addr},
              {"transfer_size_bytes", kTransferSizeBytes}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

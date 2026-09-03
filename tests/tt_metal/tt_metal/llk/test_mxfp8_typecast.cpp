@@ -101,9 +101,7 @@ static vector<uint32_t> run_mxfp8_typecast(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -117,9 +115,7 @@ static vector<uint32_t> run_mxfp8_typecast(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -141,7 +137,7 @@ static vector<uint32_t> run_mxfp8_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            experimental::ComputeGen2Config{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };
@@ -173,21 +169,21 @@ static vector<uint32_t> run_mxfp8_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -225,7 +221,7 @@ static vector<uint32_t> create_random_vector_of_mxfp8(
         v = dist(rng) + offset;
     }
 
-    auto span = tt::stl::make_const_span(fp32_vec);
+    auto span = ttsl::make_const_span(fp32_vec);
     vector<uint32_t> packed = pack_as_mx_tiles(fmt, span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
@@ -298,7 +294,7 @@ struct TileLayout {
 static TileLayout get_e5m2_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -307,7 +303,7 @@ static TileLayout get_e5m2_tile_layout() {
 static TileLayout get_e4m3_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};

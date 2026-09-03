@@ -141,11 +141,12 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
             UNPACKER_ENGINE_SEL(),
+        ],
+        runtimes=[
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

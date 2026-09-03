@@ -186,7 +186,7 @@ jobs:
              needs.detect-changes.outputs.common == 'true') }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
-      runs_on: tt-ubuntu-2204-xlarge-stable
+      runs_on: tt-ubuntu-2204-large-stable
       test_splits: 1
       pytest_markers: "quasar"
 

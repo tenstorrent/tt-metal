@@ -34,7 +34,7 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
 
 void write_shard(
     Buffer& shard_view, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter) {
-    auto payload = tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region.size));
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region.size));
     if (logical_core_filter != nullptr) {
         experimental::core_subset_write::WriteToBuffer(shard_view, payload, *logical_core_filter);
     } else {

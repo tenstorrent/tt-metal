@@ -592,10 +592,6 @@ op_map = {
         "tt_op": tt_lib_ops.matmul,
         "pytorch_op": pytorch_ops.matmul,
     },
-    "outer": {
-        "tt_op": tt_lib_ops.outer,
-        "pytorch_op": pytorch_ops.outer,
-    },
     # Broadcast
     "bcast-add-h": {
         "tt_op": tt_lib_ops.bcast_add_h,

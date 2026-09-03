@@ -6,7 +6,7 @@
 #pragma once
 
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -120,17 +120,17 @@ std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
 
 // this function is supposed to load either a whole stick or part of it
 template <typename AddrGen>
-FORCE_INLINE void load_to_cb(
+FORCE_INLINE void load_to_dfb(
     Noc noc,
-    const uint32_t& cb,
+    const uint32_t& dfb_id,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    CircularBuffer cb_exp(cb);
-    cb_exp.reserve_back(ONE_PAGE);
+    DataflowBuffer dfb_exp(dfb_id);
+    dfb_exp.reserve_back(ONE_PAGE);
     const uint64_t source_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
-    const uint32_t l1_write_address = cb_exp.get_write_ptr();
+    const uint32_t l1_write_address = dfb_exp.get_write_ptr();
 
     noc.async_read(
         UnicastEndpoint{},
@@ -142,22 +142,22 @@ FORCE_INLINE void load_to_cb(
         {.offset_bytes = 0});
     noc.async_read_barrier();
 
-    cb_exp.push_back(ONE_PAGE);
+    dfb_exp.push_back(ONE_PAGE);
 }
 
 // this function is supposed to write either a whole stick or part of it (76800 elements)
 template <typename AddrGen>
 FORCE_INLINE void write_to_output(
     Noc noc,
-    const uint32_t& cb,
+    const uint32_t& dfb_id,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    CircularBuffer cb_exp(cb);
-    cb_exp.wait_front(ONE_PAGE);
+    DataflowBuffer dfb_exp(dfb_id);
+    dfb_exp.wait_front(ONE_PAGE);
     const uint64_t destination_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
-    const uint32_t l1_read_address = cb_exp.get_read_ptr();
+    const uint32_t l1_read_address = dfb_exp.get_read_ptr();
 
     noc.async_write(
         CoreLocalMem<uint32_t>(l1_read_address),
@@ -169,5 +169,5 @@ FORCE_INLINE void write_to_output(
          .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(destination_noc_address)});
     noc.async_write_barrier();
 
-    cb_exp.pop_front(ONE_PAGE);
+    dfb_exp.pop_front(ONE_PAGE);
 }

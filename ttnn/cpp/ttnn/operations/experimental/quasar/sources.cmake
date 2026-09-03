@@ -196,3 +196,31 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     typecast/device/typecast_rm_chunked_program_factory.cpp
     typecast/device/typecast_sharded_program_factory.cpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/quasar/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
+    quasar_nanobind.cpp
+    pad/pad_nanobind.cpp
+    tilize/tilize_nanobind.cpp
+    move/move_nanobind.cpp
+    untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
+    slice/slice_nanobind.cpp
+    transpose/transpose_nanobind.cpp
+    reshard/reshard_nanobind.cpp
+    pool_generic/generic_pools_nanobind.cpp
+    conv2d/conv2d_nanobind.cpp
+    matmul/matmul_nanobind.cpp
+    binary/binary_nanobind.cpp
+    fold/fold_nanobind.cpp
+    to_memory_config/to_memory_config_nanobind.cpp
+    reshape_view/reshape_nanobind.cpp
+    untilize/untilize_nanobind.cpp
+    tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
+    to_layout/to_layout_nanobind.cpp
+    reallocate/reallocate_nanobind.cpp
+    to_device/to_device_nanobind.cpp
+)

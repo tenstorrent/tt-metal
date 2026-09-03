@@ -32,17 +32,17 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
         sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
 
         if constexpr (max_iter > 1) {
-            sfpi::vFloat y1 = y * -t - sfpi::vConst0;
+            sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
             v_if(t < 0) {
                 t = x * y1 - sfpi::vConstFloatPrgm0;
-                y = y1 * -t - sfpi::vConst0;
+                y = y1 * -t - 0.0f;
             }
             v_endif;
         } else {
             // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
             // preceding SFPMAD.
-            v_if(t < 0) { y = y * -t - sfpi::vConst0; }
+            v_if(t < 0) { y = y * -t - 0.0f; }
             v_endif;
         }
     }

@@ -12,6 +12,8 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -137,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ---- Writer kernel ----
@@ -166,7 +168,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ---- Compute kernel ----
@@ -174,9 +176,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     if (float32_dtype) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -190,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(num_tiles / num_tiles_per_block)},
              {"per_core_block_tile_cnt", num_tiles_per_block}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = compute_hw,
     };
 
     // ---- ProgramSpec ----
@@ -207,27 +213,26 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core_0, .args = {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core_0, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})},
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core_0,
-                .args =
-                    {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
-                     {"padded_W_diff_blocks", padded_W_diff_blocks},
-                     {"num_unpadded_Z", static_cast<uint32_t>(output_z)},
-                     {"padded_Z_diff_blocks", padded_Z_diff_blocks},
-                     {"num_unpadded_Y", static_cast<uint32_t>(output_y)},
-                     {"padded_Y_diff_blocks", padded_Y_diff_blocks},
-                     {"num_leftover_Y", num_leftover_Y},
-                     {"num_unpadded_X", static_cast<uint32_t>(output_x)},
-                     {"padded_X_size", padded_stick_size},
-                     {"num_blocks_w_input", num_blocks_w_input},
-                     {"num_blocks_w_output", num_blocks_w_output},
-                     {"num_blocks_w_diff", num_blocks_w_diff},
-                     {"block_row_size", block_row_size},
-                     {"block_row_leftover_size", block_row_leftover_size}}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core_0,
+                {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
+                 {"padded_W_diff_blocks", padded_W_diff_blocks},
+                 {"num_unpadded_Z", static_cast<uint32_t>(output_z)},
+                 {"padded_Z_diff_blocks", padded_Z_diff_blocks},
+                 {"num_unpadded_Y", static_cast<uint32_t>(output_y)},
+                 {"padded_Y_diff_blocks", padded_Y_diff_blocks},
+                 {"num_leftover_Y", num_leftover_Y},
+                 {"num_unpadded_X", static_cast<uint32_t>(output_x)},
+                 {"padded_X_size", padded_stick_size},
+                 {"num_blocks_w_input", num_blocks_w_input},
+                 {"num_blocks_w_output", num_blocks_w_output},
+                 {"num_blocks_w_diff", num_blocks_w_diff},
+                 {"block_row_size", block_row_size},
+                 {"block_row_leftover_size", block_row_leftover_size}})},
     };
     run_args.tensor_args = {{INPUT, input_mesh_tensor}, {OUTPUT, output_mesh_tensor}};
 

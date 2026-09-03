@@ -342,31 +342,30 @@ inline void perform_reduce_col_sum_avg() {
  * We run two reductions in lockstep (LREG0/LREG1 and LREG4/LREG5) so that the second SFPSHFT2
  * fills the latency slot of the first, avoiding extra NOPs and reducing total cycle count.
  *
- * Algorithm (log2(8) = 3 reduction stages + 1 rotate). Each stage: copy to temp, shift right
- * by the appropriate amount so columns align, then add (SFPIADD or SFPADD) to fold halves together.
+ * Algorithm (log2(8) = 3 reduction stages). Each stage: copy to temp, rotate right by the appropriate
+ * amount so columns align, then add (SFPIADD or SFPADD) to fold halves together.
  *
- *   Phase 1: Shift by 4 and add -> 8 partial sums (cols 0-7) become 4 sums (cols 4-7).
- *   Phase 2: Shift by 2 and add -> 4 sums become 2 sums (cols 6-7).
- *   Phase 3: Shift by 1 and add -> 2 sums become 1 sum (col 7).
- *   Phase 4: Rotate right by 1  -> move the single sum from col 7 to col 0.
+ *   Phase 1: Rotate by 4 and add -> 8 partial sums (cols 0-7) become 4 duplicated pair sums.
+ *   Phase 2: Rotate by 2 and add -> pair sums become 2 duplicated quad sums.
+ *   Phase 3: Rotate by 1 and add -> quad sums become the full 8-column sum in every column.
  *
  * @tparam is_integer_mode True for integer types (uses SFPIADD), false for float (uses SFPADD)
  */
 template <bool is_integer_mode>
 inline void horizontal_reduce() {
-    // Phase 1: Shift by 4 and add -> 8 partial sums (cols 0-7) become 4 sums (cols 4-7).
+    // Phase 1: Rotate by 4 and add -> 8 partial sums (cols 0-7) become 4 duplicated pair sums.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
 
-    // Four right-shifts-by-4 in lockstep for both pairs; second SFPSHFT2 hides first's latency
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    // Four right-rotates-by-1 in lockstep for both pairs; second SFPSHFT2 hides first's latency.
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
 
     if constexpr (is_integer_mode) {
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
@@ -378,13 +377,13 @@ inline void horizontal_reduce() {
             p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // lreg4 = lreg4 * 1.0 + lreg5 (float)
     }
 
-    // Phase 2: Shift by 2 and add -> 4 sums become 2 sums (cols 6-7).
+    // Phase 2: Rotate by 2 and add -> pair sums become 2 duplicated quad sums.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     if constexpr (is_integer_mode) {
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
@@ -393,11 +392,11 @@ inline void horizontal_reduce() {
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
     }
 
-    // Phase 3: Shift by 1 and add -> 2 sums become 1 sum (col 7).
+    // Phase 3: Rotate by 1 and add -> quad sums become the full 8-column sum in every column.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     if constexpr (is_integer_mode) {
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
@@ -408,9 +407,6 @@ inline void horizontal_reduce() {
             p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // lreg4 = lreg4 * 1.0 + lreg5 (float)
     }
 
-    // Phase 4: Rotate right by 1 -> move single sum from col 7 to col 0 for store.
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, 3);
     // LREG0[0 column slice] = sum of all elements in the first 4 rows of this 8-row block (first half)
     // LREG4[0 column slice] = sum of all elements in the next 4 rows of this 8-row block (second half)
 }
@@ -421,10 +417,10 @@ constexpr std::uint32_t HORIZONTAL_REDUCE_MAX_REPLAY_LEN = 16;
  * @brief Records phases 2-4 of horizontal max reduction into replay buffer at slot 0 (16 instructions).
  *
  * The full horizontal max reduction has 28 instructions across 4 phases:
- *   Phase 1: 2 MOV + 8 SHFT2 + 2 SWAP = 12 (inline, shift-by-4)
- *   Phase 2: 2 MOV + 4 SHFT2 + 2 SWAP =  8 (replay, shift-by-2)
- *   Phase 3: 2 MOV + 2 SHFT2 + 2 SWAP =  6 (replay, shift-by-1)
- *   Phase 4: 2 SHFT2                   =  2 (replay, rotate to col 0)
+ *   Phase 1: 2 MOV + 8 SHFT2 + 2 SWAP = 12 (inline, rotate-by-4)
+ *   Phase 2: 2 MOV + 4 SHFT2 + 2 SWAP =  8 (replay, rotate-by-2)
+ *   Phase 3: 2 MOV + 2 SHFT2 + 2 SWAP =  6 (replay, rotate-by-1)
+ *   Phase 4: 2 SHFT2                   =  2 (replay, rotate to col 0, redundant after rotate reduction)
  *
  * Phase 1 (12 instr) stays inline; phases 2+3+4 (16 instr) fit exactly in one replay buffer.
  * Must be called once before perform_reduce_row_max_tile.
@@ -432,21 +428,21 @@ constexpr std::uint32_t HORIZONTAL_REDUCE_MAX_REPLAY_LEN = 16;
 inline void record_horizontal_reduce_max() {
     lltt::record(0, HORIZONTAL_REDUCE_MAX_REPLAY_LEN);
 
-    // Phase 2: Shift by 2 and max -> 4 maxes become 2 maxes (cols 6-7).
+    // Phase 2: Rotate by 2 and max -> pair maxes become duplicated quad maxes.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
 
-    // Phase 3: Shift by 1 and max -> 2 maxes become 1 max (col 7).
+    // Phase 3: Rotate by 1 and max -> quad maxes become the full 8-column max in every column.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
 
@@ -460,18 +456,18 @@ inline void record_horizontal_reduce_max() {
  *        record_horizontal_reduce_max() must have been called before first use.
  */
 inline void horizontal_reduce_max() {
-    // Phase 1 (inline): Shift by 4 and max -> 8 values become 4 maxes (cols 4-7).
+    // Phase 1 (inline): Rotate by 4 and max -> 8 values become 4 duplicated pair maxes.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
 
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 4);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 4);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
 
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
@@ -1239,7 +1235,12 @@ inline void init_reduce_max_min_int32() {
  * operations)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool clear_high_bits>
-inline void init_reduce_max_min(std::uint32_t num_cols) {
+inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
+#ifdef DISABLE_SFPLOADMACRO
+    init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
+    return;
+#endif
+
     // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
     _init_sfpu_config_reg();
 
@@ -1798,7 +1799,7 @@ template <
     DataFormat format,
     bool is_fp32_dest_acc_en,
     DataFormat output_format = format>
-inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1, [[maybe_unused]] std::uint32_t block_rt_dim = 1) {
     // Row reduction supports SUM/MAX/MIN for every supported format; AVG is row-supported only for
     // float formats, because the row divisor is the runtime column count and only the float
     // reciprocal-multiply divides exactly (integer AVG stays column-only with its fixed /32 divisor).
@@ -1851,6 +1852,17 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
                 "Row MAX/MIN reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
             perform_reduce_row_max_min<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
                 block_ct_dim, block_rt_dim);
+#ifdef DISABLE_SFPLOADMACRO
+        } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
+            // Int32 column reduce already has a manual load/cast/swap path. Use it when LOADMACRO is
+            // disabled, since the generic column MAX/MIN path records SFPLOADMACRO instructions.
+            calculate_reduce_max_min_int32<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
+        } else {
+            // LOADMACRO-disabled builds use the manual load/swap column reducer. With
+            // clear_high_bits=false it is just the unfused equivalent of the LOADMACRO
+            // compare-and-swap pipeline.
+            calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
+#else
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
@@ -1861,6 +1873,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             calculate_reduce_max_min_int32<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
         } else {
             calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);
+#endif
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>(

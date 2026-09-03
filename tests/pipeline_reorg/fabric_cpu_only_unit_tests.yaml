@@ -25,11 +25,54 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-6u
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-single-galaxy
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-dual-galaxy
-    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
   skus:
     cpu_medium:
+      timeout: 25
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+# bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 38 per-host-sliced pod combos
+# across 4 single-pod mocks. The four 40-host llama_8b pods dominate wall-clock (they alone need ~40 min),
+# so they are pulled into their own shard; the remaining fast layout/pipeline-builder combos are split by
+# mock revision. Partition (disjoint, exhaustive): revAB-fast (16) + revC-fast (14) + llama (8) = 38.
+#   revAB-fast: SC4 revAB subtorus/aisleD + SP3 16x8, minus llama  (--grep revAB --grep-exclude llama_8b)
+#   revC-fast:  SC4 revC subtorus aisleC/aisleD, minus llama       (--grep revC  --grep-exclude llama_8b)
+#   llama:      all 40-host llama_8b pods on revAB + revC mocks     (--grep llama_8b)
+- id: fabric-cpu-bh-pod-pipeline-revab
+  name: fabric cpu unit tests (bh-pod-pipeline-revAB)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB --grep-exclude llama_8b
+  skus:
+    cpu_medium:
+      # 16 fast layout/pipeline-builder combos (SC36-subtorus single-pod mock + 16x8 SP3 mock); ~3 min.
+      # (The one pathological 8x16 pipeline-builder combo is dropped on CI —
+      # see https://github.com/tenstorrent/tt-metal/issues/49313.)
       timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-revc
+  name: fabric cpu unit tests (bh-pod-pipeline-revC)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC --grep-exclude llama_8b
+  skus:
+    cpu_medium:
+      # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-llama
+  name: fabric cpu unit tests (bh-pod-pipeline-llama)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep llama_8b
+  skus:
+    cpu_medium:
+      # 8 slow 40-host llama_8b pods (revAB subtorus/aisleD + revC subtorus aisleC/aisleD). These dominate
+      # the pod-pipeline wall-clock; a combined revAB shard timed out at 35 min, and the 8-combo llama-only
+      # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
+      timeout: 55
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
@@ -61,7 +104,9 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 15
+      # 20-host SC20 rings on 2 mocks: 80-stage 2x4 (x2), 40-stage 4x4, 20-stage 8x4, and the 160-node
+      # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
+      timeout: 40
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
@@ -71,7 +116,22 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      timeout: 15
+      # ~17 tt-run combos incl. slow 48/64/80-stage rings on SC16/SC20 clusters; the
+      # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
+      timeout: 30
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-ring-stress
+  name: fabric cpu unit tests (bh-ring-stress)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
+  skus:
+    cpu_medium:
+      # Long-running: 5 non-pod-aligned ring maps (20/24/28/32/36 stages) on the 36-host SC36 revC subtorus
+      # aisleD mock. Erratic general-SAT solves. ~1.5 min locally BUT the cpu_medium CI runner is ~4x
+      # slower -- the 4-stage step measured 5m34s on CI, so 5 stages ~6.5 min; 10 min = ~1.5x margin.
+      timeout: 10
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song

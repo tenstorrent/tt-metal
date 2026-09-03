@@ -17,6 +17,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -125,7 +127,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -185,7 +187,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", static_cast<uint32_t>(input.padded_shape().rank())}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
         .advanced_options =
             KernelAdvancedOptions{
                 .num_common_runtime_varargs = static_cast<uint32_t>(writer_common_runtime_args.size())},
@@ -199,9 +201,13 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
 
     KernelSpec compute{
@@ -215,19 +221,16 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = {{"per_core_block_tile_cnt", num_tiles_per_input_block}},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = compute_hw,
     };
 
     // ------------------------------------------------------------------------
     // Per-core runtime args. start_shard_id is the core's index in ordered_cores_with_data; the
     // compute block count per core is derived from the page mapping (non-padding blocks).
     // ------------------------------------------------------------------------
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> compute_node_args;
-    reader_node_args.reserve(ordered_cores_with_data.size());
-    writer_node_args.reserve(ordered_cores_with_data.size());
-    compute_node_args.reserve(ordered_cores_with_data.size());
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
 
     const auto& mapped_cores = page_mapping.all_cores;
     uint32_t start_shard_id = 0;
@@ -252,12 +255,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
             }
         }
 
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"start_shard_id", start_shard_id}}});
-        writer_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"start_shard_id", start_shard_id}}});
-        compute_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node, .args = {{"per_core_block_cnt", num_input_blocks_to_process}}});
+        reader_node_args["start_shard_id"][node] = start_shard_id;
+        writer_node_args["start_shard_id"][node] = start_shard_id;
+        compute_node_args["per_core_block_cnt"][node] = num_input_blocks_to_process;
         start_shard_id++;
     }
 

@@ -23,11 +23,11 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // function)
 
     // Compute log(1 - x^2)
-    sfpi::vFloat log_value = calculate_log_body<false, false, false>(sfpi::vConst1 - x * x, 0);
+    sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = -4.330746750799873f;   // -2 / (pi * a)
+    constexpr float TwoPiA = -4.330746750799873f;  // -2 / (pi * a)
     constexpr float OneDivA = 6.802721088435375f;  // 1/a
 
     // tmp = -2 / (pi * a) - log(1 - x^2)/2
@@ -35,11 +35,11 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
     sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
     calculated_value = tmp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat result = sfpu_sqrt_custom<false, 2>(calculated_value);
 
     return result;
 }

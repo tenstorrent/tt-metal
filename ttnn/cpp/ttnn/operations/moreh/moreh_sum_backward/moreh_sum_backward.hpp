@@ -11,7 +11,7 @@ namespace ttnn {
 Tensor moreh_sum_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& input = std::nullopt,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim = std::nullopt,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim = std::nullopt,
     bool keepdim = false,
     const std::optional<Tensor>& input_grad = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

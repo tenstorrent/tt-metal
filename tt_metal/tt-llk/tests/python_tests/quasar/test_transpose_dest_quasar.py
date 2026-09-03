@@ -25,6 +25,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -119,7 +120,7 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 

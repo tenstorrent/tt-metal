@@ -3,21 +3,17 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (runtime -> merge_gate).
 # PR gate matrix lives in runtime_validation_pr_gate_tests.yaml (runtime -> pr_gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+# Note: wh_n150_civ2 is intentionally omitted here (PR-gate smoke covers n150).
 
-- name: metalium validation smoke
+- name: runtime validation smoke
   cmd: /usr/bin/tt-metalium-validation-smoke
   skus:
-    wh_n150_civ2:
-      timeout: 15
     wh_n300_civ2:
       timeout: 15
     wh_llmbox_civ2_viommu:
       timeout: 15
-    wh_llmbox_civ2_prio:
-      timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 15
-    bh_p150b_civ2_viommu_prio:
       timeout: 15
   team: runtime
   owner_id: U099A7FMKL2 # Manish Sudumbrekar

@@ -216,23 +216,33 @@ void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
     }
 }
 
+std::vector<size_t> WorkerConfigBufferMgr::get_queued_entry_indices(size_t buffer_type) const {
+    std::vector<size_t> indices;
+    // Walk the ring buffer from the oldest freeable entry (free_index_) up to, but not including,
+    // the alloc entry (alloc_index_). Starting from alloc_index_ here would make the loop empty.
+    size_t free_index = this->free_index_[buffer_type];
+    while (free_index != this->alloc_index_[buffer_type]) {
+        indices.push_back(free_index);
+        free_index = (free_index + 1) % this->entries_.size();
+    }
+    return indices;
+}
+
 void WorkerConfigBufferMgr::PrintStatus() {
     size_t num_buffer_types = this->reservation_.size();
     for (size_t i = 0; i < num_buffer_types; i++) {
         fprintf(stderr, "Buffer type %zu\n", i);
         log_info(tt::LogTest, "Buffer type {}", i);
 
-        size_t free_index = this->alloc_index_[i];
-        while (free_index != this->alloc_index_[i]) {
+        for (size_t free_index : this->get_queued_entry_indices(i)) {
             auto& entry = this->entries_[free_index][i];
             log_info(
                 tt::LogTest, "Free index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
-
-            free_index = (free_index + 1) % this->entries_.size();
         }
-        auto& entry = this->entries_[free_index][i];
+        size_t alloc_index = this->alloc_index_[i];
+        auto& entry = this->entries_[alloc_index][i];
         log_info(
-            tt::LogTest, "Alloc index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
+            tt::LogTest, "Alloc index {} has values {} {} {}", alloc_index, entry.addr, entry.size, entry.sync_count);
     }
 }
 

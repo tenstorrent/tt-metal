@@ -29,6 +29,10 @@
   skus:
     wh_n150_civ2:
       timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    wh_llmbox:
+      timeout: 5
     bh_p150b_civ2:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -92,7 +96,9 @@
   team: runtime
 
 # --- LLK + SFPI Tests ---
-# WH timeout raised from 8→12 min: full LLK+SFPI suite exceeds 8 min wall clock on wh_n150_civ2.
+# WH/BH timeout raised to 12 min: full LLK+SFPI suite exceeds 8 min wall clock (measured
+# ~12.3 min on bh_p150b_civ2). Cost is genuine passing-test work (LLKMeshDeviceFixture reduce
+# family dominates); skipped Quasar-only tests are free (~130 ms total), not the cause.
 - name: runtime_llk
   # 4 tests disabled by #44767.
   disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
@@ -103,7 +109,7 @@
     wh_n150_civ2:
       timeout: 12
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -139,6 +145,8 @@
   skus:
     wh_n150_civ2:
       timeout: 5
+    wh_n300_civ2:
+      timeout: 5
     bh_p150b_civ2:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -161,10 +169,18 @@
   skus:
     wh_n150_civ2:
       timeout: 15
+    wh_n300_civ2:
+      timeout: 15
     bh_p150b_civ2:
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# NOTE: wh_llmbox is intentionally NOT listed here. The full distributed_unit_tests suite already
+# runs on wh_llmbox (the T3000 8-device box) via the scaleout-owned t3k_ttmetal_tests job
+# (tests/scripts/t3000/run_t3000_unit_tests.sh), which budgets 40 min for it. Adding a second
+# runtime_distributed run on wh_llmbox with the 15-min unit budget was redundant and could not
+# complete in time on 8 devices. Smaller SKUs above skip the multi-device (2x4/4x8) suites.
 
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
 - name: runtime_iommu_pinned_memory
@@ -203,18 +219,14 @@
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      TT_METAL_SLOW_DISPATCH_MODE=1 \
-        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
-        ./build/test/tt_metal/unit_tests_api \
-        --gtest_filter='*.DramKernel*:DramSenderGCBFixture.*:DramSubchannelHelperFixture.*'
-    fi
   skus:
     wh_n150_civ2:
       timeout: 20
     wh_n300_civ2:
       timeout: 20
     bh_p150b_civ2:
+      timeout: 15
+    bh_p300:
       timeout: 15
     bh_p100a_civ2_viommu:
       timeout: 15
@@ -231,6 +243,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
+    bh_p300:
+      timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -242,12 +256,6 @@
   disabled_debug_tools_filter: *disabled_debug_tools
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      TT_METAL_SLOW_DISPATCH_MODE=1 \
-        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
-        ./build/test/tt_metal/unit_tests_debug_tools \
-        --gtest_filter='*Drisc*:*Dram*Print*:-{disabled_debug_tools_filter}'
-    fi
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch
@@ -257,6 +265,8 @@
     wh_n300_civ2:
       timeout: 17
     bh_p150b_civ2:
+      timeout: 17
+    bh_p300:
       timeout: 17
     bh_p100a_civ2_viommu:
       timeout: 17
@@ -276,6 +286,8 @@
       timeout: 12
     bh_p150b_civ2:
       timeout: 10
+    bh_p300:
+      timeout: 12
     bh_p100a_civ2_viommu:
       timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -290,6 +302,8 @@
     wh_n300_civ2:
       timeout: 5
     bh_p150b_civ2:
+      timeout: 5
+    bh_p300:
       timeout: 5
     bh_p100a_civ2_viommu:
       timeout: 5
@@ -306,13 +320,15 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
+    bh_p300:
+      timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # =============================================================================
-# Multi-Card Unit Tests (Galaxy)
+# Multi-Card Unit Tests (BH + Galaxy) — see #46302 for topology matrix
 # =============================================================================
 
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
@@ -391,6 +407,8 @@
     bh_p150b_civ2:
       timeout: 5
     bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_loudbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

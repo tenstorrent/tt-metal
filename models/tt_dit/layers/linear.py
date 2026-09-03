@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -30,22 +33,66 @@ _FUSED_GELU_VARIANTS = {
 }
 
 
+def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
+    """Cast an activation that is about to cross the fabric, if a quant config asked for it.
+
+    Must be applied BEFORE the collective, never after: the win is in the bytes the gather moves,
+    and the gather's page size is the tile size of the gathered dtype (bfloat8_b tiles are 1088 B
+    vs bfloat16's 2048 B). A cast placed after the gather buys nothing and costs a full pass.
+
+    The op-level constraint that makes this legal: the AG-matmul validates the activation and the
+    weight dtypes independently, so a bf8 activation composes with the bf16-weight carve-out the
+    fused addcmul epilogue requires.
+    """
+    if activation_dtype is None or x.get_dtype() == activation_dtype:
+        return x
+    return ttnn.typecast(x, activation_dtype)
+
+
+def resolve_output_dtype(dtype, x: ttnn.Tensor):
+    """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
+
+    The matmuls default their output dtype to the input's (``output_dtype.value_or(in0.dtype())``), so a
+    quantized activation would otherwise push bf8 downstream — into the residual stream, and into
+    ``DistributedRMSNorm``, which rejects anything but bf16. The lever is input-side (fewer bytes over
+    the fabric and into the matmul) and must stop at the output.
+
+    Keyed on the input's dtype rather than on the configured ``activation_dtype`` so it also covers an
+    input that arrived block-float from upstream (e.g. an SDPA output under an SDPA-input quant). bf16
+    and fp32 inputs keep their existing default.
+    """
+    if dtype is None and x.get_dtype() in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return ttnn.bfloat16
+    return dtype
+
+
 class Linear(Module):
     """
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation_fn=None,
+        dtype=ttnn.bfloat16,
+        mesh_device=None,
+    ):
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn in _FUSED_GELU_VARIANTS:
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
+            self.activation_fn = None
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
             self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
         self.mesh_device = mesh_device
@@ -67,9 +114,15 @@ class Linear(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state["weight"].transpose(0, 1)
+            weight = state["weight"].transpose(0, 1)
+            if self.fuse_swiglu:
+                weight = prepare_for_fused_swiglu(weight, ndev=1)
+            state["weight"] = weight
         if "bias" in state:
-            state["bias"] = state["bias"].reshape(1, -1)
+            bias = state["bias"].reshape(1, -1)
+            if self.fuse_swiglu:
+                bias = prepare_for_fused_swiglu(bias, ndev=1)
+            state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
@@ -83,9 +136,24 @@ class Linear(Module):
             fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
             dtype=dtype,
+            fuse_swiglu=self.fuse_swiglu,
         )
 
         return _apply_activation_fn(output, self.activation_fn)
+
+
+def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    # Use a single scratch buffer that's reused for every intermediate so peak
+    # DRAM is x + scratch (2x input) instead of the naive 6x.
+    sqrt_2 = math.sqrt(2.0)
+    tmp = ttnn.multiply(x, 1.0 / sqrt_2)
+    ttnn.erf(tmp, output_tensor=tmp)
+    ttnn.add(tmp, 1.0, output_tensor=tmp)
+    ttnn.multiply(x, tmp, output_tensor=tmp)
+    ttnn.multiply(tmp, 0.5, output_tensor=tmp)
+    return tmp
 
 
 class ColParallelLinear(Module):
@@ -111,14 +179,18 @@ class ColParallelLinear(Module):
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn in _FUSED_GELU_VARIANTS:
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
+            self.activation_fn = None
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
             self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
         self.mesh_device = mesh_device
+
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
@@ -127,6 +199,14 @@ class ColParallelLinear(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
+
+        # Optional cast of the *input* activation, set by a quant config. This is the only Linear
+        # variant that honours it, because it is the only one whose input crosses the fabric: at
+        # TP>1 the input is the payload of the fused all-gather, and the gather's page size follows
+        # the dtype of the gathered tensor. Casting a RowParallel/replicated Linear's input would
+        # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
+        # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
+        self.activation_dtype = None
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -165,12 +245,16 @@ class ColParallelLinear(Module):
 
         if weight is not None:
             weight = weight.transpose(0, 1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                weight = prepare_for_fused_swiglu(weight, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 weight = permute_for_swiglu(weight)
             state["weight"] = weight
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                bias = prepare_for_fused_swiglu(bias, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
@@ -182,6 +266,9 @@ class ColParallelLinear(Module):
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
         """
+        x = maybe_cast_activation(x, self.activation_dtype)
+        dtype = resolve_output_dtype(dtype, x)
+
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -222,6 +309,7 @@ class ColParallelLinear(Module):
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -244,18 +332,21 @@ class ColParallelLinear(Module):
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     config=matmul_config,
                     dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-            )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
+                )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -436,6 +527,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t
     if activation_fn == "silu":
         return ttnn.silu(t)
+    if activation_fn == "decomposed_gelu":
+        return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":

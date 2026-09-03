@@ -33,6 +33,13 @@ on:
         type: string
         default: "tt-ubuntu-2204-large-stable"
         description: "Runner label for the wheel build job"
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
@@ -46,6 +53,12 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+    env:
+      # S3 ccache config — lift to repo vars/secrets when ready
+      CCACHE_S3_BUCKET: ccache
+      CCACHE_S3_PREFIX: tt-metal
+      CCACHE_S3_READONLY: "false"
+      CCACHE_S3_DEBUG: "false"
     defaults:
       run:
         shell: bash
@@ -58,21 +71,37 @@ jobs:
           echo "python_version_nodot=${PYTHON_VERSION_NODOT}" >> $GITHUB_OUTPUT
           echo "Selected Python ${{ inputs.python-version }} (${PYTHON_VERSION_NODOT})"
 
-      - name: Check Redis credentials
+      - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          # Omit |read-only unless actually true — ccache 4.13 treats the presence of the
-          # option (even =false) as read-only due to an std::optional<bool> check bug.
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}"
+          # The ccache-storage-s3 helper reads credentials from the standard AWS
+          # credential chain, so export them to the job environment.
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
+          # The s3:// scheme makes ccache auto-spawn and manage the helper itself:
+          # it derives the binary name (ccache-storage-s3) from the scheme and looks
+          # it up in libexec, forking it on demand and respawning across build steps.
+          # Garage's s3_region is configured as "garage" — must match exactly or signing fails.
+          CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
+          if [ "${CCACHE_S3_READONLY}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
+          # Explicit Garage endpoint as an AWS SDK env var fallback. The helper reads this
+          # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
+          echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -82,6 +111,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ (startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
@@ -111,15 +141,62 @@ jobs:
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
+            CCACHE_COMPRESS=true
+            CCACHE_COMPRESSLEVEL=3
+            CCACHE_LOGFILE=/tmp/ccache.log
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
+            AWS_ACCESS_KEY_ID="${{ env.AWS_ACCESS_KEY_ID }}"
+            AWS_SECRET_ACCESS_KEY="${{ env.AWS_SECRET_ACCESS_KEY }}"
+            AWS_DEFAULT_REGION=garage
+            AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900
+            CRSH_LOGFILE="${{ env.CRSH_LOGFILE }}"
             CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
             CIBW_ENABLE_LTO="${{ inputs.enable-lto && 'ON' || 'OFF' }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
-          CIBW_BEFORE_TEST: ccache -s
+          # cibuildwheel has no after_build hook; CIBW_AFTER_BUILD was silently ignored.
+          # repair-wheel-command is the only real container-side hook that runs after the
+          # compile on this build (tests are skipped for ASan), so dump ccache stats there.
+          # Keep the default auditwheel repair, then write the stats to the host-mounted
+          # /host/tmp (== host /tmp) so the host "ccache stats summary" step can read them.
+          # The stats dump is best-effort (|| true) so it can never fail the wheel build.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && (ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt || true) && (cp /tmp/ccache.log /host/tmp/ccache-wheel.log 2>/dev/null || true) && (cp /tmp/ccache-storage-s3.log /host/tmp/ccache-storage-s3-wheel.log 2>/dev/null || true)"
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+      - name: 📊 ccache stats summary
+        if: always()
+        run: |
+          if [ -f /tmp/ccache-wheel-stats.txt ]; then
+            echo "## ccache stats" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/ccache-wheel-stats.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache-wheel.log ]; then
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache-wheel.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
+          if [ -f /tmp/ccache-storage-s3-wheel.log ]; then
+            echo "=== ccache-storage-s3 log (first 30 lines) ==="
+            head -30 /tmp/ccache-storage-s3-wheel.log
+            echo "=== ccache-storage-s3 log (last 80 lines) ==="
+            tail -80 /tmp/ccache-storage-s3-wheel.log
+            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
+            echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
+            tail -200 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'

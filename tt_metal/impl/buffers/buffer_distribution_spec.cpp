@@ -30,6 +30,11 @@ struct PageMappingIntermData {
     uint32_t* actual_shard_size = nullptr;
     size_t core_id = 0;
     size_t shard_id = 0;
+
+    // Shard-contiguous (CONTIGUOUS_1D) placement: adjacent shards fill one core's slots before advancing.
+    // When false, the default round-robin placement is used.
+    bool shard_contiguous_placement = false;
+    size_t shards_per_core = 0;  // only meaningful when shard_contiguous_placement is true
 };
 
 void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_offset, size_t dst_offset) {
@@ -47,8 +52,16 @@ void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_
 
 void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_offset) {
     if (dim == params.rank) {
-        params.core_id = params.shard_id % params.num_cores;
-        size_t dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
+        size_t dst_offset = 0;
+        if (params.shard_contiguous_placement) {
+            // Contiguous: shards_per_core consecutive shards fill one core's slots [0..shards_per_core)
+            // before advancing to the next core.
+            params.core_id = params.shard_id / params.shards_per_core;
+            dst_offset = (params.shard_id % params.shards_per_core) * params.shard_volume;
+        } else {
+            params.core_id = params.shard_id % params.num_cores;
+            dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
+        }
 
         iterate_within_shard(params, 0, src_offset, dst_offset);
 
@@ -103,7 +116,8 @@ BufferDistributionSpec::BufferDistributionSpec(
     const tt::tt_metal::Shape& shard_shape_in_pages,
     const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
-    ShardDistributionStrategy shard_distribution_strategy) {
+    ShardDistributionStrategy shard_distribution_strategy) :
+    shard_distribution_strategy_(shard_distribution_strategy) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
@@ -141,7 +155,10 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
     ShardDistributionStrategy shard_distribution_strategy) {
-    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
+    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D ||
+        shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
+        // Both 1D strategies linearize the core grid identically; they differ only in how shards
+        // are assigned to that list (round-robin vs. shard-contiguous), which is handled in iterate_over_shards.
         return corerange_to_cores(
             core_range_set, core_range_set.num_cores(), shard_orientation == ShardOrientation::ROW_MAJOR);
     }
@@ -247,7 +264,10 @@ void BufferDistributionSpec::init_precomputed_data() {
 
 namespace detail {
 UncompressedBufferPageMapping compute_page_mapping(
-    const Shape& tensor_shape, const Shape& shard_shape, const std::vector<CoreCoord>& cores) {
+    const Shape& tensor_shape,
+    const Shape& shard_shape,
+    const std::vector<CoreCoord>& cores,
+    ShardDistributionStrategy shard_distribution_strategy) {
     UncompressedBufferPageMapping page_mapping;
     page_mapping.all_cores = cores;
 
@@ -263,20 +283,28 @@ UncompressedBufferPageMapping compute_page_mapping(
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
 
+    const bool shard_contiguous_placement = shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    TT_FATAL(
+        !shard_contiguous_placement || num_shards % cores.size() == 0,
+        "CONTIGUOUS_1D distribution requires a uniform shards-per-core: num_shards ({}) must be divisible by "
+        "num_cores ({}).",
+        num_shards,
+        cores.size());
+
     page_mapping.core_host_page_indices.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) {
         page_mapping.core_host_page_indices[i].resize(
             num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
 
-    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
+    ttsl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
     for (size_t i = 0; i < tensor_shape.rank(); i++) {
         shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
-    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
-    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
+    ttsl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
+    ttsl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    ttsl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
         .page_mapping = &page_mapping,
@@ -291,6 +319,8 @@ UncompressedBufferPageMapping compute_page_mapping(
         .actual_shard_size = actual_shard_size.data(),
         .core_id = 0,
         .shard_id = 0,
+        .shard_contiguous_placement = shard_contiguous_placement,
+        .shards_per_core = num_shards_per_core,
     };
     CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0);
 
@@ -306,8 +336,8 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
 
     uint64_t tensor_volume = tensor_shape.volume();
     uint64_t shard_volume = shard_shape.volume();
-    tt::stl::SmallVector<uint32_t> new_tensor_shape;
-    tt::stl::SmallVector<uint32_t> new_shard_shape;
+    ttsl::SmallVector<uint32_t> new_tensor_shape;
+    ttsl::SmallVector<uint32_t> new_shard_shape;
 
     bool matching_dims_sequence = false;
     bool last_dim_divisible = false;

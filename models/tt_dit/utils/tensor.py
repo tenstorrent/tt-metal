@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import math
+import os
+import time
 from typing import TYPE_CHECKING
 
 import torch
@@ -15,6 +17,43 @@ import ttnn
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
+
+
+def prepare_for_fused_swiglu(
+    tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
+) -> torch.Tensor:
+    """Reorder a packed [.., 2N] SwiGLU weight/bias for the fused matmul kernel.
+
+    The fused kernel emits ``silu(even_tile) * odd_tile`` per pair, so gate (the silu'd half)
+    must occupy the even tile slot and up (the multiplicand) the odd tile slot within each
+    device block.
+
+    ``gate_is_first`` specifies the input column ordering:
+
+    - ``gate_is_first=False`` (default): input is ``[up (N) | gate (N)]``, i.e.
+      ``up, gate = chunk(., 2, -1); up * silu(gate)`` — torch/HuggingFace convention.
+    - ``gate_is_first=True``: input is ``[gate (N) | up (N)]``, i.e.
+      ``gate, up = chunk(., 2, -1); silu(gate) * up``.
+
+    In both cases the output is laid out as ``ndev`` contiguous device blocks, each containing
+    interleaved gate/up tile pairs ``[gate_t0, up_t0, gate_t1, up_t1, ...]`` for that device's shard.
+    Splitting the output evenly across ``ndev`` devices along the last dimension gives each device
+    a correctly interleaved local block.
+    """
+    rows = tensor.shape[0]
+    two_N = tensor.shape[-1]
+    N = two_N // 2
+    assert (
+        N % (ndev * tile_width) == 0
+    ), f"SwiGLU half-width N={N} must be divisible by ndev*tile_width={ndev * tile_width}"
+    tiles_per_dev = N // ndev // tile_width
+    # [rows, half=2, d=ndev, t=tiles_per_dev, c=tile_width] -> [rows, d, t, half, c]
+    t = tensor.reshape(rows, 2, ndev, tiles_per_dev, tile_width)
+    t = t.permute(0, 2, 3, 1, 4)
+
+    if not gate_is_first:
+        t = t.flip(3)
+    return t.reshape(rows, two_N)
 
 
 def typed_tensor(
@@ -524,6 +563,7 @@ def fast_device_to_host(
         dtype: Output dtype.  When combined with ``permute``, the dtype
             conversion is fused into the scatter write (single-pass copy).
     """
+    _t_entry = time.perf_counter()
     mesh_shape = tuple(mesh_device.shape)
 
     if len(mesh_shape) != 2:
@@ -639,15 +679,23 @@ def fast_device_to_host(
 
     # Grab mesh coordinates from the device tensor before DMA.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+    _t_coords = time.perf_counter()
 
     if pre_transfer_fn is not None:
         tt_tensor = pre_transfer_fn(tt_tensor)
+
+    # Optional split (LTX_TIME_STAGES=1) of the two costs this call fuses: the DMA read off the
+    # mesh, and the host-side scatter that reassembles the shards. Only the DMA is command-queue
+    # work, so sizing them apart is what says whether a second CQ could hide any of this.
+    _time_d2h = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+    _t0 = time.perf_counter()
 
     # Single .cpu() on the mesh tensor batches all DMA reads into one C++
     # dispatch — host buffers are allocated in parallel and the reader thread
     # pool processes all completion-queue reads concurrently.
     host_tensor = tt_tensor.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
+    _t_dma = time.perf_counter()
 
     # Extract per-shard host tensors (single-host: just wraps each shard).
     host_shard_tensors = ttnn.get_device_tensors(host_tensor)
@@ -657,7 +705,16 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    out = _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    if _time_d2h:
+        _t_cat = time.perf_counter()
+        _nb = out.numel() * out.element_size()
+        logger.info(
+            f"D2H_SPLIT mesh_coords={(_t_coords - _t_entry) * 1000:.1f}ms pre_fn={(_t0 - _t_coords) * 1000:.1f}ms "
+            f"dma={(_t_dma - _t0) * 1000:.1f}ms host_concat={(_t_cat - _t_dma) * 1000:.1f}ms "
+            f"| {_nb / 1e9:.2f}GB dma@{_nb / 1e9 / max(_t_dma - _t0, 1e-9):.2f} GB/s"
+        )
+    return out
 
 
 def upsample(

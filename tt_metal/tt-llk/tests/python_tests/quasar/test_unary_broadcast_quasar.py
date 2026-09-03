@@ -21,6 +21,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import BootMode, TestConfig
@@ -81,7 +82,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
         else [ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
 )
 def test_unary_broadcast_quasar(
     formats,
@@ -139,12 +140,12 @@ def test_unary_broadcast_quasar(
         "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(

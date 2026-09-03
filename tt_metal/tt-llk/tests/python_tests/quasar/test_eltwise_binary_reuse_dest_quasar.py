@@ -24,6 +24,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -142,8 +143,8 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
-    output_dimensions=valid_output_dimensions,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
+    output_dimensions=runtime(valid_output_dimensions),
 )
 def test_eltwise_binary_reuse_dest_quasar(
     formats,
@@ -306,13 +307,13 @@ def test_eltwise_binary_reuse_dest_quasar(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(

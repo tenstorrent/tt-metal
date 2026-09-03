@@ -152,6 +152,12 @@ class LTXTransformerState:
 BASE_SHIFT_ANCHOR = 1024
 MAX_SHIFT_ANCHOR = 4096
 
+# Default DiT-linear quant preset. bf8 weights are the shipped tier: the perf targets and the VBench
+# floors are calibrated against it, so a bare run must get it without env plumbing. LTX_QUANT="" opts
+# back to the bf16 baseline. The weight-cache name derives from the same value, so both readers must
+# resolve the default identically or a run dtype-clashes on a stale-precision cache hit.
+LTX_QUANT_DEFAULT = "all_bf8_lofi"
+
 
 def compute_sigmas(
     steps: int,
@@ -404,8 +410,13 @@ class LTXPipeline:
                 # never holds the device for the ~500s op-by-op compile. Warm build_keys (in-run prewarm
                 # already handling them) skip straight to the real warmup. Tracing is suppressed for the
                 # capture pass: capture-only skips dispatch, so trace capture must wait for the real pass.
+                # The in-process cold-start hook is ours-only and absent upstream, where the kernel
+                # compile path is kernel_compile_utils and exposes no prewarm binding. Probe for it:
+                # without it _cold stays False, the capture pass below is skipped, and the kernels
+                # compile in-window during the real warmup — slower on a cold build_key, but the
+                # supported path rather than an AttributeError.
                 _kp = ttnn._ttnn.device
-                _cold = _kp.kernel_prewarm_cold_start_needed()
+                _cold = getattr(_kp, "kernel_prewarm_cold_start_needed", lambda: False)()
                 # The capture pass runs the pipeline once capture-only (no dispatch) to record the
                 # kernel manifest, then batch-compiles it off-device. A weight-evicting tier
                 # (dynamic_load / TT_DIT_HOST_WEIGHT_CACHE) frees the DiT weights during that pass, but
@@ -702,7 +713,7 @@ class LTXPipeline:
         if lora_specs:
             tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
             base = f"{base}.lora-{tag}"
-        preset = os.environ.get("LTX_QUANT", "").strip()
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if preset:
             from .quant_config import QuantConfig
 
@@ -995,8 +1006,10 @@ class LTXPipeline:
         self._prepare_transformer(0)
 
     def _maybe_apply_quant_config(self) -> None:
-        """Install a DiT-linear quant preset when LTX_QUANT names one. No-op (baseline) otherwise."""
-        preset = os.environ.get("LTX_QUANT", "").strip()
+        """Install a DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline."""
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
         from .quant_config import QuantConfig, set_quant_config
@@ -1010,13 +1023,19 @@ class LTXPipeline:
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # Every file the state dict is built from, so the artifact is keyed on the weights and the
+        # prep code that produced it: without this the entry is content-blind and a mismatched or
+        # half-written cache is served back silently instead of missing and rebuilding.
+        sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
+            sources=sources,
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=getattr(self, "_transformer_post_load_hook", None),
         )
@@ -1081,6 +1100,8 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_state_provider,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
@@ -1114,6 +1135,8 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_encoder_state_provider,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
@@ -1332,6 +1355,8 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            sources=[self._upsampler_path],
             get_torch_state_dict=_upsampler_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")
@@ -1867,12 +1892,9 @@ class LTXPipeline:
             torch.save(audio_latent.cpu(), _dump)
             logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 
-        # VAE and audio modules can't be L1-coresident on BH-LB. With
-        # dynamic_load the audio (re)load below evicts the VAE via the
-        # coresident exclusions registered in `_register_coresident_exclusions`;
-        # without dynamic_load nothing evicts, so free the VAE explicitly.
-        if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
-            self.vae_decoder.deallocate_weights()
+        # No explicit VAE free: dynamic_load evicts it via coresident exclusions; static load keeps
+        # it resident (the _prepare_vae is_loaded guard then skips the reload). The VAE and the
+        # audio modules are DRAM-resident and measured coresident with no OOM.
 
         assert self.tt_mel_decoder is not None and self.tt_vocoder_with_bwe is not None, (
             "audio decoder shells not built — _new_audio_decoder() must run first "

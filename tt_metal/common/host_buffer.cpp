@@ -50,9 +50,9 @@ void HostBuffer::register_pinned_memory_cache_release_callback() {
         [host_address]() { experimental::PinnedMemoryCache::instance().release(host_address); });
 }
 
-tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
+ttsl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
-tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
+ttsl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();

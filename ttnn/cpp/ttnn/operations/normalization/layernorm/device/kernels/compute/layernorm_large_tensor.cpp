@@ -190,13 +190,11 @@ void kernel_main() {
             cb_xmm2.wait_front(block.full_block_size());
 
             // Accumulate (x-E[x])^2
-            reconfig_data_format(cb_xmm2_id, cb_scaler_id);
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
-                cb_xmm2_id, cb_scaler_id, cb_accumulate_id);
+            reconfig_data_format(cb_scaler_id, cb_xmm2_id);
+            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2_id, cb_scaler_id, cb_accumulate_id);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
-                    cb_xmm2_id, cb_scaler_id, i, scaler_tile_idx, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2_id, cb_scaler_id, i, scaler_tile_idx, dst0);
             }
 
             cb_xmm2.pop_front(block.full_block_size());
@@ -209,7 +207,7 @@ void kernel_main() {
                 mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
             }
 
-            reduce_uninit<FLOAT32_REDUCTION>();
+            reduce_uninit();
             tile_regs_commit();
             tile_regs_wait();
 

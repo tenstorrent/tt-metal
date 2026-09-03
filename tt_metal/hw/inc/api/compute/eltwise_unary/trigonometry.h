@@ -73,7 +73,9 @@ ALWI void cos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
+ALWI void acosh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -91,7 +93,12 @@ ALWI void acosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init
 // clang-format on
 ALWI void acosh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_acosh, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_acosh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
@@ -126,7 +133,9 @@ ALWI void tan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
+ALWI void asinh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
@@ -144,13 +153,20 @@ ALWI void asinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init
 // clang-format on
 ALWI void asinh_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_asinh, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_asinh,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX))); }
+ALWI void atanh_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**

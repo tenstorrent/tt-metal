@@ -13,8 +13,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
 
-tt::stl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(
+ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(
         op_chain,
         output_dtype,
         memory_config,
@@ -143,7 +143,7 @@ Tensor UnaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(

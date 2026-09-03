@@ -20,6 +20,7 @@ from safetensors.torch import load_file
 from tracy import signpost
 
 import ttnn
+from models.tt_dit.models.transformers.ltx import attention_ltx, transformer_ltx
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
@@ -97,6 +98,52 @@ TIMESTEP_VAL = 0.01
 
 # Toggle PCC verification via env (mirrors Wan's `dit_unit_test`). Default ON.
 _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), True)
+
+# Fused-vs-unfused agreement bounds for LTX_FOLD_GATED_RESIDUAL. Folding the gated add into the
+# to_out matmul epilogue re-associates the bf16 accumulation, so the two paths agree to rounding,
+# not to the bit. CONTROL is the device's own run-to-run noise, measured by repeating a single
+# path: the equivalence bound is only meaningful while the floor sits well inside it, so the
+# control is asserted first and a regression there invalidates the gate rather than the fold.
+# The device is bit-deterministic, so the floor is exact and the whole fused-vs-unfused delta is
+# the fold's.
+#
+# Bounds are set from the separation between a correct fold and a wrong one. Feeding a fold the
+# self-attention gate in place of the cross-attention gate (same shape, so it fails silently)
+# moves audio to PCC 99.85 / RMSE 6.0%, against 99.9996 / 0.3% when correct. Note that wrong fold
+# still clears the diffusers oracle below (pcc=0.992), which is why that oracle cannot gate this
+# and these bounds sit an order of magnitude tighter. RMSE/σ carries the gate: PCC is shift- and
+# scale-invariant, so a fold that dropped the gate multiply outright would still score high PCC
+# wherever the gate is near-constant.
+_FOLD_CONTROL_PCC = 0.999999
+_FOLD_CONTROL_RMSE = 0.002
+_FOLD_EQUIV_PCC = 0.9995
+_FOLD_EQUIV_RMSE = 0.015
+
+# Bounds for the LTX_PROBE_ADDCMUL_SPLIT control. The probe is not a shipping path: it swaps
+# addcmul(t, t1, t2) for the algebraically identical add(t, multiply(t1, t2)) at the same three
+# residuals the fold touches, perturbing nothing but bf16 rounding. Its whole job is to be the
+# yardstick the fold's 48-layer drift is read against, and it is only a yardstick while the kick it
+# injects per layer is no bigger than the fold's — so the bounds here are deliberately the fold's
+# own. Red means the two perturbations are NOT magnitude-matched, and the 48-layer comparison is
+# unnormalized: a control that kicks harder is expected to drift further, which would prove nothing
+# about the fold.
+_PROBE_CONTROL_PCC = _FOLD_CONTROL_PCC
+_PROBE_CONTROL_RMSE = _FOLD_CONTROL_RMSE
+_PROBE_EQUIV_PCC = _FOLD_EQUIV_PCC
+_PROBE_EQUIV_RMSE = _FOLD_EQUIV_RMSE
+
+# Agreement bounds for LTX_DEDUP_GATE_GATHER. Both paths gather the same activation and run the
+# same two projections on it; only the kernel differs (fused all_gather_minimal_matmul_async vs
+# a standalone gather + minimal_matmul), so they agree to bf16 rounding of the matmul, not to the
+# bit. Tighter than the fold's bounds because no accumulation is re-associated across ops here.
+# The control (same path twice) pins the device noise floor and is asserted first: a floor as wide
+# as the bound would pass the dedup without having tested it. Separation is set by the mutant:
+# LTX_DEDUP_GATE_MUTANT feeds the gate a corrupted copy of the gathered activation — the silent
+# miswiring this cut could introduce — and must drive these bounds red.
+_DEDUP_CONTROL_PCC = 0.999999
+_DEDUP_CONTROL_RMSE = 0.002
+_DEDUP_EQUIV_PCC = 0.9999
+_DEDUP_EQUIV_RMSE = 0.008
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +554,8 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
 
 
 def _make_ccl_manager(mesh_device, num_links, topology):
+    # LTX_NUM_LINKS overrides the param default to A/B fabric link count (BH prod = 2, WH = 4).
+    num_links = int(os.environ.get("LTX_NUM_LINKS", str(num_links)))
     return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
 
@@ -856,6 +905,12 @@ def test_ltx_transformer_block(
             audio_padding_mask_full=a_pad_full,
             video_padding_mask=v_pad_sp,
         )
+        # LTX_SKIP_CROSS_ATTN ablates the a2v/v2a cross-modal block to split the audio-path floor:
+        # (av) − (av skip-cross) isolates the cross-modal cost — the target of the A→V collective
+        # fold — and the residual is audio-self attention. The av path is WARM_FWD-only (no PCC),
+        # so dropping the cross-modal residual does not disturb any quality gate.
+        if os.environ.get("LTX_SKIP_CROSS_ATTN", "0") in ("1", "true", "True"):
+            forward_kwargs["skip_cross_attn"] = True
 
     # L1 quality gate: LTX_QUANT names a QuantConfig preset (e.g. all_bf8_lofi) to apply the
     # exact pipeline quant path (weight typecast + compute configs) to this block, then PCC it
@@ -869,9 +924,30 @@ def test_ltx_transformer_block(
         logger.info(f"LTX_QUANT='{_quant_preset}': quantizing block for PCC gate")
         apply_quant_config_to_block(tt_block, _factory(), mesh_device.arch(), has_audio)
 
-    # Signpost-bracket one warm forward for tt-perf-report --start/end-signpost.
-    for _ in range(2):
+    # LTX_PROFILE_ITERS>1 re-runs the same forward so warm (program-cache-hit) iterations exist for a
+    # steady-state profile; the block is functional (no input mutation) so every iteration is identical.
+    # Drain each lap so warm markers reach profile_log_device.csv even if teardown is cut short.
+    _prof_iters = int(os.environ.get("LTX_PROFILE_ITERS", "1"))
+    _warm_ms = []
+    for _i in range(_prof_iters):
+        _t0 = time.perf_counter()
         tt_out = tt_block(**forward_kwargs)
+        ttnn.synchronize_device(mesh_device)
+        if _i > 0:  # first lap is cold-compile; time only warm laps
+            _warm_ms.append((time.perf_counter() - _t0) * 1000)
+        if _prof_iters > 1:
+            ttnn.ReadDeviceProfiler(mesh_device)
+    if _warm_ms:
+        logger.info(
+            f"WARM_FWD_MS={sum(_warm_ms) / len(_warm_ms):.2f} "
+            f"num_links={os.environ.get('LTX_NUM_LINKS', 'param')} iters={len(_warm_ms)}"
+        )
+    if os.environ.get("LTX_DEDUP_PERF_AB", "0") in ("1", "true", "True"):
+        _dedup_perf_ab(tt_block, forward_kwargs, mesh_device, iters=max(_prof_iters, 5))
+
+    # Signpost-bracket one warm forward for tt-perf-report --start/end-signpost. The loop above
+    # leaves the block warm, so the bracketed forward is a program-cache hit.
+    tt_out = tt_block(**forward_kwargs)
     ttnn.synchronize_device(mesh_device)
     signpost("start")
     tt_out = tt_block(**forward_kwargs)
@@ -915,6 +991,149 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
 
 
+def _assert_fold_equivalence(forward_to_host, *, fused_video, fused_audio) -> None:
+    """Gate LTX_FOLD_GATED_RESIDUAL: the fused path must match the unfused one to within bf16 rounding.
+
+    The caller has already run the fused path. Re-running with the module flag cleared exercises the
+    standalone-addcmul path on the same weights, inputs, device and process, so a difference between
+    the two is attributable to the fold and nothing else. A second unfused run pins the device's
+    run-to-run noise floor, which must land well inside the equivalence bound for that bound to mean
+    anything — a floor as wide as the bound would pass the fold without having tested it.
+    """
+    assert transformer_ltx.LTX_FOLD_GATED_RESIDUAL, "the fused path must be the one already run"
+    assert fused_audio is not None, "the gated residuals under test exist only on the AV path"
+
+    transformer_ltx.LTX_FOLD_GATED_RESIDUAL = False
+    try:
+        unfused_video, unfused_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        transformer_ltx.LTX_FOLD_GATED_RESIDUAL = True
+
+    logger.info("fold A/B — noise floor, unfused vs unfused (video):")
+    assert_quality(unfused_video, control_video, pcc=_FOLD_CONTROL_PCC, relative_rmse=_FOLD_CONTROL_RMSE)
+    logger.info("fold A/B — noise floor, unfused vs unfused (audio):")
+    assert_quality(unfused_audio, control_audio, pcc=_FOLD_CONTROL_PCC, relative_rmse=_FOLD_CONTROL_RMSE)
+
+    logger.info("fold A/B — fused vs unfused (video):")
+    assert_quality(unfused_video, fused_video, pcc=_FOLD_EQUIV_PCC, relative_rmse=_FOLD_EQUIV_RMSE)
+    logger.info("fold A/B — fused vs unfused (audio):")
+    assert_quality(unfused_audio, fused_audio, pcc=_FOLD_EQUIV_PCC, relative_rmse=_FOLD_EQUIV_RMSE)
+    logger.info("PASSED fold equivalence")
+
+
+def _assert_probe_split_magnitude(forward_to_host, *, addcmul_video, addcmul_audio) -> None:
+    """Size LTX_PROBE_ADDCMUL_SPLIT's per-layer kick against the fold's, on the unfolded path.
+
+    The probe reaches the three gated residuals only through _gated_residual(), which the fold
+    compiles out, so it perturbs anything at all only under LTX_FOLD_GATED_RESIDUAL=0 — which is
+    also the baseline the 48-layer A/B reads both the fold and this control against. That makes the
+    two perturbations single-flag deltas off one common baseline, hitting the same three sites.
+
+    The caller has already run the plain-addcmul path. Setting the module flag re-runs the same
+    weights, inputs, device and process through the split, so the difference is the rounding change
+    and nothing else. Running the split twice pins the device's run-to-run floor, which must sit
+    well inside the bound for the bound to mean anything.
+    """
+    assert not transformer_ltx.LTX_FOLD_GATED_RESIDUAL, (
+        "the fold absorbs the three addcmuls into the to_out epilogue, so _gated_residual — the "
+        "probe's only consumer — never runs and the probe measures nothing"
+    )
+    assert not transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT, "the plain-addcmul path must be the one already run"
+    assert addcmul_audio is not None, "the gated residuals this probe perturbs exist only on the AV path"
+
+    transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT = True
+    try:
+        split_video, split_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT = False
+
+    logger.info("probe A/B — noise floor, split vs split (video):")
+    assert_quality(split_video, control_video, pcc=_PROBE_CONTROL_PCC, relative_rmse=_PROBE_CONTROL_RMSE)
+    logger.info("probe A/B — noise floor, split vs split (audio):")
+    assert_quality(split_audio, control_audio, pcc=_PROBE_CONTROL_PCC, relative_rmse=_PROBE_CONTROL_RMSE)
+
+    logger.info("probe A/B — split vs addcmul (video):")
+    assert_quality(addcmul_video, split_video, pcc=_PROBE_EQUIV_PCC, relative_rmse=_PROBE_EQUIV_RMSE)
+    logger.info("probe A/B — split vs addcmul (audio):")
+    assert_quality(addcmul_audio, split_audio, pcc=_PROBE_EQUIV_PCC, relative_rmse=_PROBE_EQUIV_RMSE)
+    logger.info("PASSED probe magnitude")
+
+
+def _assert_dedup_equivalence(forward_to_host, *, dedup_video, dedup_audio) -> None:
+    """Gate LTX_DEDUP_GATE_GATHER: one hoisted activation gather feeding the gate and Q/QKV must
+    match the two fused gathers it replaces, to within bf16 rounding.
+
+    The caller has already run the dedup path. Clearing the module flag restores the double-gather
+    on the same weights, inputs, device and process, so any difference is the dedup's. A second
+    double-gather run pins the device's run-to-run noise floor, which must land well inside the
+    equivalence bound for that bound to mean anything.
+    """
+    assert attention_ltx.LTX_DEDUP_GATE_GATHER, "the dedup path must be the one already run"
+    assert dedup_audio is not None, "the gate whose gather this dedups exists only on the AV path"
+
+    attention_ltx.LTX_DEDUP_GATE_GATHER = False
+    try:
+        base_video, base_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = True
+
+    logger.info("dedup A/B — noise floor, double-gather vs double-gather (video):")
+    assert_quality(base_video, control_video, pcc=_DEDUP_CONTROL_PCC, relative_rmse=_DEDUP_CONTROL_RMSE)
+    logger.info("dedup A/B — noise floor, double-gather vs double-gather (audio):")
+    assert_quality(base_audio, control_audio, pcc=_DEDUP_CONTROL_PCC, relative_rmse=_DEDUP_CONTROL_RMSE)
+
+    logger.info("dedup A/B — dedup vs double-gather (video):")
+    assert_quality(base_video, dedup_video, pcc=_DEDUP_EQUIV_PCC, relative_rmse=_DEDUP_EQUIV_RMSE)
+    logger.info("dedup A/B — dedup vs double-gather (audio):")
+    assert_quality(base_audio, dedup_audio, pcc=_DEDUP_EQUIV_PCC, relative_rmse=_DEDUP_EQUIV_RMSE)
+    logger.info("PASSED dedup equivalence")
+
+
+def _dedup_perf_ab(tt_block, forward_kwargs, mesh_device, *, iters: int) -> None:
+    """Time the block with LTX_DEDUP_GATE_GATHER on vs off, on one built block in one process.
+
+    The flag is a module global read inside attention forward(), so flipping it between passes swaps
+    the gather path with nothing rebuilt. Separate processes would fold device-open and 22B weight-load
+    variance into the delta; here the flag is the only thing that differs between passes.
+
+    Each pass drops its own first lap: a flip selects op variants the program cache has not seen, so
+    the lap right after it is a cold compile, not a steady-state forward. The third pass repeats the
+    first pass's setting — if those two disagree by more than the delta, the device drifted under the
+    measurement and the delta means nothing.
+    """
+    was_enabled = attention_ltx.LTX_DEDUP_GATE_GATHER
+
+    def _pass(enabled: bool) -> float:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = enabled
+        laps = []
+        for _ in range(iters):
+            t0 = time.perf_counter()
+            tt_block(**forward_kwargs)
+            ttnn.synchronize_device(mesh_device)
+            laps.append((time.perf_counter() - t0) * 1000)
+        warm = laps[1:]
+        logger.info(
+            f"DEDUP_PERF pass dedup={int(enabled)} dropped_lap={laps[0]:.2f} " f"warm={[f'{lap:.2f}' for lap in warm]}"
+        )
+        return sum(warm) / len(warm)
+
+    try:
+        on_1 = _pass(True)
+        off = _pass(False)
+        on_2 = _pass(True)
+    finally:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = was_enabled
+
+    on = (on_1 + on_2) / 2
+    logger.info(
+        f"DEDUP_PERF_MS on={on_1:.2f} off={off:.2f} on_repeat={on_2:.2f} "
+        f"delta={on - off:+.2f} drift={abs(on_2 - on_1):.2f} warm_iters={iters - 1}"
+    )
+
+
 def _run_inner_step(
     *,
     mesh_device,
@@ -930,6 +1149,9 @@ def _run_inner_step(
     run_pcc,
     checkpoint_variant: str,
     use_forward_alias: bool,
+    fold_ab: bool = False,
+    probe_ab: bool = False,
+    dedup_ab: bool = False,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
@@ -1032,6 +1254,19 @@ def _run_inner_step(
     tt_model.load_torch_state_dict(state_dict, strict=not has_audio)
     logger.info(f"state-dict load: {time.time() - t0:.1f}s")
 
+    # Quant is the one lever that genuinely changes the math, so it has to face the diffusers AV oracle
+    # below (pcc 0.992) — a tighter bar than the block test's 0.988, and over the whole model wrapper.
+    # The pipeline reads the same var through the same QuantConfig factory, so a preset that clears this
+    # gate is precisely the one the pipeline runs.
+    quant_preset = os.environ.get("LTX_QUANT", "").strip()
+    if quant_preset:
+        from models.tt_dit.pipelines.ltx.quant_config import QuantConfig, apply_quant_config
+
+        factory = getattr(QuantConfig, quant_preset, None)
+        assert callable(factory), f"LTX_QUANT='{quant_preset}' is not a QuantConfig preset"
+        logger.info(f"LTX_QUANT='{quant_preset}': quantizing model for the AV PCC gate")
+        apply_quant_config(tt_model, factory())
+
     # === Build TT-side RoPE / cross-PE / prompt tensors (INTERLEAVED + trans_mat) ===
     tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
     tt_vc, tt_vs = _tt_rope(
@@ -1077,22 +1312,38 @@ def _run_inner_step(
         )
 
     # === Forward ===
-    t0 = time.time()
-    result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
-    logger.info(f"TT forward: {time.time() - t0:.1f}s")
+    # The model is functional (no input mutation), so this may be re-invoked to compare code paths
+    # on identical weights and inputs — see the fold A/B below.
+    def _forward_to_host():
+        t0 = time.time()
+        result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
+        logger.info(f"TT forward: {time.time() - t0:.1f}s")
 
-    # Crop the SP-padding tail off the gathered video output before checking/comparing real tokens.
-    if has_audio:
-        tt_v_dev, tt_a_dev = result
-        tt_video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)[:, :video_N_real, :]
-        tt_audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
-        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
-        assert tt_audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {tt_audio.shape}"
-        assert torch.isfinite(tt_video).all() and torch.isfinite(tt_audio).all(), "NaN/Inf in TT output"
-    else:
-        tt_video = LTXTransformerModel.device_to_host(result).squeeze(0)[:, :video_N_real, :]
-        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
-        assert torch.isfinite(tt_video).all(), "NaN/Inf in TT output"
+        # Crop the SP-padding tail off the gathered video output before checking/comparing real tokens.
+        if has_audio:
+            tt_v_dev, tt_a_dev = result
+            video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)[:, :video_N_real, :]
+            audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
+            assert video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {video.shape}"
+            assert audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {audio.shape}"
+            assert torch.isfinite(video).all() and torch.isfinite(audio).all(), "NaN/Inf in TT output"
+            return video, audio
+
+        video = LTXTransformerModel.device_to_host(result).squeeze(0)[:, :video_N_real, :]
+        assert video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {video.shape}"
+        assert torch.isfinite(video).all(), "NaN/Inf in TT output"
+        return video, None
+
+    tt_video, tt_audio = _forward_to_host()
+
+    if fold_ab:
+        _assert_fold_equivalence(_forward_to_host, fused_video=tt_video, fused_audio=tt_audio)
+
+    if probe_ab:
+        _assert_probe_split_magnitude(_forward_to_host, addcmul_video=tt_video, addcmul_audio=tt_audio)
+
+    if dedup_ab:
+        _assert_dedup_equivalence(_forward_to_host, dedup_video=tt_video, dedup_audio=tt_audio)
 
     del tt_model
 
@@ -1144,6 +1395,149 @@ def test_ltx_transformer_model(
         run_pcc=run_pcc,
         checkpoint_variant=checkpoint_variant,
         use_forward_alias=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_fold_gated_residual(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """LTX_FOLD_GATED_RESIDUAL must not move the AV output: fused vs unfused, plus the diffusers oracle.
+
+    AV-only, because the three residuals it folds (audio cross-attn, A→V, V→A) exist only there.
+    """
+    if not transformer_ltx.LTX_FOLD_GATED_RESIDUAL:
+        pytest.skip("LTX_FOLD_GATED_RESIDUAL=0: the fused path this gates is compiled out")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        fold_ab=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_probe_addcmul_split(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """Size the LTX_PROBE_ADDCMUL_SPLIT control's per-layer perturbation against the fold's.
+
+    The 48-layer A/B reads the fold's final-latent drift against this control's, and that only
+    licenses a conclusion about the fold while the two kick the sampler comparably hard per layer.
+    Nothing measured the control's kick; this does, on the same block, weights, seed and bounds the
+    fold's own 1-layer gate uses, so the two numbers are directly comparable.
+
+    AV-only and unfolded-only: the three residuals the probe perturbs exist only on the AV path,
+    and the fold compiles out _gated_residual, the probe's only consumer.
+    """
+    if transformer_ltx.LTX_FOLD_GATED_RESIDUAL:
+        pytest.skip("LTX_FOLD_GATED_RESIDUAL=1: the fold compiles out _gated_residual, the probe's only consumer")
+    if transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT:
+        pytest.skip("LTX_PROBE_ADDCMUL_SPLIT=1: the plain-addcmul baseline this measures against is compiled out")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        probe_ab=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_dedup_gate_gather(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """LTX_DEDUP_GATE_GATHER must not move the AV output: one hoisted gather vs two fused ones.
+
+    AV-only, because the per-head gate whose gather this dedups is only built with audio
+    (apply_gated_attention=has_audio).
+    """
+    if not attention_ltx.LTX_DEDUP_GATE_GATHER:
+        pytest.skip("LTX_DEDUP_GATE_GATHER=0: the hoisted-gather path this gates is compiled out")
+    if topology == ttnn.Topology.Linear and tuple(mesh_device.shape)[tp_axis] > 1:
+        pytest.skip("Linear topology already hoists the gather (use_nonfused_agmm): dedup is a no-op")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        dedup_ab=True,
     )
 
 

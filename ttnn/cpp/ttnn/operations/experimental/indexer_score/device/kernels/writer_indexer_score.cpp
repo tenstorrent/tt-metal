@@ -66,7 +66,9 @@ inline void write_pooled_strip(
     uint32_t q_seq_row0,
     uint32_t col_off_blocks,
     uint32_t valid_blocks,
-    uint32_t chunk_start_keys) {
+    uint32_t chunk_start_keys,
+    uint32_t straddle_q_keys,
+    uint32_t straddle_jump_keys) {
     CircularBuffer cb(cb_out_strip);
     cb.wait_front(blocks_per_unit);
     volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_read_ptr());
@@ -88,10 +90,14 @@ inline void write_pooled_strip(
     }
 
     // Forced-local block (sparse_local_block=1): force each query's own block to +inf so top-k always
-    // keeps it. Query (q_seq_row0 + rr)'s block = (chunk_start_keys + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
-    // stamp only when it lands in this unit's [col_off_blocks, +valid).
+    // keeps it. Query (q_seq_row0 + rr)'s block = q_pos / POOL_BLOCK_KEYS, where q_pos is the diagonal key
+    // position -- causal_diag_tile evaluated in KEYS (all args key units; the straddle jump is applied for
+    // the mid-slab boundary chip, 0 otherwise so the common case is unchanged). Stamp only when it lands in
+    // this unit's [col_off_blocks, +valid).
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-        const uint32_t local_block = (chunk_start_keys + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
+        const uint32_t q_seq = q_seq_row0 + rr;
+        const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
+        const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
             scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
@@ -124,6 +130,9 @@ void kernel_main() {
     // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
     const uint32_t chunk_start_keys = get_arg_val<uint32_t>(8) * tt::constants::TILE_WIDTH;
+    // [9],[10] mid-slab boundary-chip forced-local block jump (keys); both 0 off the boundary chip.
+    const uint32_t straddle_q_keys = get_arg_val<uint32_t>(9) * tt::constants::TILE_WIDTH;
+    const uint32_t straddle_jump_keys = get_arg_val<uint32_t>(10) * tt::constants::TILE_WIDTH;
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 1>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
@@ -153,7 +162,15 @@ void kernel_main() {
                     const uint32_t page_row_start = plane_row0 + q_seq_row0;
                     if constexpr (block_pool) {
                         write_pooled_strip(
-                            noc, out_acc, page_row_start, q_seq_row0, col_off_blocks, valid_blocks, chunk_start_keys);
+                            noc,
+                            out_acc,
+                            page_row_start,
+                            q_seq_row0,
+                            col_off_blocks,
+                            valid_blocks,
+                            chunk_start_keys,
+                            straddle_q_keys,
+                            straddle_jump_keys);
                     } else {
                         write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
                     }

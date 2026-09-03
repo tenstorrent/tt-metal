@@ -32,20 +32,27 @@ inline void _calculate_fill_int_(const std::uint32_t value)
     // SFPU microcode
     if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32)
     {
-        _sfpu_load_imm32_(p_sfpu::LREG1, value);
+        // Materialize the 32-bit immediate once, outside the loop
+        sfpi::vInt fill_val = value;
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = fill_val;
+            sfpi::dst_reg++;
+        }
     }
     else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::LO16)
     {
-        _sfpu_load_imm16_(p_sfpu::LREG1, value);
+        // Materialize the 16-bit immediate once, outside the loop
+        sfpi::vUInt fill_val = static_cast<std::uint16_t>(value & 0xFFFF);
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = fill_val;
+            sfpi::dst_reg++;
+        }
     }
     else
     {
         static_assert(false, "INSTRUCTION_MODE must be one of: INT32, LO16.");
-    }
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        TTI_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, 0);
-        sfpi::dst_reg++;
     }
 }
 

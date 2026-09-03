@@ -21,8 +21,6 @@ namespace detail {
 using namespace tt::tt_metal::experimental;
 using namespace tt;
 using tt::tt_metal::BufferType;
-using ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape;
-using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -71,7 +69,10 @@ inline Tensor transpose_(
                     auto output_padded_shape = input_padded_shape;
                     std::swap(output_padded_shape[2], output_padded_shape[3]);
                     auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                    if (!adjusted.has_value() ||
+                    // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                    const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                             a.memory_config().memory_layout();
+                    if (!adjusted.has_value() || !layouts_match ||
                         (a.layout() == Layout::TILE && (adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                                                         adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
                         shard_derivation_fallback();
@@ -89,7 +90,10 @@ inline Tensor transpose_(
                 output_padded_shape[1] = a.logical_shape()[2];
                 output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
                 auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                         a.memory_config().memory_layout();
+                if (!adjusted.has_value() || !layouts_match || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                     adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
                     shard_derivation_fallback();
                 } else {
@@ -114,7 +118,7 @@ inline Tensor transpose_(
         output_mem_constructed = output_mem_config.value();
     }
 
-    auto prim_permute = [&](const ttnn::Tensor& input, const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
+    auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
     };
 
@@ -122,26 +126,26 @@ inline Tensor transpose_(
     switch (transpose_dim) {
         case ttnn::prim::TransposeOpDim::HC:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>{0, 2, 1, 3});
+                return prim_permute(a, ttsl::SmallVector<uint32_t>{0, 2, 1, 3});
             }
             break;
         case ttnn::prim::TransposeOpDim::NH:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::NW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::CW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
         case ttnn::prim::TransposeOpDim::CN:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({1, 0, 2, 3}));
             }
             break;
         case ttnn::prim::TransposeOpDim::WH:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
             if (a.layout() == Layout::ROW_MAJOR) {
                 // Only compute the RM WH CB-vs-L1 budget when actually on the RM WH path:
@@ -156,7 +160,7 @@ inline Tensor transpose_(
                 max_l1_space =
                     max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
                 if (cb_size_for_rm > max_l1_space) {
-                    return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+                    return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
                 }
             }
             break;
@@ -172,7 +176,7 @@ ttnn::Tensor transpose_nd(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     const auto rank = input_tensor.logical_shape().rank();
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         permutation.push_back(i);
@@ -203,10 +207,29 @@ ttnn::Tensor transpose_impl(
         const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
                                                                 input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
         if (rm && in_sharded && irregular_hw) {
+            // Snapshot orientation before the L1-interleaved staging hop strips it.
+            std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+            if (input_tensor.shard_spec().has_value()) {
+                input_orientation_hint = input_tensor.shard_spec()->orientation;
+            }
+            auto resolved_mc = memory_config_arg;
+            if (memory_config_arg.has_value() && memory_config_arg->is_sharded() &&
+                !memory_config_arg->shard_spec().has_value()) {
+                const auto& input_padded = input_tensor.padded_shape();
+                const uint32_t n1 = input_logical.get_normalized_index(dim1);
+                const uint32_t n2 = input_logical.get_normalized_index(dim2);
+                ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
+                std::swap(out_padded_vec[n1], out_padded_vec[n2]);
+                auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+                auto spec = generate_transpose_shard_spec(
+                    input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
+                resolved_mc = tt::tt_metal::MemoryConfig(
+                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+            }
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
             Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
-            return transpose_impl(x, dim1, dim2, memory_config_arg, pad_value);
+            return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
         }
     }
     const auto& input_shape = input_tensor.logical_shape();

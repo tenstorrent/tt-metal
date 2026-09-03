@@ -818,14 +818,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
-    // ========== Buffer Addresses for Runtime Args ==========
-    // Mandatory buffers are passed as Buffer* (auto-registered as BufferBindings for the fast
-    // cache-hit path).  Optional buffers stay as ternary addresses since the variant cannot
-    // deduce a mixed Buffer*/uint32_t result.
-    const uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
-    const uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
-    const uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
-    const uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().buffer()->address() : 0;
+    // ========== Buffer Bindings for Runtime Args ==========
+    // Every buffer address is passed as a Buffer* so it is auto-registered as a BufferBinding and
+    // re-patched on the fast cache-hit path (apply_resolved_bindings) instead of being baked as a
+    // raw uint32 that goes stale.  Optional buffers pass a nullptr Buffer* when absent, which
+    // emplace_runtime_args() emits as 0u with no binding — keeping the arg slot stable without
+    // invalidating the fast path.  cur_pos_buffer / page_table_buffer are already the right
+    // nullptr-when-absent Buffer* pointers computed above.
+    Buffer* attn_mask_buffer = use_attention_mask ? attn_mask.value().buffer() : nullptr;
+    Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
 
     // ========== Runtime Arguments ==========
     for (uint32_t i = 0; i < num_active_cores; ++i) {
@@ -901,18 +902,25 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         }
         log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
         // reader runtime args
-        // NOTE: do not pass Buffer* here. cur_pos and the optional pos/page_table/attn_mask
-        // addresses are operation_attribute-dependent and change between calls; using
-        // BufferBinding would skip create_descriptor() on cache hits and leave those
-        // scalar args stale (test_sdpa_decode_paged_attention exposed this).
+        // All buffer addresses (mandatory q/k/v and optional pos/page_table/attn_mask/sink) are
+        // passed as Buffer* so every one is re-patched on the fast cache-hit path.  An earlier
+        // revision bound only the mandatory buffers and left the optional addresses as raw uint32;
+        // that triggered the fast path (which skips create_descriptor()) while leaving the optional
+        // addresses stale — test_sdpa_decode_paged_attention exposed this.  Binding ALL of them
+        // keeps every address live.  The remaining scalar args (cur_pos, core/head assignment, tree
+        // params) are all functions of hashed attributes, so none can go stale on a hit: when
+        // cur_pos comes from cur_pos_tensor the scalar is a constant UINT32_MAX and the position is
+        // read on-device; when it comes from the cur_pos vector that vector is hashed, so a new
+        // position is a cache miss that rebuilds the descriptor.  An absent optional passes a
+        // nullptr Buffer* (emitted as 0u, no binding).
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(q_buffer->address());
-        reader_rt_args.push_back(k_buffer->address());
-        reader_rt_args.push_back(v_buffer->address());
-        reader_rt_args.push_back(pos_addr);
-        reader_rt_args.push_back(page_table_addr);
-        reader_rt_args.push_back(attn_mask_addr);
-        reader_rt_args.push_back(attention_sink_addr);
+        reader_rt_args.push_back(q_buffer);
+        reader_rt_args.push_back(k_buffer);
+        reader_rt_args.push_back(v_buffer);
+        reader_rt_args.push_back(cur_pos_buffer);
+        reader_rt_args.push_back(page_table_buffer);
+        reader_rt_args.push_back(attn_mask_buffer);
+        reader_rt_args.push_back(attention_sink_buffer);
         reader_rt_args.push_back(page_table_stick_size);
         reader_rt_args.push_back(static_cast<uint32_t>(do_reduce));
         reader_rt_args.push_back(static_cast<uint32_t>(do_output));
@@ -930,10 +938,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.append(output_core_physical_ys);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
-        // NOTE: do not pass Buffer* here. cur_pos and tree_params are
-        // operation_attribute-dependent and change between calls.
+        // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
+        // cache-hit path.  cur_pos and tree_params are functions of hashed attributes (see the
+        // reader note above), so they never go stale on a hit.
         KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(out_buffer->address());
+        writer_rt_args.push_back(out_buffer);
         writer_rt_args.push_back(worker_id_for_reduce);
         writer_rt_args.push_back(worker_id_for_output);
         writer_rt_args.push_back(static_cast<uint32_t>(do_reduce));

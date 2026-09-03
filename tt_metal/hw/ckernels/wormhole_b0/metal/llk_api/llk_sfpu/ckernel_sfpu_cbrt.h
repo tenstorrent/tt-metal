@@ -50,9 +50,9 @@ inline void calculate_cube_root() {
             y = y * (c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0);
 
             sfpi::vFloat d = x * (y * y);
-            c = d * y + sfpi::vConstNeg1;
+            c = d * y + -1.0f;
             sfpi::vFloat negative_third = sfpi::addexp(negative_third_256, 8);
-            sfpi::vFloat t = c * negative_third + sfpi::vConst1;
+            sfpi::vFloat t = c * negative_third + 1.0f;
             d = sfpi::copysgn(d, a);
             y = d * (t * t);
         } else {

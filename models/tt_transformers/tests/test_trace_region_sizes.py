@@ -81,7 +81,7 @@ def test_resolve_trace_region_size_matches_yaml(model_name, sku, expected_size):
 @pytest.mark.parametrize(
     "model_name,legacy_sku,expected_size",
     [
-        ("Llama-3.1-8B", "N150", 25000000),
+        ("Llama-3.1-8B", "N150", 0),  # dynamic allocation, see #48636
         ("Llama-3.1-8B", "T3K", 50000000),
         ("Llama-3.3-70B", "P150x4", 96000000),
         ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", 52000000),

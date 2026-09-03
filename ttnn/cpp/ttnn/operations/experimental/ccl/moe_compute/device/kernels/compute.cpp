@@ -241,7 +241,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
     // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
@@ -315,7 +315,7 @@ void kernel_main() {
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
-                detail::pack_init_activation<activation_type>();
+                ::detail::pack_init_activation<activation_type>();
             }
 
             // Initialize matmul for W0
@@ -325,7 +325,7 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            detail::noc_semaphore_wait_min(
+            ::detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
@@ -399,7 +399,7 @@ void kernel_main() {
                 //---------------------------------------------------------------------
                 // Apply activation
                 //---------------------------------------------------------------------
-                detail::pack_compute_activation<activation_type>();
+                ::detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 

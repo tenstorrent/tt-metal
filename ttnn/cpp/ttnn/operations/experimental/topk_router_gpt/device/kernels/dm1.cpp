@@ -18,6 +18,7 @@
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -212,10 +213,9 @@ void kernel_main() {
     cb_partial_recv.reserve_back(2);
 
     // Wait for both senders' partials to arrive
-    volatile tt_l1_ptr uint32_t* partial_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_partial_ready));
-    noc_semaphore_wait(partial_sem, 2);
-    noc_semaphore_set(partial_sem, 0);
+    Semaphore<> partial_sem(sem_partial_ready);
+    partial_sem.wait(2);
+    partial_sem.set(0);
 
     cb_partial_recv.push_back(2);
 
@@ -282,10 +282,9 @@ void kernel_main() {
     }
 
     // 5. Wait for other 3 workers' topk results
-    volatile tt_l1_ptr uint32_t* topk_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_topk_ready));
-    noc_semaphore_wait(topk_sem, num_groups - 1);
-    noc_semaphore_set(topk_sem, 0);
+    Semaphore<> topk_sem(sem_topk_ready);
+    topk_sem.wait(num_groups - 1);
+    topk_sem.set(0);
 
     cb_gathered_val.push_back(num_groups);
     cb_gathered_ind.push_back(num_groups);
