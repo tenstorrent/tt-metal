@@ -22,6 +22,7 @@ class KimiK27Adapter(KimiK26Adapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
 
     # --- test metadata (HF download coordinates) ---
+    hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"
     default_local_path = Path("/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized")
     test_prefill_trace_default = (
