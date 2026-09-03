@@ -39,6 +39,12 @@ struct _llk_math_matmul_execution_geometry_t
 /**
  * @brief Derives the replay window and address-modifier geometry for matmul.
  *
+ * Standard 32x32 operands have four 16x16 faces, two K faces, and two 8-row
+ * passes per face. The four output faces therefore require eight MVMULs per K
+ * face, giving replay_start_idx = 0 and replay_len = 8 * 2 - 1 = 15. Each
+ * output tile occupies 4 * 16 = 64 destination rows. Its active transitions
+ * advance the 8-row pass, column face, row face, and K face respectively.
+ *
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param src_b_shape: Input 0/SrcB tile shape.

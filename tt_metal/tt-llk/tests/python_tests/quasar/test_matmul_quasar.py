@@ -41,7 +41,6 @@ from helpers.test_variant_parameters import (
     ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
     IN_FACE_DIMS,
-    IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
@@ -418,16 +417,32 @@ def test_matmul(
             math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
             dest_acc=dest_acc,
         )
-        golden_tensor = tilize_block(
-            golden_tensor,
-            dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
-            stimuli_format=(
-                pack_src_format
-                if format.output_format.is_mx_format()
-                else format.output_format
-            ),
-            tile_dimensions=output_tile_dimensions,
-        ).flatten()
+        golden_dimensions = (input_A_dimensions[0], input_B_dimensions[1])
+        golden_format = (
+            pack_src_format
+            if format.output_format.is_mx_format()
+            else format.output_format
+        )
+        if output_tile_dimensions[0] < 16 and output_tile_dimensions[1] == 16:
+            tile_rows, tile_cols = output_tile_dimensions
+            golden_tensor = (
+                golden_tensor.reshape(
+                    golden_dimensions[0] // tile_rows,
+                    tile_rows,
+                    golden_dimensions[1] // tile_cols,
+                    tile_cols,
+                )
+                .permute(0, 2, 1, 3)
+                .flatten()
+                .to(format_dict[golden_format])
+            )
+        else:
+            golden_tensor = tilize_block(
+                golden_tensor,
+                dimensions=golden_dimensions,
+                stimuli_format=golden_format,
+                tile_dimensions=output_tile_dimensions,
+            ).flatten()
 
     input_A_shape = construct_tile_shape(input_A_tile_dimensions)
     input_B_shape = construct_tile_shape(input_B_tile_dimensions)
@@ -457,10 +472,6 @@ def test_matmul(
             output_shape.total_num_faces(),
             input_A_shape.total_num_faces(),
             input_B_shape.total_num_faces(),
-        ),
-        IN_TILE_DIMS(
-            *input_A_shape.tile_dims,
-            *input_B_shape.tile_dims,
         ),
         IN_FACE_DIMS(
             input_A_shape.face_r_dim,
