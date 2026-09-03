@@ -915,6 +915,7 @@ void FiberSchedulerImpl::stop_watchdog() {
 
 void FiberSchedulerImpl::watchdog() {
     const auto interval = std::chrono::milliseconds(250);
+    const auto repoll_observation = std::chrono::seconds(1);
     const uint64_t window = env_size("TT_EMULE_FIBER_PROGRESS_WINDOW", 200000);
     const auto backstop = std::chrono::seconds(env_size("TT_EMULE_FIBER_WATCHDOG_SEC", 120));
     // Parked time measures the HOST; still finite, since a run nobody pumps must not read as success.
@@ -923,6 +924,9 @@ void FiberSchedulerImpl::watchdog() {
     uint64_t last_resump = resumptions_.load();
     auto last_advance = std::chrono::steady_clock::now();
     bool was_parked = host_wait_parked_.load(std::memory_order_acquire);
+    bool repoll_used = false;
+    bool observing_repoll = false;
+    std::chrono::steady_clock::time_point repoll_deadline{};
     while (run_active_.load(std::memory_order_acquire)) {
         {
             // Interruptible sleep: wake immediately when run_until_idle clears run_active_
@@ -938,6 +942,9 @@ void FiberSchedulerImpl::watchdog() {
         if (parked != was_parked) {
             was_parked = parked;
             last_advance = std::chrono::steady_clock::now();  // the host gap starts (or ends) here
+            if (parked) {
+                observing_repoll = false;  // host-wait time retains its independent backstop
+            }
         }
         uint64_t p = progress_.load();
         uint64_t r = resumptions_.load();
@@ -945,21 +952,48 @@ void FiberSchedulerImpl::watchdog() {
             last_progress = p;
             last_resump = r;
             last_advance = std::chrono::steady_clock::now();
+            repoll_used = false;
+            observing_repoll = false;
             continue;
         }
+        const auto now = std::chrono::steady_clock::now();
         // Fast livelock trip: many resumptions, zero progress. Never while parked (counters are frozen).
         bool livelock = !parked && (r - last_resump) > window;
-        bool wall = (std::chrono::steady_clock::now() - last_advance) > (parked ? host_backstop : backstop);
-        if (livelock || wall) {
+        if (observing_repoll && !livelock && now < repoll_deadline) {
+            last_resump = r;
+            continue;
+        }
+        const bool repoll_starved = observing_repoll && !parked && now >= repoll_deadline;
+        bool wall = (now - last_advance) > (parked ? host_backstop : backstop);
+        if (livelock || repoll_starved || wall) {
+            if (!livelock && !repoll_starved && wall && !parked && !repoll_used) {
+                bool released = false;
+                {
+                    std::lock_guard<std::mutex> g(mu_);
+                    if (!parked_.empty()) {
+                        release_all_parked();
+                        cv_.notify_all();
+                        released = true;
+                    }
+                }
+                if (released) {
+                    repoll_used = true;
+                    observing_repoll = true;
+                    repoll_deadline = now + repoll_observation;
+                    last_resump = r;
+                    continue;
+                }
+            }
             std::fprintf(
                 stderr,
                 "[EMULE] fiber engine: no global progress (%s) — suspected %s.\n%s",
                 livelock ? "resumption window"
                 : parked ? "host-wait backstop, TT_EMULE_HOST_WAIT_WATCHDOG_SEC"
                          : "wall-clock backstop",
-                livelock ? "livelock / wake-cycle"
-                : parked ? "the host never pumped this parked run again"
-                         : "lost wakeup / hang",
+                livelock         ? "livelock / wake-cycle"
+                : parked         ? "the host never pumped this parked run again"
+                : repoll_starved ? "starvation after parked-fiber re-poll"
+                                 : "lost wakeup / hang",
                 [this] {
                     std::lock_guard<std::mutex> g(mu_);
                     return dump_parked();

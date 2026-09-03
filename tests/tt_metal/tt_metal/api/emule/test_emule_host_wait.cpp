@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 
 #include "impl/emulation/emule_fiber_scheduler.hpp"
@@ -338,6 +339,94 @@ TEST_F(EmuleHostWait, ComputeProgressKeepsLongBusyFiberAlive) {
 
     EXPECT_EQ(FiberScheduler::instance().run_persistent(), RunOutcome::Completed);
     EXPECT_NE(result.load(std::memory_order_relaxed), 0u);
+    disarm_fast_watchdog();
+}
+
+TEST_F(EmuleHostWait, WallWatchdogRepollsParkedFiberAfterRawStore) {
+    arm_fast_watchdog();
+    std::atomic<bool> predicate{false};
+    std::atomic<bool> waiter_parked{false};
+    std::atomic<bool> waiter_done{false};
+
+    spawn_fiber(
+        [&predicate, &waiter_parked, &waiter_done] {
+            auto& sched = FiberScheduler::instance();
+            while (!predicate.load(std::memory_order_acquire)) {
+                sched.lock();
+                if (predicate.load(std::memory_order_acquire)) {
+                    sched.unlock();
+                    break;
+                }
+                waiter_parked.store(true, std::memory_order_release);
+                sched.park_locked(&predicate);
+            }
+            waiter_done.store(true, std::memory_order_release);
+        },
+        24,
+        "raw_store_waiter");
+    spawn_fiber(
+        [&waiter_done] {
+            auto& sched = FiberScheduler::instance();
+            while (!waiter_done.load(std::memory_order_acquire)) {
+                ::usleep(5 * 1000);
+                sched.yield();
+            }
+        },
+        25,
+        "slow_runnable_peer");
+
+    std::thread raw_store([&predicate, &waiter_parked] {
+        while (!waiter_parked.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        auto& sched = FiberScheduler::instance();
+        sched.lock();  // Acquiring after the marker proves the waiter completed its park.
+        predicate.store(true, std::memory_order_release);
+        sched.unlock();  // Deliberately no wake.
+    });
+
+    EXPECT_EQ(FiberScheduler::instance().run_persistent(), RunOutcome::Completed);
+    raw_store.join();
+    EXPECT_TRUE(waiter_done.load(std::memory_order_acquire));
+    disarm_fast_watchdog();
+}
+
+TEST_F(EmuleHostWait, WallWatchdogReportsStarvationAfterOneRepoll) {
+    arm_fast_watchdog();
+    EXPECT_DEATH(
+        {
+            std::atomic<bool> predicate{false};
+            std::atomic<unsigned> waiter_polls{0};
+            spawn_fiber(
+                [&predicate, &waiter_polls] {
+                    auto& sched = FiberScheduler::instance();
+                    while (!predicate.load(std::memory_order_acquire)) {
+                        if (waiter_polls.fetch_add(1, std::memory_order_relaxed) >= 2) {
+                            std::exit(4);  // More than one watchdog re-poll without progress.
+                        }
+                        sched.lock();
+                        if (predicate.load(std::memory_order_acquire)) {
+                            sched.unlock();
+                            break;
+                        }
+                        sched.park_locked(&predicate);
+                    }
+                },
+                26,
+                "starved_waiter");
+            spawn_fiber(
+                [] {
+                    auto& sched = FiberScheduler::instance();
+                    for (;;) {
+                        ::usleep(5 * 1000);
+                        sched.yield();
+                    }
+                },
+                27,
+                "slow_runnable_peer");
+            (void)FiberScheduler::instance().run_persistent();
+        },
+        "starvation after parked-fiber re-poll");
     disarm_fast_watchdog();
 }
 
