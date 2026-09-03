@@ -278,5 +278,42 @@ boundary). `tt/dflash/verify.py` documents this and requires callers to keep the
 context length tile-aligned (32) before calling `dflash_verify`; the underlying kernel bug
 in `attention/prefill.py` itself is still unfixed and would be worth a separate bug report.
 
-Next: Step 7 — end-to-end demo, no-DFlash vs. with-DFlash, tok/s and acceptance-rate
-comparison, on real T3K hardware.
+**Multi-iteration generation, validated on real hardware**
+(`tt/dflash/generate.py::dflash_generate`, test in `tests/dflash/test_dflash_generate.py`):
+runs the full draft→verify→accept→commit loop across multiple blocks with NO static
+torch reference needed at runtime -- noise-block embeddings, RoPE cos/sin, and the
+drafter's sliding-window context are all built from whatever tokens the loop itself
+produces. This required discovering and validating a mechanism Step 6 never exercised:
+the drafter's "context" is a sliding window, not a growing accumulator -- after each
+verify call it is replaced by that call's own hidden-state taps for just the
+newly-committed positions (reference `dflash/dflash.py:305`). Confirmed exact match
+against a 2-iteration torch reference on real T3K hardware, including a verify call at a
+non-tile-aligned position inside an already-touched KV-cache tile.
+
+**Step 7 (demo) done**: `demo/dflash_demo.py`, toggled via `GEMMA4_USE_DFLASH` (1 = DFlash,
+0 = plain greedy decode baseline), both paths through the same real target model
+instantiation for a matched comparison. Real T3K run, prompt "The capital city of
+France..." (32 tokens, tile-aligned), 7 tokens generated (stopped at EOS):
+
+| | tokens | verify iters | mean accepted | ms/token | tok/s/user |
+|---|---|---|---|---|---|
+| DFlash | 7 | 3 | 1.00/15 | 995 | 1.01 |
+| Plain  | 7 | -- | -- | 290 | 3.45 |
+
+Both paths produced the **identical** token sequence (`Paris.<turn|>s<turn|>\n<eos>`) --
+expected, since greedy DFlash is token-identical to greedy decode by construction, and a
+useful independent correctness cross-check. DFlash is slower here, not faster: this is an
+eager/untraced implementation (every drafter/verify call pays full host-dispatch
+overhead, unlike production spec-decode's traced fused iteration), and this particular
+prompt's natural continuation is short and low-acceptance (mean 1/15 drafts accepted per
+block) -- not enough tokens or acceptance rate to amortize the drafter's extra compute.
+Getting a real speedup would need trace capture (removing per-iteration host dispatch,
+the same lever `_run_spec_decode`'s `GEMMA4_SPEC_TRACE` uses) and longer/higher-acceptance
+generations -- not yet built.
+
+`_tile_align_prompt` pads any non-tile-aligned prompt with repeated newline filler tokens
+as a documented, logged fallback -- found to bias generation toward repeating the filler
+(the padding becomes real, attended-to trailing context), so the demo's default prompt is
+chosen to already tokenize to a 32-token multiple, sidestepping this entirely. The
+underlying fix belongs in `attention/prefill.py`'s pad-removal condition (see verify.py),
+not in caller-side prompt engineering.
