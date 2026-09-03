@@ -49,6 +49,20 @@ if TYPE_CHECKING:
 CACHE_T = 2
 
 
+def _wan_vae_rm_norm() -> bool:
+    """RMSNorm + residual add in ROW_MAJOR, skipping per-resblock tilize/untilize.
+
+    `ttnn::prim::layer_norm` (via dit_rms_norm_unary_fused) accepts RM in and returns RM
+    (tilizes in-flight). Decoder C=96/192/384 are %32. Residual `add_` runs RM; the
+    1x1 `conv_shortcut` Linear still needs TILE (tilize that residual only). Residual
+    add is out-of-place `ttnn.add` — `add_` rejects a preallocated RM output
+    (binary.cpp). Not bit-exact vs TILE staging. OPT-IN: VAE_RM_NORM=1 so we can
+    A/B vs the swap baseline without flipping production. Mid-block attention stays
+    TILE; the decoder untilizes once after mid and the up-stack stays RM.
+    """
+    return os.environ.get("VAE_RM_NORM") == "1"
+
+
 def _wan_vae_padded_conv() -> bool:
     """LTX copy-free padded conv chain. OPT-IN: VAE_PADDED_CONV=1.
 
@@ -909,16 +923,39 @@ class WanResidualBlock(Module):
         feat_idx: list[int] = [0],
         logical_w: int = 0,
     ) -> ttnn.Tensor:
-        assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanResidualBlock expects TILE input, got {x_BTHWC.layout}"
         residual_in = x_BTHWC
-        h_tile_BTHWC = (
-            self.conv_shortcut(residual_in, compute_kernel_config=self.matmul_compute_kernel_config)
-            if self.conv_shortcut is not None
-            else residual_in
-        )
-        x_norm_silu_tile_BTHWC = self.norm1(residual_in, compute_kernel_config=self.norm_compute_kernel_config)
-        x_rm_BTHWC = ttnn.to_layout(x_norm_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x_norm_silu_tile_BTHWC)
+        rm = _wan_vae_rm_norm() and residual_in.layout == ttnn.ROW_MAJOR_LAYOUT
+        if not rm:
+            assert residual_in.layout == ttnn.TILE_LAYOUT, (
+                f"WanResidualBlock expects TILE input, got {residual_in.layout}"
+            )
+
+        if self.conv_shortcut is not None:
+            # Linear is TILE-only. Keep the RM residual live for the caller; tilize a copy.
+            residual_tile = (
+                residual_in
+                if residual_in.layout == ttnn.TILE_LAYOUT
+                else ttnn.to_layout(residual_in, ttnn.TILE_LAYOUT)
+            )
+            h_BTHWC = self.conv_shortcut(residual_tile, compute_kernel_config=self.matmul_compute_kernel_config)
+            if residual_tile is not residual_in:
+                ttnn.deallocate(residual_tile)
+            if rm:
+                h_BTHWC = _to_layout(h_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            h_BTHWC = residual_in
+
+        x_norm_BTHWC = self.norm1(residual_in, compute_kernel_config=self.norm_compute_kernel_config)
+        if rm:
+            # layer_norm RM-in returns RM; defensive in case a TILE output slips through.
+            x_rm_BTHWC = (
+                x_norm_BTHWC
+                if x_norm_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+                else _to_layout(x_norm_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            )
+        else:
+            x_rm_BTHWC = ttnn.to_layout(x_norm_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x_norm_BTHWC)
 
         # deallocate_input=True: the conv frees its input at its last use, before the conv
         # output allocates — one full activation less at the DRAM peak.
@@ -936,6 +973,8 @@ class WanResidualBlock(Module):
 
         x_norm2_BTHWC = self.norm2(x_conv_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         ttnn.deallocate(x_conv_BTHWC)
+        if rm and x_norm2_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x_norm2_BTHWC = _to_layout(x_norm2_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         x_conv_BTHWC = _cached_conv(
             self.conv2,
@@ -948,12 +987,22 @@ class WanResidualBlock(Module):
             cf_input_padded=padded,
         )
 
+        if rm:
+            if x_conv_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x_conv_BTHWC = _to_layout(x_conv_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            # add_ forbids a preallocated RM output; binary_ng add(RM, RM) returns RM.
+            x_out_BTHWC = ttnn.add(x_conv_BTHWC, h_BTHWC)
+            ttnn.deallocate(x_conv_BTHWC)
+            if h_BTHWC is not residual_in:
+                ttnn.deallocate(h_BTHWC)
+            return x_out_BTHWC
+
         x_conv_tile_BTHWC = _to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         # In-place: accumulate the residual into the conv output instead of allocating a third
         # full-size tile tensor (the largest single saving at the final full-res up block).
-        ttnn.add_(x_conv_tile_BTHWC, h_tile_BTHWC)
-        if h_tile_BTHWC is not residual_in:
-            ttnn.deallocate(h_tile_BTHWC)
+        ttnn.add_(x_conv_tile_BTHWC, h_BTHWC)
+        if h_BTHWC is not residual_in:
+            ttnn.deallocate(h_BTHWC)
         return x_conv_tile_BTHWC
 
 
@@ -1595,7 +1644,8 @@ class WanUpBlock(Module):
                 logical_w=logical_w,
                 deallocate_input=True,
             )
-            x_BTHWC = _to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
+            # RM-norm path: next resnets stay RM. Default: re-tilize for TILE residual/add.
+            x_BTHWC = x_upsampled_BTHWC if _wan_vae_rm_norm() else _to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
         return x_BTHWC, logical_h, logical_w
 
 
@@ -1759,6 +1809,9 @@ class WanDecoder3d(Module):
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        # Attention stays TILE; untilize once so the up-stack residual/norm/conv stay RM.
+        if _wan_vae_rm_norm():
+            x_BTHWC = _to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         B, T, H, W, C = x_BTHWC.shape
 
         ## upsamples
