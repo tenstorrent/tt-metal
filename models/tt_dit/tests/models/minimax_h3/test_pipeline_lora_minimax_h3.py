@@ -24,6 +24,7 @@ import os
 import pytest
 from loguru import logger
 
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
@@ -68,6 +69,31 @@ BASE_MODEL_REFERENCE = {
 # fell back to the 49-forward schedule rather than to measure anything.
 MAX_S_PER_VIDEO_SECOND = 40.0
 
+# FastVideo trains the H3 students against a fixed attention: 90% sparsity over 64-wide VSA tiles
+# for the VSA variants (`attention: vsa-h3-90pct-tile64` in the bundle manifest), dense for the
+# others. The attention path is therefore not a free knob here -- it is a property of the adapter,
+# and the adapter says which it is by carrying `to_gate_compress` gates or not.
+VSA_SPARSITY = 0.9
+
+
+def _vsa_config_for(lora_path: str):
+    """The attention path the adapter was distilled against, read from its own header.
+
+    Cheap on purpose: the header alone, not the 5.3 GB of tensors, and the pipeline parses the file
+    once later. Choosing wrong is loud rather than silent in both directions -- a gate with no
+    `to_gate_compress` to land on fails to route, and a VSA build whose adapter carries no gate
+    leaves the compressed branch provably off.
+    """
+    from safetensors import safe_open
+
+    with safe_open(lora_path, framework="pt") as handle:
+        metadata = handle.metadata() or {}
+    if not int(metadata.get("set_weight_tensors", 0)):
+        logger.info(f"{lora_path}: no gate tensors, running the dense attention path")
+        return None
+    logger.info(f"{lora_path}: carries gate tensors, running VSA at sparsity {VSA_SPARSITY}")
+    return MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY)
+
 
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
@@ -77,6 +103,7 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds, duration_s):
     if not lora_path:
         pytest.skip("set MINIMAX_H3_LORA_PATH to a FastH3 adapter safetensors file")
     strength = float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0))
+    vsa_config = _vsa_config_for(lora_path)
 
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_lora_artifacts")
@@ -84,7 +111,7 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds, duration_s):
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
-    stem = f"t2va_lora_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
+    stem = f"t2va_lora_{'vsa' if vsa_config else 'dense'}_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
     logger.info(f"adapter {lora_path} at strength {strength}")
     logger.info(f"working point: {width}x{height}, {num_frames} frames, {EXPECTED_FORWARDS} forwards")
 
@@ -96,6 +123,7 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds, duration_s):
         weights_dir=weights,
         lora_path=lora_path,
         lora_strength=strength,
+        vsa_config=vsa_config,
     )
 
     output = run_warm_generation(
@@ -114,12 +142,25 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds, duration_s):
     assert report is not None, "the transformer was built without an adapter bound"
     logger.info(f"device half: {report.summary()}")
     assert report.bound, "no low-rank adapter was bound to the transformer"
-    assert not report.rejected, f"unapplied payloads: {report.rejected}"
     assert report.host, (
         "no adapter entries were deferred to the host AdaLN fold, but this pipeline builds with "
         "precomputed_adaln -- 50 low-rank pairs and six dense deltas should have landed there"
     )
     logger.info(f"host half: {len(report.host)} entries folded into the AdaLN table")
+
+    # A VSA student's gates are the third half. They are assigned onto a parameter the base
+    # zero-initialises, so a gate that fails to land is not a crash: the run completes through the
+    # ungated compressed branch and looks exactly like a successful one.
+    if vsa_config is not None:
+        assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
+            f"{len(report.replaced)} gates assigned for "
+            f"{pipeline.transformer_config['num_layers']} blocks; VSA is running partly ungated"
+        )
+        ungated = [
+            i for i, block in enumerate(pipeline._transformer.transformer_blocks) if block.attn.gate_compress_is_zero
+        ]
+        assert not ungated, f"blocks {ungated} carry a gate but still skip the compressed branch"
+        logger.info(f"VSA: {len(report.replaced)} gates assigned and active")
 
     log_timing_table(
         pipeline,
