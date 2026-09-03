@@ -295,9 +295,13 @@ def _compute_and_send(
     )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
-        compute_ms = (time.perf_counter() - t_perf) * 1000.0
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, c, t_start, compute_ms)
+    call_ms = (time.perf_counter() - t_perf) * 1000.0
+    if SYNC_PER_CHUNK or runtime.config.use_trace:
+        # Trace replay synchronizes once at the end, so this is actual device-complete time.
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={call_ms:.3f}")
+        _record_chunk_timing(rank, c, t_start, call_ms)
+    else:
+        logger.info(f"[pp rank {rank}] CHUNK_DISPATCH c={c} dispatch_ms={call_ms:.3f}")
     if not runtime.config.is_last_rank:
         forward_md = None
         if runtime.config.use_trace:
