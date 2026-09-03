@@ -392,7 +392,7 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
      - `q`: Query tensor of shape `(1, n_q_heads, seqlen, head_dim)`.
      - `k`: Key tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
-     - `attn_mask`: Defaults to `None`. Shape `(1, n_q_heads or 1, seqlen, cache_len)`. Dim 1 may be `1` to broadcast across heads; dims 2 and 3 must match Q's and K's sequence lengths exactly. Must be on device, `TILE_LAYOUT`, in DRAM, and `bfloat16`, `bfloat8_b` or `bfloat4_b`.
+     - `attn_mask`: Defaults to `None`. Shape `(bsz or 1, n_q_heads or 1, seqlen, cache_len)`, where a `1` in dim 0 or dim 1 broadcasts. Batch is `1` in this prefill flow, but the OP takes the full batch too. Dims 2 and 3 must match Q's and K's sequence lengths exactly. Must be on device, `TILE_LAYOUT`, in DRAM, and `bfloat16`, `bfloat8_b` or `bfloat4_b`.
      - `is_causal`: bool, defaults to `true`. Whether to apply causal masking. Mutually exclusive with `attn_mask` and with `sliding_window_size`. Since the default is `true`, passing `attn_mask` without also setting `is_causal=False` raises.
      - `scale`: float, defaults to `None`.
      - `sliding_window_size`: int, defaults to `None`. With `is_causal=True`, attends only to the last `sliding_window_size` tokens; with `is_causal=False`, to a window centred on the current position. Generated on device, so it cannot be combined with `attn_mask`.
@@ -475,7 +475,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
-     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Dim 2 must match `q`'s dim 2 — the padded per-device head count, not a sequence length — and dim 3 must match `k`'s `cache_len`. `cache_len` must also be a multiple of `k_chunk_size`, which defaults to the largest power-of-two divisor of the sequence length unless `program_config` overrides it. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which passes the head dim padded to 32.
+     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Dim 2 must match `q`'s dim 2 — the padded per-device Q head count, not a sequence length — and dim 3 must match `k`'s `cache_len`. Dim 3 must also be a multiple of `k_chunk_size`: unpaged decode defaults it to `min(512, largest power-of-two divisor of cache_len)`, paged decode defaults it to `32` through `SDPAProgramConfig`, and paged non-causal attention requires an explicit positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which pads the per-device head count (dim 2) to 32, not the head dimension.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
      - `scale`: Optional scale factor. Defaults to `None`.
@@ -540,6 +540,8 @@ mask_4d = blocked.to(torch.bfloat16) * -1e3
 tt_mask = ttnn.from_torch(mask_4d, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 ```
 
+This yields `[batch, 1, q_len, kv_len]`, which is the prefill and fused-softmax layout. Decode needs `[1, b, nh, s]` instead — see the table below.
+
 Dim 1 is left at `1` so the mask broadcasts across heads; expand it only if the OP requires an explicit head dimension. If you need the causal half alone, `AttentionMaskConverter(is_causal=True).to_causal_4d(...)` from `transformers.modeling_attn_mask_utils` produces it in one call, using `torch.finfo(dtype).min` as its fill value.
 
 #### Fill values
@@ -553,8 +555,8 @@ Mask shapes are enforced with hard asserts, so a mismatch is a crash rather than
 | OP | Mask shape | Constraint |
 | --- | --- | --- |
 | `scaled_dot_product_attention` | none, with `is_causal=True` | `attn_mask` and `is_causal` are mutually exclusive |
-| `scaled_dot_product_attention` | `(1, n_q_heads or 1, seqlen, cache_len)` | dims 2 and 3 must match Q and K exactly |
-| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 is the padded head count; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
+| `scaled_dot_product_attention` | `(bsz or 1, n_q_heads or 1, seqlen, cache_len)` | dims 2 and 3 must match Q and K exactly |
+| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 is the padded Q head count; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
 | `scale_mask_softmax`, interleaved | height (dim -2) `1` or the tile height (32) | intermediate dims must all be `1`; inner dim and batch must match the input |
 | `scale_mask_softmax`, sharded | equal to the input's padded shape | mask must be in `TILE` layout |
 | `ttnn.add` then `ttnn.softmax` | anything broadcastable | unfused, so slower |
