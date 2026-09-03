@@ -16,9 +16,11 @@ void bind_csa_compressor(::nanobind::module_& mod) {
             Fused Blaze-compatible compressed sparse-attention pooling.
 
             ``kv`` and ``gate`` are local BFLOAT16 TILE slabs shaped
-            ``[1, 1, S_local, 1024]``. The replicated position bias has shape
-            ``[1, 1, 4, 1024]`` and both temporal states have local shape
-            ``[1, 1, 64, 512]``.
+            ``[1, 1, S_local, 2 * head_dim]``, packing the Ca and Cb halves side
+            by side. The replicated position bias has shape
+            ``[1, 1, 4, 2 * head_dim]`` and both temporal states have local shape
+            ``[1, 1, 64, head_dim]``. ``head_dim`` is derived from ``kv`` and must
+            be a whole number of tiles wide.
 
             Returns the local pooled slab and authoritative local KV and score
             states. Incomplete and padded compression windows are zero.

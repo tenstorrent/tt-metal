@@ -13,8 +13,6 @@ namespace {
 
 constexpr uint32_t kTileBytes = 2048;
 constexpr uint32_t kTileElems = 1024;
-constexpr uint32_t kInputWidthTiles = 32;
-constexpr uint32_t kStateWidthTiles = 16;
 
 inline uint32_t tile_offset(uint32_t row, uint32_t col) {
     const uint32_t face = (row / 16) * 2 + col / 16;
@@ -48,7 +46,10 @@ void kernel_main() {
     const uint32_t local_valid = get_arg_val<uint32_t>(7);
     const uint32_t absolute_start = get_arg_val<uint32_t>(8);
 
-    constexpr auto kv_args = TensorAccessorArgs<0>();
+    constexpr uint32_t head_dim = get_compile_time_arg_val(0);
+    constexpr uint32_t input_width_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t state_width_tiles = get_compile_time_arg_val(2);
+    constexpr auto kv_args = TensorAccessorArgs<3>();
     constexpr auto gate_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
     constexpr auto base_kv_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -70,14 +71,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* memory = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
     Noc noc;
 
-    for (uint32_t tile = 0; tile < 2 * kStateWidthTiles; ++tile) {
+    for (uint32_t tile = 0; tile < 2 * state_width_tiles; ++tile) {
         noc.async_read(base_kv, scratch, kTileBytes, {.page_id = tile}, {.offset_bytes = 0});
         noc.async_read(base_score, scratch, kTileBytes, {.page_id = tile}, {.offset_bytes = kTileBytes});
         noc.async_read_barrier();
         invalidate_l1_cache();
 
-        const uint32_t tile_row = tile / kStateWidthTiles;
-        const uint32_t feature_tile = tile % kStateWidthTiles;
+        const uint32_t tile_row = tile / state_width_tiles;
+        const uint32_t feature_tile = tile % state_width_tiles;
         for (uint32_t row_in_tile = 0; row_in_tile < 32; ++row_in_tile) {
             const uint32_t state_row = tile_row * 32 + row_in_tile;
             bool is_ca = false;
@@ -114,9 +115,9 @@ void kernel_main() {
             }
 
             const uint32_t half = is_ca ? 0 : 1;
-            const uint32_t source_col = half * 512 + feature_tile * 32;
+            const uint32_t source_col = half * head_dim + feature_tile * 32;
             const uint32_t source_tile =
-                (static_cast<uint32_t>(source_token) / 32) * kInputWidthTiles + source_col / 32;
+                (static_cast<uint32_t>(source_token) / 32) * input_width_tiles + source_col / 32;
             const uint32_t bias_tile = source_col / 32;
             noc.async_read(kv, scratch, kTileBytes, {.page_id = source_tile}, {.offset_bytes = 2 * kTileBytes});
             noc.async_read(gate, scratch, kTileBytes, {.page_id = source_tile}, {.offset_bytes = 3 * kTileBytes});

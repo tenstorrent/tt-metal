@@ -12,13 +12,14 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 _BATCH = 1
 _COMPRESS_RATE = 4
 _HEAD_DIM = 512
+_INDEX_HEAD_DIM = 128
 _STATE_ROWS = 64
 _LOCAL_SEQ_LEN = 128
 
 
-def _pack_blaze_state(kv, score, start_position=0):
+def _pack_blaze_state(kv, score, head_dim, start_position=0):
     """Pack projected Ca/Cb rows using Blaze's two-tile parity layout."""
-    kv_state = torch.zeros(_BATCH, 1, _STATE_ROWS, _HEAD_DIM, dtype=torch.bfloat16)
+    kv_state = torch.zeros(_BATCH, 1, _STATE_ROWS, head_dim, dtype=torch.bfloat16)
     score_state = torch.full_like(kv_state, float("-inf"))
 
     for local_position in range(kv.shape[2]):
@@ -27,18 +28,18 @@ def _pack_blaze_state(kv, score, start_position=0):
         parity = (position // _COMPRESS_RATE) & 1
         ca_row = (parity ^ 1) * 32 + slot
         cb_row = parity * 32 + _COMPRESS_RATE + slot
-        kv_state[:, :, ca_row] = kv[:, :, local_position, :_HEAD_DIM]
-        kv_state[:, :, cb_row] = kv[:, :, local_position, _HEAD_DIM:]
-        score_state[:, :, ca_row] = score[:, :, local_position, :_HEAD_DIM]
-        score_state[:, :, cb_row] = score[:, :, local_position, _HEAD_DIM:]
+        kv_state[:, :, ca_row] = kv[:, :, local_position, :head_dim]
+        kv_state[:, :, cb_row] = kv[:, :, local_position, head_dim:]
+        score_state[:, :, ca_row] = score[:, :, local_position, :head_dim]
+        score_state[:, :, cb_row] = score[:, :, local_position, head_dim:]
 
     return kv_state, score_state
 
 
-def _make_states(sp_factor, remainder):
+def _make_states(sp_factor, remainder, head_dim):
     torch.manual_seed(42)
     seq_len = _LOCAL_SEQ_LEN * sp_factor + remainder
-    kv = torch.randn(_BATCH, 1, seq_len, 2 * _HEAD_DIM, dtype=torch.bfloat16)
+    kv = torch.randn(_BATCH, 1, seq_len, 2 * head_dim, dtype=torch.bfloat16)
     score = torch.randn_like(kv)
 
     local_kv_states = []
@@ -46,11 +47,11 @@ def _make_states(sp_factor, remainder):
     for rank in range(sp_factor):
         start = rank * _LOCAL_SEQ_LEN
         end = min(start + _LOCAL_SEQ_LEN + (remainder if rank == sp_factor - 1 else 0), seq_len)
-        kv_state, score_state = _pack_blaze_state(kv[:, :, start:end], score[:, :, start:end], start)
+        kv_state, score_state = _pack_blaze_state(kv[:, :, start:end], score[:, :, start:end], head_dim, start)
         local_kv_states.append(kv_state)
         local_score_states.append(score_state)
 
-    initial_kv = torch.randn(_BATCH, 1, _STATE_ROWS, _HEAD_DIM, dtype=torch.bfloat16)
+    initial_kv = torch.randn(_BATCH, 1, _STATE_ROWS, head_dim, dtype=torch.bfloat16)
     initial_score = torch.randn_like(initial_kv)
     initial_kv_states = [initial_kv] * sp_factor
     initial_score_states = [initial_score] * sp_factor
@@ -64,7 +65,7 @@ def _make_states(sp_factor, remainder):
 
     # The final rank's outgoing state must already be the exact state consumed by
     # Blaze decode, including a partially filled ratio-4 window.
-    decode_kv, decode_score = _pack_blaze_state(kv, score)
+    decode_kv, decode_score = _pack_blaze_state(kv, score, head_dim)
     final_start = (sp_factor - 1) * _STATE_ROWS
     final_end = final_start + _STATE_ROWS
     assert torch.equal(local_kv[:, :, final_start:final_end], decode_kv)
@@ -73,10 +74,12 @@ def _make_states(sp_factor, remainder):
     return local_kv, local_score, initial_kv, initial_score, expected_kv, expected_score
 
 
-def _run_compressor_state_exchange(mesh_device, remainder):
+def _run_compressor_state_exchange(mesh_device, remainder, head_dim):
     mesh_shape = tuple(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape
-    local_kv, local_score, initial_kv, initial_score, expected_kv, expected_score = _make_states(sp_factor, remainder)
+    local_kv, local_score, initial_kv, initial_score, expected_kv, expected_score = _make_states(
+        sp_factor, remainder, head_dim
+    )
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
 
     def to_device(tensor):
@@ -107,6 +110,7 @@ def _run_compressor_state_exchange(mesh_device, remainder):
         assert torch.equal(output_score[:, tp_rank : tp_rank + 1], expected_score)
 
 
+@pytest.mark.parametrize("head_dim", [_HEAD_DIM, _INDEX_HEAD_DIM], ids=["head512", "head128"])
 @pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -120,8 +124,8 @@ def _run_compressor_state_exchange(mesh_device, remainder):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_compressor_state_exchange_single_device(mesh_device, device_params, remainder):
-    _run_compressor_state_exchange(mesh_device, remainder)
+def test_compressor_state_exchange_single_device(mesh_device, device_params, remainder, head_dim):
+    _run_compressor_state_exchange(mesh_device, remainder, head_dim)
 
 
 @pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
@@ -144,4 +148,4 @@ def test_compressor_state_exchange_single_device(mesh_device, device_params, rem
     indirect=["mesh_device", "device_params"],
 )
 def test_compressor_state_exchange_mesh(mesh_device, device_params, remainder):
-    _run_compressor_state_exchange(mesh_device, remainder)
+    _run_compressor_state_exchange(mesh_device, remainder, _HEAD_DIM)
