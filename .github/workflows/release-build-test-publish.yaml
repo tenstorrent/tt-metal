@@ -202,7 +202,10 @@ jobs:
       # submodule out here so its JIT-compiled kernels match the libraries it
       # links against.
       metal-ref: ${{ github.sha }}
-      blaze-ref: main
+      # TEMP FOR TEST RUN -- REVERT TO `main` BEFORE MERGING. Points at the
+      # tt-blaze branch carrying the guard removals, without which this gate
+      # reports green having run the Loudbox buckets only.
+      blaze-ref: jvega/metal_p_and_r
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
