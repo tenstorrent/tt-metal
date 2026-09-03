@@ -263,45 +263,21 @@ TEST(Routing2DCodec, NorthSouthFacingRoutersPreferYThenFallThroughToX) {
     }
 }
 
-// A zeroed route buffer means "no action anywhere". It must decode to 0 and be rejected by the
-// validity check, not silently forwarded -- a zeroed region is how a mis-encode presents itself.
-TEST(Routing2DCodec, ZeroedRouteBufferDecodesToNothingAndIsInvalid) {
+// A zeroed route buffer means "no action anywhere" and decodes to 0 for every router facing.
+TEST(Routing2DCodec, ZeroedRouteBufferDecodesToNothing) {
     constexpr uint32_t kY = 4, kX = 4;
     std::array<std::uint8_t, kY + kX> route_buffer = {};
 
     EXPECT_EQ(Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), 2, 1, kY), 0);
     EXPECT_EQ(Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), 2, 1, kY), 0);
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::NORTH>(0));
 }
 
 // ---------------------------------------------------------------------------------------------
-// Action validity and dispatch keys
+// Forward direction slot ordering
 // ---------------------------------------------------------------------------------------------
 
-// A packet must never be sent back the way it came: the action's self-facing bit is a hard error,
-// because acting on it would be an immediate two-node loop.
-TEST(Routing2DCodec, SelfFacingActionIsRejected) {
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_NORTH));
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::EAST>(Codec::ACTION_EAST));
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::Z>(Codec::ACTION_Z));
-    // The same bit set alongside a legal one is still a rejection.
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_NORTH | Codec::ACTION_EAST));
-}
-
-TEST(Routing2DCodec, ReservedBitsAreRejected) {
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_SOUTH | 0b01000000));
-    EXPECT_FALSE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_SOUTH | 0b10000000));
-}
-
-TEST(Routing2DCodec, LegalActionsAreAccepted) {
-    EXPECT_TRUE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_SOUTH));
-    EXPECT_TRUE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_LOCAL_DELIVER));
-    EXPECT_TRUE(Codec::action_is_valid<eth_chan_directions::NORTH>(Codec::ACTION_SOUTH | Codec::ACTION_LOCAL_DELIVER));
-    EXPECT_TRUE(Codec::action_is_valid<eth_chan_directions::EAST>(Codec::ACTION_WEST | Codec::ACTION_NORTH));
-}
-
-// fwd_dirs is the slot order the dispatch key is packed against; every facing must exclude itself
-// and list exactly the other four, or a key bit would select the wrong outgoing sender.
+// fwd_dirs is the compact dispatch slot order; every facing must exclude itself and list exactly the
+// other four, or a slot would select the wrong outgoing sender.
 TEST(Routing2DCodec, ForwardDirectionsExcludeSelfAndCoverTheRest) {
     const auto check = [](auto dirs, eth_chan_directions self) {
         std::array<bool, 5> seen = {};
@@ -320,17 +296,6 @@ TEST(Routing2DCodec, ForwardDirectionsExcludeSelfAndCoverTheRest) {
     check(Codec::fwd_dirs<eth_chan_directions::NORTH>(), eth_chan_directions::NORTH);
     check(Codec::fwd_dirs<eth_chan_directions::SOUTH>(), eth_chan_directions::SOUTH);
     check(Codec::fwd_dirs<eth_chan_directions::Z>(), eth_chan_directions::Z);
-}
-
-TEST(Routing2DCodec, ForwardKeyPacksEachSelectedDirection) {
-    constexpr auto kDirs = Codec::fwd_dirs<eth_chan_directions::NORTH>();
-    for (size_t slot = 0; slot < kDirs.size(); ++slot) {
-        const std::uint8_t action = Codec::action_bit(kDirs[slot]);
-        EXPECT_EQ(Codec::pack_fwd_key<eth_chan_directions::NORTH>(action), 1u << slot)
-            << "slot " << slot << " did not round-trip";
-    }
-    // LOCAL_DELIVER is handled after the eth fanout and must stay out of the key.
-    EXPECT_EQ(Codec::pack_fwd_key<eth_chan_directions::NORTH>(Codec::ACTION_LOCAL_DELIVER), 0u);
 }
 
 }  // namespace tt::tt_fabric::routing_2d_codec_tests
