@@ -1102,19 +1102,18 @@
     # (PCC -3.71%, RMSE/sigma 179%, reproduced on runs 33667518970 and 33678382128). Fix is on
     # branch stisi/flux2-qb2, commit 92919ba7f5d.
     pytest --timeout 3000 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks || status=1
-    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
+    pytest --timeout 900 -rs models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks || status=1
     exit $status
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_quietbox_2:
-      # Sized from run 33685965436, the first run where all four tests reported: VAE 66s,
-      # prompt encoder 27m02s, transformer all_blocks 39m28s, single_blocks 4m15s -- about
-      # 72 min of pytest. The margin is for the once-per-job cold NFS read of the converted
-      # cache, which is most of the two big numbers (Mistral3Encoder 1220s, Flux2Transformer
-      # 1470s; single_blocks then reuses the same key in 1s). Above the sum of the pytest
-      # --timeouts (145 min) so a hang fails cleanly rather than being killed by the runner.
-      timeout: 150
+      # Measured on run 33685965436: VAE 66s, prompt encoder 27m02s, transformer all_blocks
+      # 39m28s, single_blocks 4m15s. Most of the two big numbers is the once-per-job cold NFS
+      # read of the converted cache (Mistral3Encoder 1220s, Flux2Transformer 1470s), which is
+      # why the allowances stay generous. Above the sum of the pytest --timeouts (120 min) so
+      # a hang fails cleanly rather than being killed by the runner.
+      timeout: 125
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1145,27 +1144,28 @@
     # Cheapest first. The two transformer parametrizations get a process each: each loads the full
     # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
     # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
-    run --timeout 900 models/tt_dit/tests/models/flux2/test_vae_flux2.py
-    run --timeout 1200 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    run --timeout 900 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
     # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
     # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
     # all_blocks still fails, at 70.8769%: the second defect in 92919ba7f5d -- the double block
     # built without per_head_norm -- is a constructor argument, so it is topology-independent.
     # single_blocks keeps only one double block and barely accumulates the error; all_blocks
     # runs every one of them. Both cases go green when that fix lands.
-    run --timeout 1500 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
-    run --timeout 600 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    run --timeout 1200 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
+    run --timeout 400 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
     exit $rc
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_sc1:
-      # Measured on run 33689082073: VAE 2m06s, prompt encoder 7m41s, transformer all_blocks
-      # 9m51s, single_blocks 58s -- 20m37s of pytest, 31m45s of job. Far cheaper than the
-      # QuietBox leg: 32 chips, and the HF weights were already staged on this mount (every
-      # "Fetching N files" was an instant cache hit). Above the sum of the pytest --timeouts
-      # (70 min) so a hang fails cleanly rather than being killed by the runner.
-      timeout: 75
+      # Measured on the green run 33801719909: VAE 2m06s, prompt encoder 5m22s, transformer
+      # all_blocks 9m20s, single_blocks 51s -- about 18 min of pytest. Far cheaper than the
+      # QuietBox leg: 32 chips, and the HF weights are staged on this mount. The allowances
+      # still cover a cold converted-weight cache, which this SKU rebuilds every run: $HOME is
+      # per-pod on the ephemeral runners and /mnt/models is read-only, so there is nowhere
+      # persistent to put it. Above the sum of the pytest --timeouts (52 min).
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
