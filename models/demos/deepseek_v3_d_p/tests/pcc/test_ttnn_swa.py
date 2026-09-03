@@ -2,23 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC tests for the DeepSeek-V4 sliding-only attention layer (prefill), against the reference
-modeling_deepseek_v4.py.
+"""PCC tests for the DeepSeek-V4 sliding-only attention layer (prefill), against the reference.
 
-Every test drives a public forward -- no TtSWA private method is called directly:
-  - TtSWA.forward, single-shot     4 prompt lengths
-  - TtSWA.forward, chunked         TtSWAState across chunks, 4 scenarios + two 56K runs
+Both V4 variants run. Pro has no sliding layer in the real checkpoint, but its dimensions are what
+stress the reductions, so it is kept as a width test.
 
-Both V4 variants run, flash and pro. Pro has no sliding layer in the real checkpoint, but its
-dimensions are what stress the reductions, so it is kept as a width test.
-
-Non-final chunks are multiples of the 128-token window: the next chunk's first query needs the 128
-keys before it, so a chunk that ended mid-window would leave the carry unable to name them. A FINAL
-chunk may be ragged -- nothing reads its carry -- which is what the 3000-token tails cover. Same rule
-as TtHCA's, so one chunk sequence is valid for both layers.
-
-Device-perf for the same layer lives in tests/perf/test_ttnn_swa_perf.py.
+A non-final chunk must end on a tile row; a final one may end anywhere. Device-perf for the same
+layer lives in tests/perf/test_ttnn_swa_perf.py.
 """
 
 import pytest
@@ -41,21 +31,17 @@ from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _SEED = 42
-# One shape per behaviour: 128 is the shortest legal prompt, 1024 the pad granularity (window * sp),
-# 2048 needs no padding, 5120 is the chunk width.
+# Shortest legal prompt, the pad granularity, one needing no padding, and the chunk width.
 _SHAPES = [128, 1024, 2048, 5120]
-# One program must serve every chunk; a sliding layer has no cache write, so nothing may compile after
-# the first chunk at all.
+# A sliding layer has no cache write, so nothing may compile after the first chunk at all.
 _WRITE_COMPILES_PER_CHUNK = 0
 
 
 def _config(model_config, num_hidden_layers=4):
     """Reference config from one variant's dimension constants, with layer 0 forced to sliding.
 
-    ``compress_ratios=[0, ...]`` is the legacy per-layer form the config folds into ``layer_types``;
-    0 maps to "sliding_attention", which is what makes ``DeepseekV4Attention.compressor`` None.
-    ``q_lora_rank`` / ``o_groups`` are explicit for the reason the HCA test gives: their defaults are
-    Flash's values, so a Pro config that omitted them would silently build a hybrid."""
+    ``compress_ratios=[0, ...]`` folds into ``layer_types``, and 0 means "sliding_attention".
+    ``q_lora_rank`` / ``o_groups`` are explicit because their defaults are Flash's."""
     m = model_config
     cfg = DeepseekV4Config(
         hidden_size=m.EMB_SIZE,
@@ -73,13 +59,9 @@ def _config(model_config, num_hidden_layers=4):
     return cfg
 
 
-# (id, dimension constants, per-chunk floor, long-run floor, single-shot floor).
-#
-# All three floors are measured worst case minus 1e-3, not guessed. Unlike HCA, PCC does not decay with
-# depth here: the only state crossing a chunk boundary is 128 rows, so nothing accumulates and the
-# softmax never widens. Over 56K the worst chunk lands where the shortest scenario does -- flash
-# 0.99913, pro 0.99900, every one of the 20 runs inside 3.4e-4 -- which is why the long floor is the
-# chunked one and not looser.
+# (id, dimension constants, per-chunk floor, long-run floor, single-shot floor). Measured worst case
+# minus 1e-3. All three are equal because PCC does not decay with depth here: the only state crossing a
+# chunk boundary is one window, so nothing accumulates and the softmax never widens.
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.998, 0.998, 0.998),
     ("pro", DeepSeekV4ProConfig, 0.998, 0.998, 0.998),
@@ -117,18 +99,14 @@ _CHUNKED_SCENARIOS = [
     ("2chunk-ragged", 4096, [4096, 3000]),  # the other chunk width, and a final chunk ending mid-tile
     ("chunk5120-full", 5120, [5120, 5120]),  # what the perf gate measures
     ("chunk5120-ragged", 5120, [5120, 5120, 3000]),  # three chunks, last one ragged
-    # Non-final chunks below chunk_size. Pins the place real_len and the padded slab width must not be
-    # confused: the carry, which the next chunk's first chip reads.
+    # Non-final chunks below chunk_size: real_len and the padded slab width must not be confused.
     ("chunk5120-varying", 5120, [1024, 256, 5120]),
     ("chunk1024-ragged", 1024, [1024, 1024, 1000]),  # a final chunk 8 tokens past a tile row
-    # Non-final chunks BELOW the 128-token window, which the carry can only serve by reaching back
-    # into itself: after the 32-token chunk the last 128 keys are 96 of the previous carry and 32 new.
-    # A carry cut out of the chunk alone cannot express that, so this is the case that pins it.
+    # Non-final chunks below the window, which the carry can serve only by reaching back into itself.
     ("sub-window", 5120, [1024, 32, 96, 128, 5120, 1000]),
 ]
 
-# The two 56,320-token scenarios are the same length by construction, so the mixed one differs only in
-# how the tokens are split -- every chunk a multiple of the window, none wider than chunk_size.
+# Same length by construction, so the mixed one differs only in how the tokens are split.
 _LONG_SCENARIOS = [
     pytest.param("11x5120", 5120, [5120] * 11, id="11x5120"),
     pytest.param(
@@ -141,8 +119,7 @@ _LONG_SCENARIOS = [
 
 
 def _build_reference(config):
-    """A randomised sliding-only reference layer. Weights are perturbed the way the HCA test does, so a
-    PCC pass cannot come from near-identity norms."""
+    """A randomised sliding-only reference layer, so a PCC pass cannot come from near-identity norms."""
     ref = DeepseekV4Attention(config, layer_idx=0).eval()
     assert ref.compressor is None, "layer_idx=0 must be a sliding_attention layer for TtSWA"
     with torch.no_grad():
@@ -155,10 +132,8 @@ def _build_reference(config):
 
 
 def _reference_forward(ref, config, hidden, total, batch):
-    """One unchunked pass over the whole prompt: the ground truth every chunk is compared against.
-
-    Deliberately not chunked, so the chunked path has to reproduce plain attention rather than agree
-    with a reference that shares its assumptions."""
+    """One UNCHUNKED pass over the whole prompt, so the chunked path has to reproduce plain attention
+    rather than agree with a reference sharing its assumptions."""
     sw = config.sliding_window
     position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
     with torch.no_grad():
@@ -172,11 +147,8 @@ def _reference_forward(ref, config, hidden, total, batch):
 
 
 class _RefCache:
-    """Minimal ``past_key_values`` for driving the reference chunk by chunk: the attention calls
-    ``.update(k, v, layer_idx)`` on the container.
-
-    ``DeepseekV4HCACache`` is used for its update body, which is the plain shared-KV sliding-window
-    one every V4 layer shares; its compressor dicts stay untouched on a sliding-only layer."""
+    """Minimal ``past_key_values`` for driving the reference chunk by chunk. ``DeepseekV4HCACache`` is
+    used for its update body, the plain shared-KV sliding-window one every V4 layer shares."""
 
     def __init__(self, layer):
         self.layers = [layer]
@@ -223,8 +195,7 @@ def _from_device(out_tt, mesh_device):
 
 
 def _report_chunk_pccs(pccs, floor):
-    """Log every chunk's PCC, then judge them together: the per-chunk numbers describe how error grows
-    with depth, and a single failing chunk is more useful reported alongside its neighbours."""
+    """Log every chunk's PCC, then judge them together: a failing chunk reads better beside its neighbours."""
     for it, kv_actual, valid, pcc in pccs:
         logger.debug(f"  chunk {it}: kv_actual={kv_actual} valid={valid} PCC={pcc}")
     worst = min(pccs, key=lambda row: row[3])
@@ -263,8 +234,7 @@ def _run_chunked(mesh_device, topology, chunk_size, iters_valid, model_config, f
         _, pcc = comp_pcc(expected.to(torch.float32), out.to(torch.float32))
         pccs.append((it, kv_actual, valid, pcc))
 
-        # Every chunk drives identical device shapes, so one compiled program must serve them all. A new
-        # entry means some op's attributes moved with the chunk -- exactly what breaks trace later.
+        # Identical device shapes every chunk, so a new entry means an op attribute moved with the chunk.
         now = mesh_device.num_program_cache_entries()
         logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
         if it > 0:
@@ -288,9 +258,8 @@ def _run_chunked(mesh_device, topology, chunk_size, iters_valid, model_config, f
 )
 @pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
 def test_swa_forward_mesh(mesh_device, device_params, topology, seq_len, model_config, forward_pcc):
-    """Single-shot TtSWA.forward, SP+TP sharded. Proves the halo and the first-chunk mask variant: chip
-    0's history does not exist yet, and the 128 zero rows standing in for it must not reach the
-    softmax."""
+    """Single-shot TtSWA.forward, SP+TP sharded. Proves the halo and the first-chunk mask variant:
+    chip 0 has no history yet, and the zero rows standing in for it must not reach the softmax."""
     torch.manual_seed(_SEED)
 
     batch = 1
@@ -342,13 +311,11 @@ def test_swa_chunked_prefill_mesh(
 def test_swa_long_prefill_mesh(
     mesh_device, device_params, topology, name, chunk_size, iters_valid, model_config, long_pcc
 ):
-    """The demo context, 56,320 tokens, split two ways. This is where the carry crosses fifteen chunk
-    boundaries and where a ragged non-final chunk actually appears.
+    """The demo context, split two ways.
 
-    The reference is chunked here, unlike the short scenarios. An unchunked one is not an option at
-    this length: eager attention (forced, since sinks make V4 eager-only) materializes an [S, S] mask,
-    12.7 GB at 56K, and the scores on top of it. The short scenarios are what pin chunked == plain
-    attention; this test only shows it stays true that many chunks deep."""
+    The reference is CHUNKED here, unlike the short scenarios: an unchunked one would materialize an
+    [S, S] mask, which does not fit at this length. The short scenarios are what pin chunked == plain
+    attention; this only shows it stays true that many chunks deep."""
     torch.manual_seed(_SEED)
 
     batch = 1

@@ -3,37 +3,13 @@
 
 """DeepSeek-V4 sliding-only attention (``layer_types[i] == "sliding_attention"``), chunked prefill.
 
-The reference builds all three attention kinds from one class: a sliding layer is
-``DeepseekV4Attention`` with ``compressor = None`` and ``rope_layer_type = "main"`` (plain theta=10000
-instead of the YaRN-scaled table HCA/CSA share with their compressor). Everything else -- the Q/KV
-stems, the per-head sink, the grouped output projection -- is identical, and is duplicated here rather
-than shared; see the note in ``__init__``. Flash has two such layers (0 and 1); Pro has none.
+A sliding layer is the reference's ``DeepseekV4Attention`` with ``compressor = None`` and the plain
+theta=10000 rope. Flash has two (layers 0 and 1); Pro has none.
 
-The attention core is where a sliding layer stops looking like HCA. HCA all-gathers the K/V and then
-attends over ``[carry | chunk | compressed]``, so every chip sees ``Sk`` = the whole slab. A 128-token
-window never reaches further back than the 128 rows before a chip's own first query, so each chip
-attends over ``[halo | its own rows]`` instead -- ``Sk`` drops from 5248 to 768 and the SDPA walks 6
-K-chunks per Q-chunk instead of 41.
-
-``halo`` is the 128 rows preceding this chip's block, which is a DIFFERENT global offset per chip. That
-comes from ``ttnn.slice`` with sequence-parallel-sharded index tensors: the bounds live in device
-tensors, so only their shape is in the program and each chip reads its own offset -- verified on 8x4 as
-one program serving all eight offsets.
-
-Two things this deliberately does NOT do, both measured or reasoned rather than assumed:
-
-* It keeps HCA's full K/V all-gather. The attention only needs each chip's own rows plus a 128-row
-  halo, so gathering just the per-chip tails would cut that CCL ~5x. But a ragged chunk's carry is the
-  global ``[real_len - 128, real_len)`` block, which a tails-only gather does not contain, and the
-  gathered slab is what makes ``_carry_index`` work. The compute win is independent of this and is the
-  larger one.
-* It masks rather than passing ``sliding_window_size``. The op's band comes from LOCAL Q/K indices, so
-  it needs Q front-padded by the window to line up, and then chunk 0's chip 0 has no real halo -- 128
-  zero KEY rows, which a zero-value key still adds to the softmax denominator, and
-  ``compute_streaming.hpp``'s ``static_assert`` forbids combining a mask with the window to -inf them.
-  A mask handles that as data (one SP-sharded tensor, chip 0 differing only on the first chunk) and
-  keeps one program. It costs the loop narrowing: 6 K-chunks instead of 2, ~150 us per chunk per layer
-  against a ~200 ms whole-model chunk.
+The window never reaches past the ``sliding_window`` rows before a chip's own first query, so each
+chip attends over ``[halo | its own rows]`` rather than over the whole slab like HCA. Rationale for
+the choices here -- the mask instead of ``sliding_window_size``, the full K/V gather, the SDPA chunk
+sizes -- is in ``V4_HCA_next_steps.MD``.
 """
 
 import torch
@@ -47,20 +23,16 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
-#: Slice bounds on a tiled tensor move a tile row at a time, which is what sets the
-#: granularity a chunk may end on.
+#: A slice bound on a tiled tensor moves a tile row at a time.
 TILE_HEIGHT = 32
 
 
 class TtSWAState:
-    """Chunked-prefill state, owned by the caller and passed to ``TtSWA.forward``.
-
-    One tensor, and it never grows: a sliding layer's whole history is the 128 tokens before the next
-    chunk starts. ``kv_actual`` says how many real tokens precede this chunk, which is what selects the
-    first-chunk mask variant and the rotary offset."""
+    """Chunked-prefill state. One tensor, and it never grows: the whole history a sliding layer needs
+    is the ``sliding_window`` tokens before the next chunk starts."""
 
     def __init__(self, carry, max_seq_len):
-        self.carry = carry  # [B, 1, sliding_window, head_dim]
+        self.carry = carry
         self.max_seq_len = int(max_seq_len)
         self.kv_actual = 0
 
@@ -92,13 +64,7 @@ class TtSWA(LightweightModule):
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
-        # TODO: q_stem / kv_stem / o_proj below are byte-identical to TtHCA's, and to whatever TtCSA's
-        # will be -- the reference builds all eight projections unconditionally for every layer_type and
-        # runs them identically (modeling_deepseek_v4.py:786-800); only the key assembly in the middle
-        # differs. They belong in one TtV4Attention.forward that runs the shared pipeline
-        # (q_stem -> kv_stem -> per-type core -> o_proj) and injects the core, rather than in a base
-        # class each type re-derives a forward from. Duplicated here on purpose so this layer lands
-        # without touching heavily_compressed_attention.py; unify once TtCSA's core exists.
+        # TODO: share the stems with TtHCA/TtCSA once TtCSA lands; see V4_HCA_next_steps.MD.
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
@@ -128,8 +94,7 @@ class TtSWA(LightweightModule):
             memory_config=memory_config,
         )
 
-        # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
-        # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
+        # Pre-divided: SDPA scales the sink as well as QK, the reference scales only QK.
         sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
         self.sinks_sdpa = self.ops.from_torch(sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
 
@@ -140,9 +105,8 @@ class TtSWA(LightweightModule):
         self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
         self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
 
-        # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole
-        # groups: keep it as ONE batched weight sharded on the group axis and run a single batched
-        # matmul -- each chip applies only its own groups, no collective.
+        # o_a_proj is block-diagonal over o_groups and a TP chip owns whole groups, so this stays one
+        # batched weight and one batched matmul, no collective.
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
         self.wo_a = self.ops.from_torch(
@@ -152,10 +116,10 @@ class TtSWA(LightweightModule):
 
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
 
-        # Everything below comes from alloc_state, which every caller has to run before forward.
-        self._mask = None  # persistent additive mask; forward overwrites only the halo columns
-        self._head_cols = None  # the halo columns, in a normal and a first-chunk variant
-        self._halo_bounds = None  # SP-sharded slice bounds: this chip's 128 rows of history
+        # Built by alloc_state, which every caller runs before forward.
+        self._mask = None
+        self._head_cols = None
+        self._halo_bounds = None
         self._halo_num_devices = None
         self._slab_rope = None
         self._slab_index = None
@@ -167,8 +131,6 @@ class TtSWA(LightweightModule):
             "TtSWA expects a sliding-only reference layer (compressor is None); a layer with a "
             "compressor is HCA or CSA"
         )
-        # A sliding layer has no compressor to borrow a rotary_emb from -- and unlike HCA it does not
-        # need one, since its rope is the plain theta=10000 variant the config alone determines.
         rotary_emb = getattr(reference, "rotary_emb", None) or DeepseekV4RotaryEmbedding(config)
         return cls(
             device,
@@ -191,10 +153,7 @@ class TtSWA(LightweightModule):
         )
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtSWAState:
-        """Size the state and build every host tensor forward will need, so forward builds none.
-
-        ``chunk_tokens`` is the slab width forward will be called with; the mask and the slice bounds
-        are sized from it and are the same for every chunk."""
+        """Build every host tensor forward will need, so forward builds none."""
         assert batch == 1, f"SWA state is single-user for now, got batch={batch}"
         chunk = int(chunk_tokens or max_seq_len)
         sw, sp = self.sliding_window, self.sp_factor
@@ -207,8 +166,6 @@ class TtSWA(LightweightModule):
         self._build_masks(seq_local)
         self._build_halo_bounds(chunk, seq_local)
         self._build_carry_index(chunk)
-        # A row per TOKEN, and the "main" rope variant: a sliding layer does not share the compressor's
-        # YaRN-scaled table (reference DeepseekV4Attention.rope_layer_type).
         self._slab_rope = self.ops.build_rope_table(int(max_seq_len) + chunk, 1, layer_type="main")
         self._slab_index = self.ops.rope_index_base(seq_local)
         return TtSWAState(
@@ -217,10 +174,8 @@ class TtSWA(LightweightModule):
         )
 
     def _alloc_carry(self, batch: int, rows: int):
-        """``[batch, 1, rows, head_dim]``, ND-sharded so the migration address table can name it.
-
-        ``seq_len`` is pre-multiplied by sp_factor to cancel the division init_kvpe_cache does for its
-        own SP-sharded cache: the carry is replicated, so every chip holds all ``rows``."""
+        """ND-sharded so the migration address table can name it. ``seq_len`` is pre-multiplied by
+        sp_factor to cancel the division init_kvpe_cache does: the carry is replicated."""
         return init_kvpe_cache(
             kvpe_cache_head_dim=self.head_dim,
             mesh_device=self.device,
@@ -234,20 +189,9 @@ class TtSWA(LightweightModule):
         )
 
     def _build_masks(self, seq_local: int):
-        """The additive mask over the key layout ``[halo | own rows]``, both chip-local.
-
-        Key column ``j`` holds the token at global position ``base - sw + j`` and query row ``i`` the one
-        at ``base + i``, where ``base`` is this chip's first token. The causal window
-        ``base + i - sw < pos <= base + i`` then reduces to ``i < j <= i + sw`` -- the chip offset
-        cancels, so ONE replicated mask serves every chip.
-
-        The halo columns need a second version for the first chunk, where the carry holds no tokens yet.
-        Only chip 0 reads the carry -- chips 1..sp-1 take their halo from a predecessor inside this same
-        chunk -- so that version differs per chip, and ``log(nez(chip_index))`` turns the chip index into
-        the 0 / -inf it needs without a host tensor.
-
-        Built from index vectors so no large host tensor is created. They are float32 because
-        bfloat16 stops being exact above 256, and the column index runs to 768."""
+        """Additive mask over the key layout ``[halo | own rows]``. Both are chip-local and the chip
+        offset cancels, so ``i < j <= i + sw`` is the whole band and one replicated mask serves every
+        chip. float32 because bfloat16 cannot hold the column index exactly."""
         sw = self.sliding_window
         width = sw + seq_local
 
@@ -262,16 +206,14 @@ class TtSWA(LightweightModule):
             self.ops.mesh_mapper(sp_dim=2),
             dtype=ttnn.float32,
         )
-        not_chip_0 = ttnn.typecast(ttnn.log(ttnn.nez(chip)), self.dtype)  # 0 on chips 1.., -inf on chip 0
+        not_chip_0 = ttnn.typecast(ttnn.log(ttnn.nez(chip)), self.dtype)
+        # Second variant for the first chunk, where the carry is empty: only chip 0 reads it.
         self._head_cols = {False: head, True: ttnn.add(head, not_chip_0)}
 
     def _build_halo_bounds(self, chunk: int, seq_local: int):
-        """Slice bounds for this chip's halo: rows ``[d*seq_local, d*seq_local + sw)`` of
-        ``[carry | gathered chunk]``.
-
-        The offset differs per chip, so the bounds are SP-sharded device tensors -- ``ttnn.slice`` reads
-        them at runtime, which keeps only their shape in the program and lets one program serve all
-        ``sp`` offsets. They must be 1-D, hence the flat layout."""
+        """This chip's halo: rows ``[d*seq_local, d*seq_local + sw)`` of ``[carry | gathered chunk]``.
+        SP-sharded bound tensors, so only their shape is in the program and one program serves all
+        ``sp`` offsets. They must be 1-D."""
         sw, sp = self.sliding_window, self.sp_factor
         starts = torch.tensor([v for d in range(sp) for v in (0, 0, d * seq_local, 0)], dtype=torch.int32)
         ends = torch.tensor(
@@ -281,34 +223,20 @@ class TtSWA(LightweightModule):
         self._halo_bounds = tuple(
             self.ops.from_torch(t, mapper, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT) for t in (starts, ends)
         )
-        # ttnn.slice sizes its output as in_rows / num_devices, so this is a divisor and not a mesh size.
+        # ttnn.slice sizes its output as in_rows / num_devices: a divisor, not a mesh size.
         self._halo_num_devices = (sw + chunk) // sw
 
     def _carry_key(self, real_len: int):
-        """The carry index is tabulated per tile row, the granularity a slice start can take. A chunk
-        ending mid-tile rounds down, which only the final chunk may do.
-
-        Invisible to prefill, which never reads that last carry, but NOT invisible to migration: decode
-        picks the carry up from the address table and would be short by up to 31 positions after a
-        final chunk that ended mid-tile. Deciding that is a decode-interface question, not a local one
-        -- see "the final chunk's carry is not migration-correct" in V4_HCA_next_steps.MD. TtHCA rounds
-        the same way at 128, so it is off by up to 127."""
+        """Rounds down, which only the final chunk may do. Fine for prefill, which never reads that
+        carry, but not for migration -- see V4_HCA_next_steps.MD."""
         return (int(real_len) // TILE_HEIGHT) * TILE_HEIGHT
 
     def _build_carry_index(self, chunk: int):
-        """start/end index tensors for the carry slice, one pair per real_len a chunk can have.
+        """Bounds for the carry slice, one pair per real_len a chunk can have.
 
-        The carry is the last ``sw`` keys of the ACCUMULATED prefix, not the last rows of the padded
-        slab, and those differ as soon as ``real_len < chunk``. It is cut out of ``[carry | chunk]``
-        rather than out of the chunk alone, which is what lets a chunk be shorter than the window:
-        the real tokens of this chunk sit at ``[sw, sw + real_len)`` there, so the last ``sw`` of the
-        prefix are ``[real_len, real_len + sw)`` -- for ``real_len`` below ``sw`` that range walks
-        back into the previous carry on its own, and for ``real_len == 0`` it reproduces it exactly.
-        Out of the chunk alone no such range exists, since the chunk holds no history.
-
-        Tabulated per tile row: the start is a slice bound on a tiled tensor, so it moves a tile at a
-        time. The bounds are the same on every chip (the gathered slab is replicated), so unlike the
-        halo these are not sharded."""
+        The carry is the last ``sw`` keys of the ACCUMULATED prefix, cut out of ``[carry | chunk]``
+        as ``[real_len, real_len + sw)``. Out of the chunk alone that range would not exist for a
+        chunk shorter than the window; here it walks back into the previous carry by itself."""
         sw = self.sliding_window
 
         def idx(vals):
@@ -322,11 +250,10 @@ class TtSWA(LightweightModule):
         }
 
     def _attention(self, q, sliding_kv, cos, sin, carry, kv_actual: int, real_len: int):
-        """``q`` [B, H/tp, S/sp, head_dim] and this chip's own ``sliding_kv`` [B, 1, S/sp, head_dim]
-        -> ``(attn, next_carry)``.
+        """``q`` [B, H/tp, S/sp, head_dim] + this chip's ``sliding_kv`` -> ``(attn, next_carry)``.
 
-        The gather is over the WHOLE chunk even though attention reads 768 rows of it, because the
-        carry slice needs the global slab; see the module docstring."""
+        The gather covers the whole chunk though attention reads 768 rows of it, because the carry
+        slice needs the global slab."""
         batch, num_heads_local, seq_local, _ = q.shape
         sw = self.sliding_window
 
@@ -344,17 +271,13 @@ class TtSWA(LightweightModule):
         else:
             gathered = sliding_kv
 
-        # [carry | chunk] is the global key sequence this chunk can see; each chip takes the 128 rows
-        # that precede its own block out of it.
-        # The carry is ND-sharded so the migration table can name it, and concat refuses a mix of
-        # sharded and interleaved inputs.
+        # The carry is ND-sharded and concat will not mix sharded with interleaved.
         hist = ttnn.concat([ttnn.to_memory_config(carry, ttnn.DRAM_MEMORY_CONFIG), gathered], dim=2)
         start, end = self._halo_bounds
         halo = ttnn.slice(hist, start, end, slice_dim=2, num_devices=self._halo_num_devices)
         kv = ttnn.concat([halo, sliding_kv], dim=2)
 
-        # Only the halo columns move between chunks, and always over the same range, so the mask is
-        # built once and this overwrites that range in place.
+        # Only the halo columns move between chunks, over a fixed range, so this patches in place.
         head_cols = self._head_cols[kv_actual == 0]
         ttnn.experimental.slice_write(
             head_cols, self._mask, start=[0, 0, 0, 0], end=[1, 1, seq_local, sw], step=[1, 1, 1, 1]
@@ -368,10 +291,7 @@ class TtSWA(LightweightModule):
             is_causal=False,
             scale=self.scaling,
             attention_sink=self.sinks_sdpa,
-            # 128/128 is not inherited from HCA, it is the only good split here: a provided mask makes
-            # the reader stream a [q_chunk, k_chunk] tile per iteration, so anything wider blows L1
-            # (k_chunk=256 asks 1.93 MB of a 1.57 MB budget). Swept on 8x4 -- 96/128 costs 5% and
-            # 64/128 costs 38% on this op, everything above 128 fails to allocate.
+            # A provided mask makes the reader stream a [q_chunk, k_chunk] tile, so wider blows L1.
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=128,
@@ -380,23 +300,20 @@ class TtSWA(LightweightModule):
             ),
         )
 
-        # The next chunk's window reaches back into this one, so the carry is this chunk's last REAL
-        # keys. Taking the start from a device tensor keeps only its shape in the program, so one
-        # program serves every real_len.
+        # Device-tensor bounds keep only their shape in the program, so one program serves every
+        # real_len.
         c_start, c_end = self._carry_index[self._carry_key(real_len)]
         next_carry = ttnn.slice(hist, c_start, c_end, slice_dim=2, num_devices=self._halo_num_devices)
 
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
         rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
-        # Undoing V's RoPE is the same rotation with the sign of sin flipped, so cos is reused.
+        # V's rope is undone by the same rotation with sin's sign flipped, so cos is reused.
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
 
     def _q_stem(self, hidden_states, cos, sin):
-        """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]. ``cos``/``sin`` cover the padded
-        slab and are built once per call: both stems and the output un-rope want the same rotation, and
-        building it again costs ~2.9 ms of host time."""
+        """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -405,7 +322,7 @@ class TtSWA(LightweightModule):
 
         q = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
 
-        # Row-parallel -> partial sums; all-reduce rebuilds the full q_lora, replicated across TP.
+        # Row-parallel, so partial sums; the all-reduce rebuilds q_lora replicated across TP.
         if self.tp_factor > 1:
             q = ttnn.experimental.reduce_scatter_minimal_async(
                 q,
@@ -449,7 +366,7 @@ class TtSWA(LightweightModule):
 
     def _kv_stem(self, hidden_states, cos, sin):
         """[B, 1, S/sp, hidden/tp] -> single-head sliding_kv [B, 1, S/sp, head_dim], TP-replicated.
-        K == V in V4. Returns the full S; the sliding-window truncation is a chunked-prefill concern."""
+        K == V in V4, and the sliding-window truncation is the caller's concern."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -457,8 +374,6 @@ class TtSWA(LightweightModule):
 
         kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
 
-        # kv_proj is contraction(row)-parallel like wq_a -> partial-sum single-head KV; TP all-reduce
-        # (reduce_scatter + all_gather) rebuilds the full head_dim, replicated across TP.
         if self.tp_factor > 1:
             kv = ttnn.experimental.reduce_scatter_minimal_async(
                 kv,
@@ -491,7 +406,7 @@ class TtSWA(LightweightModule):
         return ttnn.concat([nope, rope], dim=-1)
 
     def _o_proj(self, attn):
-        """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
+        """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's input layout."""
         batch, _, seq_len, _ = attn.shape
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         groups_local = self.o_groups // self.tp_factor
@@ -500,17 +415,16 @@ class TtSWA(LightweightModule):
         x = ttnn.experimental.nlp_concat_heads(x, memory_config=self.memory_config)
         x = ttnn.reshape(x, [batch, groups_local, seq_len, in_per_group])
 
-        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [B, groups_local, S, o_lora_rank]
+        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)
         o_lora_rank = grouped.shape[-1]
         grouped = ttnn.concat(
             [ttnn.slice(grouped, [0, g, 0, 0], [batch, g + 1, seq_len, o_lora_rank]) for g in range(groups_local)],
             dim=-1,
-        )  # [B, 1, S, groups_local*o_lora_rank]
+        )
 
-        out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # partial-sum [B,1,S,hidden]
+        out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)
 
-        # Reduce-scatter, not a full all-reduce: it both sums the partials and slices to hidden/tp,
-        # which is already the layout the next block wants.
+        # Reduce-scatter and not an all-reduce: it sums the partials and slices to hidden/tp at once.
         if self.tp_factor > 1:
             out = ttnn.experimental.reduce_scatter_minimal_async(
                 out,
@@ -526,18 +440,13 @@ class TtSWA(LightweightModule):
         return out
 
     def forward(self, hidden_states, seq_len_actual: int | None = None, state: TtSWAState = None):
-        """[B, 1, S/sp, hidden/tp] -> the same, one chunk. ``seq_len_actual`` is the chunk's real token
-        count; the rest of the slab is padding the mask never lets a real query read."""
+        """[B, 1, S/sp, hidden/tp] -> the same, one chunk. ``seq_len_actual`` is the real token count;
+        the rest of the slab is padding no real query reads."""
         assert state is not None, "TtSWA.forward needs the state alloc_state returned"
         seq_len = hidden_states.shape[2] * self.sp_factor
         real_len = int(seq_len if seq_len_actual is None else seq_len_actual)
         sw = self.sliding_window
-        # Checked on the ACCUMULATED length, not this chunk's, and against a tile row rather than the
-        # window: the carry is cut out of [carry | chunk], so a chunk may be SHORTER than the window
-        # and still leave a correct carry -- the only real constraint is that its end be a slice bound
-        # a tiled tensor can take. A final chunk may end anywhere, since nothing reads its carry.
-        # Looser than TtHCA, which is tied to its compressor's 128-token windows; a chunk sequence
-        # valid there is therefore valid here too.
+        # On the ACCUMULATED length: a final chunk may end mid-tile, a non-final one may not.
         assert state.kv_actual % TILE_HEIGHT == 0, (
             f"cannot append after a chunk with {state.kv_actual % TILE_HEIGHT} leftover tokens; only "
             f"the final chunk may end mid-tile, non-final chunks must be a multiple of {TILE_HEIGHT}"
@@ -553,6 +462,6 @@ class TtSWA(LightweightModule):
         )
 
         state.kv_actual += real_len
-        # In place, not a rebind: the migration table is built once from this tensor's address.
+        # In place, not a rebind: the migration table records this address once.
         ttnn.kv_cache.fill_cache_for_user_(state.carry, next_carry, 0, update_idx=0)
         return self._o_proj(attn)
