@@ -950,12 +950,13 @@ void kernel_main() {
             while (true) {
                 const bool more = cur < n_end;
                 if (more) {
-                    retire_gen(gen);
                     // The tails this batch consumes were refreshed a batch ago (or probed at sweep start); they are
-                    // waited for here, not at the gather barrier.
+                    // waited for here, not at the gather barrier. retire_gen comes after them: with full frames its
+                    // DMA wait is what binds here, and the poll and fence then run under it instead of after it.
                     while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
                     }
                     invalidate_l1_cache();
+                    retire_gen(gen);
                     n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
                     const uint32_t pk = issue_batch(&ship_list[cur], n, kGenBase[gen], ring_base);
                     if (pk < demote_below) {
