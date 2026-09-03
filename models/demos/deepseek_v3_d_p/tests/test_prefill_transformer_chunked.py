@@ -151,27 +151,19 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). Re-centered 2026-08-29: 2D matmul program configs on the shared expert and
-    # the latent projections took 2-5% off every chunk and 7/11 fell out the bottom of the old band --
-    # the baseline was stale, not the margin too tight. The saving is device-side, so it lands here and
-    # nowhere else: the untraced twin is host-dispatch bound at ~1.04 s/chunk and did not move, passing
-    # its own gate in the same run.
-    #
-    # Per-chunk medians of run 33251442925/job 99098593625 verbatim. ONE run, where the superseded
-    # value carried a second run agreeing to <=0.010 s -- traced replay has the device as its only
-    # noise source and per-chunk stddev here is 0.000-0.003 s, but cross-check the next green run.
+    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944).
     (61, 11, 10): [
-        0.519,
-        0.521,
-        0.569,
-        0.597,
-        0.631,
-        0.665,
-        0.683,
-        0.725,
-        0.777,
-        0.816,
-        0.855,
+        0.497,
+        0.501,
+        0.539,
+        0.567,
+        0.598,
+        0.629,
+        0.659,
+        0.697,
+        0.749,
+        0.788,
+        0.824,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {

@@ -377,6 +377,7 @@
     export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
     export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
     export PREFILL_RUNNER_LAUNCH=ci
+    export PREFILL_STANDALONE_CHUNKED_PCC=0.892300
     export LOGURU_LEVEL=INFO  # as every other prefill entry; keeps per-layer progress, drops per-op DEBUG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
