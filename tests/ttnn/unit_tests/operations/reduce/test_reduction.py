@@ -85,6 +85,32 @@ def test_std_w_streaming_output_padding_is_finite(device):
     assert torch.isfinite(padded_output).all()
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+    ids=["bf16", "fp32", "bfp8"],
+)
+def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op):
+    torch.manual_seed(0)
+    # More outputs than either supported Gen1 compute grid ensures that the
+    # one-entry combined buffer is reused after its write pointer wraps.
+    torch_input = -torch.rand((1, 256, 32, 96), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor, dim=(-2, -1), keepdim=True, correction=False)
+    padded_output = output_tensor.cpu().to_torch_with_padded_shape()
+    padding = padded_output.clone()
+    padding[..., 0, 0] = 0
+
+    assert torch.isfinite(padded_output).all()
+    assert torch.count_nonzero(padding) == 0
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])

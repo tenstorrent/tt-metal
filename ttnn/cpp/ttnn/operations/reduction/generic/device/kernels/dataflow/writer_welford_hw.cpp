@@ -140,6 +140,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     const std::uint32_t partial_tile_size_bytes = dfb_partial.get_tile_size();
+    const std::uint32_t combined_tile_size_bytes = dfb_combined.get_tile_size();
     const std::uint32_t out_tile_size_bytes = dfb_out.get_tile_size();
 
     const auto tensor_out = TensorAccessor(tensor::dst);
@@ -148,6 +149,24 @@ void kernel_main() {
     // Each output element is produced by combining reduce_batch_size
     // consecutive NC slices (each contributing Wt partial tile pairs).
     std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
+
+    // dfb::combined has one entry, so its write pointer wraps to the same tile
+    // after every push/pop cycle. Clear the full tile once before publishing
+    // any result; subsequent outputs only need to replace element [0,0].
+    if (num_outputs > 0) {
+        dfb_combined.reserve_back(1);
+        if constexpr (combined_is_bf16) {
+            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
+            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(std::uint16_t); ++i) {
+                combined_ptr[i] = 0;
+            }
+        } else {
+            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
+            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(float); ++i) {
+                combined_ptr[i] = 0.0f;
+            }
+        }
+    }
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
@@ -255,28 +274,13 @@ void kernel_main() {
         // Write the combined scalar into a tile in cb_combined.  The compute
         // kernel will unpack this and re-pack into cb_out in the correct
         // output data format (using the packer hardware).
-        //
-        // Only Face 0 row 0 (FACE_W elements) needs zeroing.  The scalar
-        // lives at position [0,0]; the remaining FACE_W-1 elements in
-        // the same row share a BFP exponent group, so they must be zero
-        // to avoid corrupting the scalar's mantissa precision in
-        // BFLOAT8_B output.  Other face rows have independent exponents
-        // and are never read (the output is a single scalar), so stale
-        // L1 contents there are harmless.
-        dfb_combined.reserve_back(1);
         if constexpr (combined_is_bf16) {
             auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < FACE_W; ++i) {
-                combined_ptr[i] = 0;
-            }
             // fp32_to_bf16 applies round-to-nearest-even, matching the packer
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
             auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < FACE_W; ++i) {
-                combined_ptr[i] = 0.0f;
-            }
             combined_ptr[0] = final_var;
         }
         dfb_combined.push_back(1);
@@ -287,6 +291,10 @@ void kernel_main() {
         noc.async_write(dfb_out, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
         dfb_out.pop_front(1);
+
+        if (out + 1 < num_outputs) {
+            dfb_combined.reserve_back(1);
+        }
     }
 
     noc.async_write_barrier();
