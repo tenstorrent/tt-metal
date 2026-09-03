@@ -61,22 +61,24 @@ struct NamedPerCoreRuntimeArgArray {
 };
 using NamedPerCoreRuntimeArgArrays = std::vector<NamedPerCoreRuntimeArgArray>;
 
-// Aggregates the 4 named-arg vector fields.  Included as a sub-struct member
+// Aggregates the named-arg vector fields. Included as a sub-struct member
 // on `KernelDescriptor` so that the named-arg fields are quarantined in the
 // `experimental` namespace while `KernelDescriptor` itself stays intact.
 struct NamedKernelArgs {
+    std::vector<std::pair<std::string, uint32_t>> named_compile_time_args;
     NamedCommonRuntimeArgs named_common_runtime_args;
     NamedPerCoreRuntimeArgs named_per_core_runtime_args;
     NamedCommonRuntimeArgArrays named_common_runtime_arg_arrays;
     NamedPerCoreRuntimeArgArrays named_per_core_runtime_arg_arrays;
 
     bool empty() const {
-        return named_common_runtime_args.empty() && named_per_core_runtime_args.empty() &&
-               named_common_runtime_arg_arrays.empty() && named_per_core_runtime_arg_arrays.empty();
+        return named_compile_time_args.empty() && named_common_runtime_args.empty() &&
+               named_per_core_runtime_args.empty() && named_common_runtime_arg_arrays.empty() &&
+               named_per_core_runtime_arg_arrays.empty();
     }
 };
 
-// Processes named runtime args for a kernel: merges named values into
+// Processes named args for a kernel: merges named runtime values into
 // positional runtime/common arg vectors, validates identifiers, and builds
 // the namespace maps used by the JIT header generator.
 // Called from the Program constructor when `kernel_descriptor.blaze_named_args` is non-empty.

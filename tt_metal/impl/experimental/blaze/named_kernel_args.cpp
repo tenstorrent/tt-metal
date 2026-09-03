@@ -159,11 +159,11 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         kernel->set_named_runtime_arg_namespaces(rt_ns_map);
     }
 
-    // CT namespace map: ct::ns::field (plain constexpr values)
-    if (!kernel_descriptor.named_compile_time_args.empty()) {
+    // CT namespace map: blaze_ct_args::ns::field (plain constexpr values)
+    if (!named_args.named_compile_time_args.empty()) {
         NamedCTArgNamespaces ct_ns_map;
         std::unordered_map<std::string, uint32_t> seen_ct_args;
-        for (const auto& [name, value] : kernel_descriptor.named_compile_time_args) {
+        for (const auto& [name, value] : named_args.named_compile_time_args) {
             auto it = seen_ct_args.find(name);
             if (it != seen_ct_args.end()) {
                 TT_FATAL(

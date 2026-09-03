@@ -849,9 +849,17 @@ void py_module_types(nb::module_& mod) {
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
         //
-        // These 4 def_prop_rw setters are the ENTIRE Python surface for the temporary,
-        // Blaze-only named runtime args. They are intentionally kept off __init__ and
+        // These def_prop_rw setters are the ENTIRE Python surface for the temporary,
+        // Blaze-only named args. They are intentionally kept off __init__ and
         // loudly marked so they acquire no new users before deletion (issue #50953).
+        .def_prop_rw(
+            "blaze_named_compile_time_args",
+            [](const tt::tt_metal::KernelDescriptor& self) { return self.blaze_named_args.named_compile_time_args; },
+            [](tt::tt_metal::KernelDescriptor& self, tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs args) {
+                self.blaze_named_args.named_compile_time_args = std::move(args);
+            },
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Named compile-time "
+            "arguments exposed through blaze_ct_args.")
         .def_prop_rw(
             "blaze_named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {

@@ -50,10 +50,10 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
                 .named_common_runtime_args = {{"my_kernel.marker", expected_marker}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core0, core0_idx}, {core1, core1_idx}}}},
             },
@@ -144,10 +144,10 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -231,7 +231,7 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
 // compile_one and delivered via `-include` — a non-atomic write on a shared path
 // (racy under multiprocess, and never carried to the remote/JIT-server path). This
 // exercises the relocated, presence-gated prolog #include on the compute path.
-TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
+TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -244,13 +244,16 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source =
             "tests/tt_metal/tt_metal/test_kernels/compute/blaze_named_compile_time_args_compute_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .blaze_named_args =
+            {.named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}}},
         .config = ComputeConfigDescriptor{},
     };
 
@@ -260,10 +263,11 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 2 * sizeof(uint32_t), results);
+    detail::ReadFromDeviceL1(device, core, write_addr, 3 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], param_a) << "blaze_ct_args::my_kernel::param_a should be 42 (compute path)";
     EXPECT_EQ(results[1], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
+    EXPECT_EQ(results[2], legacy_param) << "legacy named compile-time arg should remain available";
 }
 
 // Test 1: Mixed positional + named args coexist in the same kernel.
@@ -339,11 +343,11 @@ TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
         // Duplicate param_a with the same value — should be silently deduplicated
-        .named_compile_time_args =
-            {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args =
+                    {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -377,10 +381,10 @@ TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
         // Same name, conflicting values — should fatal
-        .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -405,10 +409,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_ns = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"123bad.field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"123bad.field", 1}},
                 .named_common_runtime_args = {{"123bad.marker", 0}},
                 .named_per_core_runtime_args = {{"123bad.core_idx", {{core, 0}}}},
             },
@@ -421,10 +425,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_field = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.bad-field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.bad-field", 1}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
