@@ -317,7 +317,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
         return m2::KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path(COMPUTE_KERNEL_PATH),
-            .compiler_options = {.defines = compute_defines},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings(),
             .compile_time_args =
                 {{"num_output_tiles", num_cols_per_core_group},

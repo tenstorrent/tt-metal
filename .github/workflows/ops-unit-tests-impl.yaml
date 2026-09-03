@@ -21,10 +21,31 @@ on:
         type: string
         default: ''
         description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/ops_unit_tests.yaml
+        description: "Test list to load. Pipelines that own a disjoint slice of the ops suites pass their own yaml."
+      budget-subheading:
+        required: false
+        type: string
+        default: "unit"
+        description: "Key under each team in .github/time_budget.yaml to verify against.
+          Pipelines that run this workflow at different frequencies pass different keys so
+          their budgets are tracked separately (e.g. package_and_release vs the nightly unit)."
       enable-llk-asserts:
         required: false
         type: boolean
         default: false
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
@@ -32,7 +53,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ops_unit_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -50,7 +71,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "unit"
+            "${{ inputs.budget-subheading }}"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -63,6 +84,8 @@ jobs:
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           categories='${{ inputs.additional_test_categories }}'
+          # The comparison is exact between commas, strip whitespace first.
+          categories="${categories//[[:space:]]/}"
           filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
           {
             echo "matrix<<EOF"
@@ -113,12 +136,32 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status }}
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

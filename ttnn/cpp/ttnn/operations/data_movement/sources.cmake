@@ -191,6 +191,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     gather/codegen/gather_codegen_program_factory.cpp
     gather/codegen/gather_codegen_supported.cpp
     gather/tosa/gather_tosa.cpp
+    concat/device/concat_tiled_unaligned_program_factory.cpp
 )
 
 set(TTNN_OP_DATA_MOVEMENT_API_HEADERS

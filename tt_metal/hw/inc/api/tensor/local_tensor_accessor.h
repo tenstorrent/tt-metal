@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <tuple>
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
@@ -147,3 +149,33 @@ struct noc_traits_t<LocalTensorAccessor<T>> {
 template <typename T>
 inline constexpr bool noc_zero_l1_endpoint_v<LocalTensorAccessor<T>> = true;
 #endif  // !defined(COMPILE_FOR_TRISC)
+
+/**
+ * @brief Map a tensor sequence (tuple of TensorBindingToken) to an array of LocalTensorAccessor.
+ *
+ * A tuple of TensorBindingTokens is obtained from a TensorBindingSequence: host codegen emits
+ * `tensor::<sequence_name>` as `std::tuple` of the named binding tokens. This helper
+ * maps that sequence into a std::array of LocalTensorAccessors, one per token, in the same order.
+ * LocalTensorAccessor is only templated on the element type T, so all entries share one type.
+ *
+ * All tokens must refer to L1-resident tensors; a DRAM token fails at compile time. For DRAM or
+ * NOC address generation, use make_tensor_accessors instead (DM kernels only).
+ *
+ * Usage:
+ *   auto local_accessors = make_local_tensor_accessors<uint32_t>(tensor::inputs);
+ *   auto& acc = local_accessors[i];  // i-th LocalTensorAccessor in the sequence
+ *   auto& elem = acc[0];            // element in that accessor's local L1 region
+ *
+ * @tparam T Element type stored in each local region.
+ * @param tokens constexpr tuple of TensorBindingTokens from a TensorBindingSequence
+ *               (tensor::<sequence_name>).
+ * @return std::array<LocalTensorAccessor<T>, N>, one per token, in sequence order.
+ */
+template <typename T, typename... Tokens>
+std::array<LocalTensorAccessor<T>, sizeof...(Tokens)> make_local_tensor_accessors(const std::tuple<Tokens...>& tokens) {
+    return std::apply(
+        [](const auto&... toks) {
+            return std::array<LocalTensorAccessor<T>, sizeof...(Tokens)>{LocalTensorAccessor<T>(toks)...};
+        },
+        tokens);
+}

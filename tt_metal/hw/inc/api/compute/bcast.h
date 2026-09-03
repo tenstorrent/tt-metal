@@ -84,7 +84,7 @@ ALWI void unary_bcast_init(uint32_t icb) {
 template <BroadcastType bcast_type>
 [[deprecated(
     "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then unary_bcast_init(icb). "
-    "The unary_bcast_init(icb, ocb) full init will be removed after September 15th, 2026 (tt-metal#49924).")]]
+    "The unary_bcast_init(icb, ocb) full init will be removed after September 20th, 2026.")]]
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     compute_kernel_hw_startup(icb, ocb);

@@ -31,81 +31,101 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
                                                 // first 16 for sfpu, next 16 for fpu
 
 // ---------------------------------------------------------------------------------------------
-// Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) state tracker.
+// Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src).
 //
-// The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/ELW/MVMUL (the math thread),
-// so the math thread owns it via a small state machine. The recorded state lets format reconfigs and op
-// inits compose instead of clobbering each other:
+// The flag is a math-ALU concern: only read by MOVA2D/MOVB2D/MOVB2A/MVMUL/ELWADD/ELWMUL (the math
+// thread), never by the SFPU. Crucially, NO instruction changes it as a side effect -- it moves only
+// on an explicit cfg_reg_rmw. So the math thread owns it and we simply track its real value: each op
+// sets the value it needs, and an already-correct value is a no-op (skip the pipe-draining STALLWAIT +
+// RMW). src_zero_flag_hw caches that physical value (0xff = unknown, only at power-on).
 //
-//   DEFAULT        : flag follows the operand formats (UInt16 -> 1, else 0). Established by the
-//                    format-aware math config (_llk_math_hw_configure_ / reconfig), which also
-//                    clears any stale op-state before the next FP matmul/binary/reduce.
-//   UNARY_PRESERVE : flag = 1. Selected by eltwise unary / SFPU / datacopy inits to preserve
-//                    bf16 -0.0 and 16-bit-integer datums.
-//   MOV_OPS        : flag = 1. Selected by transpose_dest / 32b hi16-lo16 MOV sequences.
+// What each op wants:
+//   FP compute (matmul / eltwise-binary / reduce compute-phase) and format reconfigs -> the
+//     operand-driven value (keep for the int formats that require it, flush otherwise; see
+//     ckernel::requires_disabled_src_zero_flag). The cached operand formats feed this.
+//   Data-movement (datacopy / copy_init / transpose_dest / reduce mov-phase) -> keep (1), so bf16 -0.0
+//     (which the SFPU sign ops read back out of DEST) and 16b/32b int datums pass through faithfully.
 //
-// Each configurator early-returns when already in its state (DEFAULT additionally re-applies when
-// the cached operand formats changed), so steady-state ops pay no extra cfg writes.
-// See ckernel::requires_disabled_src_zero_flag for the UInt16 rationale.
+// Canonical (non-experimental) LLKs only touch the flag from math-thread code, so the tracked value
+// stays coherent. A raw cfg write that bypasses the setter must call _invalidate_src_zero_flag_state_().
 // ---------------------------------------------------------------------------------------------
-enum class SrcZeroFlagState : std::uint8_t
-{
-    UNCONFIGURED   = 0,
-    DEFAULT        = 1,
-    UNARY_PRESERVE = 2,
-    MOV_OPS        = 3,
-};
-
-static SrcZeroFlagState src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
-static std::uint32_t src_zero_flag_srca_fmt = 0xff;
+static std::uint32_t src_zero_flag_hw       = 0xff; // last value written to the flag; 0xff = unknown
+static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats feeding the compute default
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
+// The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
+// kernel otherwise overflows its slot).
+inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
+{
+    src_zero_flag_hw = value;
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
+}
+
+// Set the flag to `disable`; skip if it already holds that value. The check is inlined at every call
+// site so hot loops (whose operand formats change but map to the same flag value) stay call-free; only
+// a genuine value change pays the out-of-line write.
 inline void _configure_src_zero_flag_(const bool disable)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
-}
-
-// DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
-inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
-{
-    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_srca_fmt == srca_dst_format && src_zero_flag_srcb_fmt == srcb_dst_format)
+    const std::uint32_t value = disable ? 1u : 0u;
+    if (src_zero_flag_hw == value)
     {
         return;
     }
-    src_zero_flag_srca_fmt = srca_dst_format;
-    src_zero_flag_srcb_fmt = srcb_dst_format;
-    src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
-    _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+    _apply_src_zero_flag_(value);
 }
 
-// UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
-inline void _configure_unary_preserve_zero_flag_state_()
+// A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
+// #define LLK_ZEROFLAG_OUTLINE before its includes to force this configurator out-of-line -- one copy
+// called from each reconfig/init site instead of an inlined fast path at every one, trading a call for
+// code size. Perf-critical kernels (groupnorm welford) leave it inlined (the default).
+#ifdef LLK_ZEROFLAG_OUTLINE
+#define LLK_ZEROFLAG_DEFAULT_ATTR __attribute__((noinline))
+#else
+#define LLK_ZEROFLAG_DEFAULT_ATTR
+#endif
+
+// FP compute / format reconfig: the flag follows the operand formats. Reads the cached SrcA/SrcB formats
+// -- maintained by the reconfig sites, the only places the SrcA/SrcB format actually changes -- and applies
+// the operand-driven value, skipping the pipe-draining write when the flag already holds it (the steady
+// state in hot loops). Takes no format args and stores nothing, so the inlined fast path at every init site
+// stays tiny AND the caches can never diverge (they are refreshed on every format change, independent of
+// whether the resulting flag value changed).
+// TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once that lands this collapses to
+// _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag() / the format cache are dropped.
+inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 {
-    if (src_zero_flag_state == SrcZeroFlagState::UNARY_PRESERVE)
+    const std::uint32_t value = requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u;
+    if (src_zero_flag_hw == value)
     {
         return;
     }
-    src_zero_flag_state = SrcZeroFlagState::UNARY_PRESERVE;
+    _apply_src_zero_flag_(value);
+}
+
+// Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
+inline void _configure_preserve_zero_flag_state_()
+{
     _configure_src_zero_flag_(true);
 }
 
-// MOV_OPS: transpose_dest / 32b hi16-lo16 MOV sequences keep the flag disabled.
-inline void _configure_mov_ops_zero_flag_state_()
+// Datacopy zero-flag, chosen by the source (SrcA) format. Default is preserve (keep) so bf16 -0.0 and
+// 16-bit integer datums survive the move. Exception: fp8 (e4m3 / e5m2) sources widen into a SrcA datum
+// whose zero carries a nonzero high residual, so preserve would read it back as ~2^-15; those must be
+// flushed (zero-substituted) to produce a clean 0. Src format carries extra high bits, so mask to 0x1F.
+inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
 {
-    if (src_zero_flag_state == SrcZeroFlagState::MOV_OPS)
-    {
-        return;
-    }
-    src_zero_flag_state = SrcZeroFlagState::MOV_OPS;
-    _configure_src_zero_flag_(true);
+    const std::uint32_t fmt = src_dst_format & 0x1F;
+    // Wormhole fp8 is Lf8 (e5m2) only; Fp8_e4m3 is a Blackhole-only DataFormat.
+    const bool flush_fp8 = (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
+    _configure_src_zero_flag_(!flush_fp8);
 }
 
-// Invalidate the tracked state after code path that writes the flag directly (bypassing the
-// tracker), so the next configurator re-applies regardless of the skip-if-set fast path.
+// After a raw cfg write that bypassed the setter, mark the tracked value unknown so the next
+// _configure_ re-applies from a known baseline.
 inline void _invalidate_src_zero_flag_state_()
 {
-    src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
+    src_zero_flag_hw = 0xff;
 }
 
 inline void reset_counters(const std::uint32_t setrwc)
@@ -116,6 +136,19 @@ inline void reset_counters(const std::uint32_t setrwc)
 inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b, const std::uint32_t incr_d, const std::uint32_t incr_cr)
 {
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
+}
+
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 }
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
