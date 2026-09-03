@@ -6,9 +6,8 @@
 The reference builds all three attention kinds from one class: a sliding layer is
 ``DeepseekV4Attention`` with ``compressor = None`` and ``rope_layer_type = "main"`` (plain theta=10000
 instead of the YaRN-scaled table HCA/CSA share with their compressor). Everything else -- the Q/KV
-stems, the per-head sink, the grouped output projection -- is identical, so those come from
-:class:`TtHCA` unchanged and only the attention core differs. Flash has two such layers (0 and 1); Pro
-has none.
+stems, the per-head sink, the grouped output projection -- is identical, and is duplicated here rather
+than shared; see the note in ``__init__``. Flash has two such layers (0 and 1); Pro has none.
 
 The attention core is where a sliding layer stops looking like HCA. HCA all-gathers the K/V and then
 attends over ``[carry | chunk | compressed]``, so every chip sees ``Sk`` = the whole slab. A 128-token
@@ -41,9 +40,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
-from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
+from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class TtSWAState:
@@ -86,50 +87,71 @@ class TtSWA(LightweightModule):
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
-        # The stems, the sink packing and the grouped o_proj are the reference's shared half, so they
-        # come from a TtHCA built with compressor=None rather than copied. Only _attention and the
-        # state differ, and both live here.
-        self._hca = TtHCA(
+        # TODO: q_stem / kv_stem / o_proj below are byte-identical to TtHCA's, and to whatever TtCSA's
+        # will be -- the reference builds all eight projections unconditionally for every layer_type and
+        # runs them identically (modeling_deepseek_v4.py:786-800); only the key assembly in the middle
+        # differs. They belong in one TtV4Attention.forward that runs the shared pipeline
+        # (q_stem -> kv_stem -> per-type core -> o_proj) and injects the core, rather than in a base
+        # class each type re-derives a forward from. Duplicated here on purpose so this layer lands
+        # without touching heavily_compressed_attention.py; unify once TtCSA's core exists.
+        self.device = device
+        self.dtype = dtype
+        self.weights_dtype = weights_dtype
+        self.memory_config = memory_config
+        self.num_heads = int(num_heads)
+        self.head_dim = int(head_dim)
+        self.rope_head_dim = int(rope_head_dim)
+        self.sliding_window = int(sliding_window)
+        self.o_groups = int(o_groups)
+        self.scaling = self.head_dim**-0.5
+        self.rotary_emb = rotary_emb
+        self.rms_norm_eps = float(rms_norm_eps)
+
+        self.sp_axis, self.tp_axis = sp_axis, tp_axis
+        self.sp_factor = device.shape[sp_axis]
+        self.tp_factor = device.shape[tp_axis]
+        self.tp_ccl_topology = topology
+        self.tt_ccl = get_tt_ccl(device) if (self.sp_factor > 1 or self.tp_factor > 1) else None
+        self.ccl_num_links = 2 if is_blackhole() else 1
+        self.ops = TtCompressorUtils(
             device,
-            compressor=None,
-            q_a_proj_weight=q_a_proj_weight,
-            q_a_norm_weight=q_a_norm_weight,
-            q_b_proj_weight=q_b_proj_weight,
-            kv_proj_weight=kv_proj_weight,
-            kv_norm_weight=kv_norm_weight,
-            sinks=sinks,
-            o_a_proj_weight=o_a_proj_weight,
-            o_b_proj_weight=o_b_proj_weight,
             rotary_emb=rotary_emb,
-            num_heads=num_heads,
-            head_dim=head_dim,
-            rope_head_dim=rope_head_dim,
-            sliding_window=sliding_window,
-            o_groups=o_groups,
-            rms_norm_eps=rms_norm_eps,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            topology=topology,
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
         )
-        self.device = device
-        self.dtype = dtype
-        self.memory_config = memory_config
-        self.head_dim = int(head_dim)
-        self.rope_head_dim = int(rope_head_dim)
-        self.sliding_window = int(sliding_window)
-        self.scaling = self.head_dim**-0.5
-        self.sp_axis, self.tp_axis = sp_axis, tp_axis
-        self.sp_factor = self._hca.sp_factor
-        self.tp_factor = self._hca.tp_factor
-        self.ops: TtCompressorUtils = self._hca.ops
+
+        # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
+        # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
+        sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
+        self.sinks_sdpa = self.ops.from_torch(sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
+
+        self.wq_a = self.ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
+        self.wq_b = self.ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
+        self.q_a_norm_weight = self.ops.from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
+        self.q_b_norm_weight = self.ops.from_torch(torch.ones(1, 1, 1, self.head_dim))
+        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
+        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
+
+        # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole
+        # groups: keep it as ONE batched weight sharded on the group axis and run a single batched
+        # matmul -- each chip applies only its own groups, no collective.
+        in_per_group = self.num_heads * self.head_dim // self.o_groups
+        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
+        self.wo_a = self.ops.from_torch(
+            o_a_grouped, mesh_mapper=self.ops.mesh_mapper(tp_dim=1), dtype=self.weights_dtype
+        )
+        self.wo_b = self.ops.to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
+
+        self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
 
         # Everything below comes from alloc_state, which every caller has to run before forward.
         self._mask = None  # persistent additive mask; forward overwrites only the halo columns
         self._head_cols = None  # the halo columns, in a normal and a first-chunk variant
         self._halo_bounds = None  # SP-sharded slice bounds: this chip's 128 rows of history
+        self._halo_num_devices = None
         self._slab_rope = None
         self._slab_index = None
         self._carry_index = None
@@ -271,13 +293,11 @@ class TtSWA(LightweightModule):
             gathered = ttnn.experimental.all_gather_async(
                 sliding_kv,
                 dim=2,
-                multi_device_global_semaphore=self._hca.tt_ccl.get_and_cycle_ag_semaphore_handles(
-                    cluster_axis=self.sp_axis
-                ),
-                barrier_semaphore=self._hca.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-                num_links=self._hca.ccl_num_links,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self._hca.tp_ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.sp_axis,
             )
         else:
@@ -304,7 +324,7 @@ class TtSWA(LightweightModule):
             attn_mask=self._mask,
             is_causal=False,
             scale=self.scaling,
-            attention_sink=self._hca.sinks_sdpa,
+            attention_sink=self.sinks_sdpa,
             # 128/128 is not inherited from HCA, it is the only good split here: a provided mask makes
             # the reader stream a [q_chunk, k_chunk] tile per iteration, so anything wider blows L1
             # (k_chunk=256 asks 1.93 MB of a 1.57 MB budget). Swept on 8x4 -- 96/128 costs 5% and
@@ -327,10 +347,140 @@ class TtSWA(LightweightModule):
         nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
         rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
         # Undoing V's RoPE is the same rotation with the sign of sin flipped, so cos is reused.
-        rope = ttnn.experimental.rotary_embedding_llama(
-            rope, cos, ttnn.neg(sin), self._hca.trans_mat, is_decode_mode=False
-        )
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
+
+    def _q_stem(self, hidden_states, cos, sin):
+        """[B, 1, S/sp, hidden/tp] -> q [B, num_heads/tp, S/sp, head_dim]. ``cos``/``sin`` cover the padded
+        slab and are built once per call: both stems and the output un-rope want the same rotation, and
+        building it again costs ~2.9 ms of host time."""
+        input_shape = tuple(hidden_states.shape)
+        if len(input_shape) != 4 or input_shape[1] != 1:
+            raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
+        batch, seq_len = input_shape[0], input_shape[2]
+        num_heads_local = self.num_heads // self.tp_factor
+
+        q = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
+
+        # Row-parallel -> partial sums; all-reduce rebuilds the full q_lora, replicated across TP.
+        if self.tp_factor > 1:
+            q = ttnn.experimental.reduce_scatter_minimal_async(
+                q,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            q = ttnn.experimental.all_gather_async(
+                q,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+
+        q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
+        q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
+
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            num_heads=num_heads_local,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=self.memory_config,
+        )
+        q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.rms_norm_eps)
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads_local, seq_len, nope_dim])
+        rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_len, self.head_dim])
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
+
+    def _kv_stem(self, hidden_states, cos, sin):
+        """[B, 1, S/sp, hidden/tp] -> single-head sliding_kv [B, 1, S/sp, head_dim], TP-replicated.
+        K == V in V4. Returns the full S; the sliding-window truncation is a chunked-prefill concern."""
+        input_shape = tuple(hidden_states.shape)
+        if len(input_shape) != 4 or input_shape[1] != 1:
+            raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
+        batch, seq_len = input_shape[0], input_shape[2]
+
+        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
+
+        # kv_proj is contraction(row)-parallel like wq_a -> partial-sum single-head KV; TP all-reduce
+        # (reduce_scatter + all_gather) rebuilds the full head_dim, replicated across TP.
+        if self.tp_factor > 1:
+            kv = ttnn.experimental.reduce_scatter_minimal_async(
+                kv,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            kv = ttnn.experimental.all_gather_async(
+                kv,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+
+        kv = ttnn.rms_norm(kv, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, nope_dim])
+        rope = ttnn.slice(kv, [0, 0, 0, nope_dim], [batch, 1, seq_len, self.head_dim])
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
+
+    def _o_proj(self, attn):
+        """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
+        batch, _, seq_len, _ = attn.shape
+        in_per_group = self.num_heads * self.head_dim // self.o_groups
+        groups_local = self.o_groups // self.tp_factor
+
+        x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_len, self.head_dim])
+        x = ttnn.experimental.nlp_concat_heads(x, memory_config=self.memory_config)
+        x = ttnn.reshape(x, [batch, groups_local, seq_len, in_per_group])
+
+        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [B, groups_local, S, o_lora_rank]
+        o_lora_rank = grouped.shape[-1]
+        grouped = ttnn.concat(
+            [ttnn.slice(grouped, [0, g, 0, 0], [batch, g + 1, seq_len, o_lora_rank]) for g in range(groups_local)],
+            dim=-1,
+        )  # [B, 1, S, groups_local*o_lora_rank]
+
+        out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # partial-sum [B,1,S,hidden]
+
+        # Reduce-scatter, not a full all-reduce: it both sums the partials and slices to hidden/tp,
+        # which is already the layout the next block wants.
+        if self.tp_factor > 1:
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+        return out
 
     def forward(self, hidden_states, seq_len_actual: int | None = None, state: TtSWAState = None):
         """[B, 1, S/sp, hidden/tp] -> the same, one chunk. ``seq_len_actual`` is the chunk's real token
@@ -346,8 +496,8 @@ class TtSWA(LightweightModule):
 
         slab_index = self.ops.rope_index(self._slab_index, state.kv_actual)
         cos, sin = self.ops.rope_gather(self._slab_rope, slab_index)
-        q = self._hca._q_stem(hidden_states, cos, sin)
-        sliding_kv = self._hca._kv_stem(hidden_states, cos, sin)
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
 
         attn, next_carry = self._attention(
             q, sliding_kv, cos, sin, carry=state.carry, kv_actual=state.kv_actual, real_len=real_len
@@ -355,4 +505,4 @@ class TtSWA(LightweightModule):
 
         state.kv_actual += real_len
         state.carry = next_carry
-        return self._hca._o_proj(attn)
+        return self._o_proj(attn)
