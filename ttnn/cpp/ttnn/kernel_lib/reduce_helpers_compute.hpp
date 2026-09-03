@@ -10,6 +10,7 @@
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
@@ -514,6 +515,8 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  *        dimension (default: ReducePartialMode::None). Kernel callers do not
  *        select or address auxiliary tiles.
  *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
+ * @param auxiliary_tile_offset Planner-selected start of this call's recipe in
+ *        a shared sequence-level auxiliary CB (default: 0 for standalone calls).
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -606,7 +609,26 @@ ALWI void reduce(
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
     ReducePartialMode partial_mode = ReducePartialMode::None,
-    ReduceInputChunk input_chunk = ReduceInputChunk::automatic());
+    ReduceInputChunk input_chunk = ReduceInputChunk::automatic(),
+    std::uint32_t auxiliary_tile_offset = 0);
+
+/**
+ * @brief Issue one host-planned tiled reduce call.
+ *
+ * This overload lowers every planner-selected field from `Call` into the
+ * explicit reduce() interface above, including accumulation, post-scaling,
+ * partial handling, chunking, and the shared auxiliary-CB slice.
+ *
+ * It deliberately does not perform compute-kernel startup or any surrounding
+ * CB preparation. The kernel owns when this call runs and may perform
+ * arbitrary work, including refilling a reused input CB, between planned
+ * calls.
+ *
+ * @tparam Call A constexpr call descriptor such as
+ *         ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
+ */
+template <typename Call>
+ALWI void reduce();
 
 }  // namespace compute_kernel_lib
 
