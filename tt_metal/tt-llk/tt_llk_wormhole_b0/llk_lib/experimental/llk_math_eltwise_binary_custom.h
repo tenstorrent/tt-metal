@@ -130,6 +130,7 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
     math::clear_dst_reg_addr();
 }
 
+/** @brief Initialises math state for cancellation-resistant column-broadcast subtraction. */
 inline void _llk_math_sub_bcast_cols_compensated_init_()
 {
     eltwise_binary_configure_addrmod_custom<BroadcastType::COL>();
@@ -138,6 +139,13 @@ inline void _llk_math_sub_bcast_cols_compensated_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Computes (input - anchor) + (anchor - mean) for a block of 32x32 tiles.
+ * @param ct_dim Number of consecutive input tiles to process.
+ * @param tensor_shape Shape of each input tile; only full 32x32 tiles are supported.
+ * @param dst_index First destination tile slot to write.
+ * @note Call @ref _llk_math_sub_bcast_cols_compensated_init_ before this operation.
+ */
 inline void _llk_math_sub_bcast_cols_compensated_(
     const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
