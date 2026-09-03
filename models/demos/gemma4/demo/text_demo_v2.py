@@ -885,6 +885,11 @@ def _run_spec_decode(
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
+    # Capture the fused graph after prefill / assistant load, before the decode
+    # timer. Decode: already excludes this; wall should too so 200-token demos
+    # are not dominated by one-time compile. Setup is still logged separately.
+    if use_fused and spec._use_trace:
+        spec.prepare_fused_trace(anchor_token, anchor_pos)
     t0 = time.time()
     if use_fused:
         generated, accepts = spec.generate_fused(
@@ -915,7 +920,8 @@ def _run_spec_decode(
     tok_s = tok_s_u * batch_size
     ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
     ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
-    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
+    wall_elapsed = elapsed + (setup_elapsed if use_fused and spec._use_trace else 0.0)
+    wall_tok_s_u = n_tokens / wall_elapsed if wall_elapsed > 0 else 0.0
 
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
