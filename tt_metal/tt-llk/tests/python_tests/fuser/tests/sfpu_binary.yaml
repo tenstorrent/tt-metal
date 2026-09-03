@@ -18,15 +18,21 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        unpack_to_dest: true
+        blocks:
+          - in0: {start: 0, count: 4}
+            dest: auto
       - type: "BinarySfpu"
         operation: "SfpuElwadd"
         approximation_mode: false
         iterations: 32
-        src1_dest_tile_index: 0
-        src2_dest_tile_index: 1
-        dst_dest_tile_index: 2
+        blocks:
+          - src0: 0
+            src1: 1
+            dest: 2
     pack:
       - output: "datacopy_out"
         packer: "Packer"
+        blocks:
+          - dest: {start: 0, count: 4}
+            out: auto
     block_size: [32, 128]

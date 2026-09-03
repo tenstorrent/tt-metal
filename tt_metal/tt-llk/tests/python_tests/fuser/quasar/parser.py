@@ -285,11 +285,13 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _iteration_step: ClassVar[int] = 4
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _iteration_step: ClassVar[int] = 4
 
 
 MathSchema = Annotated[

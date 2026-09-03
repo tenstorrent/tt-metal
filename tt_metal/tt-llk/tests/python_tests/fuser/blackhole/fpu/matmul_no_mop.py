@@ -4,17 +4,16 @@
 
 from typing import List
 
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlock, TileLoop
 
 from .matmul import MatmulFpu
 
 
 class MatmulNoMopFpu(MatmulFpu):
-    loop: TileLoop = LoopBlock()
+    granularity = InvocationGranularity.BLOCK
     per_block_init = True
 
     def get_headers(self) -> List[str]:

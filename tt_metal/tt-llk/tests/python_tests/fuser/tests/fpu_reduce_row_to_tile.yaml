@@ -18,7 +18,8 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "SUM"
-        reduce_to_tile: true
+        blocks:
+          dest: 0
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
     block_size: [64, 128]

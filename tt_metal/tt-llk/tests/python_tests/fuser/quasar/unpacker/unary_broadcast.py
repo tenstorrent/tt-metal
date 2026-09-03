@@ -6,16 +6,15 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import BroadcastType
 
 
 class UnaryBroadcastUnpacker(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def _srcb_dvalids_per_tile(self, compute_unit: FpuNode) -> int:
         if compute_unit.broadcast_type == BroadcastType.Scalar:

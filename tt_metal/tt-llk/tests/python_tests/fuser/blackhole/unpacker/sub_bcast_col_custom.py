@@ -6,15 +6,14 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class SubBcastColCustomUnpacker(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -84,7 +83,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         return (
             f"_llk_unpack_AB_sub_bcast_col_custom_("
             f"L1_ADDRESS({buffer_a}[{block.tile_id_global}]), "
-            f"L1_ADDRESS({buffer_b}[{block.tile_id_global}]), "
+            f"L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]), "
             f"{ct_dim});\n"
         )
 

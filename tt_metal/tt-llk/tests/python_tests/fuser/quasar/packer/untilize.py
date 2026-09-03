@@ -5,18 +5,17 @@
 from typing import List
 
 import torch
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
-from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import PackerReluType
 
 from .packer import Packer
 
 
 class PackUntilize(Packer):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -64,6 +63,8 @@ class PackUntilize(Packer):
             * tile_shape.num_faces_r_dim
             * tile_shape.face_r_dim
         )
-        l1_row_idx = f"{y_stride} * ({block.block_y} + tile_y) + {block.block_x}"
+        l1_row_idx = (
+            f"{y_stride} * ({block.block_y} + {block.tile_y}) + {block.block_x}"
+        )
 
         return f"_llk_pack_untilize_({block.tile_id_block}, {l1_row_idx});\n"

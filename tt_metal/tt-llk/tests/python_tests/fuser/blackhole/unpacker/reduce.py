@@ -6,15 +6,14 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class ReduceUnpacker(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
@@ -92,4 +91,4 @@ class ReduceUnpacker(Unpacker):
         buffer_b = compute_unit.src_b.cpp_name
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"

@@ -13,8 +13,8 @@ if TYPE_CHECKING:
     from .block_data import BlockData
 
 
+from .block_data import InvocationGranularity
 from .golden import Golden
-from .tile_loop import TileLoop
 
 
 class Fpu(Golden):
@@ -25,25 +25,21 @@ class Fpu(Golden):
     Math thread, plus a Python golden function for test validation.
 
     The lifecycle called by the pipeline is:
-        init() -> loop.math_loop() [which calls calculate()] -> uninit()
-
-    Override `loop` with an appropriate TileLoop subclass to control
-    the tile iteration pattern used by the math phase.
+        init() -> planned calls to calculate() -> uninit()
 
     Set `per_block_init = True` if init() needs block dimensions and must
     be called per-block inside the batch loop rather than hoisted out.
 
     To create a new FPU:
         1. Subclass Fpu
-        2. Set `loop` to the desired TileLoop variant
+        2. Set `granularity` to the adapter invocation granularity
         3. Override get_headers() with the required LLK header files
         4. Override init(), calculate(), uninit() to emit the C++ LLK calls
         5. Override golden() to compute the expected math result, calling
            self.eltwise_golden(), self.matmul_golden(), etc.
     """
 
-    # Controls the tile iteration pattern for the math loop.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.NONE
     per_block_init: bool = False
 
     def init(
@@ -71,8 +67,8 @@ class Fpu(Golden):
     ) -> str:
         """Return C++ code that performs the math operation on a single tile.
 
-        Called inside the tile loop by TileLoop.math_loop(). Use block.tile_id_block
-        for the dest register index. Override to emit the _llk_math_*_<>() call
+        Called for each planned invocation. Use block.tile_id_block for the Dest
+        register index. Override to emit the _llk_math_*_<>() call
         that executes the FPU operation on data in the source register files.
         """
         return ""

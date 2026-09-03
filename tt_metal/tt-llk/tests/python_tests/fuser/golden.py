@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .operand import Operand
     from .pack_node import PackNode
-    from .sfpu_node import SfpuNode
 
 from helpers.golden_generators import (
     BinarySFPUGolden,
@@ -25,6 +24,7 @@ from helpers.golden_generators import (
     TransposeGolden,
     UnarySFPUGolden,
     UntilizeGolden,
+    apply_l1_accumulation,
     get_golden_generator,
 )
 from helpers.llk_params import (
@@ -136,14 +136,14 @@ class Golden:
             tile_shape.face_r_dim,
         )
 
-        if per_block:
+        if node.block_defaults.in1 is not None:
+            tiles = broadcast.view(operand.tile_count, -1)
+            tiles[:] = tiles[node.block_defaults.in1].clone()
+        elif per_block:
             tiles = broadcast.view(operand.tile_count_y, operand.tile_count_x, -1)
             for bx in range(0, operand.tile_count_x, operation.block_tiles_x):
                 block = tiles[:, bx : bx + operation.block_tiles_x]
                 block[:] = block[:, :1]
-        elif node.broadcast_tile is not None:
-            tiles = broadcast.view(operand.tile_count, -1)
-            tiles[:] = tiles[node.broadcast_tile].clone()
 
         return untilize_block(
             broadcast,
@@ -310,7 +310,9 @@ class Golden:
                 num_faces=num_faces,
             ).flatten()
 
-        src_reduced = reduce(tensor_a, block_max or node.reduce_to_tile)
+        src_reduced = reduce(
+            tensor_a, block_max or node.block_defaults.dest is not None
+        )
         dest_reduced = reduce(tensor_dst, block_max)
 
         if pool_type == ReducePool.Average:
@@ -331,21 +333,16 @@ class Golden:
         batch_dims: tuple,
     ) -> torch.Tensor:
         sfpu = node.sfpu
-        format_input = config.sentinel.golden_math_format
-        format_output = config.sentinel.golden_math_format
-        dest_acc = config.dest_acc
-
-        generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
-
-        return generate_sfpu_golden(
+        data_format = config.sentinel.golden_math_format
+        return get_golden_generator(UnarySFPUGolden)(
             sfpu.operation,
             tensor,
-            format_output,
-            dest_acc,
-            format_input,
+            data_format,
+            config.dest_acc,
+            data_format,
             batch_dims,
             sfpu.iterations,
-            sfpu.dest_idx,
+            0,
             sfpu.fill_const_value,
             skip_tilize=True,
         )
@@ -358,22 +355,26 @@ class Golden:
         node: "SfpuNode",
         batch_dims: tuple,
     ) -> torch.Tensor:
-        sfpu = node.sfpu
-        math_format = config.sentinel.golden_math_format
-
-        generate_binary_golden = get_golden_generator(BinarySFPUGolden)
-
-        return generate_binary_golden(
-            sfpu.operation,
+        tile_size = tensor.numel() // 3
+        if tile_size < 1024:
+            padded = torch.zeros((3, 1024), dtype=tensor.dtype, device=tensor.device)
+            padded[:, :tile_size] = tensor.view(3, tile_size)
+            tensor = padded.flatten()
+            batch_dims = (96, 32)
+        result = get_golden_generator(BinarySFPUGolden)(
+            node.sfpu.operation,
             tensor,
-            sfpu.dst_index_in0,
-            sfpu.dst_index_in1,
-            sfpu.dst_index_out,
-            sfpu.iterations,
+            0,
+            1,
+            2,
+            node.sfpu.iterations,
             batch_dims,
-            math_format,
+            config.sentinel.golden_math_format,
             skip_tilize=True,
         )
+        if tile_size < 1024:
+            return result.view(3, 1024)[:, :tile_size].flatten()
+        return result
 
     def untilize_golden(
         self,
@@ -393,53 +394,11 @@ class Golden:
 
     def l1_acc_golden(
         self,
-        tensor: torch.Tensor,
-        config: "GlobalConfig",
-        operation: "L1Operation",
-        node: "PackNode",
+        accumulated: torch.Tensor,
+        tile: torch.Tensor,
+        output_format,
     ) -> torch.Tensor:
-        output_dims = node.output.dimensions
-        output_format = node.output.data_format
-        tile_size = node.output.tile_shape.total_tile_size()
-        tile_count_x = node.output.tile_count_x
-        tile_count_y = node.output.tile_count_y
-        block_tiles_x = operation.block_tiles_x
-        block_tiles_y = operation.block_tiles_y
-
-        tile_dims = (
-            node.output.tile_shape.total_row_dim(),
-            node.output.tile_shape.total_col_dim(),
-        )
-        num_faces = node.output.tile_shape.total_num_faces()
-        tensor = tilize_block(
-            tensor,
-            output_dims,
-            output_format,
-            num_faces=num_faces,
-            tile_dimensions=tile_dims,
-        ).flatten()
-        tile_grid = tensor.view(tile_count_y, tile_count_x, tile_size)
-
-        accumulated = torch.zeros(
-            block_tiles_y, block_tiles_x, tile_size, dtype=tensor.dtype
-        )
-        for by in range(0, tile_count_y, block_tiles_y):
-            for bx in range(0, tile_count_x, block_tiles_x):
-                bty = min(block_tiles_y, tile_count_y - by)
-                btx = min(block_tiles_x, tile_count_x - bx)
-                accumulated[:bty, :btx] += tile_grid[by : by + bty, bx : bx + btx]
-
-        result_grid = torch.zeros(
-            tile_count_y, tile_count_x, tile_size, dtype=tensor.dtype
-        )
-        result_grid[:block_tiles_y, :block_tiles_x] = accumulated
-        return untilize_block(
-            result_grid.flatten(),
-            output_format,
-            output_dims,
-            tile_dimensions=tile_dims,
-            num_faces=num_faces,
-        )
+        return apply_l1_accumulation([accumulated, tile], output_format)
 
     def relu_golden(
         self,

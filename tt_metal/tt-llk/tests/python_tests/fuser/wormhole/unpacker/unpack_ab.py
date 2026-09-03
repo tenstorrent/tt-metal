@@ -6,16 +6,15 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import BroadcastType
 
 
 class UnpackerAB(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def get_headers(self) -> List[str]:
         return [
@@ -116,11 +115,7 @@ class UnpackerAB(Unpacker):
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        tile_id_b = (
-            block.tile_id_global
-            if compute_unit.broadcast_tile is None
-            else compute_unit.broadcast_tile
-        )
+        tile_id_b = block.tile_id_src_b
         return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{tile_id_b}]));\n"
 
     def uninit(

@@ -6,16 +6,15 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import DestAccumulation
 
 
 class UnpackerTilizeA(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def perf_set_valid(
@@ -87,7 +86,7 @@ class UnpackerTilizeA(Unpacker):
 
         return (
             f"_llk_unpack_tilize_<p_unpacr::UNP_A>"
-            f"({block.tile_id_global} * {num_faces_r_dim} * {face_r_dim});\n"
+            f"(({block.tile_id_global}) * {num_faces_r_dim} * {face_r_dim});\n"
         )
 
     def uninit(

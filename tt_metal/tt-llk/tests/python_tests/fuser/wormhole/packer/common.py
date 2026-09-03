@@ -67,7 +67,7 @@ def untilize_l1_address(output: Operand, block: BlockData) -> str:
 
     return (
         f"L1_ADDRESS({output.cpp_name}[0])"
-        f" + {row_stride} * ({block.block_y} + tile_y)"
+        f" + {row_stride} * ({block.block_y} + {block.tile_y})"
         f" + {col_stride} * {block.block_x}"
     )
 

@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from .block_data import BlockData
     from .pack_node import PackNode
 
+from .block_data import InvocationGranularity
 from .golden import Golden
-from .tile_loop import TileLoop
 
 
 class Packer(Golden):
@@ -22,9 +22,8 @@ class Packer(Golden):
     Subclasses override methods to emit the C++ LLK calls that configure and
     drive the Pack thread, plus a Python golden function for test validation.
 
-    The pack lifecycle is driven by TileLoop.pack_loop(), which iterates
-    over tiles in the block and calls pack() for each one:
-        init() -> pack_loop() [which calls pack()] -> uninit()
+    The pipeline calls pack() for each resolved invocation:
+        init() -> planned calls to pack() -> uninit()
 
     To create a new packer:
         1. Subclass Packer
@@ -34,8 +33,7 @@ class Packer(Golden):
            calling self.relu_golden() and self.l1_acc_golden() as needed
     """
 
-    # Controls the tile iteration pattern for the pack loop.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.TILE
 
     # Set `per_block_init = True` if init() needs block dimensions and must
     # be called per-block inside the batch loop rather than hoisted out.
@@ -92,8 +90,8 @@ class Packer(Golden):
     ) -> str:
         """Return C++ code that packs a single tile from dest to L1.
 
-        Called inside the tile loop by TileLoop.pack_loop(). Use
-        block.tile_id_block for the dest register index and
+        Called for each planned invocation. Use block.tile_id_block for the Dest
+        register index and
         block.tile_id_global for the L1 output buffer index.
         Override to emit the _llk_pack_<>() call.
         """

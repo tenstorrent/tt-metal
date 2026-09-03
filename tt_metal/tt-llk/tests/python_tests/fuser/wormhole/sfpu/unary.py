@@ -22,7 +22,6 @@ class UnarySfpu(Sfpu):
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
-        dest_idx: int = 0,
         fill_const_value=5,
     ):
         if not operation in MathOperation.get_sfpu_unary_operations():
@@ -32,7 +31,6 @@ class UnarySfpu(Sfpu):
         self.iterations = iterations
         self.approx_mode = approx_mode
         self.operation = operation
-        self.dest_idx = dest_idx
         self.fill_const_value = fill_const_value
 
     def get_headers(self) -> List[str]:
@@ -90,7 +88,7 @@ class UnarySfpu(Sfpu):
             f"test_utils::call_unary_sfpu_operation<"
             f"{dest_sync}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
-            f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
+            f">({block.tile_id_block}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

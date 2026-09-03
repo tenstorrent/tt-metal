@@ -39,6 +39,7 @@ class L1Operation:
     def __post_init__(self):
         self.block_tiles_x = self.block_size[1] // self.tile_shape.total_col_dim()
         self.block_tiles_y = self.block_size[0] // self.tile_shape.total_row_dim()
+        self.math.plan(self)
 
     def unpack(self, config) -> str:
         return self.math.unpack_body(self, config)

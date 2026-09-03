@@ -6,15 +6,14 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class ReduceBlockMaxRuntimeUnpacker(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -77,7 +76,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        return f"_llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"
 
     def uninit(
         self,

@@ -40,7 +40,8 @@ operations:
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
+        blocks:
+          in1: 0
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Relu"

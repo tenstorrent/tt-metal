@@ -78,7 +78,8 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
-        reduce_to_tile: true
+        blocks:
+          dest: 0
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     block_size: [32, 32]
@@ -95,7 +96,8 @@ operations:
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        broadcast_tile: 0
+        blocks:
+          in1: 0
         math_fidelity: "LoFi"
     block_size: [32, 32]
     pack:
@@ -123,7 +125,8 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
-        reduce_to_tile: true
+        blocks:
+          dest: 0
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     block_size: [32, 32]
@@ -156,7 +159,8 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        broadcast_tile: 0
+        blocks:
+          in1: 0
         math_fidelity: "HiFi4"
     block_size: [32, 32]
     pack:

@@ -1,0 +1,36 @@
+operands:
+  - name: "input_A"
+    dims: [32, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [32, 256]
+    format: "Float16_b"
+  - name: "output"
+    dims: [32, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        operation: "Elwadd"
+        in0: "input_A"
+        in1: "input_B"
+        unpacker: "UnpackerAB"
+        blocks:
+          - in0: [1, 3, 0, 2]
+            in1: 0
+            dest: {start: 0, count: 4}
+      - type: "BinarySfpu"
+        operation: "SfpuElwadd"
+        iterations: 32
+        blocks:
+          - src0: [0, 1, 2, 3]
+            src1: [1, 2, 3, 0]
+            dest: [0, 1, 2, 3]
+    block_size: [32, 128]
+    pack:
+      - output: "output"
+        packer: "Packer"
+        blocks:
+          - dest: [1, 0, 3, 2]
+            out: [0, 1, 2, 3]

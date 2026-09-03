@@ -44,7 +44,8 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
+        blocks:
+          in1: 0
         math_fidelity: "HiFi2"
     block_size: [64, 64]
     pack:
@@ -58,7 +59,8 @@ operations:
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
+        blocks:
+          in1: 0
         math_fidelity: "LoFi"
     block_size: [64, 64]
     pack:

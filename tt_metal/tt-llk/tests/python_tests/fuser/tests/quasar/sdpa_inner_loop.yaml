@@ -61,7 +61,7 @@ operations:
       - output: "qkt"
         packer: "Packer"
 
-  # Step 2: row_max = reduce_max_row(qkt) with reduce_to_tile
+  # Step 2: row_max = reduce_max_row(qkt) into Dest tile zero
   - math:
       - type: "Fpu"
         in0: "qkt"
@@ -69,7 +69,8 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "MAX"
-        reduce_to_tile: true
+        blocks:
+          dest: 0
         unpacker: "ReduceUnpacker"
         math_fidelity: "LoFi"
     block_size: [32, 64]

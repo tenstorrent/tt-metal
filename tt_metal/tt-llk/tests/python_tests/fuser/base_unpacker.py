@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
+from .block_data import InvocationGranularity
 from .golden import Golden
-from .tile_loop import TileLoop
 
 
 class Unpacker(Golden):
@@ -24,17 +24,14 @@ class Unpacker(Golden):
     drive the Unpack thread, plus a Python golden function for test validation.
 
     The lifecycle called by the pipeline is:
-        init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
-
-    Override `loop` with an appropriate TileLoop subclass to control
-    the tile iteration pattern used by the unpack phases.
+        init() -> planned calls to unpack() -> uninit()
 
     Set `per_block_init = True` if init() needs block dimensions and must
     be called per-block inside the batch loop rather than hoisted out.
 
     To create a new unpacker:
         1. Subclass Unpacker
-        2. Set `loop` to the desired TileLoop variant
+        2. Set `granularity` to the adapter invocation granularity
         3. Override get_headers() with the required LLK header files
         4. Override init(), unpack(), uninit() to emit the C++ LLK calls
         5. Override golden() to compute the expected unpack transformation,
@@ -43,8 +40,7 @@ class Unpacker(Golden):
         6. Override perf_set_valid() / perf_clear_valid() for perf isolation
     """
 
-    # Controls the tile iteration pattern for unpack and math loops.
-    loop: TileLoop = TileLoop()
+    granularity = InvocationGranularity.NONE
     per_block_init: bool = False
 
     def init(
@@ -72,8 +68,8 @@ class Unpacker(Golden):
     ) -> str:
         """Return C++ code that unpacks a single tile (or tile group).
 
-        Called inside the tile loop by TileLoop.unpack_loop(). Use block.tile_id_global
-        for the L1 buffer index and block.tile_id_block for the dest register index.
+        Called for each planned invocation. Use block.tile_id_global for the L1
+        buffer index and block.tile_id_block for the Dest register index.
         Override to emit the _llk_unpack_*_<>() call that moves data from L1 into
         source register files.
         """

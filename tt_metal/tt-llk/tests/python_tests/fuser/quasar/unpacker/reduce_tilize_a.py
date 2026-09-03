@@ -6,15 +6,14 @@ from typing import List, Tuple
 
 import torch
 from fuser.base_unpacker import Unpacker
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnpackReduceTilize(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
@@ -99,9 +98,13 @@ class UnpackReduceTilize(Unpacker):
             compute_unit.src_a.tile_count_x
             * compute_unit.src_a.tile_shape.total_row_dim()
         )
-        l1_row_idx = (
-            f"{row_stride} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
-        )
+        if isinstance(block.tile_id_global, str):
+            tile_y = f"({block.tile_id_global}) / {block.tile_count_x}"
+            tile_x = f"({block.tile_id_global}) % {block.tile_count_x}"
+        else:
+            tile_y = block.tile_id_global // block.tile_count_x
+            tile_x = block.tile_id_global % block.tile_count_x
+        l1_row_idx = f"{row_stride} * ({tile_y}) + ({tile_x})"
 
         return (
             f"_llk_unpack_reduce_col_tilizeA_strided_"

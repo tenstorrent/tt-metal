@@ -2,17 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from fuser.block_data import BlockData
+from fuser.block_data import BlockData, InvocationGranularity
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 from .unpack_a import UnpackerA
 
 
 class TransposeDestUnpacker(UnpackerA):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def perf_set_valid(
         self,

@@ -26,8 +26,8 @@ class Sfpu(Golden):
     by a prior FPU stage or loaded via datacopy. It has no unpacker — SfpuNode
     has no unpacker field at all.
 
-    The lifecycle called by SfpuNode.sfpu_run() is:
-        init() -> calculate() -> uninit()
+    The lifecycle called by the pipeline is:
+        init() -> planned calls to calculate() -> uninit()
 
     Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
 
@@ -35,9 +35,10 @@ class Sfpu(Golden):
         1. Subclass Sfpu
         2. Override get_headers() with the required LLK header files
         3. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        4. Override golden() to compute the expected SFPU result, calling
-           self.unary_sfpu_golden() or self.binary_sfpu_golden() as needed
+        4. Override golden() to compute the expected SFPU result
     """
+
+    input_count = 1
 
     def init(
         self,
@@ -62,7 +63,7 @@ class Sfpu(Golden):
     ) -> str:
         """Return C++ code that performs the SFPU operation.
 
-        Called once per block between init() and uninit().
+        Called once per planned invocation between init() and uninit().
         Override to emit the sfpu calls.
         """
         return ""
@@ -92,10 +93,11 @@ class Sfpu(Golden):
     ) -> torch.Tensor:
         """Compute the golden SFPU result in Python.
 
-        Operates on tilized dest data per block. batch_dims and batch_tile_cnt
-        describe the current block's tile layout. Returns the transformed tensor.
+        Operates on prepared dest data per invocation. batch_dims and
+        batch_tile_cnt describe the current tile layout. Returns the transformed
+        tensor.
 
-        Called by SfpuNode.golden() on each block of the tilized dest tensor.
+        Called by SfpuNode.golden_call() for each planned invocation.
         """
         return tensor
 
