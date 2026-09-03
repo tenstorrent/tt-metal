@@ -107,6 +107,25 @@ def decode_hidden_width_memcfg(device, hidden_size: int) -> ttnn.MemoryConfig:
     return sharded_hidden_width_memcfg(device, hidden_size, m=TILE)
 
 
+def unpad_dram_sharded_out(out_sharded: ttnn.Tensor, n: int, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    """Trim a DRAM-sharded matmul's N-padded output back to ``n`` columns.
+
+    ``pad_n_for_dram_align`` widens N to a multiple of the DRAM bank count (2048 ->
+    2304 on wormhole), so every DRAM-sharded projection whose real N is not aligned
+    needs its output trimmed. ``ttnn.slice`` reads the width-sharded output directly
+    and writes any layout (verified bit-exact into L1-interleaved and DRAM), so no
+    ShardedToInterleaved is needed first. Frees ``out_sharded``.
+    """
+    out = ttnn.slice(
+        out_sharded,
+        [0, 0, 0, 0],
+        [out_sharded.shape[0], out_sharded.shape[1], out_sharded.shape[2], n],
+        memory_config=memory_config,
+    )
+    ttnn.deallocate(out_sharded)
+    return out
+
+
 def dram_sharded_program_config(
     m: int, k: int, n: int, num_cores: int, fused_activation=None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:

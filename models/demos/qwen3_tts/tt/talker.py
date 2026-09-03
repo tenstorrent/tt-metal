@@ -16,9 +16,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.attention import prepare_fused_sdpa_mask
+from models.demos.qwen3_tts.tt.attention import prepare_fused_sdpa_mask, talker_fused_sdpa_enabled
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
-from models.demos.qwen3_tts.tt.mesh_utils import is_n150
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 from models.demos.qwen3_tts.tt.rope import shard_decode_rope_tables
 
@@ -366,8 +365,10 @@ class Talker(LightweightModule):
         _own_rope = False
         if mode == "decode" or int(hidden_states.shape[-2]) == 1:
             cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, self.config.head_dim)
+        # Fused SDPA rejects the fp32 padding masks the caller builds; convert once
+        # here instead of once per layer (28 typecasts -> 1).
         _own_decode_mask = _own_prefill_mask = False
-        if is_n150(self.device):
+        if talker_fused_sdpa_enabled(self.device):
             decode_attn_mask, _own_decode_mask = prepare_fused_sdpa_mask(decode_attn_mask)
             prefill_attn_mask, _own_prefill_mask = prepare_fused_sdpa_mask(prefill_attn_mask)
 
