@@ -31,8 +31,9 @@ from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _SEED = 42
-# Shortest legal prompt, the pad granularity, one needing no padding, and the chunk width.
-_SHAPES = [128, 1024, 2048, 5120]
+# Shortest legal prompt, the pad granularity, one needing no padding, the chunk width, and HCA's two
+# ragged lengths: a single-shot prompt is a final chunk, which may end anywhere.
+_SHAPES = [128, 130, 1024, 2048, 4095, 5120]
 # A sliding layer has no cache write, so nothing may compile after the first chunk at all.
 _WRITE_COMPILES_PER_CHUNK = 0
 
