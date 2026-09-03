@@ -6542,7 +6542,13 @@ def _stages_short_of_achievable() -> list:
         _thr = _read_throughput() or {}
         _theo = float(_thr.get("theoretical_rate") or 0.0)
         _band = _thr.get("band") or []
-        _lof = (float(_band[0]) / _theo) if (_theo > 0 and len(_band) == 2 and _band[0]) else 0.60
+        # THE DENSE DEFAULT IS DERIVED, NOT TYPED. perf_target owns the band shape -- the top fraction
+        # and how far below it the band starts -- and 0.60 is their product, not an independent
+        # number. A typed copy here would keep the old physics the day that shape changes, which is
+        # the exact failure rate_and_band's docstring records: a second copy with a hardcoded
+        # (0.60, 0.80) had the report and the stop gate judging the same run against 84.0 and 51.2.
+        _dense_lo = float(perf_target._DENSE_BAND_HI) * float(perf_target._BAND_LO_OF_HI)
+        _lof = (float(_band[0]) / _theo) if (_theo > 0 and len(_band) == 2 and _band[0]) else _dense_lo
         # THE BYTES AND THE UNIT COME FROM THEIR OWNERS, not off the throughput snapshot. That
         # snapshot is rewritten from a file inside the model directory the optimize loop reverts, so
         # reading it here can resurrect a stale vintage -- a 16-layer 3.33 GB one came back twice in

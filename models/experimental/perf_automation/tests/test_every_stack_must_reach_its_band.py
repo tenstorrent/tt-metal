@@ -124,6 +124,23 @@ def test_the_unit_is_taken_from_the_anchor_when_the_facts_file_omits_it(monkeypa
     assert [r["stage"] for r in out] == ["s"], "the unit must come from the anchor the file does not carry"
 
 
+def test_the_dense_default_is_derived_from_the_band_owner(monkeypatch):
+    """0.60 is the product of perf_target's two band constants, not an independent number. A typed
+    copy keeps the old physics the day that shape changes -- the failure rate_and_band records, where
+    a second hardcoded (0.60, 0.80) had the report and the gate judging one run against 84.0 and 51.2."""
+    from agent import perf_target
+
+    src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
+    i = src.index("def _stages_short_of_achievable()")
+    seg = src[i : i + 2600]
+    # CODE only -- a comment may quote the number it is explaining away.
+    body = [l for l in seg.splitlines() if l.strip() and not l.strip().startswith("#")]
+    assert not [l for l in body if "0.60" in l], "the dense band fraction is typed instead of derived"
+    assert "_DENSE_BAND_HI" in seg and "_BAND_LO_OF_HI" in seg
+    # and the product is the number the band actually uses
+    assert abs(perf_target._DENSE_BAND_HI * perf_target._BAND_LO_OF_HI - 0.60) < 1e-9
+
+
 def test_a_reader_that_raises_does_not_block_the_run(monkeypatch):
     def _boom():
         raise RuntimeError("no throughput")
