@@ -224,6 +224,9 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: "Release"
       publish-artifact: true
+      # The env images bake the tarball and the wheel; the debs would be an upload
+      # and a retention cost that nothing in this arm reads.
+      publish-package: false
       # In-place, not build-wheel: that one runs cibuildwheel for a second full
       # compile, and the consumers this serves get the in-place wheel anyway.
       build-inplace-wheel: true
