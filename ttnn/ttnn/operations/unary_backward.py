@@ -194,10 +194,20 @@ ttnn.attach_golden_function(
     ),
 )
 
+def _golden_function_rpow_bw(grad_tensor, input_tensor, alpha, *args, **kwargs):
+    import torch
+
+    input_tensor = input_tensor.clone().requires_grad_(True)
+    pyt_y = torch.pow(torch.tensor(float(alpha)), input_tensor)
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad]
+    return golden_tensor
+
+
 ttnn.attach_golden_function(
     ttnn.rpow_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "pow", grad, input, alpha, *args, **kwargs
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_rpow_bw(
+        grad, input, alpha, *args, **kwargs
     ),
 )
 

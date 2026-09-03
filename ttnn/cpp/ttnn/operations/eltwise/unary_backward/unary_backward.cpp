@@ -802,15 +802,19 @@ std::vector<Tensor> celu_bw(
 std::vector<Tensor> rpow_bw(
     const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
     Tensor grad_result = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
     if (exponent != 0.0) {
+        // ttnn.rpow(input, exponent) == exponent ** input, so d/dx exponent ** input is
+        // exponent ** input * ln(exponent).
         grad_result = ttnn::multiply(
             grad,
-            ttnn::multiply(pow(input, exponent - 1, output_mem_config), exponent, std::nullopt, output_mem_config),
+            ttnn::multiply(
+                ttnn::rpow(input, exponent, output_mem_config),
+                std::log(exponent),
+                std::nullopt,
+                output_mem_config),
             std::nullopt,
             output_mem_config);
-        grad_result = ttnn::where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
