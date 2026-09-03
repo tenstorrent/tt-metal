@@ -587,13 +587,11 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     const std::vector<CoreCoord> logical_dispatch_cores =
         get_logical_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
 
-    const CoreType dispatch_core_type =
-        resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
+    const CoreType dispatch_core_type = resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
     std::vector<CoreCoord> virtual_dispatch_cores;
     virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
-        const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, dispatch_core_type);
+        const CoreCoord virtual_dispatch_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -2353,6 +2351,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                             enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
                         marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
                         marker.meta_data["value"] = perf_counter.counter_value;
+                        if (counter_type_raw == static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT)) {
+                            marker.meta_data["counter sel"] = perf_counter.counter_sel;
+                        }
 
                         const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
                         device_marker_it = marker_ret.first;

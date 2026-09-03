@@ -254,6 +254,34 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            // Quasar has no L1 counter unit; only FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) exist.
+            constexpr uint32_t quasar_valid_groups = 0x27;
+            TT_FATAL(
+                (rtoptions.get_profiler_perf_counter_mode() & ~quasar_valid_groups) == 0,
+                "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid "
+                "bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+                rtoptions.get_profiler_perf_counter_mode());
+            if (rtoptions.get_profiler_perf_counter_mode() == quasar_valid_groups) {
+                // All four groups emit 85 records = 255 profiler slots, over the 250-slot L1 budget,
+                // and Quasar TRISCs cannot flush to DRAM mid-readout.
+                log_warning(
+                    tt::LogBuildKernels,
+                    "TT_METAL_PROFILE_PERF_COUNTERS=39 captures all Quasar counter groups in one pass; the last few "
+                    "INSTRN records may be dropped when the profiler L1 buffer fills. For a complete capture run "
+                    "twice: once with 32 (INSTRN) and once with 7 (FPU|PACK|UNPACK).");
+            }
+            if (rtoptions.get_profiler_perf_counter_l1_sel() >= 0) {
+                TT_FATAL(
+                    rtoptions.get_profiler_perf_counter_l1_sel() < 37 * 8,
+                    "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 "
+                    "subports and 8 events",
+                    rtoptions.get_profiler_perf_counter_l1_sel());
+                this->defines_ +=
+                    "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(rtoptions.get_profiler_perf_counter_l1_sel()) +
+                    " ";
+            }
+        }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
     }
 
