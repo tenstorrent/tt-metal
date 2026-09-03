@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 
 #include <fmt/format.h>
 
@@ -48,22 +49,43 @@ static_assert(
     std::has_unique_object_representations_v<PhysicalNodeId>,
     "PhysicalNodeId is not byte-comparable; std::hash<PhysicalNodeId> hashes the whole object");
 
-// Lowercase, strip a trailing "_<rank>" when hosts are not unique, then take the first DNS label.
-// The rank suffix is what run_local_discovery appends when two ranks report the same host
-// (hostname + "_" + rank), so it is only stripped when hosts_unique is false.
+}  // namespace tt::tt_metal
+
+// Declared here, directly under the type, because the declarations below already use PhysicalNodeId
+// as an unordered_map key -- specializing after that first instantiation is ill-formed.
+namespace std {
+template <>
+struct hash<tt::tt_metal::PhysicalNodeId> {
+    std::size_t operator()(const tt::tt_metal::PhysicalNodeId& id) const noexcept {
+        // Whole object. Value-initialization zeroes the unused host_id bytes, and the static_asserts
+        // above rule out padding, so equal ids always hash equally. This is a container hash only --
+        // it is not the node's identity.
+        return std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char*>(&id), sizeof(id)));
+    }
+};
+}  // namespace std
+
+namespace tt::tt_metal {
+
+// Lowercase, then take the first DNS label if the name is an FQDN.
+//
+// The trailing "_<rank>" that run_local_discovery appends when two ranks report the same host is
+// deliberately kept: that suffix is the only thing telling those hosts apart, so removing it here
+// would give their chips the same address and merge them into one solver node.
 //
 // This is the one canonicalization. The FSD host filter uses it too, so a mix of FQDN and short
 // names for the same machine still lands on one string.
-std::string canonical_host_for_node_id(std::string_view host_id, bool hosts_unique = true);
+std::string canonical_host_for_node_id(std::string_view host_id);
 
 // Fatal if the canonical host id is empty or does not fit in kPhysicalHostNameLen - 1 characters
 // (never truncated -- a truncated id would silently collide with its neighbours), or if tray or loc
 // does not fit in 16 bits.
-PhysicalNodeId make_physical_node_id(std::string_view host_id, TrayID tray, ASICLocation loc, bool hosts_unique = true);
+PhysicalNodeId make_physical_node_id(std::string_view host_id, TrayID tray, ASICLocation loc);
 
 // Declared here rather than alongside ASICDescriptor so there is one place that builds a node id.
 // Forward declared to keep the physical system descriptor out of this header.
 struct ASICDescriptor;
+class PhysicalSystemDescriptor;
 
 // The id of the ASIC a descriptor describes, built from the three address components the descriptor
 // already carries. Both the factory-system-descriptor builder and live discovery fill host_name,
@@ -71,9 +93,25 @@ struct ASICDescriptor;
 // solver key -- pass every descriptor through it instead of reading unique_id, which is 1..N file
 // order on the factory path and a UMD chip id on the live path.
 //
-// hosts_unique comes from PhysicalSystemDescriptor::get_all_hostnames_unique(); it decides whether a
-// trailing "_<rank>" on host_name is discovery's uniqueness suffix and must be stripped.
-PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor, bool hosts_unique = true);
+PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor);
+
+// The boundary between a descriptor's own ASIC labels and the addresses the mapper is keyed on.
+//
+// PhysicalSystemDescriptor keys its ASICs by AsicID, which is 1..N in file order when the descriptor
+// came from a factory system descriptor and a UMD chip unique id when it came from discovery. Those
+// two label spaces are why the mapper cannot use AsicID as identity. But the descriptor's query APIs
+// (get_asic_neighbors, get_eth_connections, get_tray_id, ...) still take its own label, so code that
+// holds an address and needs to ask the descriptor a question translates through this index.
+//
+// Build it once per descriptor and pass it down; it is a full pass over the descriptors.
+struct PhysicalNodeIdIndex {
+    std::unordered_map<PhysicalNodeId, AsicID> node_id_to_asic_id;
+    std::unordered_map<AsicID, PhysicalNodeId> asic_id_to_node_id;
+};
+
+// Fatal if two ASICs in the descriptor share an address: their node ids would collide, silently
+// merging two chips into one solver node.
+PhysicalNodeIdIndex build_physical_node_id_index(const PhysicalSystemDescriptor& descriptor);
 
 // host_id is the NUL-trimmed canonical string stored in the id.
 struct PhysicalNodeFields {
@@ -94,18 +132,6 @@ inline std::string_view host_id_view(const PhysicalNodeId& id) { return std::str
 std::ostream& operator<<(std::ostream& os, const PhysicalNodeId& id);
 
 }  // namespace tt::tt_metal
-
-namespace std {
-template <>
-struct hash<tt::tt_metal::PhysicalNodeId> {
-    std::size_t operator()(const tt::tt_metal::PhysicalNodeId& id) const noexcept {
-        // Whole object. Value-initialization zeroes the unused host_id bytes, and the static_asserts
-        // above rule out padding, so equal ids always hash equally. This is a container hash only --
-        // it is not the node's identity.
-        return std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char*>(&id), sizeof(id)));
-    }
-};
-}  // namespace std
 
 template <>
 struct fmt::formatter<tt::tt_metal::PhysicalNodeId> {

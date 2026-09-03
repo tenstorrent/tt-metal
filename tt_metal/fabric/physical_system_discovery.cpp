@@ -110,7 +110,19 @@ TrayID get_tray_id_for_chip(
     };
 
     if (using_mock_cluster_desc) {
-        return TrayID{0};
+        // Mock descriptors have no motherboard to read, so bus-id ordering is unavailable. A board is
+        // physically a tray, so rank the chip's board among the boards in this (single-host) descriptor.
+        // Ranking rather than using board_id directly keeps trays small and contiguous like the real
+        // paths below. Returning a constant here would make (host, tray, asic_location) name more than
+        // one chip, since asic_location only distinguishes ASICs within a board.
+        const uint64_t board_id = cluster_desc.get_board_id_for_chip(chip_id);
+        std::set<uint64_t> board_ids;
+        for (const auto& [chip, _] : cluster_desc.get_chip_unique_ids()) {
+            board_ids.insert(cluster_desc.get_board_id_for_chip(chip));
+        }
+        const auto board_it = board_ids.find(board_id);
+        TT_FATAL(board_it != board_ids.end(), "Chip {} has no board in the mock cluster descriptor.", chip_id);
+        return TrayID{static_cast<uint32_t>(std::distance(board_ids.begin(), board_it) + 1)};
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);

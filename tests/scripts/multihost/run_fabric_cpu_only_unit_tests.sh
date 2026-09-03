@@ -177,7 +177,13 @@ run_test() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  "$@"
+  # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
+  # deadlocks prterun forever; this turns that into a failed command instead of a hang.
+  if [[ -n "${TT_FABRIC_TEST_TIMEOUT:-}" ]]; then
+    timeout --foreground --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@"
+  else
+    "$@"
+  fi
   local status=$?
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")

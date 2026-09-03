@@ -25,8 +25,8 @@ namespace {
 
 constexpr std::string_view kHost = "bh-glx-110-c01u02";
 
-PhysicalNodeId node(std::string_view host_id, uint32_t tray, uint32_t loc, bool hosts_unique = true) {
-    return make_physical_node_id(host_id, TrayID{tray}, ASICLocation{loc}, hosts_unique);
+PhysicalNodeId node(std::string_view host_id, uint32_t tray, uint32_t loc) {
+    return make_physical_node_id(host_id, TrayID{tray}, ASICLocation{loc});
 }
 
 TEST(PhysicalNodeIdTest, SameAddressGivesSameId) { EXPECT_EQ(node(kHost, 1, 2), node(kHost, 1, 2)); }
@@ -41,19 +41,17 @@ TEST(PhysicalNodeIdTest, CanonicalizationCollapsesFqdnAndCase) {
     EXPECT_EQ(node("BH-GLX-110-C01U02.Tenstorrent.COM", 1, 2), expected);
 }
 
-TEST(PhysicalNodeIdTest, RankSuffixStrippedOnlyWhenHostsAreNotUnique) {
-    // The suffix is what discovery appends as hostname + "_" + rank when two ranks collide.
-    EXPECT_EQ(node("bh-glx-110-c01u02_3", 1, 2, /*hosts_unique=*/false), node(kHost, 1, 2));
-
-    // With unique hosts there is no suffix to strip, so the id keeps the trailing text.
-    EXPECT_NE(node("bh-glx-110-c01u02_3", 1, 2, /*hosts_unique=*/true), node(kHost, 1, 2));
+// Discovery appends "_<rank>" when two ranks report the same host. That suffix is the only thing
+// telling those hosts apart, so it is part of the address -- stripping it would merge their chips.
+TEST(PhysicalNodeIdTest, RankSuffixIsKept) {
+    EXPECT_NE(node("bh-glx-110-c01u02_3", 1, 2), node(kHost, 1, 2));
+    EXPECT_EQ(decode_physical_node_id(node("bh-glx-110-c01u02_3", 1, 2)).host_id, "bh-glx-110-c01u02_3");
+    EXPECT_NE(node("t3k_cluster_desc_0", 1, 0), node("t3k_cluster_desc_1", 1, 0));
 }
 
-// Only a run of digits is a rank suffix; a host id that genuinely ends in "_word" is left alone.
-TEST(PhysicalNodeIdTest, NonNumericTrailingSegmentIsNotARankSuffix) {
-    EXPECT_EQ(
-        decode_physical_node_id(node("metal-wh-09_spare", 1, 2, /*hosts_unique=*/false)).host_id, "metal-wh-09_spare");
-    EXPECT_EQ(decode_physical_node_id(node("host_", 1, 2, /*hosts_unique=*/false)).host_id, "host_");
+TEST(PhysicalNodeIdTest, UnderscoreInHostNameIsKept) {
+    EXPECT_EQ(decode_physical_node_id(node("metal-wh-09_spare", 1, 2)).host_id, "metal-wh-09_spare");
+    EXPECT_EQ(decode_physical_node_id(node("host_", 1, 2)).host_id, "host_");
 }
 
 TEST(PhysicalNodeIdTest, DifferentComponentGivesDifferentId) {
@@ -91,8 +89,8 @@ TEST(PhysicalNodeIdTest, IllegalAddressIsFatal) {
     EXPECT_THROW(node("", 1, 2), std::runtime_error);
     EXPECT_THROW(node(".", 1, 2), std::runtime_error);                 // first label is empty
     EXPECT_THROW(node(".tenstorrent.com", 1, 2), std::runtime_error);  // ditto
-    // Nothing left once the rank suffix comes off.
-    EXPECT_THROW(node("_7", 1, 2, /*hosts_unique=*/false), std::runtime_error);
+    // A leading underscore is an ordinary character, not a stripped rank suffix.
+    EXPECT_NO_THROW(node("_7", 1, 2));
 
     // Not truncated: a truncated host id would silently collide with its neighbours.
     EXPECT_THROW(node(std::string(kPhysicalHostNameLen, 'a'), 1, 2), std::runtime_error);
@@ -180,13 +178,30 @@ TEST(PhysicalNodeIdTest, CanonicalHostIsExposedForTheFsdHostFilter) {
     // The FSD host filter joins on the same canonical string, so it is public and has to agree with
     // what make_physical_node_id packs.
     EXPECT_EQ(canonical_host_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"), kHost);
-    EXPECT_EQ(canonical_host_for_node_id("bh-glx-110-c01u02_3", /*hosts_unique=*/false), kHost);
-    EXPECT_EQ(canonical_host_for_node_id("bh-glx-110-c01u02_3", /*hosts_unique=*/true), "bh-glx-110-c01u02_3");
+    EXPECT_EQ(canonical_host_for_node_id("bh-glx-110-c01u02_3"), "bh-glx-110-c01u02_3");
     EXPECT_EQ(canonical_host_for_node_id(""), "");
 
     EXPECT_EQ(
         decode_physical_node_id(node("BH-GLX-110-C01U02.tenstorrent.com", 1, 2)).host_id,
         canonical_host_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"));
+}
+
+// A dot is only a domain separator in a real FQDN. Mock descriptors that leave host_id empty get a
+// host name synthesized from the config name, and those carry dots inside a version number.
+// Truncating there left every rank of dual_glx_2.5d_torus answering to "dual_glx_2", which merged
+// the two hosts' chips onto one address.
+TEST(PhysicalNodeIdTest, DotsThatAreNotDomainSeparatorsAreKept) {
+    EXPECT_EQ(
+        canonical_host_for_node_id("dual_glx_2.5d_torus_cluster_desc_rank_0"),
+        "dual_glx_2.5d_torus_cluster_desc_rank_0");
+
+    EXPECT_NE(
+        node("dual_glx_2.5d_torus_cluster_desc_rank_0", 3, 1),
+        node("dual_glx_2.5d_torus_cluster_desc_rank_1", 3, 1));
+
+    // Still a plain FQDN, so the domain is still dropped.
+    EXPECT_EQ(canonical_host_for_node_id("host1.example.com"), "host1");
+    EXPECT_EQ(canonical_host_for_node_id("f10cs04"), "f10cs04");
 }
 
 // Mock + FSD is the case the whole encoding exists for: a mock descriptor carrying the UMD host_id

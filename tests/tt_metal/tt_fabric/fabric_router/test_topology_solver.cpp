@@ -331,17 +331,26 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     // Load PhysicalSystemDescriptor from file
     tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
 
-    // Hand-craft the asic_id_to_mesh_rank mapping
+    // The graph is keyed on addresses, so name the four ASICs by asking the descriptor for theirs
+    // rather than by their labels in the file. That is the whole point of the indirection: the labels
+    // here happen to be 100..103, and nothing downstream may depend on that.
+    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor);
+    auto node = [&](std::uint64_t asic_label) {
+        return node_index.asic_id_to_node_id.at(tt::tt_metal::AsicID{asic_label});
+    };
+
+    // Hand-craft the physical_node_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)
     // Mesh 1: ASICs 102, 103 (connected)
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{100}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{101}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{102}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    physical_node_id_to_mesh_rank[MeshId{0}][node(100)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{0}][node(101)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(102)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(103)] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map =
+        build_adjacency_graph_physical(cluster_type, physical_system_descriptor, physical_node_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -354,12 +363,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes0.size(), 2u) << "Mesh 0 should have 2 ASICs";
 
     // Check that ASIC 100 has ASIC 101 as neighbor (2 connections = 2 entries)
-    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), tt::tt_metal::AsicID{100});
+    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), node(100));
     ASSERT_NE(asic100_it, nodes0.end()) << "Mesh 0 should contain ASIC 100";
-    const auto& neighbors100 = graph0.get_neighbors(tt::tt_metal::AsicID{100});
+    const auto& neighbors100 = graph0.get_neighbors(node(100));
     EXPECT_EQ(neighbors100.size(), 2u) << "ASIC 100 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors100[0], tt::tt_metal::AsicID{101}) << "ASIC 100 should be connected to ASIC 101";
-    EXPECT_EQ(neighbors100[1], tt::tt_metal::AsicID{101}) << "ASIC 100 should have 2 connections to ASIC 101";
+    EXPECT_EQ(neighbors100[0], node(101)) << "ASIC 100 should be connected to ASIC 101";
+    EXPECT_EQ(neighbors100[1], node(101)) << "ASIC 100 should have 2 connections to ASIC 101";
 
     // Verify mesh 1
     auto it1 = adjacency_map.find(MeshId{1});
@@ -369,12 +378,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes1.size(), 2u) << "Mesh 1 should have 2 ASICs";
 
     // Check that ASIC 102 has ASIC 103 as neighbor
-    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), tt::tt_metal::AsicID{102});
+    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), node(102));
     ASSERT_NE(asic102_it, nodes1.end()) << "Mesh 1 should contain ASIC 102";
-    const auto& neighbors102 = graph1.get_neighbors(tt::tt_metal::AsicID{102});
+    const auto& neighbors102 = graph1.get_neighbors(node(102));
     EXPECT_EQ(neighbors102.size(), 2u) << "ASIC 102 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors102[0], tt::tt_metal::AsicID{103}) << "ASIC 102 should be connected to ASIC 103";
-    EXPECT_EQ(neighbors102[1], tt::tt_metal::AsicID{103}) << "ASIC 102 should have 2 connections to ASIC 103";
+    EXPECT_EQ(neighbors102[0], node(103)) << "ASIC 102 should be connected to ASIC 103";
+    EXPECT_EQ(neighbors102[1], node(103)) << "ASIC 102 should have 2 connections to ASIC 103";
 }
 
 // AdjacencyGraph Tests with Different User Types

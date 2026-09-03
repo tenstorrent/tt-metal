@@ -364,7 +364,7 @@ TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLab
     // FSD spells its hosts "hostA"/"hostB" and the ids carry "hosta"/"hostb".
     std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> actual;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc, psd.get_all_hostnames_unique());
+        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
         const auto fields = decode_physical_node_id(node_id);
         EXPECT_EQ(fields.host_id, canonical_host_for_node_id(desc.host_name));
         EXPECT_EQ(fields.tray, desc.tray_id);
@@ -382,12 +382,6 @@ TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLab
 TEST(PhysicalDescriptorBuilder, FsdPathReportsUniqueHostnames) {
     ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(make_two_host_fsd()));
     EXPECT_TRUE(psd.get_all_hostnames_unique());
-
-    // Which means passing the flag through or hardcoding true are the same thing here -- a live
-    // descriptor with colliding hosts is the only case where they differ.
-    for (const auto& [_, desc] : psd.get_asic_descriptors()) {
-        EXPECT_EQ(node_id_from_asic_descriptor(desc, /*hosts_unique=*/true), node_id_from_asic_descriptor(desc));
-    }
 }
 
 // The load-bearing one. An FSD-built descriptor set labelled 1..N and a live-style one labelled with
@@ -473,7 +467,7 @@ TEST(PhysicalDescriptorBuilder, IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack
 
     std::set<PhysicalNodeId> node_ids;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc, psd.get_all_hostnames_unique());
+        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
         EXPECT_TRUE(node_ids.insert(node_id).second) << "two ASICs packed to " << node_id;
 
         const auto fields = decode_physical_node_id(node_id);

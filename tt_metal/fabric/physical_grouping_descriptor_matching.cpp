@@ -24,6 +24,7 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -1319,24 +1320,26 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
 
 namespace {
 
-using tt::tt_metal::AsicID;
+using tt::tt_metal::PhysicalNodeId;
 using tt::tt_metal::ASICLocation;
 using tt::tt_metal::TrayID;
 using tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd;
 using tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
 
-// Host boundaries come only from the PSD (get_host_name_for_asic). Global groups are one set per host (variable
-// size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise preferred ASICs on a
-// greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
+// Host boundaries come from the nodes themselves, each of which carries its host id. Global groups are one set per
+// host (variable size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise
+// preferred ASICs on a greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
 void configure_pgd_psd_host_alignment_constraints(
     const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<uint32_t, AsicID>& constraints) {
+    const AdjacencyGraph<PhysicalNodeId>& physical_graph,
+    MappingConstraints<uint32_t, PhysicalNodeId>& constraints) {
     // Collect hostname map for all asics in physical graph
-    std::map<std::string, std::set<AsicID>> host_to_asics;
-    for (const AsicID& asic_id : physical_graph.get_nodes()) {
-        host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
+    std::map<std::string, std::set<PhysicalNodeId>> host_to_asics;
+    // The node already carries its host, so this no longer asks the descriptor. It groups on the
+    // canonical host id, which is what a host boundary means here -- a descriptor that spells one
+    // machine both as an FQDN and as a short name now yields one group rather than two.
+    for (const PhysicalNodeId& asic_id : physical_graph.get_nodes()) {
+        host_to_asics[std::string(tt::tt_metal::host_id_view(asic_id))].insert(asic_id);
     }
 
     // Collect all targets from PGD grouping info
@@ -1359,7 +1362,7 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
-    std::vector<std::set<AsicID>> global_groups;
+    std::vector<std::set<PhysicalNodeId>> global_groups;
     global_groups.reserve(host_to_asics.size());
     for (auto& [_, asics] : host_to_asics) {
         if (!asics.empty()) {
@@ -1393,7 +1396,7 @@ void configure_pgd_psd_host_alignment_constraints(
 std::string build_pgd_mapping_failure_message(
     const std::string& grouping_name,
     const GroupingInfo& grouping_info,
-    const MappingResult<uint32_t, AsicID>& result) {
+    const MappingResult<uint32_t, PhysicalNodeId>& result) {
     size_t total = grouping_info.adjacency_graph.get_nodes().size();
     size_t mapped_count = result.target_to_global.size();
     size_t unmapped_count = total - mapped_count;
@@ -1409,13 +1412,12 @@ std::string build_pgd_mapping_failure_message(
 // Build the MappingConstraints used by PGD→PSD embedding (trait + host alignment).
 // Returns std::nullopt if a required trait constraint cannot be satisfied (e.g. slot count mismatch);
 // `error_out` is set when that happens.
-std::optional<MappingConstraints<uint32_t, AsicID>> build_pgd_to_psd_constraints(
+std::optional<MappingConstraints<uint32_t, PhysicalNodeId>> build_pgd_to_psd_constraints(
     const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<uint32_t, AsicID> initial_constraints,
+    const AdjacencyGraph<PhysicalNodeId>& physical_graph,
+    MappingConstraints<uint32_t, PhysicalNodeId> initial_constraints,
     std::string* error_out = nullptr) {
-    MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
+    MappingConstraints<uint32_t, PhysicalNodeId> constraints = std::move(initial_constraints);
 
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
     constraints.set_quiet_mode(true);
@@ -1442,14 +1444,14 @@ std::optional<MappingConstraints<uint32_t, AsicID>> build_pgd_to_psd_constraints
         }
     }
     // Build trait maps for global nodes (from physical graph)
-    std::map<AsicID, TrayID> global_tray_traits;
-    std::map<AsicID, ASICLocation> global_location_traits;
+    std::map<PhysicalNodeId, TrayID> global_tray_traits;
+    std::map<PhysicalNodeId, ASICLocation> global_location_traits;
 
+    // Read straight off the node: tray and loc are two of the three components of its address, so
+    // these traits are the same values the descriptor would have reported.
     for (const auto& asic_id : physical_graph.get_nodes()) {
-        TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
-        ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
-        global_tray_traits[asic_id] = tray_id;
-        global_location_traits[asic_id] = asic_location;
+        global_tray_traits[asic_id] = asic_id.tray;
+        global_location_traits[asic_id] = asic_id.loc;
     }
 
     // When set to 1, do not require PGD (tray_id, asic_location) on logical nodes to match UMD-reported ASIC
@@ -1482,24 +1484,22 @@ std::optional<MappingConstraints<uint32_t, AsicID>> build_pgd_to_psd_constraints
         }
     }
 
-    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
-    configure_pgd_psd_host_alignment_constraints(
-        grouping_info, physical_graph, physical_system_descriptor, constraints);
+    // Host partition (node -> host id): same-rank when the full mesh fits on one host, else unconstrained.
+    configure_pgd_psd_host_alignment_constraints(grouping_info, physical_graph, constraints);
 
     return constraints;
 }
 
 // Helper function to solve the topology mapping with pinning constraints from GroupingInfo
-MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+MappingResult<uint32_t, PhysicalNodeId> solve_for_one_grouping_to_psd(
     const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    const AdjacencyGraph<PhysicalNodeId>& physical_graph,
+    MappingConstraints<uint32_t, PhysicalNodeId> initial_constraints = {}) {
     std::string err;
-    auto constraints_opt = build_pgd_to_psd_constraints(
-        grouping_info, physical_graph, physical_system_descriptor, std::move(initial_constraints), &err);
+    auto constraints_opt =
+        build_pgd_to_psd_constraints(grouping_info, physical_graph, std::move(initial_constraints), &err);
     if (!constraints_opt) {
-        MappingResult<uint32_t, AsicID> failure;
+        MappingResult<uint32_t, PhysicalNodeId> failure;
         failure.success = false;
         failure.error_message = std::move(err);
         return failure;
@@ -1511,17 +1511,15 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
 // Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
 // Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
 // Returns the (possibly empty) list of successful MappingResults.
-std::vector<MappingResult<uint32_t, AsicID>> enumerate_distinct_placements_for_grouping(
+std::vector<MappingResult<uint32_t, PhysicalNodeId>> enumerate_distinct_placements_for_grouping(
     const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const AdjacencyGraph<PhysicalNodeId>& physical_graph,
     size_t max_solutions) {
-    auto constraints_opt =
-        build_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, {}, nullptr);
+    auto constraints_opt = build_pgd_to_psd_constraints(grouping_info, physical_graph, {}, nullptr);
     if (!constraints_opt) {
         return {};
     }
-    return solve_topology_mapping_n<uint32_t, AsicID>(
+    return solve_topology_mapping_n<uint32_t, PhysicalNodeId>(
         grouping_info.adjacency_graph,
         physical_graph,
         *constraints_opt,
@@ -1536,7 +1534,7 @@ std::vector<MappingResult<uint32_t, AsicID>> enumerate_distinct_placements_for_g
 struct PackingCandidate {
     size_t grouping_idx;             // index into the input groupings vector
     std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
-    MappingResult<uint32_t, AsicID> result;
+    MappingResult<uint32_t, PhysicalNodeId> result;
     size_t pool_order = 0;  // insertion order into the candidate pool (matches solver enumeration order)
     size_t host_count = 1;  // distinct hosts spanned by this placement
 };
@@ -1665,10 +1663,8 @@ constexpr size_t kMaxPlacementsPerGrouping = 1024;
 // is returned (may be empty or sub-optimal if the solver has not yet found any solution).
 constexpr std::chrono::milliseconds kSetPackingBudget{5000};
 
-std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+std::vector<MappingResult<uint32_t, PhysicalNodeId>> solve_for_many_groupings_to_psd(
+    const GroupingInfo& grouping_info, const AdjacencyGraph<PhysicalNodeId>& physical_graph) {
     const AdjacencyGraph<uint32_t>& flat_mesh = grouping_info.adjacency_graph;
 
     // Check if mesh is empty
@@ -1678,19 +1674,19 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     }
 
     // Iteratively solve for copies until no more can be found
-    std::vector<MappingResult<uint32_t, AsicID>> results;
-    MappingConstraints<uint32_t, AsicID> current_constraints;
-    std::set<std::set<AsicID>> seen_asic_sets;  // Guard against infinite loop
+    std::vector<MappingResult<uint32_t, PhysicalNodeId>> results;
+    MappingConstraints<uint32_t, PhysicalNodeId> current_constraints;
+    std::set<std::set<PhysicalNodeId>> seen_asic_sets;  // Guard against infinite loop
 
     while (results.size() < kMaxPlacementsPerRun) {
-        MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
-            grouping_info, physical_graph, physical_system_descriptor, current_constraints);
+        MappingResult<uint32_t, PhysicalNodeId> result =
+            solve_for_one_grouping_to_psd(grouping_info, physical_graph, current_constraints);
 
         if (!result.success) {
             break;
         }
 
-        std::set<AsicID> used_asic_ids;
+        std::set<PhysicalNodeId> used_asic_ids;
         for (const auto& [_, asic_id] : result.target_to_global) {
             used_asic_ids.insert(asic_id);
         }
@@ -1714,15 +1710,13 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 //   Phase B — Maximum Weight Set Packing via branch-and-bound to pick the disjoint subset that maximizes total
 //             ASIC coverage. Wall-clock-budgeted; returns best feasible solution found on expiry.
 // Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
-std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
+std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, PhysicalNodeId>>>
 solve_for_many_groupings_to_psd_heterogeneous(
-    const std::vector<GroupingInfo>& groupings,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    const std::vector<GroupingInfo>& groupings, const AdjacencyGraph<PhysicalNodeId>& physical_graph) {
     // Dense ASIC id → index assignment so the set-packing universe is [0, U).
-    std::unordered_map<AsicID, size_t> asic_to_slot;
+    std::unordered_map<PhysicalNodeId, size_t> asic_to_slot;
     asic_to_slot.reserve(physical_graph.get_nodes().size());
-    for (const AsicID& asic : physical_graph.get_nodes()) {
+    for (const PhysicalNodeId& asic : physical_graph.get_nodes()) {
         asic_to_slot.emplace(asic, asic_to_slot.size());
     }
     const size_t universe_size = asic_to_slot.size();
@@ -1736,8 +1730,8 @@ solve_for_many_groupings_to_psd_heterogeneous(
         if (grouping.adjacency_graph.get_nodes().empty()) {
             continue;
         }
-        auto placements = enumerate_distinct_placements_for_grouping(
-            grouping, physical_graph, physical_system_descriptor, kMaxPlacementsPerGrouping);
+        auto placements =
+            enumerate_distinct_placements_for_grouping(grouping, physical_graph, kMaxPlacementsPerGrouping);
         log_debug(
             tt::LogFabric,
             "Heterogeneous solver: grouping '{}' ({} nodes) enumerated {} distinct image-set placements",
@@ -1779,7 +1773,7 @@ solve_for_many_groupings_to_psd_heterogeneous(
             }
             std::set<std::string> hosts;
             for (const auto& [_, asic_id] : placement.target_to_global) {
-                hosts.insert(physical_system_descriptor.get_host_name_for_asic(asic_id));
+                hosts.insert(std::string(tt::tt_metal::host_id_view(asic_id)));
             }
             PackingCandidate candidate{gi, std::move(slots), std::move(placement)};
             candidate.pool_order = pool_order++;
@@ -1789,9 +1783,9 @@ solve_for_many_groupings_to_psd_heterogeneous(
     }
 
     // Pre-seed the result map so every grouping has an entry, even if no placement is selected.
-    std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>> map_result;
+    std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, PhysicalNodeId>>> map_result;
     for (const auto& grouping : groupings) {
-        map_result.emplace(&grouping, std::vector<MappingResult<uint32_t, AsicID>>{});
+        map_result.emplace(&grouping, std::vector<MappingResult<uint32_t, PhysicalNodeId>>{});
     }
     if (candidates.empty()) {
         return map_result;
@@ -1869,7 +1863,7 @@ bool PhysicalGroupingDescriptor::can_map_to_psd(
     return true;
 }
 
-std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
+std::unordered_set<tt::tt_metal::PhysicalNodeId> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     std::vector<std::string> errors;
     return find_any_in_psd(grouping, physical_system_descriptor, errors);
@@ -1877,14 +1871,14 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
 
 // NOTE this only works on flattenable meshes right now
 // TODO: Expand Find any to non-flattenable meshes by doing recursive mapping
-std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
+std::unordered_set<tt::tt_metal::PhysicalNodeId> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::vector<std::string>& errors_out) const {
     // Build physical adjacency map from PSD (empty map means include all ASICs)
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
     // Convert to AdjacencyGraph
-    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+    AdjacencyGraph<PhysicalNodeId> physical_graph(physical_adj_map);
 
     // Detect if its flattened or not, if it its not then flatten it
     std::vector<GroupingInfo> flat_meshes;
@@ -1894,9 +1888,9 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
         flat_meshes.push_back(grouping);
     }
 
-    std::unordered_set<tt::tt_metal::AsicID> asic_ids;
+    std::unordered_set<tt::tt_metal::PhysicalNodeId> asic_ids;
     const GroupingInfo* last_mesh_tried = nullptr;
-    MappingResult<uint32_t, AsicID> last_result;
+    MappingResult<uint32_t, PhysicalNodeId> last_result;
 
     // Use the first flat mesh that actually fits
     for (const auto& flat_mesh : flat_meshes) {
@@ -1906,7 +1900,7 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
 
         last_mesh_tried = &flat_mesh;
         // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
-        auto result = solve_for_one_grouping_to_psd(flat_mesh, physical_graph, physical_system_descriptor);
+        auto result = solve_for_one_grouping_to_psd(flat_mesh, physical_graph);
         last_result = result;
 
         if (result.success) {
@@ -1948,7 +1942,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
-    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+    AdjacencyGraph<PhysicalNodeId> physical_graph(physical_adj_map);
     return find_all_in_psd(groupings, physical_system_descriptor, physical_graph);
 }
 
@@ -1956,7 +1950,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const AdjacencyGraph<AsicID>& physical_graph,
+    const AdjacencyGraph<PhysicalNodeId>& physical_graph,
     std::vector<std::string>* errors_out) const {
     // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
@@ -1973,7 +1967,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     std::vector<PsdPlacement> placements;
     if (!flat_meshes.empty()) {
         auto heterogeneous_results =
-            solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
+            solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph);
 
         for (const auto& grouping : flat_meshes) {
             auto it = heterogeneous_results.find(&grouping);
@@ -1986,7 +1980,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
                     // Downstream only needs the pinning map, so copy just that (not the whole GroupingInfo,
                     // which would deep-copy items + adjacency_graph per placement).
                     placement.mesh_node_to_asic_position = grouping.mesh_node_to_asic_position;
-                    // result.target_to_global is this grouping's node id -> AsicID; collect just the ASICs
+                    // result.target_to_global is this grouping's node id -> PhysicalNodeId; collect just the ASICs
                     // for the placement footprint (order unused, so iterate it directly).
                     for (const auto& [grouping_node, asic_id] : result.target_to_global) {
                         placement.asics.insert(asic_id);
@@ -2002,7 +1996,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
             errors_out->push_back("No valid groupings found for PSD");
         } else {
             const GroupingInfo& mesh_to_use = flat_meshes.back();
-            auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
+            auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph);
             errors_out->push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
         }
     }
