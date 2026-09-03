@@ -8,10 +8,12 @@
 namespace ttnn::experimental::prim {
 namespace {
 
-constexpr uint32_t kProjectionDim = 1024;
-constexpr uint32_t kHeadDim = 512;
 constexpr uint32_t kStateRows = 64;
 constexpr uint32_t kRatio = 4;
+constexpr uint32_t kTileWidth = 32;
+
+// kv/gate pack the Ca and Cb halves side by side, so the head dimension is half the projection width.
+uint32_t head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] / 2; }
 
 void validate_tensor(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be a device tensor", name);
@@ -28,11 +30,19 @@ void validate_common(const CsaRuntimeParams& params, const Inputs& args) {
     validate_tensor(args.position_bias, "position_bias");
     TT_FATAL(args.kv.logical_shape() == args.gate.logical_shape(), "kv and gate shapes must match");
     const auto& shape = args.kv.logical_shape();
-    TT_FATAL(shape[0] == 1 && shape[1] == 1 && shape[-1] == kProjectionDim, "kv/gate must be [1,1,S,1024]");
+    TT_FATAL(shape[0] == 1 && shape[1] == 1, "kv/gate must be [1,1,S,2*head_dim]");
+    TT_FATAL(
+        shape[-1] > 0 && shape[-1] % (2 * kTileWidth) == 0,
+        "kv/gate width must be a positive multiple of {} so head_dim is tile aligned, got {}",
+        2 * kTileWidth,
+        shape[-1]);
+    const uint32_t head_dim = head_dim_of(args.kv);
     TT_FATAL(shape[-2] >= kRatio && shape[-2] % kRatio == 0, "S_local must be a positive multiple of 4");
     TT_FATAL(
-        args.position_bias.logical_shape() == Shape({1, 1, kRatio, kProjectionDim}),
-        "position_bias must be [1,1,4,1024]");
+        args.position_bias.logical_shape() == Shape({1, 1, kRatio, 2 * head_dim}),
+        "position_bias must be [1,1,{},{}]",
+        kRatio,
+        2 * head_dim);
     TT_FATAL(params.cluster_axis < 2, "cluster_axis must be 0 or 1");
     TT_FATAL(
         params.first_token_position % kRatio == 0, "first_token_position must start on a ratio-4 compression boundary");
@@ -48,7 +58,12 @@ void validate_common(const CsaRuntimeParams& params, const Inputs& args) {
 void validate_states(const Tensor& kv_state, const Tensor& score_state, const Tensor& kv) {
     validate_tensor(kv_state, "kv_state");
     validate_tensor(score_state, "score_state");
-    TT_FATAL(kv_state.logical_shape() == Shape({1, 1, kStateRows, kHeadDim}), "KV state must be [1,1,64,512] locally");
+    const uint32_t head_dim = head_dim_of(kv);
+    TT_FATAL(
+        kv_state.logical_shape() == Shape({1, 1, kStateRows, head_dim}),
+        "KV state must be [1,1,{},{}] locally",
+        kStateRows,
+        head_dim);
     TT_FATAL(score_state.logical_shape() == kv_state.logical_shape(), "state shapes must match");
     TT_FATAL(kv_state.tensor_spec() == score_state.tensor_spec(), "state tensor specs must match");
     TT_FATAL(kv_state.device() == kv.device(), "states and slab must share one mesh device");
@@ -97,8 +112,8 @@ void CsaCompressionDeviceOperation::validate_on_program_cache_miss(
 CsaCompressionDeviceOperation::spec_return_value_t CsaCompressionDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& args) {
     const auto& input_layout = args.kv.tensor_spec().tensor_layout();
-    const auto pooled_spec =
-        tt::tt_metal::TensorSpec(Shape({1, 1, args.kv.logical_shape()[-2] / kRatio, kHeadDim}), input_layout);
+    const auto pooled_spec = tt::tt_metal::TensorSpec(
+        Shape({1, 1, args.kv.logical_shape()[-2] / kRatio, head_dim_of(args.kv)}), input_layout);
     return {pooled_spec, args.predecessor_kv_state.tensor_spec(), args.predecessor_score_state.tensor_spec()};
 }
 

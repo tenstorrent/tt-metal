@@ -50,7 +50,9 @@ void kernel_main() {
     constexpr uint32_t scratch_cb = get_compile_time_arg_val(2);
     constexpr uint32_t input_height_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t input_width_tiles = get_compile_time_arg_val(4);
-    constexpr auto kv_args = TensorAccessorArgs<5>();
+    constexpr uint32_t output_width_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t head_dim = output_width_tiles * 32;
+    constexpr auto kv_args = TensorAccessorArgs<6>();
     constexpr auto gate_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
     constexpr auto predecessor_kv_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -68,7 +70,6 @@ void kernel_main() {
     scratch.reserve_back(5);
     Noc noc;
 
-    constexpr uint32_t output_width_tiles = 16;
     for (uint32_t output_tile = 0; output_tile < output_tiles; ++output_tile) {
         candidate_kv.reserve_back(8);
         candidate_score.reserve_back(8);
@@ -109,7 +110,7 @@ void kernel_main() {
                         predecessor_score, scratch, kTileBytes, {.page_id = score_tile}, {.offset_bytes = kTileBytes});
                 } else {
                     const uint32_t token = is_ca ? (window - 1) * 4 + local_slot : window * 4 + local_slot;
-                    const uint32_t source_col = (is_ca ? 0 : 512) + feature_tile * 32;
+                    const uint32_t source_col = (is_ca ? 0 : head_dim) + feature_tile * 32;
                     kv_tile = (token / 32) * input_width_tiles + source_col / 32;
                     score_tile = kv_tile;
                     source_row = token % 32;

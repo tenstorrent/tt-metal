@@ -13,12 +13,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 _BATCH = 1
 _COMPRESS_RATE = 4
 _HEAD_DIM = 512
+_INDEX_HEAD_DIM = 128
 _STATE_ROWS = 64
 _LOCAL_SEQ_LEN = 128
 _PCC = 0.999
 
 
-def _update_state(kv_state, score_state, kv, gate, position_bias, start_position):
+def _update_state(kv_state, score_state, kv, gate, position_bias, start_position, head_dim):
     kv_state = kv_state.clone()
     score_state = score_state.clone()
     for local_position in range(kv.shape[2]):
@@ -28,16 +29,16 @@ def _update_state(kv_state, score_state, kv, gate, position_bias, start_position
         ca_row = (parity ^ 1) * 32 + slot
         cb_row = parity * 32 + _COMPRESS_RATE + slot
         biased_gate = gate[:, :, local_position] + position_bias[:, :, slot]
-        kv_state[:, :, ca_row] = kv[:, :, local_position, :_HEAD_DIM]
-        kv_state[:, :, cb_row] = kv[:, :, local_position, _HEAD_DIM:]
-        score_state[:, :, ca_row] = biased_gate[..., :_HEAD_DIM]
-        score_state[:, :, cb_row] = biased_gate[..., _HEAD_DIM:]
+        kv_state[:, :, ca_row] = kv[:, :, local_position, :head_dim]
+        kv_state[:, :, cb_row] = kv[:, :, local_position, head_dim:]
+        score_state[:, :, ca_row] = biased_gate[..., :head_dim]
+        score_state[:, :, cb_row] = biased_gate[..., head_dim:]
     return kv_state, score_state
 
 
-def _compress_local(kv, gate, position_bias, predecessor_kv, predecessor_score, start_position):
+def _compress_local(kv, gate, position_bias, predecessor_kv, predecessor_score, start_position, head_dim):
     n_windows = kv.shape[2] // _COMPRESS_RATE
-    pooled = torch.zeros(_BATCH, 1, n_windows, _HEAD_DIM, dtype=torch.bfloat16)
+    pooled = torch.zeros(_BATCH, 1, n_windows, head_dim, dtype=torch.bfloat16)
     for window in range(n_windows):
         current_start = window * _COMPRESS_RATE
         current_end = current_start + _COMPRESS_RATE
@@ -53,11 +54,11 @@ def _compress_local(kv, gate, position_bias, predecessor_kv, predecessor_score, 
         else:
             previous_start = current_start - _COMPRESS_RATE
             previous_end = current_start
-            previous_ca_kv = kv[:, :, previous_start:previous_end, :_HEAD_DIM]
-            previous_ca_score = gate[:, :, previous_start:previous_end, :_HEAD_DIM] + position_bias[..., :_HEAD_DIM]
+            previous_ca_kv = kv[:, :, previous_start:previous_end, :head_dim]
+            previous_ca_score = gate[:, :, previous_start:previous_end, :head_dim] + position_bias[..., :head_dim]
 
-        overlap_kv = torch.cat([previous_ca_kv, current_kv[..., _HEAD_DIM:]], dim=2)
-        overlap_score = torch.cat([previous_ca_score, current_gate[..., _HEAD_DIM:]], dim=2)
+        overlap_kv = torch.cat([previous_ca_kv, current_kv[..., head_dim:]], dim=2)
+        overlap_score = torch.cat([previous_ca_score, current_gate[..., head_dim:]], dim=2)
         weights = overlap_score.softmax(dim=2, dtype=torch.float32).to(overlap_kv.dtype)
         pooled[:, :, window] = (overlap_kv * weights).sum(dim=2)
     return pooled
@@ -72,6 +73,7 @@ def _torch_csa_compressor(
     sp_factor,
     seq_len_actual,
     first_token_position,
+    head_dim,
 ):
     local_seq_len = kv.shape[2] // sp_factor
     pooled_outputs = []
@@ -96,8 +98,9 @@ def _torch_csa_compressor(
             predecessor_kv,
             predecessor_score,
             local_position,
+            head_dim,
         )
-        padded_pooled = torch.zeros(_BATCH, 1, local_seq_len // _COMPRESS_RATE, _HEAD_DIM, dtype=torch.bfloat16)
+        padded_pooled = torch.zeros(_BATCH, 1, local_seq_len // _COMPRESS_RATE, head_dim, dtype=torch.bfloat16)
         padded_pooled[:, :, : local_pooled.shape[2]] = local_pooled
         pooled_outputs.append(padded_pooled)
 
@@ -108,6 +111,7 @@ def _torch_csa_compressor(
             local_gate[:, :, :local_valid],
             position_bias,
             local_position,
+            head_dim,
         )
         kv_states.append(local_kv_state)
         score_states.append(local_score_state)
@@ -121,14 +125,14 @@ def _torch_csa_compressor(
     )
 
 
-def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position):
+def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head_dim):
     torch.manual_seed(42)
     padded_seq_len = local_seq_len * sp_factor
     seq_len_actual = padded_seq_len - _COMPRESS_RATE + remainder
-    kv = torch.randn(_BATCH, 1, padded_seq_len, 2 * _HEAD_DIM, dtype=torch.bfloat16)
+    kv = torch.randn(_BATCH, 1, padded_seq_len, 2 * head_dim, dtype=torch.bfloat16)
     gate = torch.randn_like(kv)
-    position_bias = torch.randn(1, 1, _COMPRESS_RATE, 2 * _HEAD_DIM, dtype=torch.bfloat16)
-    initial_kv_state = torch.randn(_BATCH, 1, _STATE_ROWS, _HEAD_DIM, dtype=torch.bfloat16)
+    position_bias = torch.randn(1, 1, _COMPRESS_RATE, 2 * head_dim, dtype=torch.bfloat16)
+    initial_kv_state = torch.randn(_BATCH, 1, _STATE_ROWS, head_dim, dtype=torch.bfloat16)
     initial_score_state = torch.randn_like(initial_kv_state)
     expected = _torch_csa_compressor(
         kv,
@@ -139,15 +143,16 @@ def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position):
         sp_factor,
         seq_len_actual,
         first_token_position,
+        head_dim,
     )
     return kv, gate, position_bias, initial_kv_state, initial_score_state, seq_len_actual, expected
 
 
-def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position):
+def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim):
     mesh_shape = tuple(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape
     kv, gate, bias, initial_kv, initial_score, seq_len_actual, expected = _make_inputs(
-        sp_factor, local_seq_len, remainder, first_token_position
+        sp_factor, local_seq_len, remainder, first_token_position, head_dim
     )
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
     replicated_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -185,6 +190,7 @@ def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_posit
         assert torch.equal(actual[2][:, tp_rank : tp_rank + 1], expected_score)
 
 
+@pytest.mark.parametrize("head_dim", [_HEAD_DIM, _INDEX_HEAD_DIM], ids=["head512", "head128"])
 @pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
 @pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
 @pytest.mark.parametrize(
@@ -199,31 +205,41 @@ def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_posit
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_csa_compressor_single_device(mesh_device, device_params, remainder, first_token_position):
-    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position)
+def test_csa_compressor_single_device(mesh_device, device_params, remainder, first_token_position, head_dim):
+    _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, head_dim)
 
 
 @pytest.mark.parametrize("first_token_position", [0, _COMPRESS_RATE])
 @pytest.mark.parametrize("remainder", range(_COMPRESS_RATE))
 @pytest.mark.parametrize(
-    "mesh_device, device_params, local_seq_len",
+    "mesh_device, device_params, local_seq_len, head_dim",
     [
         pytest.param(
             (2, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             _LOCAL_SEQ_LEN,
+            _HEAD_DIM,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric1d-2x2",
         ),
         pytest.param(
             (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            _LOCAL_SEQ_LEN,
+            _INDEX_HEAD_DIM,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric1d-2x2-head128",
+        ),
+        pytest.param(
+            (2, 2),
             fabric2d_device_params(),
             16,
+            _HEAD_DIM,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_csa_compressor_mesh(mesh_device, device_params, local_seq_len, remainder, first_token_position):
-    _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position)
+def test_csa_compressor_mesh(mesh_device, device_params, local_seq_len, head_dim, remainder, first_token_position):
+    _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim)

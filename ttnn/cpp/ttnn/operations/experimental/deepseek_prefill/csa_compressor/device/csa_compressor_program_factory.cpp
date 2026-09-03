@@ -57,13 +57,18 @@ CBDescriptor cb_descriptor(uint32_t cb, uint32_t pages, const CoreRangeSet& core
     };
 }
 
+// kv/gate pack the Ca and Cb halves side by side, so the head dimension is half the projection width.
+uint32_t head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] / 2; }
+
 KernelDescriptor state_kernel_descriptor(
     const CsaStateInputs& args,
     std::array<Tensor, 2>& outputs,
     const CoreCoord& core,
     uint32_t local_valid,
     uint32_t absolute_start) {
-    std::vector<uint32_t> compile_args;
+    const uint32_t head_dim = head_dim_of(args.kv);
+    std::vector<uint32_t> compile_args = {
+        head_dim, 2 * head_dim / tt::constants::TILE_WIDTH, head_dim / tt::constants::TILE_WIDTH};
     TensorAccessorArgs(args.kv.buffer()).append_to(compile_args);
     TensorAccessorArgs(args.gate.buffer()).append_to(compile_args);
     TensorAccessorArgs(args.position_bias.buffer()).append_to(compile_args);
@@ -124,8 +129,11 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     TT_FATAL(grid.x > 1, "CSA compression requires at least two worker cores");
     const uint32_t local_seq = args.kv.logical_shape()[-2];
     const auto [local_valid, absolute_start] = local_runtime(params, local_seq, *mesh_dispatch_coordinate);
+    const uint32_t head_dim = head_dim_of(args.kv);
+    const uint32_t state_width_tiles = head_dim / tt::constants::TILE_WIDTH;
+    const uint32_t input_width_tiles = 2 * state_width_tiles;
     const uint32_t output_height_tiles = (local_seq / 4 + 31) / 32;
-    const uint32_t output_tiles = output_height_tiles * (512 / 32);
+    const uint32_t output_tiles = output_height_tiles * state_width_tiles;
 
     ProgramDescriptor desc;
     const CoreRangeSet compression_cores(CoreRange(kCompressionCore, kCompressionCore));
@@ -140,7 +148,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     desc.cbs.push_back(cb_descriptor(kScratchCb, 7, state_cores));
 
     std::vector<uint32_t> reader_compile_args = {
-        kCandidateKvCb, kCandidateScoreCb, kScratchCb, local_seq / 32, 1024 / 32};
+        kCandidateKvCb, kCandidateScoreCb, kScratchCb, local_seq / 32, input_width_tiles, state_width_tiles};
     TensorAccessorArgs(args.kv.buffer()).append_to(reader_compile_args);
     TensorAccessorArgs(args.gate.buffer()).append_to(reader_compile_args);
     TensorAccessorArgs(args.position_bias.buffer()).append_to(reader_compile_args);
