@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""DFlash drafter attention: the one genuinely DFlash-specific op. Query comes only from
+the noise/draft block; key and value are the concatenation of the (fixed) context and the
+noise block's own key/value -- see models/demos/gemma4/docs/dflash_design.md section 1.
+
+Head reshape/RoPE/SDPA call pattern mirrors gated_attention_forward_ttnn
+(models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py), already
+proven on real T3K hardware for the architecturally-similar Qwen3-style Qwen3.6 MTP head --
+plain reshape+transpose for heads (no nlp_create_qkv_heads needed), plain (non-zero-centered)
+ttnn.rms_norm for q_norm/k_norm, and ttnn.transformer.scaled_dot_product_attention handling
+GQA internally (no manual KV-head repeat needed).
+"""
+
+from __future__ import annotations
+
+import torch
+
+import ttnn
+from models.demos.gemma4.tt.attention.weights import AttentionWeights
+from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import rotate_half_ttnn
+
+
+def build_attention_mask_additive(
+    ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+) -> torch.Tensor:
+    """Host torch additive mask [1,1,q_len,ctx_len+q_len], ported from the reference
+    Qwen3DFlashAttention's _attention_mask (dflash.py). 0.0 where visible, -inf where not.
+
+    Query row i is the (ctx_len+i)-th absolute position (queries are the tail of the
+    combined [context, noise] sequence) -- so context columns (< ctx_len) are always
+    visible under causal masking, and only the noise-vs-noise sub-block is restricted.
+    """
+    total = ctx_len + q_len
+    query_position = (total - q_len) + torch.arange(q_len)[:, None]
+    key_position = torch.arange(total)[None, :]
+    visible = torch.ones((q_len, total), dtype=torch.bool)
+    if is_causal:
+        visible &= key_position <= query_position
+    if sliding_window is not None:
+        visible &= (query_position - key_position) < sliding_window
+        if not is_causal:
+            visible &= (key_position - query_position) < sliding_window
+    # -1e4 (not -inf): matches the established bf16-safe convention elsewhere in this repo
+    # (ttnn_gated_attention.py's segmented_attn_mask) -- large enough to zero out via softmax
+    # without the NaN risk -inf carries in bfloat16.
+    mask = torch.where(visible, torch.zeros(1), torch.full((1,), -1e4))
+    return mask.unsqueeze(0).unsqueeze(0)  # [1,1,q_len,total]
+
+
+def _apply_rope_single(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotate_half_ttnn(x), sin))
+
+
+def dflash_attention_forward(
+    context: ttnn.Tensor,  # [1,1,ctx_len,hidden], full-width replicated
+    noise: ttnn.Tensor,  # [1,1,q_len,hidden], full-width replicated (already input_layernorm'd)
+    weights: AttentionWeights,
+    cos_full: ttnn.Tensor,  # [1,1,ctx_len+q_len,head_dim], replicated
+    sin_full: ttnn.Tensor,
+    attn_mask: ttnn.Tensor,  # [1,1,q_len,ctx_len+q_len], replicated (build_attention_mask_additive, uploaded)
+    mesh_config,
+    ccl_manager,
+    num_local_heads: int,
+    num_local_kv_heads: int,
+    head_dim: int,
+    eps: float,
+) -> ttnn.Tensor:
+    scale = head_dim**-0.5
+    q_w = num_local_heads * head_dim
+    kv_w = num_local_kv_heads * head_dim
+
+    q_len = noise.shape[-2]
+    ctx_len = context.shape[-2]
+
+    qkv_noise = ttnn.linear(noise, weights.wqkv)  # [1,1,q_len, q_w+2*kv_w] per device
+    qkv_ctx = ttnn.linear(context, weights.wqkv)  # [1,1,ctx_len, q_w+2*kv_w] per device
+
+    q = ttnn.slice(qkv_noise, [0, 0, 0, 0], [1, 1, q_len, q_w])
+    k_noise = ttnn.slice(qkv_noise, [0, 0, 0, q_w], [1, 1, q_len, q_w + kv_w])
+    v_noise = ttnn.slice(qkv_noise, [0, 0, 0, q_w + kv_w], [1, 1, q_len, q_w + 2 * kv_w])
+    ttnn.deallocate(qkv_noise)
+
+    k_ctx = ttnn.slice(qkv_ctx, [0, 0, 0, q_w], [1, 1, ctx_len, q_w + kv_w])
+    v_ctx = ttnn.slice(qkv_ctx, [0, 0, 0, q_w + kv_w], [1, 1, ctx_len, q_w + 2 * kv_w])
+    ttnn.deallocate(qkv_ctx)
+
+    k = ttnn.concat([k_ctx, k_noise], dim=-2)  # [1,1,ctx_len+q_len, kv_w]
+    v = ttnn.concat([v_ctx, v_noise], dim=-2)
+    ttnn.deallocate(k_ctx)
+    ttnn.deallocate(k_noise)
+    ttnn.deallocate(v_ctx)
+    ttnn.deallocate(v_noise)
+
+    # heads: [1,1,seq,W] -> [1,seq,heads,head_dim] -> norm (last axis) -> transpose -> [1,heads,seq,head_dim]
+    q = ttnn.reshape(q, [1, q_len, num_local_heads, head_dim])
+    q = ttnn.rms_norm(q, weight=weights.q_norm_weight, epsilon=eps)
+    q = ttnn.transpose(q, 1, 2)
+
+    k = ttnn.reshape(k, [1, ctx_len + q_len, num_local_kv_heads, head_dim])
+    k = ttnn.rms_norm(k, weight=weights.k_norm_weight, epsilon=eps)
+    k = ttnn.transpose(k, 1, 2)
+
+    v = ttnn.reshape(v, [1, ctx_len + q_len, num_local_kv_heads, head_dim])
+    v = ttnn.transpose(v, 1, 2)
+
+    # RoPE: q only ever needs the LAST q_len positions' rotation; k spans the full range.
+    total = ctx_len + q_len
+    cos_q = ttnn.slice(cos_full, [0, 0, total - q_len, 0], [1, 1, total, head_dim])
+    sin_q = ttnn.slice(sin_full, [0, 0, total - q_len, 0], [1, 1, total, head_dim])
+    q = _apply_rope_single(q, cos_q, sin_q)
+    k = _apply_rope_single(k, cos_full, sin_full)
+
+    attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False, scale=scale)
+    ttnn.deallocate(q)
+    ttnn.deallocate(k)
+    ttnn.deallocate(v)
+
+    attn_out = ttnn.transpose(attn_out, 1, 2)
+    attn_out = ttnn.reshape(attn_out, [1, q_len, num_local_heads * head_dim])
+
+    out = ttnn.linear(attn_out, weights.o_proj)
+    ttnn.deallocate(attn_out)
+    out = ccl_allreduce(out, mesh_config, ccl_manager)
+    return out
