@@ -12,7 +12,7 @@ Tensor high_bw_all_gather(
     const Tensor& input_tensor,
     int32_t dim,
     const Tensor& output_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,

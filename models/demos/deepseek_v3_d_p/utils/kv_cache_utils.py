@@ -26,6 +26,23 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
 
+def create_sequence_cache_mesh_composer(mesh_device, sp_axis: int = 0, full_mesh: bool = False):
+    """Compose canonical sequence shards while dropping only true replicas.
+
+    Axis mode concatenates the named SP axis and collapses TP replicas. Full-mesh mode flattens all
+    2D coordinates in canonical row-major order and concatenates every device shard.
+    """
+    assert full_mesh or sp_axis == 0, "axis-mode sequence cache composition currently assumes sp_axis=0"
+    sequence_factor = mesh_device.get_num_devices() if full_mesh else mesh_device.shape[sp_axis]
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        config=ttnn.MeshComposerConfig(
+            dims=(2, -1),
+            mesh_shape_override=ttnn.MeshShape(sequence_factor, 1),
+        ),
+    )
+
+
 class MlaKvCacheFormat(str, Enum):
     """Physical encodings supported by the persistent MLA cache."""
 
@@ -801,6 +818,7 @@ def init_kvpe_cache(
     num_users=1,
     dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
+    full_mesh=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -823,7 +841,9 @@ def init_kvpe_cache(
     """
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
-    seq_len_local = seq_len // mesh_shape[sp_axis]
+    sequence_factor = mesh_shape[0] * mesh_shape[1] if full_mesh else mesh_shape[sp_axis]
+    assert seq_len % sequence_factor == 0, f"seq_len ({seq_len}) must divide across sequence_factor ({sequence_factor})"
+    seq_len_local = seq_len // sequence_factor
 
     num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
@@ -847,6 +867,16 @@ def init_kvpe_cache(
     # num_users; a device kernel zeros it instead with no host transfer. Allocating
     # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
     # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
+    full_mesh_topology = None
+    if full_mesh:
+        dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+        physical_mesh_shape = dist_shape
+        coords = [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(physical_mesh_shape)
+        ]
+        full_mesh_topology = ttnn.TensorTopology(dist_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+
     kvpe_cache = ttnn.allocate_tensor_on_device(
         ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
         dtype,
@@ -855,6 +885,13 @@ def init_kvpe_cache(
         kv_mem_config,
     )
     DRAMZeroFill.op(kvpe_cache)
+
+    if full_mesh:
+        # Full-mesh ring mode assigns one canonical row-major sequence shard to every coordinate.
+        # DRAMZeroFill is an in-place generic op whose output follows the allocator's default replicated
+        # topology, so stamp the intended full-mesh distribution after the fill.
+        kvpe_cache.update_tensor_topology(full_mesh_topology)
+        return kvpe_cache
 
     # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
     # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
@@ -865,7 +902,10 @@ def init_kvpe_cache(
     dist_shape = ttnn.MeshShape([num_devices])
     placements = [ttnn.PlacementReplicate()]
     physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-    coords = list(ttnn.MeshCoordinateRange(physical_mesh_shape))
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+        for coord in ttnn.MeshCoordinateRange(physical_mesh_shape)
+    ]
     kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return kvpe_cache
@@ -881,6 +921,7 @@ def init_mla_kv_cache(
     sp_axis,
     num_kvpe_cache_layers,
     num_users=1,
+    full_mesh=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -902,12 +943,13 @@ def init_mla_kv_cache(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_kvpe_cache_layers,
         num_users=num_users,
+        full_mesh=full_mesh,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users
+    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -925,6 +967,7 @@ def allocate_mla_kvpe_cache(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
+        full_mesh=full_mesh,
     )
 
 
