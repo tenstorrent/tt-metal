@@ -288,6 +288,7 @@ class TtPrefillTransformer(LightweightModule):
             self.rope_setup.get_rope_tensors_indexed(
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
+                tail_slack=is_chunked,
             )
             if (is_chunked or self._has_indexer)
             else None
