@@ -4134,9 +4134,58 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsDataflowBufferComputeJITSmoke) {
+    // Compute-kernel counterpart of CPU_GetTokenIfPresentConstructsDataflowBufferJITSmoke.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[0].dfb_bindings[0].accessor_name = "dfb_present";
+    spec.kernels[1].dfb_bindings[0].accessor_name = "dfb_present";
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::L1)};
+    BindTensorParameterToKernel(spec.kernels[1], "input_tensor", "tensor_present");
+
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"dfb_present">() == &dfb::dfb_present);
+    if (const auto* token = dfb::get_token_if_present<"dfb_present">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(dfb::get_token_if_present<"dfb_absent">() == nullptr);
+    if (const auto* token = dfb::get_token_if_present<"dfb_absent">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+    if (const auto* token = scratch::get_token_if_present<"scratch">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_present">() == &tensor::tensor_present);
+    if (const auto* token = tensor::get_token_if_present<"tensor_present">()) {
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)local_accessor;
+    }
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentPrUsageExampleJITSmoke) {
     // Kernel shape from the PR description: always-present `normal`, optional `bias` via
-    // get_token_if_present + std::optional. Compiles the same source with and without `bias` bound.
+    // get_token_if_present + std::optional. Compiles the same source on DM and compute, with
+    // and without `bias` bound.
     constexpr const char* kSource = R"(
 #include <optional>
 void kernel_main() {
@@ -4165,6 +4214,7 @@ void kernel_main() {
         auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
         dm_kernel.source = KernelSpec::SourceCode{kSource};
         auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
+        compute_kernel.source = KernelSpec::SourceCode{kSource};
 
         auto normal = MakeMinimalDFB("normal");
         normal.data_format_metadata = tt::DataFormat::Float16_b;
@@ -4344,9 +4394,10 @@ void kernel_main() {
 
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstantExpressionBigSmoke) {
     // Same bindings as CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJITSmoke.
-    // Present names use `if constexpr (get_token_if_present<"x">() == &ns::x)` — converting the
-    // pointer to bool is -Werror=address because it is the address of a constexpr object.
-    // Absent names use `if constexpr (constexpr const auto* token = get_token_if_present<"missing">())`.
+    // Present and absent names use the same
+    // `if constexpr (constexpr const auto* token = get_token_if_present<"x">())` shape.
+    // Converting a present token pointer to bool is -Werror=address (address of a constexpr
+    // object), so the kernel suppresses -Waddress around those conditions.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     auto dfb_b = MakeMinimalDFB("dfb_1");
@@ -4379,9 +4430,11 @@ TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstantExpressionBigSmoke) {
 #include "api/tensor/local_tensor_accessor.h"
 
 void kernel_main() {
+#pragma GCC diagnostic push
+// Present tokens are addresses of constexpr objects; converting them to bool is -Werror=address.
+#pragma GCC diagnostic ignored "-Waddress"
     static_assert(dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a);
-    if constexpr (dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a) {
-        constexpr const auto* token = dfb::get_token_if_present<"dfb_a">();
+    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_a">()) {
         DataflowBuffer buf(*token);
         (void)buf;
     }
@@ -4392,15 +4445,13 @@ void kernel_main() {
     }
 
     static_assert(dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b);
-    if constexpr (dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b) {
-        constexpr const auto* token = dfb::get_token_if_present<"dfb_b">();
+    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_b">()) {
         DataflowBuffer buf(*token);
         (void)buf;
     }
 
     static_assert(tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a);
-    if constexpr (tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a) {
-        constexpr const auto* token = tensor::get_token_if_present<"tensor_a">();
+    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_a">()) {
         TensorAccessor accessor(*token);
         LocalTensorAccessor<uint32_t> local_accessor(*token);
         (void)accessor;
@@ -4415,8 +4466,7 @@ void kernel_main() {
     }
 
     static_assert(tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b);
-    if constexpr (tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b) {
-        constexpr const auto* token = tensor::get_token_if_present<"tensor_b">();
+    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_b">()) {
         TensorAccessor accessor(*token);
         LocalTensorAccessor<uint32_t> local_accessor(*token);
         (void)accessor;
@@ -4424,8 +4474,7 @@ void kernel_main() {
     }
 
     static_assert(scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a);
-    if constexpr (scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a) {
-        constexpr const auto* token = scratch::get_token_if_present<"scratch_a">();
+    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_a">()) {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
     }
@@ -4436,11 +4485,11 @@ void kernel_main() {
     }
 
     static_assert(scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b);
-    if constexpr (scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b) {
-        constexpr const auto* token = scratch::get_token_if_present<"scratch_b">();
+    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_b">()) {
         Scratchpad<int32_t> pad(*token);
         (void)pad;
     }
+#pragma GCC diagnostic pop
 }
 )"};
 
