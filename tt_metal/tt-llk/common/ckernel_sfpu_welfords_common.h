@@ -1050,7 +1050,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
-    _two_pass_horizontal_sum_pair_<true>();
+    _two_pass_horizontal_sum_pair_<true /*broadcast_result*/>();
 
     constexpr std::uint32_t lane_reciprocal_bits = 0x3d000000; // 1/32
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, lane_reciprocal_bits >> 16);
