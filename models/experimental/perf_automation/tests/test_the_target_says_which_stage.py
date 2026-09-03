@@ -22,7 +22,7 @@ _spec = _ilu.spec_from_file_location("_pm_stage", PERF / "cc_optimize" / "perf_m
 _pm = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_pm)
 
-_stage_of_op = _pm.stage_of_op
+stage_of_op = _pm.stage_of_op
 _stage_gap_share = _pm._stage_gap_share
 
 
@@ -37,31 +37,31 @@ def _prof(**stages):
 def test_an_op_is_attributed_to_where_it_costs_the_most_not_where_it_appears_first():
     """First-match returns whichever stage the capture serialised first -- a coin toss."""
     prof = _prof(first=[("Matmul", 1.0)], second=[("Matmul", 20.0)])
-    assert _stage_of_op("Matmul", prof) == "second"
+    assert stage_of_op("Matmul", prof) == "second"
 
 
 def test_a_tie_names_no_stage():
     prof = _prof(one=[("X", 5.0)], two=[("X", 5.0)])
-    assert _stage_of_op("X", prof) == "", "a tie must say nothing rather than guess"
+    assert stage_of_op("X", prof) == "", "a tie must say nothing rather than guess"
 
 
 def test_an_op_the_capture_cannot_place_returns_nothing():
     """host_overhead is real and belongs to no stage; claiming one would be a lie."""
     prof = _prof(only=[("Matmul", 1.0)])
-    assert _stage_of_op("host_overhead", prof) == ""
-    assert _stage_of_op("", prof) == ""
+    assert stage_of_op("host_overhead", prof) == ""
+    assert stage_of_op("", prof) == ""
 
 
 def test_an_unmarked_capture_behaves_as_before_the_field_existed():
     for prof in ({}, {"stage_buckets": {}}, {"stage_buckets": None}, None):
-        assert _stage_of_op("Matmul", prof) == ""
+        assert stage_of_op("Matmul", prof) == ""
         assert _stage_gap_share(prof) == {}
 
 
 def test_the_stage_names_come_from_the_capture_not_from_a_list():
     """A model that calls its stages anything must still be attributed."""
     prof = _prof(denoise=[("Conv", 9.0)], upsample=[("Conv", 2.0)])
-    assert _stage_of_op("Conv", prof) == "denoise"
+    assert stage_of_op("Conv", prof) == "denoise"
 
 
 def test_the_share_summarises_every_marked_stage():
@@ -87,8 +87,8 @@ def test_an_op_is_not_pooled_with_a_longer_op_that_starts_with_its_name():
         cheap=[("MorehSoftmaxOp", 1.0)],
         expensive=[("MorehSoftmaxOpParallelizationStrategy", 40.0)],
     )
-    assert _stage_of_op("MorehSoftmaxOp", prof) == "cheap"
-    assert _stage_of_op("MorehSoftmaxOpParallelizationStrategy", prof) == "expensive"
+    assert stage_of_op("MorehSoftmaxOp", prof) == "cheap"
+    assert stage_of_op("MorehSoftmaxOpParallelizationStrategy", prof) == "expensive"
 
 
 def test_a_target_named_with_its_shape_lands_in_its_own_stage():
@@ -99,15 +99,15 @@ def test_a_target_named_with_its_shape_lands_in_its_own_stage():
             "step": [{"top_ops": [{"op_code": "Matmul", "shape": "[1,1,3072]", "device_ms": 2.4}]}],
         }
     }
-    assert _stage_of_op("Matmul [1,1,3072]", prof) == "step"
-    assert _stage_of_op("Matmul", prof) == "prompt", "the bare code still ranks by cost"
+    assert stage_of_op("Matmul [1,1,3072]", prof) == "step"
+    assert stage_of_op("Matmul", prof) == "prompt", "the bare code still ranks by cost"
 
 
 def test_the_stop_gate_is_the_registered_tool_and_the_helper_is_not():
     """The helper sits directly above termination_check, where a stray decorator unregisters it.
 
     termination_check is the binding stop gate; an agent that cannot call it cannot finish a round.
-    _stage_of_op is a private helper and has no business on the wire.
+    stage_of_op is a shared helper and has no business on the wire.
     """
     src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
     assert "@mcp.tool()\ndef termination_check(" in src, "the stop gate must stay registered"
