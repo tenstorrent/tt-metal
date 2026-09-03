@@ -32,8 +32,17 @@ def _parallel_geometry(device: ttnn.MeshDevice, tensor_parallel_axis: int) -> tu
     return mesh_shape, mesh_shape[tensor_parallel_axis]
 
 
-def _cache_artifact_names(num_layers: int = NUM_LAYERS) -> tuple[str, ...]:
-    per_layer = tuple(f"layers.{idx}.{part}" for idx in range(num_layers) for part in ("self_attention", "mlp"))
+def _cache_artifact_names(num_layers: int = NUM_LAYERS, first_layer_idx: int = 0) -> tuple[str, ...]:
+    """The tensorbin names for `num_layers` layers starting at `first_layer_idx`.
+
+    The cache is written once for the whole stack and is keyed by GLOBAL layer index, so a
+    pipeline rank holding layers `F..F+n-1` must ask for `layers.F..` — not `layers.0..`.
+    Getting this wrong is silent: the names it asks for all exist, so the completeness check
+    passes and the rank loads another rank's queries.
+    """
+    per_layer = tuple(
+        f"layers.{first_layer_idx + idx}.{part}" for idx in range(num_layers) for part in ("self_attention", "mlp")
+    )
     return per_layer + ("output",)
 
 
@@ -50,7 +59,7 @@ def _serialized_path(cache_file: Path, dtype: ttnn.DataType) -> Path:
     return Path(f"{cache_file}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
 
 
-def walk_sites(pre, post, output=None):
+def walk_sites(pre, post, output=None, *, first_pre_issued=False):
     """The queries the walk issues, in issue order.
 
     Layer 0 has nothing sealed to read against, so `pre[0]` is held but never issued —
@@ -58,10 +67,16 @@ def walk_sites(pre, post, output=None):
     that entry is a dead constant against a `1.7e-5` projection, which is the architecture
     agreeing with the driver.
 
+    `first_pre_issued` undoes that skip, and exists for one caller: a pipeline rank that
+    does not hold layer 0. Its local `pre[0]` is global `pre[first_layer_idx]`, a real
+    query that an undivided walk issues against the sealed set the previous rank hands
+    over — the one read that straddles a rank boundary. Skipping it there would drop a
+    site the model performs, not elide a dead one.
+
     `output` is the single model-level read after the stack. A caller gating a block's own
-    sites omits it.
+    sites omits it, and so does a rank that is not the last.
     """
-    sites = [post[0]]
+    sites = [pre[0], post[0]] if first_pre_issued else [post[0]]
     for pre_query, post_query in zip(pre[1:], post[1:]):
         sites += [pre_query, post_query]
     return sites if output is None else sites + [output]
@@ -88,13 +103,18 @@ class AttnResWeights:
         cache_name_prefix: str,
         *,
         num_layers: int = NUM_LAYERS,
+        first_layer_idx: int = 0,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> bool:
-        """Return whether every query's tensorbin exists at this dtype and layout."""
+        """Return whether every query's tensorbin exists at this dtype and layout.
+
+        `first_layer_idx` must match the caller's global layer range, or this checks that
+        someone ELSE's queries are present and returns True while they are missing.
+        """
         if cache_path is None:
             return False
         cache_path = Path(cache_path)
-        for name in _cache_artifact_names(num_layers):
+        for name in _cache_artifact_names(num_layers, first_layer_idx):
             if not _serialized_path(cache_path / _cache_stem(cache_name_prefix, name), dtype).is_file():
                 return False
         return True
@@ -108,6 +128,7 @@ class AttnResWeights:
         mesh_device: ttnn.MeshDevice,
         *,
         num_layers: int = NUM_LAYERS,
+        first_layer_idx: int = 0,
         dtype: ttnn.DataType = ttnn.bfloat16,
         tensor_parallel_axis: int = 1,
         prefix: str = CHECKPOINT_PREFIX,
@@ -119,6 +140,7 @@ class AttnResWeights:
             cache_path,
             cache_name_prefix=cache_name_prefix,
             num_layers=num_layers,
+            first_layer_idx=first_layer_idx,
             dtype=dtype,
             tensor_parallel_axis=tensor_parallel_axis,
             prefix=prefix,
@@ -134,6 +156,7 @@ class AttnResWeights:
         cache_name_prefix: str,
         *,
         num_layers: int = NUM_LAYERS,
+        first_layer_idx: int = 0,
         dtype: ttnn.DataType = ttnn.bfloat16,
         tensor_parallel_axis: int = 1,
     ) -> "AttnResWeights":
@@ -144,6 +167,7 @@ class AttnResWeights:
             cache_path,
             cache_name_prefix=cache_name_prefix,
             num_layers=num_layers,
+            first_layer_idx=first_layer_idx,
             dtype=dtype,
             tensor_parallel_axis=tensor_parallel_axis,
         )
@@ -158,6 +182,7 @@ def load_attn_res_weights(
     *,
     cache_name_prefix: str = "attn_res",
     num_layers: int = NUM_LAYERS,
+    first_layer_idx: int = 0,
     dtype: ttnn.DataType = ttnn.bfloat16,
     tensor_parallel_axis: int = 1,
     prefix: str = CHECKPOINT_PREFIX,
@@ -178,7 +203,11 @@ def load_attn_res_weights(
         if not _load_to_device:
             raise ValueError("building the AttnRes TTNN cache requires a state_dict")
         if not AttnResWeights.check_cache_complete(
-            tensor_cache_path, cache_name_prefix, num_layers=num_layers, dtype=dtype
+            tensor_cache_path,
+            cache_name_prefix,
+            num_layers=num_layers,
+            first_layer_idx=first_layer_idx,
+            dtype=dtype,
         ):
             raise FileNotFoundError(f"incomplete AttnRes TTNN cache for {cache_name_prefix!r} at {tensor_cache_path!r}")
     if tensor_cache_path is not None:
@@ -206,10 +235,12 @@ def load_attn_res_weights(
     if state_dict is None:
         pre, post, output = [None] * num_layers, [None] * num_layers, None
     else:
-        pre, post, output = fold_queries(state_dict, num_layers, prefix)
+        pre, post, output = fold_queries(state_dict, num_layers, prefix, first_layer_idx=first_layer_idx)
 
-    placed_pre = tuple(place(pre[idx], f"layers.{idx}.self_attention") for idx in range(num_layers))
-    placed_post = tuple(place(post[idx], f"layers.{idx}.mlp") for idx in range(num_layers))
+    # Global layer index, not local: the cache and the checkpoint are both keyed by it, and a
+    # pipeline rank holds a window into that range rather than a stack of its own.
+    placed_pre = tuple(place(pre[idx], f"layers.{first_layer_idx + idx}.self_attention") for idx in range(num_layers))
+    placed_post = tuple(place(post[idx], f"layers.{first_layer_idx + idx}.mlp") for idx in range(num_layers))
     placed_output = place(output, "output")
 
     if not _load_to_device:
