@@ -14,8 +14,10 @@ namespace {
 // Every input is indexed by tile page, so an unpadded rank-4 [1,1,rows,cols] block with both
 // tiled dims tile-aligned is what keeps host page arithmetic and kernel page arithmetic the
 // same expression.
-void check_flat_2d(const Tensor& t, const char* name, uint32_t rows, uint32_t cols) {
-    TT_FATAL(t.dtype() == tt::tt_metal::DataType::FLOAT32, "{} must be FLOAT32", name);
+void check_flat_2d(const Tensor& t, const char* name, uint32_t rows, uint32_t cols, tt::tt_metal::DataType dtype) {
+    // One dtype for every input: the reader sizes all its NoC reads from CB_IN's page, so a
+    // narrower coefficient tensor would read the wrong stride into CB_PC and CB_CONSTS.
+    TT_FATAL(t.dtype() == dtype, "{} must have the same dtype as y ({}), got {}", name, dtype, t.dtype());
     TT_FATAL(t.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
     TT_FATAL(t.is_allocated(), "{} must be allocated on device", name);
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be a device tensor", name);
@@ -47,20 +49,26 @@ void MhcPostDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(yls.rank() >= 2, "y must be rank>=2, got rank {}", yls.rank());
     const uint32_t T = yls[-2];
     const uint32_t C = yls[-1];
+    const auto dtype = tensor_args.y.dtype();
+    TT_FATAL(
+        dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::BFLOAT16 ||
+            dtype == tt::tt_metal::DataType::BFLOAT8_B,
+        "y must be FLOAT32, BFLOAT16 or BFLOAT8_B, got {}",
+        dtype);
     // The column tiles of y, residual and out must line up page for page, which they only do
     // when each stream is a whole number of tiles wide. T is free: a partial last token-tile
     // carries padding through the mix untouched, since every term is row-local.
     TT_FATAL(C % tt::constants::TILE_WIDTH == 0, "y width ({}) must be a multiple of 32", C);
 
-    check_flat_2d(tensor_args.y, "y", T, C);
-    check_flat_2d(tensor_args.residual, "residual", T, n * C);
+    check_flat_2d(tensor_args.y, "y", T, C, dtype);
+    check_flat_2d(tensor_args.residual, "residual", T, n * C, dtype);
     // post and comb come straight from mhc_split_sinkhorn, whose outputs are logically n / n*n
     // wide inside a full tile; the extraction matmul reads the tile, so only the row count binds.
-    check_flat_2d(tensor_args.post, "post", T, n);
-    check_flat_2d(tensor_args.comb, "comb", T, n * n);
+    check_flat_2d(tensor_args.post, "post", T, n, dtype);
+    check_flat_2d(tensor_args.comb, "comb", T, n * n, dtype);
 
     const auto& consts = tensor_args.consts;
-    TT_FATAL(consts.dtype() == tt::tt_metal::DataType::FLOAT32, "consts must be FLOAT32");
+    TT_FATAL(consts.dtype() == dtype, "consts must have the same dtype as y ({}), got {}", dtype, consts.dtype());
     TT_FATAL(consts.layout() == tt::tt_metal::Layout::TILE, "consts must be TILE layout");
     TT_FATAL(consts.is_allocated(), "consts must be allocated on device");
     TT_FATAL(consts.storage_type() == StorageType::DEVICE, "consts must be a device tensor");
@@ -83,7 +91,7 @@ MhcPostDeviceOperation::spec_return_value_t MhcPostDeviceOperation::compute_outp
     return tt::tt_metal::TensorSpec(
         ttnn::Shape({r.logical_shape()[-2], r.logical_shape()[-1]}),
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::FLOAT32,
+            r.dtype(),
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
 }

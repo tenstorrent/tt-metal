@@ -49,7 +49,9 @@ ProgramDescriptor MhcPostProgramFactory::create_descriptor(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     ProgramDescriptor desc;
 
-    const tt::DataFormat df = datatype_to_dataformat_converter(tt::tt_metal::DataType::FLOAT32);
+    // Validation pins every input to one dtype, so a single format sizes all five CBs. DEST stays
+    // fp32 regardless, so a bf16 pass still sums its five terms at full precision before packing.
+    const tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.y.dtype());
     const uint32_t tile_size = tt::tile_size(df);
     const uint32_t n = operation_attributes.n;
 
