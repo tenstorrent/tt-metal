@@ -64,6 +64,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
     sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
     sd_bool("PREFILL_PRODUCER_SYNTHETIC_TOKENS", workload.get("synthetic_tokens"))
+    sd_bool("PREFILL_PRODUCER_WAIT_FOR_ACK", workload.get("wait_for_ack"))
     sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
     slot_prompts = workload.get("slot_prompts")
     if slot_prompts is not None:
@@ -209,16 +210,18 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     if ack_channel is None:
         return 0
     drained = 0
-    last_logged = -1
     start = time.perf_counter()
+    next_progress_log = start + 1.0
+    logger.info(f"[producer] waiting for {expected} layer acks")
     while drained < expected:
         drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
         if drained >= expected:
             break
-        if time.perf_counter() - start > timeout_s:
+        now = time.perf_counter()
+        if now >= next_progress_log:
+            logger.info(f"[producer] layer acks {drained}/{expected}")
+            next_progress_log = now + 1.0
+        if now - start > timeout_s:
             logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
             break
         time.sleep(0.01)
@@ -1066,19 +1069,21 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    wait_for_ack = cfg.verify or os.environ.get("PREFILL_PRODUCER_WAIT_FOR_ACK", "0") == "1"
+    ack_channel = _connect_layer_ack_channel(timeout_s) if wait_for_ack else None
+    if wait_for_ack and ack_channel is None:
         logger.error(
-            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
-            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
+            "[producer] completion wait requested but LayerAck channel is missing. "
+            "Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
             "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
         )
         sys.exit(1)
-    if not cfg.verify:
-        logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
-        )
+    if ack_channel is not None:
+        stale_acks = ack_channel.try_consume_all()
+        if stale_acks:
+            logger.warning(f"[producer] discarded {stale_acks} stale layer acks before sending requests")
+    elif not cfg.verify:
+        logger.info("[producer] CHECK_PCC off and WAIT_FOR_ACK off — measuring H2D enqueue only, not model completion")
 
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
@@ -1104,19 +1109,33 @@ def main() -> None:
             _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
+    completion_start = time.perf_counter()
     stats = run_schedule(cfg, push_fn=push_chunk)
     service.barrier()
 
     sorted_ms = sorted(stats.push_ms)
     total_tokens = stats.total_pushes * CHUNK_SIZE
+    enqueue_label = "ENQUEUED" if wait_for_ack else "DONE_ENQUEUE_ONLY"
     logger.info(
-        f"[producer] DONE wall={stats.wall_s:.1f}s pushes={stats.total_pushes} requests={stats.completed} "
-        f"tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
+        f"[producer] {enqueue_label} schedule_ms={stats.wall_s * 1000.0:.3f} "
+        f"pushes={stats.total_pushes} requests={stats.completed} tokens={total_tokens} "
+        f"enqueue_rate={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    expected_acks = NUM_LAYERS * stats.total_pushes
+    drained_acks = _drain_layer_acks(ack_channel, expected_acks)
+    if wait_for_ack:
+        if drained_acks != expected_acks:
+            raise RuntimeError(f"request completion timed out: received {drained_acks}/{expected_acks} layer acks")
+        completion_ms = (time.perf_counter() - completion_start) * 1000.0
+        completed_tokens_per_second = total_tokens * 1000.0 / completion_ms if completion_ms else 0.0
+        logger.success(
+            f"[producer] REQUESTS_COMPLETE layer_acks={drained_acks}/{expected_acks} "
+            f"enqueue_to_completion_ms={completion_ms:.3f} "
+            f"completed_tokens_per_second={completed_tokens_per_second:.3f}"
+        )
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
