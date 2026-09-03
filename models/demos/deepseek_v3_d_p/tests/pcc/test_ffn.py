@@ -16,10 +16,16 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
+    ACTIVATION_CLAMPED_SILU_GLU,
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -35,8 +41,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        # DeepSeek-V4's dense FFN at the DeepSeek default width: the activation is what is new.
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
     ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ"],
+    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -90,6 +98,11 @@ def test_ffn_pcc(
         situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+    # Only read on the clamped path. The reference's default weight init leaves the projections
+    # far short of the clamp, so the gate and up weights are scaled up to reach it.
+    is_clamped = activation == ACTIVATION_CLAMPED_SILU_GLU
+    clamp_limit = DeepSeekV4ProConfig.SWIGLU_LIMIT
+    gate_up_scale = 4.5 if is_clamped else 1.0
 
     topology = per_axis_topology(device_params["fabric_config"])[1]
     num_devices = mesh_device.get_num_devices()
@@ -106,6 +119,13 @@ def test_ffn_pcc(
     # Create PyTorch reference model with FFN dimensions
     logger.debug("Creating TorchExpert reference with FFN dimensions")
     torch_model = TorchExpert(EMB_DIM, hidden_dim, activation=activation, **situ_betas)
+
+    # In place, so both sides are graded on one set of weights. down_proj only rescales the
+    # output, so it is left alone.
+    if gate_up_scale != 1.0:
+        with torch.no_grad():
+            torch_model.gate_proj.mul_(gate_up_scale)
+            torch_model.up_proj.mul_(gate_up_scale)
 
     torch_weights = {
         "gate_proj": torch_model.gate_proj.data,
@@ -124,12 +144,16 @@ def test_ffn_pcc(
         activations_dtype=activations_dtype,
         weights_dtype=weights_dtype,
         activation=activation,
+        clamped_silu_glu_limit=clamp_limit,
         **situ_betas,
     )
 
     # Create input tensor (replicated across all devices)
     torch_input = torch.randn(batch_seq_len, EMB_DIM, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
+
+    if is_clamped:
+        assert_clamp_coverage(torch_model, torch_input, clamp_limit)
 
     tt_input = ttnn.from_torch(
         torch_input,

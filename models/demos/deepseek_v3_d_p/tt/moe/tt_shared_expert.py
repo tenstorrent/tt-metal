@@ -28,7 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # without translation -- unlike the routed expert, whose fused kernel needs an enum.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
-SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU)
+ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
+SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU, ACTIVATION_CLAMPED_SILU_GLU)
 
 
 def situ_glu(
@@ -52,6 +53,26 @@ def situ_glu(
     path allocates interleaved, i.e. on the dispatch sub-device's cores as well.
     """
     activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta, sub_core_grids=sub_core_grids)
+    ttnn.deallocate(gate_out)
+    ttnn.deallocate(up_out)
+    return activated
+
+
+def clamped_silu_glu(
+    gate_out: ttnn.Tensor,
+    up_out: ttnn.Tensor,
+    limit: float,
+    sub_core_grids: Optional[ttnn.CoreRangeSet] = None,
+) -> ttnn.Tensor:
+    """DeepSeek-V4's clamped SiLU-GLU over a raw gate/up matmul pair, consuming (deallocating) both.
+
+        silu(min(gate, limit)) * clamp(up, -limit, limit)
+
+    The wrapper exists only to free the two matmul accumulators, which an op may not do to its own
+    inputs. ``sub_core_grids`` confines it to the shared expert's sub-device so it can run
+    overlapped with the MoE dispatch.
+    """
+    activated = ttnn.clamped_silu_glu(gate_out, up_out, limit, sub_core_grids=sub_core_grids)
     ttnn.deallocate(gate_out)
     ttnn.deallocate(up_out)
     return activated
@@ -299,6 +320,7 @@ class TtSharedExpert(LightweightModule):
         activation: str = ACTIVATION_SILU,
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
+        clamped_silu_glu_limit: Optional[float] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -315,11 +337,14 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config: Compute kernel configuration
             weight_cache_path: Optional path for caching TTNN weight tensors
             cache_name_prefix: Optional prefix for cache file names
-            activation: GLU activation over the gate/up pair -- "silu" (default, every model but
-                Kimi-K3) or "situ" for K3's SiTU-GLU. Unlike the routed expert this is a plain
-                string: both paths are composed from Python-level ttnn ops, not a fused kernel.
+            activation: GLU activation over the gate/up pair -- "silu" (default), "situ" for
+                Kimi-K3's SiTU-GLU, or "clamped_silu_glu" for DeepSeek-V4's. Unlike the routed
+                expert this is a plain string: every path here is composed from Python-level ttnn
+                ops, not a fused kernel.
             situ_beta / situ_linear_beta: SiTU softcap betas (K3: 4.0 / 25.0). Required, and
                 non-zero, when activation == "situ"; ignored otherwise.
+            clamped_silu_glu_limit: the clamp limit (V4: 10.0). Required, and positive, when
+                activation == "clamped_silu_glu"; ignored otherwise.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -348,9 +373,16 @@ class TtSharedExpert(LightweightModule):
                     f"activation {activation!r} requires non-zero situ_beta / situ_linear_beta, "
                     f"got {situ_beta} / {situ_linear_beta}"
                 )
+        if activation == ACTIVATION_CLAMPED_SILU_GLU:
+            if clamped_silu_glu_limit is None or clamped_silu_glu_limit <= 0:
+                raise ValueError(
+                    f"activation {activation!r} requires a positive clamped_silu_glu_limit, "
+                    f"got {clamped_silu_glu_limit}"
+                )
         self.activation = activation
         self.situ_beta = situ_beta
         self.situ_linear_beta = situ_linear_beta
+        self.clamped_silu_glu_limit = clamped_silu_glu_limit
 
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
@@ -545,6 +577,13 @@ class TtSharedExpert(LightweightModule):
                 up_out,
                 self.situ_beta,
                 self.situ_linear_beta,
+                sub_core_grids=self.subdevice_cores,
+            )
+        elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
+            activated = clamped_silu_glu(
+                gate_out,
+                up_out,
+                self.clamped_silu_glu_limit,
                 sub_core_grids=self.subdevice_cores,
             )
         else:
