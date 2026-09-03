@@ -161,7 +161,7 @@ def _build(mesh_device, hf_config, weight_cache_path, num_layers, num_links, use
         max_seq_len=TOTAL_LEN,
         chunk_size=CHUNK,
         num_users=NUM_USERS,
-        capacity_factor=1,
+        capacity_factor=8,  # PREFILL_CAPACITY_FACTOR default; 1 undersizes the MoE dispatch buffers
         num_links=num_links,
         gate_mode_name=adapter.default_gate_mode,
         kv_only_last_layer=False,
@@ -193,6 +193,8 @@ def _run_traced(runtime, kv_caches, mesh_device, token_ids, slot):
 
 
 def _run_eager(runtime, kv_caches, mesh_device, token_ids, slot):
+    """Eager reference through prefill_chunk. Only valid on a use_trace=False runtime."""
+    assert not runtime.config.use_trace, "use _run_eager_reference on a traced runtime; see its docstring"
     for c, ids in enumerate(token_ids):
         runtime.prefill_chunk(
             runtime.make_chunk_input(ids),
@@ -202,6 +204,35 @@ def _run_eager(runtime, kv_caches, mesh_device, token_ids, slot):
             actual_end=(c + 1) * CHUNK,
             request_id=c,
         )
+    ttnn.synchronize_device(mesh_device)
+
+
+def _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, slot):
+    """Eager reference on a TRACED runtime, by calling the model directly.
+
+    prefill_chunk dispatches on ``self.config.use_trace``, so a use_trace=True runtime cannot also
+    serve as its own eager reference through that entry point -- it would take the traced branch
+    again and compare a replay against itself. Two runtimes would keep both sides on prefill_chunk,
+    at the cost of building and loading the model twice and holding both resident while one of them
+    holds a capture; one runtime plus a direct forward is the cheaper trade and keeps the side UNDER
+    TEST (traced) on the real entry point.
+
+    The argument list mirrors prefill_chunk's eager branch exactly, including the defaults it leaves
+    implicit: no d2h_service, no metadata_msg, no layer callbacks, and metadata unset so ttMLA takes
+    its host-scalar path and derives the scale from kv_actual_isl.
+    """
+    for c, ids in enumerate(token_ids):
+        inp = runtime.make_chunk_input(ids)
+        runtime.model.forward(
+            inp,
+            kv_caches.kvpe,
+            actual_isl=CHUNK,
+            actual_start=c * CHUNK,
+            actual_end=(c + 1) * CHUNK,
+            cache_user_id=slot,
+            index_kv_cache=kv_caches.index,
+        )
+        ttnn.deallocate(inp)
     ttnn.synchronize_device(mesh_device)
 
 
@@ -260,7 +291,7 @@ def test_prefill_chunk_traced_matches_eager(
         runtime.compile(kv_caches)
         runtime.capture_trace(kv_caches)
         _run_traced(runtime, kv_caches, mesh_device, token_ids, SLOT_TRACED)
-        _run_eager(runtime, kv_caches, mesh_device, token_ids, SLOT_EAGER)
+        _run_eager_reference(runtime, kv_caches, mesh_device, token_ids, SLOT_EAGER)
 
         traced = _read_slot(
             kvpe_cache=kv_caches.kvpe,
