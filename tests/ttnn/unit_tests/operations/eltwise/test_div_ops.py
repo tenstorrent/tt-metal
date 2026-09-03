@@ -534,6 +534,59 @@ def test_div_scalar_output_dtype(device, rounding_mode, output_dtype):
     assert torch.equal(ttnn.to_torch(output).float(), torch_golden.float())
 
 
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.float32])
+def test_div_preallocated_output_rounds_before_narrowing(device, rounding_mode, output_dtype):
+    # A preallocated integer output has to reach the same value as dtype=int32, so the quotient
+    # cannot be narrowed into it before floor()/trunc() runs.
+    torch_input_a = torch.tensor([[7.0, -7.0, 6.0, -6.0]], dtype=torch.bfloat16)
+    torch_input_b = torch.full_like(torch_input_a, 2.0)
+
+    input_tensor_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_dtype = torch.int32 if output_dtype == ttnn.int32 else torch.float32
+    preallocated = ttnn.from_torch(
+        torch.zeros_like(torch_input_a, dtype=torch_dtype), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, output_tensor=preallocated)
+
+    torch_golden = torch.div(torch_input_a.float(), torch_input_b.float(), rounding_mode=rounding_mode)
+
+    assert output.dtype == output_dtype
+    assert torch.equal(ttnn.to_torch(output).float(), torch_golden)
+    # the caller's tensor must hold the result, not just the returned handle
+    assert torch.equal(ttnn.to_torch(preallocated).float(), torch_golden)
+
+
+@pytest.mark.parametrize("rounding_mode", [None, "floor", "trunc"])
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.float32])
+def test_div_output_dtype_with_sub_core_grids(device, rounding_mode, output_dtype):
+    # The post-rounding typecast has to keep the caller's core restriction.
+    torch_input_a = torch.tensor([[7.0, -7.0, 6.0, -6.0]], dtype=torch.bfloat16)
+    torch_input_b = torch.full_like(torch_input_a, 2.0)
+
+    input_tensor_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+
+    output = ttnn.div(
+        input_tensor_a,
+        input_tensor_b,
+        rounding_mode=rounding_mode,
+        dtype=output_dtype,
+        sub_core_grids=sub_core_grids,
+    )
+
+    torch_golden = torch.div(torch_input_a.float(), torch_input_b.float(), rounding_mode=rounding_mode)
+    if output_dtype == ttnn.int32:
+        torch_golden = torch_golden.to(torch.int32).float()
+
+    assert output.dtype == output_dtype
+    assert torch.equal(ttnn.to_torch(output).float(), torch_golden)
+
+
 @pytest.mark.parametrize(
     "dtype_a, dtype_b",
     [
