@@ -8,6 +8,8 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 
 #include "page_config_impl.hpp"
@@ -250,6 +252,9 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
         BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
     if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config_)) {
         tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(memory_config_)) {
+        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
     }
     return sharding_args;
 }

@@ -166,6 +166,7 @@ ttsim:
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
   e2e_tier2:

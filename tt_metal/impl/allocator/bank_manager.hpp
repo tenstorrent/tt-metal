@@ -101,7 +101,11 @@ public:
         const CoreRangeSet& compute_grid,
         std::optional<uint32_t> num_shards,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0},
-        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {},
+        // When set, only these dependent allocators are subtracted, instead of every one this
+        // allocator depends on. Range lockstep uses it to keep the scan to the buffer's own cores
+        // on the path that does not go through a mesh allocator.
+        const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
 
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
@@ -214,9 +218,19 @@ private:
     // Invalidate caches stored on allocators that depend on the given allocator
     void invalidate_allocated_ranges_cache_for_dependent_allocators(AllocatorDependencies::AllocatorID allocator_id);
 
+    // Merge, sort and coalesce the allocated ranges of the given allocators
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> merge_allocated_ranges_from(
+        const ttsl::SmallVector<AllocatorDependencies::AllocatorID>& dependent_allocators);
+
     // Compute and cache the merged allocated ranges of all dependent allocators for the given allocator
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& compute_merged_allocated_ranges(
         AllocatorDependencies::AllocatorID allocator_id);
+
+    // The same, restricted to the dependent allocators named in the scope. Not cached: the cache is
+    // keyed by allocator id alone.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> compute_scoped_allocated_ranges(
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::unordered_set<uint32_t>& scoped_dependent_allocators);
 
     // Compute available address ranges for the given allocator and request, after subtracting merged neighbor
     // allocations and any additional occupied ranges (e.g., from device-level allocators at mesh level)
@@ -224,7 +238,8 @@ private:
         AllocatorDependencies::AllocatorID allocator_id,
         DeviceAddr size_per_bank,
         DeviceAddr address_limit,
-        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {},
+        const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
 };
 
 }  // namespace tt::tt_metal

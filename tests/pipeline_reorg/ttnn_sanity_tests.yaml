@@ -265,11 +265,11 @@
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "core ttnn unit test group"
-  # per_core_allocation runs as its own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
+  # The allocator suites run as their own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
   # once when MetalContext is first constructed, so it must be set before this process opens a
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
   ai_summary:
     authoritative_job_status: true
   skus:
