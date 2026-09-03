@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -74,14 +75,13 @@ template <uint32_t dfb_id, ReduceDim reduce_dim>
 FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems);
 
 /**
- * @brief Materialize the auxiliary recipe selected by the host ReducePlan.
+ * @brief Materialize and push a flat host-planned sequence of auxiliary tiles.
  *
- * REDUCE_AUX_ZERO may accompany REDUCE_AUX_MASK. In that case this emits the
- * mask first and the zero second. Otherwise the factory defines at most one
- * recipe, and with no define this emits the ordinary scalar tile.
+ * The planned `Call` owns the physical recipe. Kernel callers do not inspect or
+ * address its auxiliary tiles.
  */
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
-FORCE_INLINE void prepare_planned_reduce_aux(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile);
+template <typename Call>
+FORCE_INLINE void prepare_reduce_auxiliary_tiles();
 
 /**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
@@ -119,8 +119,8 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(
 //   tile 0 → full scaler
 //   tile 1 → partial scaler
 //
-// Pair with compute_kernel_lib::ReducePartialScaler::with_partial() on the
-// compute side. REDUCE_SCALAR is not supported (scaler is applied twice).
+// Pair with compute_kernel_lib::ReducePartialMode::Scaler on the compute side.
+// REDUCE_SCALAR is not supported (scaler is applied twice).
 // =============================================================================
 
 /**

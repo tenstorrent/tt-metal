@@ -190,9 +190,8 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 // (sfpu_reduce_init) is hoisted OUT of the per-output loop; only the light MOP inits (add_tiles/copy) run per
 // output.
 //
-// PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by partial_scaler.use_partial: the last tile
-// is folded in with a DEST-ACCUMULATING masked broadcast-mul (0/1 mask at
-// scaler_dfb_id[partial_tile_idx]; row-0 mask for ROW, col-0 for COL) via fold_partial_last(), so the padding
+// PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by ReducePartialMode::Mask: the last tile
+// is folded in with a DEST-ACCUMULATING masked broadcast-mul via fold_partial_last(), so the padding
 // contributes 0. The bulk stays pure add_tiles (fidelity-flat, 2 tiles/op); only the one partial tile is a
 // (fidelity-affected) mul. The bcast shorthands overwrite DEST (clear_fp32_dst_acc=true), so the accumulating
 // variant is the LLK directly with acc_to_dest=1 at init and clear_fp32_dst_acc=false at the op.
@@ -222,7 +221,7 @@ template <
 ALWI void reduce_accumulate_via_add(
     ReduceInputBlockShape shape,
     ReduceInputMemoryLayout input_memory_layout,
-    ReducePartialScaler partial_scaler,
+    ReducePartialMode partial_mode,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
     ReduceInputChunk input_chunk) {
@@ -268,8 +267,11 @@ ALWI void reduce_accumulate_via_add(
 
     // The pairwise accumulation and within-tile finalize produce a SUM. AVG applies the caller-owned
     // compile-time 1/reduce_factor below; no divisor is inferred from this call's tile geometry.
-    const bool has_partial = partial_scaler.use_partial;
-    const uint32_t mask_idx = partial_scaler.partial_tile_idx;
+    ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Mask);
+    const bool has_partial = partial_mode == ReducePartialMode::Mask;
+    // The auxiliary representation is private to the helper: Mask always occupies
+    // the first auxiliary tile, followed by an optional zero tile.
+    constexpr uint32_t mask_idx = 0;
     const uint32_t full_cnt = has_partial ? (cnt - 1u) : cnt;  // tiles summed via pure add_tiles
 
     DataflowBuffer input_dfb(input_dfb_id), scaler_dfb(scaler_dfb_id), output_dfb(output_dfb_id);
@@ -339,7 +341,7 @@ ALWI void reduce_accumulate_via_add(
     // CopySeedZeroPair zero follows that representation, so mask and zero can coexist in the same CB.
     // With AccumulateViaAdd's mask-only partial layout this is [mask@0, zero@1]; without a partial it is
     // [zero@0].
-    const uint32_t zero_idx = has_partial ? partial_scaler.scaler_tile_count() : 0u;
+    const uint32_t zero_idx = has_partial ? 1u : 0u;
     uint32_t required_aux_tiles = has_partial ? mask_idx + 1u : 0u;
     if constexpr (has_accum) {
         // AccumulateReloadMode contracts for indexed input. Streamed/grouped paths normally use their safe
@@ -975,7 +977,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReducePartialScaler partial_scaler,
+    ReducePartialMode partial_mode,
     ReduceInputChunk input_chunk) {
     // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
@@ -1054,12 +1056,12 @@ ALWI void reduce(
         // can be partial in BOTH axes at once (a single row/col mask cannot express the corner), so it is
         // rejected — use ReduceTile.
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            ASSERT(!partial_scaler.use_partial);
+            ASSERT(partial_mode == ReducePartialMode::None);
         }
         // Skip + partial is a contradiction: use_partial requests a lane mask along an axis whose inputs are
         // already collapsed. Reject it rather than pretend the mask did useful work.
         if constexpr (within_tile == ReduceWithinTile::Skip) {
-            ASSERT(!partial_scaler.use_partial);
+            ASSERT(partial_mode == ReducePartialMode::None);
         }
         // Cross-call Accumulate + partial is supported for ROW/COL (the masked last tile folds into each
         // chunk's sum via fold_partial_last). SCALAR partial is rejected above (622-ish) regardless of accumulate.
@@ -1091,7 +1093,7 @@ ALWI void reduce(
             PostReduceOp,
             within_tile,
             reduce_factor>(
-            input_block_shape, input_memory_layout, partial_scaler, accumulate, post_reduce_op, input_chunk);
+            input_block_shape, input_memory_layout, partial_mode, accumulate, post_reduce_op, input_chunk);
         return;
     }
 
@@ -1167,12 +1169,17 @@ ALWI void reduce(
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
-    // Partial scaler: REDUCE_SCALAR can't use it (applies the scaler twice).
-    // Other reduce dims may add a partial-fill tile at index >0; wait for both.
+    ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Scaler);
+    // REDUCE_SCALAR can't use a partial scaler because it applies the scaler twice.
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-        ASSERT(!partial_scaler.use_partial);
+        ASSERT(partial_mode == ReducePartialMode::None);
     }
-    scaler_dfb.wait_front(partial_scaler.scaler_tile_count());
+    const bool has_partial_scaler = partial_mode == ReducePartialMode::Scaler;
+    // The full scaler is tile 0 and the partial scaler is tile 1. That physical
+    // layout is owned here rather than exposed through the call interface.
+    const uint32_t scaler_tile_count = has_partial_scaler ? 2u : 1u;
+    const uint32_t partial_scaler_idx = has_partial_scaler ? 1u : 0u;
+    scaler_dfb.wait_front(scaler_tile_count);
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
     }
@@ -1316,8 +1323,7 @@ ALWI void reduce(
                                 detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
                                     input_dfb_id, local_wt, dst_idx, sfpu_work_dst, is_first_tile);
                             } else {
-                                const uint32_t scaler_idx =
-                                    (global_wt == Wt - 1) ? partial_scaler.partial_scaler_idx() : 0;
+                                const uint32_t scaler_idx = (global_wt == Wt - 1) ? partial_scaler_idx : 0;
                                 reduce_tile<reduce_type, reduce_dim>(
                                     input_dfb_id, scaler_dfb_id, local_wt, scaler_idx, dst_idx);
                             }
@@ -1344,7 +1350,7 @@ ALWI void reduce(
                             }
                         } else {
                             // Last W-tile picks up the partial scaler when one was prepared by the reader.
-                            const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.partial_scaler_idx() : 0;
+                            const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler_idx : 0;
                             if constexpr (waits_per_tile(input_policy)) {
                                 // One-at-a-time: wait/pop per tile
                                 input_dfb.wait_front(onetile);
@@ -1459,7 +1465,7 @@ ALWI void reduce(
                         for (uint32_t local_ht = 0; local_ht < current_h; ++local_ht) {
                             const uint32_t ht = ht_base + local_ht;
                             uint32_t dst_idx = get_dst_index(accumulate);
-                            const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler.partial_scaler_idx() : 0;
+                            const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : 0;
                             for (uint32_t local_wt = 0; local_wt < current_chunk; ++local_wt) {
                                 const uint32_t tile_idx = local_ht * current_chunk + local_wt;
                                 if constexpr (is_sfpu) {
@@ -1482,8 +1488,7 @@ ALWI void reduce(
                         // Base dst_index: from accumulation config or 0 for multi-column output
                         uint32_t dst_idx = get_dst_index(accumulate);
                         // Last H-tile picks up the partial scaler when one was prepared by the reader.
-                        [[maybe_unused]] const uint32_t scaler_idx =
-                            (ht == Ht - 1) ? partial_scaler.partial_scaler_idx() : 0;
+                        [[maybe_unused]] const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : 0;
                         for (uint32_t i = wt; i < chunk_end; ++i) {
                             if constexpr (is_sfpu) {
                                 const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
