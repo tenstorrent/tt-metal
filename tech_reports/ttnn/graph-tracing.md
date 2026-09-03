@@ -272,7 +272,7 @@ The importer produces output compatible with the ttnn-visualizer:
 - Input tensor IDs (instead of heuristic extraction from C++ graph connections)
 - Output tensor IDs (instead of C++ function_end connections)
 
-The importer matches `python_io` records to graph nodes by operation name, consuming them in order.
+The importer matches `python_io` records to graph nodes by operation name, consuming them in order. Each Python-level `function_start` reserves a `python_io` slot before argument capture, so a recording-time failure still consumes a record and cannot be paired with a later same-name operation.
 
 **Tensor lifting**: When nested operations are filtered, their input/output tensor associations are "lifted" to the parent operation. For example, `ttnn.conv2d` might internally call `ttnn::matmul` which produces an output tensor — that tensor is attributed to `ttnn.conv2d` in the database. Internal tensors (produced and consumed within the same parent scope) are excluded.
 
