@@ -11,6 +11,7 @@ Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
 import os
+import traceback
 from dataclasses import dataclass
 
 import pytest
@@ -1148,7 +1149,22 @@ def test_ttnn_combine_sweep(mesh_device, device_params):
                         _sweep_state_record("unsup", name, str(e))
                     except Exception as e:  # noqa: BLE001 - a phase's outcome is data here, not control flow
                         outcome = _classify_phase_failure(e)
-                        logger.exception(f"[sweep] {name} {outcome}")
+                        if outcome == "unsup":
+                            # An expected result, not an incident. The op said it does not implement
+                            # this combination, that message is recorded below, and a traceback adds
+                            # nothing to it.
+                            logger.info(f"[sweep] {name} unsup: {e}")
+                        else:
+                            # A real failure is worth its frames, so keep the traceback -- but
+                            # format it here rather than with logger.exception, whose diagnose
+                            # annotations repr every local in every frame. These frames hold live
+                            # ttnn device tensors, and reprring one reads it back off the mesh: a
+                            # 590 MB/chip dispatch buffer, printed into a log nobody wants it in.
+                            # That cost 37-42s per unsupported phase, eight times the phase's own
+                            # work, and about a third of the sweep's wall clock over 14 such phases.
+                            # (diagnose is a handler option in loguru 0.6, not a per-call one, so it
+                            # cannot be turned off for one call -- hence the stdlib formatter.)
+                            logger.error(f"[sweep] {name} {outcome}\n{traceback.format_exc()}")
                         _sweep_state_record(outcome, name, str(e))
                         if outcome == "HANG":
                             # The device is gone; every phase after this one would fail the same way.
