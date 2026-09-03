@@ -100,9 +100,11 @@ constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
 constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
-// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, input_batch_base,
-// valid_pages_per_batch_head, worker link, and input cache batch extent.
-constexpr uint32_t kTensorDescriptorFieldCount = 9;
+// Per-input scalar fields: Wt, Ht, out_Wt, out_Ht, batch_head_size,
+// input_batch_base (offset 5), valid_pages_per_batch_head (offset 6), and worker link (offset 7).
+// Metadata-enabled kernels append input_cache_batch_extent (offset 8).
+constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kMetadataTensorDescriptorFieldCount = kTensorDescriptorFieldCount + 1;
 constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
@@ -110,6 +112,8 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
+    kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;

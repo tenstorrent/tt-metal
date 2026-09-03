@@ -625,6 +625,12 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+    const uint32_t tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
+    const uint32_t neighbor_reader_tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kNeighborReaderMetadataTensorDescriptorFieldCount
+                                   : ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
     // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
@@ -655,18 +661,18 @@ void apply_ring_joint_scalar_runtime_args(
             patch_reader_batch_base(
                 kNeighborHaloReaderKernelIndex,
                 ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                ag_rt::kNeighborReaderTensorDescriptorFieldCount,
+                neighbor_reader_tensor_descriptor_field_count,
                 ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
         } else {
             patch_reader_batch_base(
                 kAllGatherReaderForwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
             patch_reader_batch_base(
                 kAllGatherReaderBackwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
         }
     }
@@ -704,22 +710,22 @@ void apply_ring_joint_scalar_runtime_args(
         patch_valid_pages(
             kAllGatherReaderForwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterForwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherReaderBackwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterBackwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
     }
 
@@ -755,7 +761,7 @@ void apply_ring_joint_scalar_runtime_args(
                     reader_args.size() != 0 && writer_args.size() != 0, "Directional gather worker pair is incomplete");
                 for (uint32_t in = 0; in < num_ag_inputs; ++in) {
                     const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
-                                                 in * ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+                                                 in * neighbor_reader_tensor_descriptor_field_count;
                     const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
                                                  in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
                     const uint32_t writer_origin_idx = writer_base + ag_rt::kNeighborWriterInputOriginPageFieldOffset;
