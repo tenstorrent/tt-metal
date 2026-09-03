@@ -272,10 +272,17 @@ def test_point_sampling_3d_to_2d(
             show_sparsity=True,
         )
 
+    # A point outside its camera's frustum carries whatever the projection divide
+    # produced, so only points both implementations call valid are comparable.
+    # Mask disagreement is a separate failure, caught by the validity_mask check.
+    shared_mask = torch_bev_mask & ttnn_bev_mask_torch
+    shared_torch_points = torch_ref_points_cam[shared_mask]
+    shared_ttnn_points = ttnn_ref_points_cam_torch[shared_mask]
+
     # Check with expected tolerances from test parameters
     check_with_tolerances(
-        torch_ref_points_cam,
-        ttnn_ref_points_cam_torch,
+        shared_torch_points,
+        shared_ttnn_points,
         pcc_threshold=expected_pcc,
         abs_error_threshold=expected_abs_error,
         rel_error_threshold=expected_rel_error,
@@ -294,8 +301,8 @@ def test_point_sampling_3d_to_2d(
     )
 
     points_passed, points_message = check_with_pcc(
-        torch_ref_points_cam,
-        ttnn_ref_points_cam_torch,
+        shared_torch_points,
+        shared_ttnn_points,
         expected_pcc,
     )
 
