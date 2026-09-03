@@ -5,20 +5,25 @@
 // Unit tests for the offline FSD -> PSD builder (physical_descriptor_builder).
 // Ported/adapted from tenstorrent/tt-fabric-manager tests/unit/topology_mapper_test.cpp (FSD cases).
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 #include <google/protobuf/text_format.h>
 
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include "protobuf/physical_system_descriptor.pb.h"
 
@@ -322,6 +327,163 @@ TEST(PhysicalDescriptorBuilder, IntegrationHostFilterRestrictsToSubset) {
     for (const auto& host : hostnames) {
         EXPECT_TRUE(allowed.contains(host)) << "unexpected host after filter: " << host;
     }
+}
+
+// --- PhysicalNodeId: the FSD side of the identity the topology solver keys on -------------------
+//
+// The builder still labels ASICs 1..N in file order, because the PSD keys its descriptors by a
+// uint64 AsicID and the packed address does not fit in one. What these tests pin down is that those
+// labels are no longer identity: every consumer that reaches a descriptor through
+// node_id_from_asic_descriptor sees the position-derived address instead, so an FSD-built graph and
+// a live-discovered one describe the same nodes.
+
+// The three ASICs make_two_host_fsd() wires up, as addresses rather than file-order labels.
+std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> two_host_expected_node_ids() {
+    return {
+        {make_physical_node_id("hostA", TrayID{0}, ASICLocation{0}), {"hostA", 0}},
+        {make_physical_node_id("hostA", TrayID{0}, ASICLocation{1}), {"hostA", 1}},
+        {make_physical_node_id("hostB", TrayID{0}, ASICLocation{0}), {"hostB", 0}},
+    };
+}
+
+TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLabels) {
+    ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(make_two_host_fsd()));
+    const auto& asics = psd.get_asic_descriptors();
+    ASSERT_EQ(asics.size(), 3u);
+
+    // The synthesized labels are still 1..N in (host, tray, loc) file order.
+    std::set<uint64_t> raw_ids;
+    for (const auto& [asic_id, _] : asics) {
+        raw_ids.insert(*asic_id);
+    }
+    EXPECT_EQ(raw_ids, (std::set<uint64_t>{1, 2, 3}));
+
+    // The address every solver-facing map keys on is derived from the descriptor's position, so it
+    // is the FSD hostname packed with tray and loc -- never the label above. The builder copies
+    // hostnames out of the FSD verbatim, so the id holds the canonical form of that string: this
+    // FSD spells its hosts "hostA"/"hostB" and the ids carry "hosta"/"hostb".
+    std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> actual;
+    for (const auto& [_, desc] : asics) {
+        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
+        const auto fields = decode_physical_node_id(node_id);
+        EXPECT_EQ(fields.host_id, canonical_host_for_node_id(desc.host_name));
+        EXPECT_EQ(fields.tray, desc.tray_id);
+        EXPECT_EQ(fields.loc, desc.asic_location);
+        actual[node_id] = {desc.host_name, *desc.asic_location};
+    }
+
+    // One id per ASIC: (host, tray, loc) is unique across the descriptor set, so nothing collapsed.
+    EXPECT_EQ(actual.size(), asics.size());
+    EXPECT_EQ(actual, two_host_expected_node_ids());
+}
+
+// The builder rejects duplicate hostnames and enumerates ASICs through a set keyed by
+// (host, tray, loc), so hostnames are unique on this path and no rank suffix can appear.
+TEST(PhysicalDescriptorBuilder, FsdPathReportsUniqueHostnames) {
+    ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(make_two_host_fsd()));
+    EXPECT_TRUE(psd.get_all_hostnames_unique());
+}
+
+// The load-bearing one. An FSD-built descriptor set labelled 1..N and a live-style one labelled with
+// UMD chip ids produce the *same* adjacency map once keyed by PhysicalNodeId. That equality is what
+// makes the solver erase both graphs to the same dense indices and choose the same placement, which
+// is exactly what two disjoint id spaces used to prevent.
+TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
+    ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(make_two_host_fsd()));
+    const auto& fsd_descs = psd.get_asic_descriptors();
+
+    // Relabel the same three ASICs the way discovery would: large, unordered UMD chip unique ids.
+    // Sorting by these puts the ASICs in a different order than sorting by 1..N, so a graph keyed on
+    // them is a different graph -- that is the bug PhysicalNodeId exists to remove.
+    const std::vector<uint64_t> umd_like = {
+        0x9a3f'0000'0000'0001ULL, 0x15e8'0000'0000'0002ULL, 0x4c71'0000'0000'0003ULL};
+    std::unordered_map<AsicID, ASICDescriptor> live_descs;
+    std::map<PhysicalNodeId, AsicID> node_id_to_live_id;
+    {
+        std::size_t i = 0;
+        // Iterate in FSD label order so the assignment is deterministic.
+        for (const auto& [fsd_id, desc] : std::map<AsicID, ASICDescriptor>(fsd_descs.begin(), fsd_descs.end())) {
+            const AsicID live_id{umd_like.at(i++)};
+            ASICDescriptor live = desc;
+            live.unique_id = live_id;  // discovery's key is the UMD chip id, not a file-order label
+            live_descs.emplace(live_id, live);
+            node_id_to_live_id[node_id_from_asic_descriptor(desc)] = live_id;
+        }
+    }
+    ASSERT_EQ(live_descs.size(), fsd_descs.size());
+
+    // Both id spaces are genuinely disjoint...
+    std::set<uint64_t> fsd_labels;
+    std::set<uint64_t> live_labels;
+    for (const auto& [id, _] : fsd_descs) {
+        fsd_labels.insert(*id);
+    }
+    for (const auto& [id, _] : live_descs) {
+        live_labels.insert(*id);
+    }
+    std::vector<uint64_t> shared;
+    std::set_intersection(
+        fsd_labels.begin(), fsd_labels.end(), live_labels.begin(), live_labels.end(), std::back_inserter(shared));
+    EXPECT_TRUE(shared.empty()) << "the two id spaces overlap, so this test proves nothing";
+
+    // ...yet the adjacency maps they produce, keyed by address, are equal.
+    auto adjacency_by_node_id = [](const std::unordered_map<AsicID, ASICDescriptor>& descs, const auto& neighbors_of) {
+        std::map<PhysicalNodeId, std::vector<PhysicalNodeId>> adjacency;
+        for (const auto& [asic_id, desc] : descs) {
+            auto& neighbors = adjacency[node_id_from_asic_descriptor(desc)];
+            for (const AsicID neighbor : neighbors_of(asic_id)) {
+                neighbors.push_back(node_id_from_asic_descriptor(descs.at(neighbor)));
+            }
+            std::sort(neighbors.begin(), neighbors.end());
+        }
+        return adjacency;
+    };
+
+    const auto fsd_adjacency = adjacency_by_node_id(fsd_descs, [&](AsicID id) { return psd.get_asic_neighbors(id); });
+    const auto live_adjacency = adjacency_by_node_id(live_descs, [&](AsicID live_id) {
+        // The same edges, expressed in the live id space.
+        std::vector<AsicID> neighbors;
+        const auto& desc = live_descs.at(live_id);
+        const AsicID fsd_id = psd.get_asic_id(desc.host_name, desc.tray_id, desc.asic_location);
+        for (const AsicID fsd_neighbor : psd.get_asic_neighbors(fsd_id)) {
+            neighbors.push_back(node_id_to_live_id.at(node_id_from_asic_descriptor(fsd_descs.at(fsd_neighbor))));
+        }
+        return neighbors;
+    });
+
+    EXPECT_FALSE(fsd_adjacency.empty());
+    EXPECT_EQ(fsd_adjacency, live_adjacency);
+}
+
+// Same invariant on a real in-repo FSD: 4 hosts of ASICs all packed without collision.
+TEST(PhysicalDescriptorBuilder, IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack) {
+    ASSERT_NE(std::getenv("TT_METAL_HOME"), nullptr) << "TT_METAL_HOME must be set";
+    const std::string fsd_path = quietbox_fsd_path();
+    ASSERT_TRUE(std::filesystem::exists(fsd_path)) << "fixture missing: " << fsd_path;
+
+    auto psd = build_physical_descriptor_from_file(fsd_path);
+    const auto& asics = psd.get_asic_descriptors();
+    ASSERT_GT(asics.size(), 0u);
+
+    std::set<PhysicalNodeId> node_ids;
+    for (const auto& [_, desc] : asics) {
+        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
+        EXPECT_TRUE(node_ids.insert(node_id).second) << "two ASICs packed to " << node_id;
+
+        const auto fields = decode_physical_node_id(node_id);
+        EXPECT_EQ(fields.host_id, desc.host_name) << "quietbox hostnames are already canonical, so they round-trip";
+        EXPECT_EQ(fields.tray, desc.tray_id);
+        EXPECT_EQ(fields.loc, desc.asic_location);
+    }
+    EXPECT_EQ(node_ids.size(), asics.size());
+
+    // Every host in the FSD shows up in the packed ids, spelled exactly as the FSD spells it.
+    std::set<std::string> hosts_in_ids;
+    for (const auto& node_id : node_ids) {
+        hosts_in_ids.insert(std::string(host_id_view(node_id)));
+    }
+    const auto hostnames = psd.get_all_hostnames();
+    EXPECT_EQ(hosts_in_ids, std::set<std::string>(hostnames.begin(), hostnames.end()));
 }
 
 }  // namespace

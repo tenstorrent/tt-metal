@@ -35,27 +35,29 @@ namespace tt::tt_fabric {
 
 namespace {
 
-// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
-// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
+// The export is keyed per physical host, but discovery suffixes its host keys with "_<rank>" when
+// several ranks report the same host (PhysicalSystemDescriptor::my_host_name()), which happens
+// whenever a mock run gives more ranks than cluster descriptors. Undo that suffix so the ranks
+// sharing a host land on one key.
+//
+// The suffix is recognized by its own shape -- a trailing "_<digits>" -- not by what precedes it.
+// It used to require a ".yaml" basename, which stopped matching once the host key became the
+// descriptor's host_id (bh-glx-110-d03u02_26) rather than a filename.
 HostName hostname_for_mapping_export(const HostName& hostname) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
         return hostname;
     }
-    constexpr std::string_view cluster_desc_suffix = ".yaml";
-    const auto pos = hostname.rfind(cluster_desc_suffix);
-    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
+    const auto pos = hostname.rfind('_');
+    if (pos == std::string::npos || pos + 1 == hostname.size()) {
         return hostname;
     }
-    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
-    if (tail.size() <= 1 || tail.front() != '_') {
+    const std::string_view tail = std::string_view(hostname).substr(pos + 1);
+    if (!std::all_of(tail.begin(), tail.end(), [](const char c) {
+            return std::isdigit(static_cast<unsigned char>(c)) != 0;
+        })) {
         return hostname;
     }
-    for (char c : tail.substr(1)) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-            return hostname;
-        }
-    }
-    return hostname.substr(0, pos + cluster_desc_suffix.size());
+    return hostname.substr(0, pos);
 }
 
 }  // namespace

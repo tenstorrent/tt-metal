@@ -97,7 +97,7 @@ struct GroupingInfo {
 // empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
 // retained, not the full GroupingInfo, to avoid deep-copying its items + adjacency_graph per placement.
 struct PsdPlacement {
-    std::unordered_set<tt::tt_metal::AsicID> asics;
+    std::unordered_set<tt::tt_metal::PhysicalNodeId> asics;
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
@@ -175,14 +175,14 @@ public:
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
-    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
+    std::unordered_set<tt::tt_metal::PhysicalNodeId> find_any_in_psd(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
     // errors_out will be populated with detailed error messages if mapping fails
-    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
+    std::unordered_set<tt::tt_metal::PhysicalNodeId> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
@@ -205,7 +205,7 @@ public:
     std::vector<PsdPlacement> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+        const AdjacencyGraph<tt::tt_metal::PhysicalNodeId>& physical_graph,
         std::vector<std::string>* errors_out = nullptr) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed

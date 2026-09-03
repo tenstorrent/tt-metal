@@ -1737,9 +1737,9 @@ TEST_F(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGrou
         for (const auto& placement : asic_ids) {
             const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x2_Mesh_t3k mapping should contain at least one ASIC";
-            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
+            std::string host_name = std::string(tt::tt_metal::host_id_view(*asic_id_set.begin()));
             for (const auto& asic_id : asic_id_set) {
-                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
+                EXPECT_EQ(std::string(tt::tt_metal::host_id_view(asic_id)), host_name)
                     << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
             }
         }
@@ -1758,9 +1758,9 @@ TEST_F(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGrou
         for (const auto& placement : asic_ids) {
             const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x4_Mesh_t3k mapping should contain at least one ASIC";
-            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
+            std::string host_name = std::string(tt::tt_metal::host_id_view(*asic_id_set.begin()));
             for (const auto& asic_id : asic_id_set) {
-                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
+                EXPECT_EQ(std::string(tt::tt_metal::host_id_view(asic_id)), host_name)
                     << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
             }
         }
@@ -2513,11 +2513,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
-static size_t count_distinct_hosts_for_asics(
-    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::unordered_set<tt::tt_metal::AsicID>& asics) {
+static size_t count_distinct_hosts_for_nodes(const std::unordered_set<tt::tt_metal::PhysicalNodeId>& nodes) {
     std::set<std::string> hosts;
-    for (const auto& asic : asics) {
-        hosts.insert(psd.get_host_name_for_asic(asic));
+    for (const auto& node : nodes) {
+        hosts.insert(std::string(tt::tt_metal::host_id_view(node)));
     }
     return hosts.size();
 }
@@ -2569,7 +2568,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
 
     for (const auto& placement : placements) {
         EXPECT_EQ(placement.asics.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
-        EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)
+        EXPECT_EQ(count_distinct_hosts_for_nodes(placement.asics), 1u)
             << "Set-packing should prefer single-host placements when host_topology is [1,1]";
 
         // find_all_in_psd copies the matched grouping's pinning onto the placement.
@@ -2580,9 +2579,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
             composed_positions.insert(asic_position);
         }
         std::set<tt::tt_metal::ASICPosition> footprint_positions;
-        for (const auto& asic_id : placement.asics) {
-            footprint_positions.insert(
-                tt::tt_metal::ASICPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
+        for (const auto& node_id : placement.asics) {
+            footprint_positions.insert(tt::tt_metal::ASICPosition{node_id.tray, node_id.loc});
         }
         EXPECT_EQ(composed_positions, footprint_positions)
             << "Composed pinning should pin exactly the footprint ASIC positions";

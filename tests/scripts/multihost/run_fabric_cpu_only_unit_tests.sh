@@ -177,7 +177,16 @@ run_test() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  "$@"
+  # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
+  # deadlocks prterun forever; this turns that into a failed command instead of a hang.
+  # No --foreground: that signals only tt-run itself, and killing the launcher leaves its
+  # ranks orphaned and spinning in MPI finalize. The default puts the command in its own
+  # process group so the whole rank set is torn down.
+  if [[ -n "${TT_FABRIC_TEST_TIMEOUT:-}" ]]; then
+    timeout --kill-after=30s "${TT_FABRIC_TEST_TIMEOUT}" "$@"
+  else
+    "$@"
+  fi
   local status=$?
   if [[ $status -ne 0 ]]; then
     FAILURES+=("[${CURRENT_GROUP}] exit ${status}: ${cmd_str% }")
@@ -637,7 +646,7 @@ if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
 else
   AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
 fi
-TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
 
 
 fi # bh-sp4-glx

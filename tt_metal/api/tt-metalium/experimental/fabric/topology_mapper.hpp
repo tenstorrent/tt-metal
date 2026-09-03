@@ -40,7 +40,7 @@ using AsicPosition = tt::tt_metal::ASICPosition;
  * This class takes a mesh graph object and a physical system descriptor to create bidirectional
  * mappings between:
  * - FabricNodeId (mesh_id + chip_id from mesh graph)
- * - AsicID (physical ASIC IDs from physical system descriptor)
+ * - PhysicalNodeId (the address (host_id, tray, loc) of an ASIC in the physical system descriptor)
  *
  * The mapping is based on the mesh IDs and fabric chip IDs from the mesh_container and maps
  * them to the ASIC IDs of the physical descriptor.
@@ -48,7 +48,9 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 
 using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
 using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
-using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
+// One declaration only: this used to be a second, independently written copy of the utils alias, and the
+// two have to stay identical because the same graph crosses between them.
+using PhysicalAdjacencyMap = tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
 
 /**
  * @brief Centralized representation of chip topology information
@@ -60,6 +62,11 @@ using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_m
 struct MappedChipInfo {
     // Core mapping information
     FabricNodeId fabric_node_id{MeshId{0}, 0};
+    // The physical key: the address (host_id, tray, loc). Every mapper table whose key is a physical
+    // chip is keyed on this, so a factory-built descriptor and a live-discovered one name the same chip.
+    tt::tt_metal::PhysicalNodeId physical_node_id{};
+    // UMD chip unique id when known. A payload, not an index: it is unset on the factory-only path
+    // (generate_rank_bindings), and it is what verify_topology_mapping checks against the Cluster.
     tt::tt_metal::AsicID asic_id{0};
     ChipId physical_chip_id = 0;
 
@@ -144,7 +151,37 @@ public:
     const LocalMeshBinding& get_local_mesh_binding() const { return local_mesh_binding_; }
 
     /**
+     * @brief Get fabric node ID from a physical node ID mapped by the topology mapper
+     *
+     * This is the direct lookup: physical node IDs are what the mapper's physical tables are keyed on.
+     *
+     * @param physical_node_id
+     * @return FabricNodeId
+     */
+    FabricNodeId get_fabric_node_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+
+    /**
+     * @brief Get the physical node ID (host_id, tray, loc) mapped to a fabric node ID
+     *
+     * @param fabric_node_id
+     * @return tt::tt_metal::PhysicalNodeId
+     */
+    tt::tt_metal::PhysicalNodeId get_physical_node_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
+    /**
+     * @brief Get physical chip ID from a physical node ID mapped by the topology mapper
+     *
+     * @param physical_node_id
+     * @return chip_id_t
+     */
+    ChipId get_physical_chip_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+
+    /**
      * @brief Get fabric node ID from ASIC ID mapped by the topology mapper
+     *
+     * The ASIC ID is a UMD payload rather than a mapper index, so this scans the mapping table instead
+     * of hitting a dedicated map. Prefer get_fabric_node_id_from_physical_node_id where the caller has
+     * an address; this overload exists for callers holding a UMD chip unique id (ControlPlane, Cluster).
      *
      * @param asic_id
      * @return FabricNodeId
@@ -168,7 +205,10 @@ public:
     ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     /**
-     * @brief Get ASIC ID from fabric node ID mapped by the topology mapper
+     * @brief Get the UMD chip unique id of the ASIC mapped to a fabric node ID
+     *
+     * Returns the UMD payload on the mapping, which is unset on the factory-only path. Callers that
+     * want the chip's address want get_physical_node_id_from_fabric_node_id instead.
      *
      * @param fabric_node_id
      * @return tt::tt_metal::AsicID
@@ -177,6 +217,9 @@ public:
 
     /**
      * @brief Get physical chip ID from ASIC ID mapped by the topology mapper
+     *
+     * Scans the mapping table on the UMD payload, for the same reason as
+     * get_fabric_node_id_from_asic_id.
      *
      * @param asic_id
      * @return chip_id_t
@@ -362,10 +405,10 @@ private:
      * to gather the mappings from all ranks. The mesh host ranks come directly from the gathered
      * local bindings (TT_MESH_HOST_RANK environment variable).
      *
-     * @return std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> Map from mesh ID to
+     * @return std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> Map from mesh ID to
      * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> build_asic_id_to_mesh_rank_mapping();
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> build_physical_node_id_to_mesh_rank_mapping();
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
@@ -425,7 +468,7 @@ private:
      * @brief Lookup maps with references/pointers to chip_topology_mapping_ for fast access
      */
     std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_mapping_;
-    std::unordered_map<tt::tt_metal::AsicID, MappedChipInfo*> asic_id_to_mapping_;
+    std::unordered_map<tt::tt_metal::PhysicalNodeId, MappedChipInfo*> physical_node_id_to_mapping_;
     std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_mapping_;
 
     /**
@@ -434,9 +477,9 @@ private:
     void rebuild_lookup_maps();
 
     // Rebuild host-rank containers purely from chip_topology_mapping_ container
-    // Uses asic_id_to_mesh_rank parameter for compatibility with algorithm improvements
+    // Uses physical_node_id_to_mesh_rank parameter for compatibility with algorithm improvements
     void rebuild_host_rank_structs_from_mapping(
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank);
 
     /**
      * @brief Verify the topology mapping against PSD and cluster API
@@ -446,6 +489,13 @@ private:
      * - Verifies tray IDs and ASIC locations match the Physical System Descriptor
      * - Ensures physical chip IDs map correctly to ASIC IDs via cluster API for local chips
      */
+    /**
+     * @brief Find the mapping entry carrying a given UMD chip unique id, or nullptr
+     *
+     * A scan, because the UMD id is a payload on MappedChipInfo rather than one of the mapper's keys.
+     */
+    const MappedChipInfo* find_mapping_by_asic_id(tt::tt_metal::AsicID asic_id) const;
+
     void verify_topology_mapping(const Cluster& cluster) const;
 
     void print_logical_adjacency_map(

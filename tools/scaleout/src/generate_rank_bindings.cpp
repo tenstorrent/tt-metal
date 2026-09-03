@@ -137,7 +137,7 @@ struct TopologyMappingInputs {
     PhysicalMultiMeshGraph physical_graph;
     TopologyMappingConfig config;
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
 };
 
 /**
@@ -183,9 +183,12 @@ TopologyMappingInputs build_topology_mapping_inputs(
     }
 
     // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
+    // Keyed by address: this descriptor came from a factory system descriptor, so its ASIC labels are
+    // 1..N file order and cannot be the solver's identity.
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
-        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
+        const auto node_id = tt::tt_metal::node_id_from_asic_descriptor(desc);
+        config.hostname_to_asics[desc.host_name].insert(node_id);
+        config.asic_positions[node_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
     // MGD many-to-many pinning groups, now keyed by local mesh id (PinningsByMesh). Single MGD, so local == global:
@@ -243,7 +246,7 @@ TopologyMappingInputs build_topology_mapping_inputs(
     }
 
     // Physical rank bindings are left empty (all ASICs UNSET) so the topology mapper assigns physical
-    // ASICs to hosts itself; TopologyMappingInputs::asic_id_to_mesh_rank defaults to empty.
+    // ASICs to hosts itself; TopologyMappingInputs::physical_node_id_to_mesh_rank defaults to empty.
     TopologyMappingInputs inputs;
     inputs.logical_graph = std::move(logical_graph);
     inputs.physical_graph = std::move(physical_graph);
@@ -299,7 +302,8 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     config.disable_rank_bindings = false;
 
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.hostname_to_asics[desc.host_name].insert(
+            tt::tt_metal::node_id_from_asic_descriptor(desc));
     }
 
     // Build pinnings once, in each MGD's LOCAL mesh-id space, exactly as the single-MGD path feeds one MGD's
@@ -351,8 +355,9 @@ TopologyMappingWithLocalMaps run_topology_mapping(
 
     if (!config.pinnings.empty()) {
         const auto& asic_descriptors = psd.get_asic_descriptors();
-        for (const auto& [asic_id, _] : asic_descriptors) {
-            config.asic_positions[asic_id] = std::make_pair(psd.get_tray_id(asic_id), psd.get_asic_location(asic_id));
+        for (const auto& [_, desc] : asic_descriptors) {
+            const auto node_id = tt::tt_metal::node_id_from_asic_descriptor(desc);
+            config.asic_positions[node_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
     }
 
@@ -420,12 +425,12 @@ TopologyMappingWithLocalMaps run_topology_mapping(
         }
     }
 
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank = {};
 
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
     TopologyMappingWithLocalMaps out;
     out.mapping = map_multi_mesh_to_physical(
-        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+        logical_graph, physical_graph, config, physical_node_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
     out.per_part_local_to_global_mesh_ids = std::move(per_part_local_to_global_mesh_ids);
     return out;
 }
@@ -479,7 +484,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     }
 
     struct AsicGrouping {
-        std::vector<AsicID> asic_ids;
+        std::vector<tt::tt_metal::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
         std::optional<MeshHostRankId> mesh_host_rank;
     };
@@ -487,8 +492,11 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
     std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
-    // Iterate through fabric_node_to_asic mapping
-    for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
+    // The solver returned addresses; the descriptor is still queried by its own ASIC labels.
+    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
+
+    // Iterate through the fabric-node-to-physical-node mapping
+    for (const auto& [fabric_node_id, physical_node_id] : mapping_result.fabric_node_to_physical) {
         MeshId mesh_id_global = fabric_node_id.mesh_id;
         if (emit_local_mesh_ids_for_mgd_partition && !global_to_local_mesh_for_output.contains(mesh_id_global)) {
             continue;
@@ -519,6 +527,9 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             continue;
         }
 
+        // Emit the hostname exactly as the descriptor spells it, not the canonical form carried in the
+        // node id: this string goes into the generated rank bindings, which name real hosts.
+        const AsicID asic_id = node_index.node_id_to_asic_id.at(physical_node_id);
         std::string hostname = psd.get_host_name_for_asic(asic_id);
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
@@ -527,7 +538,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         int mesh_id_int = static_cast<int>(*mesh_id_for_binding);
         const int mesh_host_rank_int = static_cast<int>(*mesh_host_rank.value());
         auto& bucket = mesh_host_asics[mesh_id_int][hostname][mesh_host_rank_int];
-        bucket.asic_ids.push_back(asic_id);
+        bucket.physical_node_ids.push_back(physical_node_id);
         bucket.chip_ids.push_back(chip_id);
         bucket.mesh_host_rank = mesh_host_rank;
     }
@@ -963,7 +974,7 @@ int main(int argc, char** argv) {
                     inputs.physical_graph,
                     inputs.config,
                     unique_shapes,
-                    inputs.asic_id_to_mesh_rank,
+                    inputs.physical_node_id_to_mesh_rank,
                     inputs.fabric_node_id_to_mesh_rank);
 
                 std::vector<SolutionIndexEntry> index_entries;
@@ -1128,7 +1139,7 @@ int main(int argc, char** argv) {
                 }
 
                 std::vector<RankBindingConfig> merged_global_rank_bindings;
-                merged_global_rank_bindings.reserve(topology.mapping.fabric_node_to_asic.size());
+                merged_global_rank_bindings.reserve(topology.mapping.fabric_node_to_physical.size());
                 std::vector<std::pair<int, std::string>> rank_bindings_mapping_entries;
                 int global_rank_base = 0;
 
