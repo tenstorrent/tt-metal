@@ -970,13 +970,21 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     # ---- Helper functions ----
 
-    def get_counter_series(counter_name):
+    _SERIES_INDEX = ["run_host_id", "trace_id_count", "core_x", "core_y", "risc_type"]
+
+    def _counter_column(counter_name, column):
         mask = perf_counter_df["counter type"] == counter_name
-        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["value"]
+        series = perf_counter_df[mask].set_index(_SERIES_INDEX)[column]
+        # risc_type keeps each Quasar NEO reader distinct, and averaging repeated launches on the
+        # same reader keeps cross-counter arithmetic aligned 1:1 instead of going cartesian on
+        # duplicate index labels.
+        return series.groupby(level=list(range(series.index.nlevels))).mean()
+
+    def get_counter_series(counter_name):
+        return _counter_column(counter_name, "value")
 
     def get_counter_ref_cnt(counter_name):
-        mask = perf_counter_df["counter type"] == counter_name
-        return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["ref cnt"]
+        return _counter_column(counter_name, "ref cnt")
 
     def has_counter(counter_name):
         return counter_name in perf_counter_df["counter type"].values
@@ -1071,7 +1079,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     math_counter = get_counter_series("MATH_COUNTER")
     math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
     srca_write = get_counter_series("SRCA_WRITE_ACTUAL")
-    srcb_write = get_counter_series("SRCB_WRITE_NOT_BLOCKED_PORT")
+    # SRCB_WRITE_ACTUAL mirrors SRCA_WRITE_ACTUAL for unpacker0 and matches the device-only engine.
+    srcb_write = get_counter_series("SRCB_WRITE_ACTUAL")
     unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
     unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
     srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
@@ -1087,20 +1096,22 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     math_util = (math_counter / math_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
 
+    def _avg_count(series):
+        grouped = series.groupby(level=["run_host_id", "trace_id_count"])
+        if device_arch == "quasar":
+            # 4 NEO records per core (one per launch each): average per record, or a multi-NEO
+            # multi-launch sum divided by core count overstates the per-core average ~4x.
+            return (grouped.sum() / grouped.count()).to_dict()
+        return (grouped.sum() / total_compute_cores).to_dict()
+
     per_op_stats["SFPU Util"] = _group_to_stat_dict(sfpu_util)
-    per_op_counts["avg_sfpu_count"] = (
-        sfpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_sfpu_count"] = _avg_count(sfpu_counter)
 
     per_op_stats["FPU Util"] = _group_to_stat_dict(fpu_util)
-    per_op_counts["avg_fpu_count"] = (
-        fpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_fpu_count"] = _avg_count(fpu_counter)
 
     per_op_stats["MATH Util"] = _group_to_stat_dict(math_util)
-    per_op_counts["avg_math_count"] = (
-        math_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
-    ).to_dict()
+    per_op_counts["avg_math_count"] = _avg_count(math_counter)
 
     unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
     unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
@@ -1255,7 +1266,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter(dest_grant_name):
         req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
         grant = get_counter_series(dest_grant_name)
-        ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
+        ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Dest Read Backpressure"] = _group_to_stat_dict(ratio)
 
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
@@ -1263,12 +1274,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         # Skip when the counter reads 0 for the whole op (would report bogus 100% stall rate).
         if unstalled.sum() > 0:
             avail = get_counter_series("MATH_INSTRN_AVAILABLE")
-            ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+            ratio = ((avail - unstalled) / avail * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
             per_op_stats["Math Dest Write Port Stall Rate"] = _group_to_stat_dict(ratio)
     if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
         avail = get_counter_series("MATH_INSTRN_AVAILABLE")
         unstalled = get_counter_series("AVAILABLE_MATH")
-        ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+        ratio = ((avail - unstalled) / avail * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
     # Per-thread total instruction issue rates (per cycle, not %).
@@ -1357,7 +1368,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
                 per_op_stats[f"{cls} Instrn Avail Rate T{thread}"] = compute_util_metric(counter_name)
     for name in perf_counter_df["counter type"].unique():
         if str(name).startswith("L1_CLIENT_"):
-            per_op_stats[f"{name} Rate"] = compute_util_metric(name)
+            scale = 400 if str(name).endswith("_CARRY") and "PENDING" not in str(name) else 100
+            per_op_stats[f"{name} Rate"] = compute_util_metric(name, scale=scale)
 
     if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
         per_op_stats["SrcB Write Port Blocked Rate"] = compute_complement_metric(
@@ -1529,6 +1541,7 @@ def compute_device_only_metrics(
                 "core_x": row["core_x"],
                 "core_y": row["core_y"],
                 "counter_type": row["counter type"],
+                "risc": row["risc_type"],
                 "value": row["value"],
                 "ref_cnt": row["ref cnt"],
             }
@@ -1536,11 +1549,13 @@ def compute_device_only_metrics(
 
     eff_df = pd.DataFrame(efficiency_records)
 
+    # risc in the index keeps each Quasar NEO reader as its own row instead of discarding 3 of 4;
+    # mean (not first) averages the windows when one core records multiple launches.
     eff_pivot = eff_df.pivot_table(
-        index=["run_host_id", "trace_id_count", "core_x", "core_y"],
+        index=["run_host_id", "trace_id_count", "core_x", "core_y", "risc"],
         columns="counter_type",
         values=["value", "ref_cnt"],
-        aggfunc="first",
+        aggfunc="mean",
     ).reset_index()
 
     eff_pivot.columns = ["_".join(col).strip("_") if col[1] else col[0] for col in eff_pivot.columns.values]
@@ -1993,7 +2008,8 @@ def compute_device_only_metrics(
         if str(col).startswith("value_L1_CLIENT_"):
             name = str(col)[len("value_") :]
             l1_client_rate_names.append(f"{name} Rate")
-            eff_pivot[f"{name} Rate"] = eff_pivot.apply(safe_util(col, f"ref_cnt_{name}"), axis=1)
+            carry_scale = 4.0 if name.endswith("_CARRY") and "PENDING" not in name else 1.0
+            eff_pivot[f"{name} Rate"] = eff_pivot.apply(safe_util(col, f"ref_cnt_{name}"), axis=1) * carry_scale
 
     # Packer engine granularity (WH only)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
@@ -2098,6 +2114,8 @@ def compute_device_only_metrics(
 
     def unpacker_l1_eff(x):
         """L1 grant to unpacker / unpacker busy cycles. How well L1 serves the unpacker."""
+        if "value_L1_0_UNPACKER_0_GRANT" not in x:
+            return nan
         grant = x.get("value_L1_0_UNPACKER_0_GRANT", 0)
         busy = x.get("value_UNPACK0_BUSY_THREAD0", 0)
         return (grant / busy * 100) if busy > 0 else nan
@@ -2106,6 +2124,8 @@ def compute_device_only_metrics(
 
     def packer_l1_eff(x):
         """L1 grant to packer port / packer busy cycles."""
+        if "value_L1_0_PORT1_GRANT" not in x:
+            return nan
         grant = x.get("value_L1_0_PORT1_GRANT", 0)
         busy = x.get("value_PACKER_BUSY", 0)
         return (grant / busy * 100) if busy > 0 else nan
@@ -2113,6 +2133,16 @@ def compute_device_only_metrics(
     eff_pivot["Packer L1 Efficiency"] = eff_pivot.apply(packer_l1_eff, axis=1)
 
     def noc_vs_compute(x):
+        if not any(
+            k in x
+            for k in (
+                "value_L1_0_NOC_RING0_OUTGOING_0",
+                "value_L1_0_NOC_RING0_OUTGOING_1",
+                "value_L1_0_NOC_RING0_INCOMING_0",
+                "value_L1_0_NOC_RING0_INCOMING_1",
+            )
+        ):
+            return nan
         """NOC cycles / (FPU + NOC cycles). >50% = NOC-bound, <50% = compute-bound."""
         noc = (
             x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0)

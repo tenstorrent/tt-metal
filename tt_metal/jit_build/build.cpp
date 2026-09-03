@@ -280,6 +280,14 @@ void JitBuildEnv::init(
                 this->defines_ +=
                     "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(rtoptions.get_profiler_perf_counter_l1_sel()) +
                     " ";
+                if (rtoptions.get_profiler_perf_counter_l1_sel_per_neo()) {
+                    TT_FATAL(
+                        rtoptions.get_profiler_perf_counter_l1_sel() + 3 < 37 * 8,
+                        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} leaves no room for the per-NEO stride (needs sel+3 "
+                        "< 296)",
+                        rtoptions.get_profiler_perf_counter_l1_sel());
+                    this->defines_ += "-DPROFILE_PERF_COUNTERS_L1_SEL_PER_NEO ";
+                }
             }
         }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";

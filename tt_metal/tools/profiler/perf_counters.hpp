@@ -556,6 +556,11 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
 #if defined(ARCH_QUASAR)
         // TRISCs cannot push to DRAM; timeStampedData drops the record when the L1 buffer is full.
+        // Flag the drop so the host's DROPPED_ZONES warning fires instead of silently thinning data.
+        if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
+                kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
+            kernel_profiler::mark_dropped_timestamps(kernel_profiler::myRiscID);
+        }
         kernel_profiler::timeStampedData<
             PERF_COUNTER_PROFILER_ID,
             kernel_profiler::DoingDispatch::NOT_DISPATCH,
@@ -612,14 +617,19 @@ void read_perf_counters() {
 #if defined(PERF_COUNTER_WRAP_RISC)
 
 #if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PROFILE_PERF_COUNTERS_L1_SEL_PER_NEO)
+// Stride the selection by NEO so one run samples 4 adjacent l1_client streams instead of 1.
+constexpr uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL + (COMPILE_FOR_TRISC / 4);
+#else
+constexpr uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
+#endif
 static_assert(
-    PROFILE_PERF_COUNTERS_L1_SEL >= 0 &&
-        PROFILE_PERF_COUNTERS_L1_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
-    "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296");
+    QUASAR_L1_CLIENT_SEL < QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS,
+    "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event, below 296 (minus 3 in per-NEO mode)");
 
 inline void start_l1_client_event_counter() {
-    constexpr uint32_t subport = PROFILE_PERF_COUNTERS_L1_SEL / QUASAR_L1_CLIENT_NUM_EVENTS;
-    constexpr uint32_t event = PROFILE_PERF_COUNTERS_L1_SEL % QUASAR_L1_CLIENT_NUM_EVENTS;
+    constexpr uint32_t subport = QUASAR_L1_CLIENT_SEL / QUASAR_L1_CLIENT_NUM_EVENTS;
+    constexpr uint32_t event = QUASAR_L1_CLIENT_SEL % QUASAR_L1_CLIENT_NUM_EVENTS;
     volatile tt_reg_ptr uint32_t* ctrl =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_QUASAR_L1_CLIENT_PERF_CTRL);
     volatile tt_reg_ptr uint32_t* cnt =
@@ -639,7 +649,11 @@ inline void read_l1_client_event_counter(uint32_t start_cycles) {
     *ctrl = 0;
     // This CSR has no reference counter of its own; the wall-clock delta is the denominator.
     uint32_t elapsed = static_cast<uint32_t>(quasar_read_wall_clock_64()) - start_cycles;
-    PerfCounter counter(count, elapsed, PerfCounterType::QUASAR_L1_CLIENT_EVENT, PROFILE_PERF_COUNTERS_L1_SEL);
+    PerfCounter counter(count, elapsed, PerfCounterType::QUASAR_L1_CLIENT_EVENT, QUASAR_L1_CLIENT_SEL);
+    if (!kernel_profiler::bufferHasRoom<kernel_profiler::DoingDispatch::NOT_DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3 - 1)) {
+        kernel_profiler::mark_dropped_timestamps(kernel_profiler::myRiscID);
+    }
     kernel_profiler::timeStampedData<
         PERF_COUNTER_PROFILER_ID,
         kernel_profiler::DoingDispatch::NOT_DISPATCH,

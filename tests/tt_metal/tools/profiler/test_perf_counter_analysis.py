@@ -175,3 +175,66 @@ def test_blackhole_capture_gets_no_quasar_columns():
 
 def test_csv_headers_are_unique():
     assert len(PERF_COUNTER_CSV_HEADERS) == len(set(PERF_COUNTER_CSV_HEADERS))
+
+
+def test_multi_neo_rows_are_not_collapsed():
+    # 4 NEO readers on the SAME core must contribute 4 samples, not 1 (the old pivot kept "first").
+    rows = []
+    for neo in range(4):
+        rows.append(
+            {
+                "run_host_id": 1,
+                "trace_id_count": 0,
+                "record time": 1,
+                "core_x": 1,
+                "core_y": 1,
+                "risc_type": f"QUASAR_NEO{neo}_TRISC1",
+                "counter type": "FPU_COUNTER",
+                "value": 100 * (neo + 1),
+                "ref cnt": 1000,
+            }
+        )
+    df = pd.DataFrame(rows)
+    agg, _ = compute_device_only_metrics(df, "quasar")
+    stats = agg["FPU Util"]
+    key = list(stats["min"].keys())[0]
+    assert stats["min"][key] == 10.0 and stats["max"][key] == 40.0, stats
+    per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]["FPU Util"]
+    assert per_op["min"][key] == 10.0 and per_op["max"][key] == 40.0, per_op
+
+
+def test_l1_client_carry_rates_scale_by_lane_count():
+    rows = [
+        {
+            "run_host_id": 1,
+            "trace_id_count": 0,
+            "record time": 1,
+            "core_x": 1,
+            "core_y": 1,
+            "risc_type": "QUASAR_NEO0_TRISC1",
+            "counter type": name,
+            "value": 100,
+            "ref cnt": 10000,
+        }
+        for name in ("L1_CLIENT_UNPACK0_SBANK_POP", "L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY")
+    ]
+    df = pd.DataFrame(rows)
+    per_op = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
+    pop = list(per_op["L1_CLIENT_UNPACK0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(per_op["L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
+    agg, _ = compute_device_only_metrics(df, "quasar")
+    pop = list(agg["L1_CLIENT_UNPACK0_SBANK_POP Rate"]["avg"].values())[0]
+    carry = list(agg["L1_CLIENT_UNPACK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
+    assert abs(pop - 1.0) < 1e-9 and abs(carry - 4.0) < 1e-9, (pop, carry)
+
+
+def test_absent_l1_noc_counters_give_nan_not_zero():
+    # Quasar has no L1_0_* NOC/grant counters; efficiency metrics that need them must be NaN, not 0.
+    quasar_only = {n for n in QUASAR_CAPTURE_TYPES if n.startswith("L1_CLIENT_")}
+    df = make_capture([n for n in QUASAR_CAPTURE_TYPES if n not in quasar_only], "QUASAR_NEO{}_TRISC1", 1)
+    agg, _ = compute_device_only_metrics(df, "quasar")
+    for metric in ("Unpacker L1 Efficiency", "Packer L1 Efficiency", "NOC vs Compute Balance"):
+        if metric in agg:
+            vals = [v for stat in agg[metric].values() for v in (stat.values() if isinstance(stat, dict) else [stat])]
+            assert all(v != v for v in vals if isinstance(v, float)), (metric, vals)
