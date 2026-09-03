@@ -239,9 +239,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
     // Trace-safe logical_n: args.logical_n is the worst-case placeholder (padded_N) and the kernels read
-    // the live value. The placeholder already worst-cases every size derivation below EXCEPT the two mask
-    // derivations, which a chunk-aligned placeholder would resolve to "no mask" — CB geometry is fixed at
-    // program creation, so both are forced whenever the tensor is present.
+    // the live value. The placeholder already worst-cases every size derivation below EXCEPT three, which
+    // a chunk-aligned placeholder resolves the wrong way — the two mask derivations (resolve to "no mask")
+    // and the state-FIFO spare (resolves to "no one-chunk iter", the ANTI-worst case). CB geometry is
+    // fixed at program creation, so all three are forced whenever the tensor is present.
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
 
     // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
@@ -417,9 +418,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // around the SAME sdpa_inner_loop_step call — so the exit's reserve precedes the pop it needs.
     // Rows whose pass count fills the FIFO deadlock on that reserve. Give the FIFO one spare entry
     // whenever any ring iteration can process a single chunk: a one-chunk shard, or the
-    // beyond-logical_n whole-chunk skip shaving the last shard down to one chunk (a pad tail that
+    // beyond-logical_n whole-chunk skip shaving a shard down to one chunk (a pad tail that
     // covers at least one full K chunk — first hit by the fl2va 1024x768 canvas at 4x32).
-    bool some_iter_processes_one_chunk = (num_local_k_chunks <= 1);
+    bool some_iter_processes_one_chunk = has_logical_n_tensor || (num_local_k_chunks <= 1);
     for (uint32_t rid = 0; rid < args.ring_size && !some_iter_processes_one_chunk; ++rid) {
         uint32_t iter_chunks = 0;
         for (uint32_t kc = 0; kc < num_local_k_chunks; ++kc) {

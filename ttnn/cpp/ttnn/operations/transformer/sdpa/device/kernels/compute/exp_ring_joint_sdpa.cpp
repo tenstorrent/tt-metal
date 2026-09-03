@@ -168,7 +168,11 @@ void kernel_main() {
     };
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
+
+    // First iteration that does work inits accumulators — not necessarily iter 0 (a fully-pad own
+    // shard skips it).
+    bool seen_active_iter = false;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -177,8 +181,7 @@ void kernel_main() {
 
         // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
         if (!ring_iter_does_work) {
@@ -219,6 +222,7 @@ void kernel_main() {
         }
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+        const bool is_first_active_iter = !seen_active_iter;
         static_assert(use_streaming_compute, "Streaming compute must be enabled for ring joint SDPA");
 
         // Serial passes over this row's heads, same order as the reader and writer. Each pass is a
@@ -289,7 +293,7 @@ void kernel_main() {
                 /*skip_first_half_q=*/false,
                 /*use_zigzag_balancing=*/false,
                 ChunkedContext{},
-                /*is_first_active_iter=*/(ring_iter == 0),
+                is_first_active_iter,
                 /*logical_lt=*/0,
                 /*q_base_tiles=*/stream_q ? 0u : pass * q_chunk_tiles);
 
@@ -309,5 +313,7 @@ void kernel_main() {
                 sdpa_cb_pop_front_out_of_line(cb_q_in, q_count * q_chunk_tiles);
             }
         }
+
+        seen_active_iter = true;
     }
 }
