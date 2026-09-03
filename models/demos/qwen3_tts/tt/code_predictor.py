@@ -1003,21 +1003,26 @@ class CodePredictor(LightweightModule):
                     memory_config=self._cp_wo_out_memcfg,
                 )
                 ttnn.deallocate(attn_wo)
-                o_il = ttnn.to_memory_config(o_s, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(o_s)
-                # Leave the DRAM-shard N-pad on when an all-reduce follows: its slices
-                # drop it for free (see tp_all_reduce_2chip's out_width). Without TP
-                # there is no all-reduce, so unpad here.
-                if self._cp_wo_n_padded != self.hidden_size and self.tp_size == 1:
-                    o = ttnn.slice(
-                        o_il,
-                        [0, 0, 0, 0],
-                        [o_il.shape[0], o_il.shape[1], o_il.shape[2], self.hidden_size],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                    ttnn.deallocate(o_il)
+                if self.tp_size > 1 and fast:
+                    # all_gather reads a WIDTH_SHARDED input and writes interleaved, so
+                    # the CCL absorbs the unshard that used to be a separate S2I here.
+                    o = o_s
                 else:
-                    o = o_il
+                    o_il = ttnn.to_memory_config(o_s, ttnn.L1_MEMORY_CONFIG)
+                    ttnn.deallocate(o_s)
+                    # Leave the DRAM-shard N-pad on when an all-reduce follows: its slices
+                    # drop it for free (see tp_all_reduce_2chip's out_width). Without TP
+                    # there is no all-reduce, so unpad here.
+                    if self._cp_wo_n_padded != self.hidden_size and self.tp_size == 1:
+                        o = ttnn.slice(
+                            o_il,
+                            [0, 0, 0, 0],
+                            [o_il.shape[0], o_il.shape[1], o_il.shape[2], self.hidden_size],
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                        )
+                        ttnn.deallocate(o_il)
+                    else:
+                        o = o_il
             else:
                 # to_memory_config is a no-op returning the SAME tensor when the config
                 # already matches, which the generic path's concat output does. The
@@ -1212,7 +1217,10 @@ class CodePredictor(LightweightModule):
             memory_config=self._cp_down_out_memcfg,
         )
         ttnn.deallocate(gated_d)
-        if self._cp_down_n_padded != self.hidden_size and self.tp_size == 1:
+        if self.tp_size > 1 and fast:
+            # See the o_proj above: the all-gather takes the shard directly.
+            mlp_o = mlp_o_sharded
+        elif self._cp_down_n_padded != self.hidden_size and self.tp_size == 1:
             mlp_o_il = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mlp_o_sharded)
             mlp_o = ttnn.slice(
