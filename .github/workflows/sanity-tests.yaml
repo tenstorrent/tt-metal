@@ -78,6 +78,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-models-sanity-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         type: boolean
@@ -187,6 +192,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-models-sanity-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         default: false
@@ -369,6 +379,7 @@ jobs:
               "sim_wh_galaxy"
               "sim_bh_p150"
               "sim_bh_galaxy"
+              "sim_quasar"
             )
             sanity_skus+=("${sim_skus[@]}")
           fi
@@ -517,6 +528,20 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
+  # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
+  # main and the scheduled runs leave this leg out: `inputs` is null on those events.
+  models-sanity-tests:
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
+    needs: [build-artifact, generate-sku-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/models-sanity-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      ref: ${{ inputs.ref || github.sha }}
+      summary-scope: ${{ inputs.platform }}
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
   # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
@@ -542,6 +567,7 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
+      - models-sanity-tests
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.

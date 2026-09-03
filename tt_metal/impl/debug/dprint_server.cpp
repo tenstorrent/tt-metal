@@ -1022,7 +1022,7 @@ void DPrintServer::Impl::await() {
 void DPrintServer::Impl::init_device(ChipId device_id) {
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
+    CoreDescriptorSet all_cores = GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
@@ -1058,7 +1058,8 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // here are virtual.
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     tt::tt_metal::CoreDescriptorSet dispatch_cores =
         tt::tt_metal::GetDispatchCores(env_, device_id, num_hw_cqs_, dispatch_core_config_);
 
@@ -1275,7 +1276,8 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     for (const auto& logical_core : all_cores) {
         init_print_buffers_for_core(device_id, logical_core);
     }

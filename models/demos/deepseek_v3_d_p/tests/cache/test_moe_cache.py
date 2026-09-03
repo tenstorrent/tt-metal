@@ -176,7 +176,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     # === Path 2: Cold Cache (build + load) ===
     init_checker(CACHE_DIR)
     assert not TtMoe.check_cache_complete(
-        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip, routed_expert_weights_dtype=ttnn.bfloat16
     ), "Cache should be empty before build"
 
     logger.info(f"Building cache to {CACHE_DIR}...")
@@ -199,7 +199,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
 
     init_checker(CACHE_DIR)
     assert TtMoe.check_cache_complete(
-        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip
+        CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip, routed_expert_weights_dtype=ttnn.bfloat16
     ), "Cache should be complete after build"
 
     logger.info("Path 2: Creating TtMoe from cold cache...")

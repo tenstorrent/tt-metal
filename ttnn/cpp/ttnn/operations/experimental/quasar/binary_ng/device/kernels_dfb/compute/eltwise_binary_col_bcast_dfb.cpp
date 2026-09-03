@@ -79,7 +79,6 @@ ALWI void process_tile(
     pack_init(dfb_llk_post_id);
 #endif
     reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
-    pack_reconfig_data_format(dfb_llk_post_id);
     unary_bcast_init<BroadcastType::COL>(dfb_bcast_id);
 
     tile_regs_acquire();
@@ -92,16 +91,13 @@ ALWI void process_tile(
     tile_regs_release();
 
     pack_reconfig_data_format(dfb_llk_post_id, dfb_out_id);
-#ifdef ARCH_QUASAR
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
+#elif defined(ARCH_QUASAR)
     // Retarget the packer destination ring back to dfb_out for the binary-op pack below; without this the
     // gasket-only pack_reconfig above leaves the ring on llk_post and pack_tile(0, out) writes the wrong
     // buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
     pack_init(dfb_out_id);
-#endif
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the row).
@@ -182,7 +178,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
