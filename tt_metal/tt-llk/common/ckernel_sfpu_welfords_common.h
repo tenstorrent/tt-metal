@@ -973,7 +973,12 @@ sfpi_inline void _two_pass_horizontal_sum_pair_()
     }
 }
 
-/** Horizontally reduce LREG0 while preserving the already-broadcast value in LREG4. */
+/**
+ * Horizontally reduce LREG0 without rebroadcasting the result.
+ *
+ * The final transpose leaves the sum in sub-row 0 (lanes 0-7). It also reduces
+ * the previously broadcast value in LREG4 to the same sub-row-only layout.
+ */
 sfpi_inline void _two_pass_horizontal_sum_mean_()
 {
     // This single reduction has no independent shuffle chain to fill the
@@ -1022,7 +1027,9 @@ sfpi_inline void _two_pass_horizontal_sum_mean_()
  *
  * Uses total variance: average lane variance plus variance of lane means.
  * The third consecutive DST tile is clobbered as scratch while the first two
- * receive compact mean and variance vectors.
+ * receive compact mean and variance vectors. The stored mean is broadcast to
+ * all 32 lanes, while the stored variance is valid only in sub-row 0 (lanes
+ * 0-7); current consumers read one value from that sub-row for each group.
  * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
  * @param group_id Four-lane group slot within the output vectors.
  * @param reciprocal_bits FP32 bits for the reciprocal lane population count.
