@@ -906,10 +906,7 @@ def test_tilize_width_sharded_shapes(device, tensor_shape, num_cores, dtype):
     ["sharded_width_l1", "interleaved_dram_multicore", "single_core"],
 )
 def test_tilize_program_cache_addr_change(device, config):
-    """Program-cache hit path (override_runtime_arguments): re-running tilize on freshly
-    allocated inputs (different buffer addresses) must hit the same cached program and stay
-    correct. Guards the sharded CB-bound path (addresses ride on CBs) and the interleaved
-    buffer-address runtime args -- both re-derived from create_descriptor on every hit."""
+    """Program-cache hit path (override_runtime_arguments)"""
     torch.manual_seed(0)
 
     if config == "sharded_width_l1":
@@ -1206,3 +1203,57 @@ def test_tilize_uint8(device, shape):
     tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_output = ttnn.tilize(tt_input)
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("tensor_shape", [(1, 1, 32, 7328)])
+def test_tilize_block_two_pair_program_cache_addr_change(device, tensor_shape):
+    torch.manual_seed(0)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg, use_multicore=True)
+        keep_alive += [tt_input, tt_output]
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "tilize must reuse the cached program on a hit"
+
+    assert entries == 1, "tilize should build exactly one program for a fixed config"
+    device.disable_and_clear_program_cache()
+
+
+# Blackhole sends non-sharded uint8 tilize to the block factory, the only way a 1-tile-wide tensor
+# reaches it. These get a single reader/writer pair: 2048/4096 rows build only full_set, 5120 rows
+# only cliffrow_set. Checks that lone pair is still re-pointed on a cache hit.
+@run_for_blackhole()
+@pytest.mark.parametrize("shape", [(1, 1, 2048, 32), (1, 1, 4096, 32), (1, 1, 5120, 32)])
+def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
+    torch.manual_seed(0)
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+        tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_output = ttnn.tilize(tt_input)
+        keep_alive += [tt_input, tt_output]
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "tilize must reuse the cached program on a hit"
+
+    assert entries == 1, "tilize should build exactly one program for a fixed config"
+    device.disable_and_clear_program_cache()

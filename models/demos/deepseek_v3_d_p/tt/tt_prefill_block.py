@@ -610,6 +610,7 @@ class TtPrefillBlock(LightweightModule):
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             actual_start=actual_start,
+            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
             indexer_indices=indexer_indices,

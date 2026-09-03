@@ -225,7 +225,6 @@ class TestConfig:
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
-    TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
     THREAD_PERFORMANCE_DATA_BUFFER = [
@@ -239,7 +238,7 @@ class TestConfig:
     # Shared config + per-zone data layout (must match counters.h).
     # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
     # words + 200 counter-count words + sync = 860 B) follows.
-    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF0.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
     PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
     _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
@@ -359,9 +358,6 @@ class TestConfig:
                     0x16D000,  # Pack
                     0x16E000,  # SFPU
                 ]
-                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = (
-                    0x16AFF0  # BARRIER_START for 4 cores
-                )
             case _:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
@@ -1199,6 +1195,12 @@ class TestConfig:
 
         pytest.skip()
 
+    def _barrier_reservation_include(self) -> str:
+        """First in the unit, so barrier.h's reservation covers the driver whatever it includes first."""
+        if self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "barrier.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1783,7 +1785,10 @@ class TestConfig:
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
                     TestConfig.TESTS_WORKING_DIR,
-                    (f"{self._kernel_source_include()}#include  <trisc.cpp>\n"),
+                    (
+                        f"{self._barrier_reservation_include()}"
+                        f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
+                    ),
                 )
 
             with ThreadPoolExecutor(

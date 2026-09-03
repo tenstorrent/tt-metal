@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -125,34 +126,27 @@ void validate_rm_preconditions(
     tt::tt_metal::ReduceOpDim dim,
     std::string_view dim_label);
 
-// Build the reader compile-time args vector for the RM path (slots match
-// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
-// `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 / full Ht_rm = normal
-// reduce).
-std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan,
-    uint32_t scaler_bits,
-    const tt::tt_metal::MeshTensor& src,
-    tt::tt_metal::ReduceOpDim dim,
-    uint32_t num_h_slices = 1,
-    uint32_t slice_Ht = 0);
+// Build the named compile-time args for the RM reader (names match reader_unary_reduce_rm.cpp).
+// Both reduce dims get the full set: the reader's H branch is the only consumer of H_logical and of
+// the H-axis-split geometry (`num_h_slices` / `slice_Ht`; 1 / full Ht_rm = normal reduce), but a
+// compile-time arg costs nothing on the path that ignores it, and emitting it unconditionally is
+// what lets the kernel reference the name from either branch.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices = 1, uint32_t slice_Ht = 0);
 
-// Build the writer compile-time args vector for the RM path (slots match
-// writer_reduce_rm_scalar.cpp): scalar slots followed by TensorAccessorArgs(dst). `tile_output`
-// selects TILE instead of ROW_MAJOR pages on the H path; it and `num_h_slices` are ignored on the
-// W path, which only emits ROW_MAJOR.
-std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan,
-    const tt::tt_metal::MeshTensor& dst,
-    tt::tt_metal::ReduceOpDim dim,
-    bool tile_output = false,
-    uint32_t num_h_slices = 1);
+// Build the named compile-time args for the RM writer (names match writer_reduce_rm_scalar.cpp).
+// As above, both dims get the full set even though Wt / W_logical / wt_tiles_per_chunk and the
+// H-axis-split fields (tile_output / num_h_slices / out_tile_rows) are read only by the H branch.
+// `tile_output` selects TILE instead of ROW_MAJOR pages on the H path (mirrored by the
+// REDUCE_RM_TILE_OUTPUT define, which is what the kernel actually branches on).
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
+    const RmPlan& plan, bool tile_output = false, uint32_t num_h_slices = 1);
 
-// Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
+// Build the named compile-time args for the RM compute kernel (names match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
-// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 6) routes Float32 through the SFPU for
-// full-fp32 accumulation instead of the tf32 FPU path.
-std::vector<uint32_t> build_rm_compute_ct_args(
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (the enable_fp32_sfpu arg) routes Float32 through the
+// SFPU for full-fp32 accumulation instead of the tf32 FPU path.
+tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
     const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(

@@ -606,9 +606,9 @@ targets:
             seq_len: 712
             status: active
             perf:
-              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
-              # was 20.3; TTFT 53.31-53.35 ms, was 75.
-              decode_t/s/u: 33.0
+              # Greedy decode uses the on-device argmax fast-path and two DRAM readers per bank
+              # for the decode projections. Measured 42.08-42.09 t/s/u locally and in CI.
+              decode_t/s/u: 42.0
               prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:

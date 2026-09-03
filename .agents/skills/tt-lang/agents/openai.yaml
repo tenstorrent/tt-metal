@@ -1,4 +1,0 @@
-interface:
-  display_name: "TT-Lang"
-  short_description: "Write and debug TT-Lang kernels"
-  default_prompt: "Use $tt-lang to port this kernel to TT-Lang and validate it."

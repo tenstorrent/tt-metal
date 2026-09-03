@@ -38,7 +38,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
@@ -217,6 +217,10 @@ void JitBuildEnv::init(
         this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
+    if (this->arch_ == tt::ARCH::QUASAR && rtoptions.get_simulator_enabled() &&
+        rtoptions.get_simulator_path().extension() == ".so") {
+        this->defines_ += "-DNOC_API_V1 ";
+    }
 
     if (rtoptions.get_profiler_enabled()) {
         uint32_t profiler_options = 1;

@@ -647,11 +647,17 @@ class TtPrefillRuntime:
             assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         if actual_start is not None:
             assert (
-                actual_start + self.config.chunk_size <= self.config.max_seq_len
-            ), f"chunk at actual_start={actual_start} exceeds per-user cache {self.config.max_seq_len}"
-            assert (
                 actual_start <= actual_end <= actual_start + self.config.chunk_size
             ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+            # The cache holds the chunk's real tokens on the 32-row write grid; the padded tail is skipped.
+            write_end = -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            assert write_end <= self.config.max_seq_len, (
+                f"chunk [{actual_start}, {actual_end}) writes up to {write_end} (32-row grid), past the "
+                f"per-user cache {self.config.max_seq_len}"
+            )
+            # Sparse/DSA has the SAME bound as dense: indexer_score now allows a causal window ending past the
+            # valid prefix, and the indexer bounds kv_len / top-k by the populated prefix instead. That uniformity
+            # matters — the inference server sizes the cache without knowing which model it is talking to.
 
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
@@ -738,6 +744,7 @@ class TtPrefillRuntime:
                     self._dflash_v_cache,
                     actual_start,
                     slot_idx=slot_id,
+                    actual_end=actual_end,
                 )
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.

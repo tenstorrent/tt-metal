@@ -181,7 +181,15 @@ struct NOCDebugIssueType {
 struct NOCDebugIssue {
     std::set<NOCDebugIssueType> issues;
 
-    void set_issue(const NOCDebugIssueType& issue_type) { issues.insert(issue_type); }
+    // Issues recorded since report_new_issues() last drained this, so incremental reporting costs O(new issues)
+    // instead of rescanning every issue recorded so far on every background full read.
+    std::vector<NOCDebugIssueType> unreported;
+
+    void set_issue(const NOCDebugIssueType& issue_type) {
+        if (issues.insert(issue_type).second) {
+            unreported.push_back(issue_type);
+        }
+    }
 
     bool has_issue(const NOCDebugIssueType& issue_type) const { return issues.contains(issue_type); }
 
@@ -215,8 +223,13 @@ public:
     // Accumulate an event (processed in timestamp order when process_accumulated_events is called)
     void push_event(size_t chip_id, uint64_t timestamp, int processor_id, const NOCDebugEvent& event);
 
-    // Sort accumulated events by timestamp, process them, then clear the queue. Call after a poll is complete.
+    // Sort accumulated events by timestamp, process them, then clear the queue.
     void process_accumulated_events_all_chips();
+
+    // Bounded-lateness variant for MID-RUN processing (the background full read). Processes only events older than a
+    // per-chip watermark (that chip's latest-seen timestamp minus margin_ticks) and RETAINS the newer tail for a
+    // later call. Keeps host memory bounded to ~margin_ticks worth.
+    void process_accumulated_events_up_to(uint64_t margin_ticks);
 
     // Get the issue reported for a given core and processor during the lifetime of the debug state
     NOCDebugIssue get_issues(tt_cxy_pair core, int processor_id) const;
@@ -227,9 +240,20 @@ public:
     // Print aggregated errors summary (grouped by error type with affected cores)
     void print_aggregated_errors() const;
 
+    // Print any issue that has appeared since the last call, exactly once each. Used to report problems incrementally
+    // as the background full-read processes events during a long run, instead of only at a user read / close.
+    void report_new_issues() const;
+
     // This should be called after kernels are done (Finish()). It will check for unflushed reads/writes at the end of
     // the kernel.
     void finish_cores();
+
+    // Small snapshot of host-side state, for tests/diagnostics that check memory stays bounded.
+    struct StateSummary {
+        size_t issues = 0;          // total distinct issues recorded across cores+processors
+        size_t pending_events = 0;  // size of the not-yet-processed pending_events_ queue
+    };
+    StateSummary get_state_summary() const;
 
     // Tracks info about a pending write for end-of-kernel checking
     struct PendingWriteInfo {
@@ -353,6 +377,11 @@ private:
         int processor_id;
         NOCDebugEvent event;
     };
+
+    // Sort a moved-out batch by timestamp and dispatch each event into the per-core state machine. Caller must hold
+    // cores_mutex. Shared by process_accumulated_events_all_chips and process_accumulated_events_up_to.
+    void process_events_locked(std::vector<PendingEvent>& to_process);
+
     mutable std::vector<PendingEvent> pending_events_;
     mutable std::mutex pending_events_mutex_;
 

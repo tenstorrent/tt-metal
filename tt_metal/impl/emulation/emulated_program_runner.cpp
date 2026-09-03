@@ -53,6 +53,7 @@
 #endif
 
 #include "impl/kernels/kernel.hpp"
+#include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
@@ -567,7 +568,7 @@ struct Metal2BindingsSnapshot {
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
-    std::map<std::string, uint16_t> sem_accessors;
+    std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
 
@@ -579,8 +580,8 @@ struct Metal2BindingsSnapshot {
         for (const auto& [name, id] : dfb_accessors) {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
-        for (const auto& [name, id] : sem_accessors) {
-            s += ":sem:" + name + "=" + std::to_string(id);
+        for (const auto& [name, h] : sem_accessors) {
+            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -798,7 +799,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
+        [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            s.sem_accessors[name] = {id, scope, total_binder_harts};
+        });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
         // snapshot doesn't yet model per-binding runtime CRTA words, and the
@@ -837,14 +840,16 @@ static void emit_metal2_namespaces(
     const std::unordered_map<std::string, uint32_t>& named_compile_args) {
     const bool has_args =
         !s.runtime_arg_names.empty() || !s.common_runtime_arg_names.empty() || !named_compile_args.empty();
+    std::vector<tt::tt_metal::SemBindingEntry> sem_entries;
+    sem_entries.reserve(s.sem_accessors.size());
+    for (const auto& [name, h] : s.sem_accessors) {
+        sem_entries.push_back({name, h.id, h.scope});
+    }
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
     }
     if (!s.dfb_accessors.empty()) {
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-    }
-    if (!s.sem_accessors.empty()) {
-        f << "#include <cstdint>\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
@@ -893,12 +898,8 @@ static void emit_metal2_namespaces(
         }
         f << "}  // namespace dfb\n";
     }
-    if (!s.sem_accessors.empty()) {
-        f << "namespace sem {\n";
-        for (const auto& [name, id] : s.sem_accessors) {
-            f << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
-        }
-        f << "}  // namespace sem\n";
+    if (!sem_entries.empty()) {
+        tt::tt_metal::emit_semaphore_binding_tokens(f, sem_entries);
     }
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
@@ -1743,6 +1744,14 @@ static void collect_kernels(
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
+            for (const auto& [sem_name, h] : bindings.sem_accessors) {
+                TT_FATAL(
+                    h.scope != SemScope::DM_LOCAL_CACHED,
+                    "Internal error: semaphore '{}' resolved to DM_LOCAL_CACHED under emule, but the emule "
+                    "backend does not model the cached pool (no seeder is emitted); the classifier "
+                    "(ResolveSemaphoreScope) must never pick the cached tier for this backend.",
+                    sem_name);
+            }
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
             // GENERAL emule fix — intentionally NOT part of the Blaze named-args feature and NOT

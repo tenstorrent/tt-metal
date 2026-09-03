@@ -194,8 +194,14 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        bool wraps;
+        if (cluster_axis.has_value()) {
+            wraps = is_axis_wrap_wired(*tensor.device(), *cluster_axis);
+        } else {
+            wraps = get_boundary_mode(tensor, topology_, cluster_axis) ==
+                    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        }
+        if (wraps) {
             return topology_;
         }
         if (topology_ == tt::tt_fabric::Topology::Torus) {

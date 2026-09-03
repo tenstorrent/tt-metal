@@ -30,6 +30,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
@@ -161,12 +162,10 @@ using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 // Basic Utility Helpers
 // ============================================================================
 
-inline tt::ARCH get_arch() { return tt::tt_metal::hal::get_arch(); }
+inline bool is_gen2_arch(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
 
-inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
-
-inline bool is_gen1_arch() {
-    tt::ARCH arch = get_arch();
+inline bool is_gen1_arch(const Hal& hal) {
+    tt::ARCH arch = hal.get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
@@ -671,12 +670,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
 // representative of every device in the mesh.
 
-void ValidateNodeBounds(const ProgramSpec& spec) {
-
-    MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(metal_ctx.get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
-    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    const bool is_mock = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
     // from the YAML descriptor, and both are available in mock mode.
@@ -687,7 +685,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // But, best get the real dispatch_core_config and num_hw_cqs
     // (Makes no difference now, but hardbaking that assumption could be brittle)
     if (!is_mock) {
-        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+        auto& dispatch_mgr = metal_ctx.get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
         num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     }
@@ -696,25 +694,24 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const Nodes& target_nodes,
-                                  std::string_view entity_type,
-                                  std::string_view entity_name) {
-        const NodeRangeSet range_set = to_node_range_set(target_nodes);
-        for (const NodeRange& range : range_set.ranges()) {
-            for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    node.x < compute_grid.x && node.y < compute_grid.y,
-                    "{} '{}' targets node ({},{}), which is out of bounds. "
-                    "The compute worker grid on this device is {}x{}.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y,
-                    compute_grid.x,
-                    compute_grid.y);
+    auto check_target_nodes =
+        [&](const Nodes& target_nodes, std::string_view entity_type, std::string_view entity_name) {
+            const NodeRangeSet range_set = to_node_range_set(target_nodes);
+            for (const NodeRange& range : range_set.ranges()) {
+                for (const NodeCoord& node : range) {
+                    TT_FATAL(
+                        node.x < compute_grid.x && node.y < compute_grid.y,
+                        "{} '{}' targets node ({},{}), which is out of bounds. "
+                        "The compute worker grid on this device is {}x{}.",
+                        entity_type,
+                        entity_name,
+                        node.x,
+                        node.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                }
             }
-        }
-    };
+        };
 
     for (const auto& work_unit : spec.work_units) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
@@ -748,15 +745,16 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 //
 // Assumes CollectedSpecData is already built.
 
-void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected, MetalContext& metal_ctx) {
+    const Hal& hal = metal_ctx.hal();
     // Sanity check for supported architecture.
-    TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
+    TT_FATAL(is_gen1_arch(hal) || is_gen2_arch(hal), "Unsupported architecture.");
 
     //////////////////////////////
     // Node bounds checks
     //////////////////////////////
 
-    ValidateNodeBounds(spec);
+    ValidateNodeBounds(spec, metal_ctx);
 
     //////////////////////////////
     // Validate KernelSpecs
@@ -801,7 +799,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
                     "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
@@ -823,7 +821,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
         if (kernel.is_data_movement_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
                     "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
@@ -847,7 +845,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
@@ -867,7 +865,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
                     kernel.unique_id,
                     static_cast<int>(processor));
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen2Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
@@ -879,13 +877,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_compute_kernel()) {
             const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen1Config>(compute_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
                     "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
                     kernel.unique_id);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen2Config>(compute_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
@@ -912,7 +910,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
     //      intentionally share a NOC, freeing the other NOC for fabric.
     // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
-    if (is_gen1_arch()) {
+    if (is_gen1_arch(hal)) {
         // (node, processor) -> the kernel that already claimed it.
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
         // node -> (noc mode, the kernel that first set it) — all DM kernels on a node must agree.
@@ -1224,10 +1222,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
-                                                ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                : tt::tt_metal::hal::get_arch_num_circular_buffers();
+        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
+                                                                             : hal.get_arch_num_circular_buffers();
 
         std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
@@ -1240,7 +1236,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (count <= max_slots_per_core) {
                 continue;
             }
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
                     "supports at most {} device slots per core (disjoint cores may reuse slots).",
@@ -1249,7 +1245,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     node.x,
                     node.y,
                     max_slots_per_core);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
                     "target architecture supports at most {} device slots per core. The true "
@@ -1283,7 +1279,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
     // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
     // is actually multi-bound — a Gen2 spec carrying it is never valid.
-    if (is_gen2_arch()) {
+    if (is_gen2_arch(hal)) {
         for (const auto& dfb : spec.dataflow_buffers) {
             TT_FATAL(
                 !dfb.advanced_options.allow_instance_multi_binding,
@@ -1480,7 +1476,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
             // always legal: they lower to the intra-Tensix packer->unpacker flow.)
             TT_FATAL(
-                !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel()),
+                !(is_gen2_arch(hal) && self_loop_kernel->is_data_movement_kernel()),
                 "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
                 "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
                 "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
@@ -1676,7 +1672,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1720,7 +1719,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Data format must be valid for the architecture
-    const tt::ARCH arch = get_arch();
+    const tt::ARCH arch = hal.get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
             TT_FATAL(
@@ -1738,7 +1737,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     for (const auto& sem : spec.semaphores) {
         const uint32_t init_value = sem.advanced_options.initial_value;
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 init_value == 0,
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
@@ -1763,10 +1762,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.name,
-                    other_work_unit.name);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
@@ -1789,7 +1785,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
@@ -1803,7 +1799,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed,
                 QUASAR_USER_DM_CORES_PER_NODE);
         }
-        if (is_gen1_arch()) {
+        if (is_gen1_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= 1,
                 "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
@@ -2307,22 +2303,33 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const BufferType buffer_type = memory_config.buffer_type();
     const bool is_dram = (buffer_type == BufferType::DRAM);
     const bool is_sharded = memory_config.is_sharded();
-    // dynamic_tensor_shape is only meaningful on sharded tensors: for interleaved
-    // tensors the CTA payload never carried tensor_shape in the first place (and
-    // the device-side accessor doesn't read it), so the flag is a pure host-side
-    // validation loosening and has no effect on the CTA/CRTA layout.
+    // The tensor SHAPE only rides the CTA/CRTA payload for a sharded tensor: an interleaved payload
+    // never carried it in the first place, and the device-side accessor doesn't read it. So this
+    // particular induction is sharded-only.
+    //
+    // That is a statement about the shape words, NOT about the flag. dynamic_tensor_shape is a
+    // dynamic relaxation on every layout -- see dyn_page immediately below, which moves an
+    // interleaved ROW-MAJOR page size out of the CTAs. (match_padded_shape_only is the flag that is
+    // purely a host-side validation loosening with no CTA/CRTA effect; do not transplant its
+    // description onto this one.)
     const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
-    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
-    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
-    // the width without varying the logical shape), so there is no "page size varies but shape
-    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
-    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
-    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
-    const bool dyn_page =
-        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+    // accessor strides by the wrong number of bytes. We induce that here rather than expose a flag
+    // for it: a useful page-size change is ALWAYS a shape change on row-major (you can't vary the
+    // width without varying the logical shape), so there is no "page size varies but shape doesn't"
+    // case to give a flag to. Tiled page size is dtype-fixed and sharded page size is spec-fixed, so
+    // neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages words instead
+    // (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    //
+    // match_page_size opts out of the induction, for the CONVERSE case: shape varies, width does
+    // not. That implication runs only one way, so the flag does not reopen the reasoning above --
+    // it declares a narrower equivalence class in which the page size is pinned, and the match
+    // enforces it (tensor_spec_relaxations.cpp), so the CTA below cannot go stale.
+    const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
+                          !tensor_parameter.relaxations.match_page_size && !is_sharded &&
+                          spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2551,9 +2558,13 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id
+// Create map of accessor name -> semaphore handle: the logical id, the resolved scope,
+// and the binder hart count for local cached semaphores.
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
-    const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    const KernelSpec& kernel_spec,
+    const sem_solver::SemaphoreBinderCensus& semaphore_binders,
+    const SemaphoreNameToIdMap& semaphore_name_to_id,
+    const sem_solver::SemaphoreNameToScopeMap& semaphore_name_to_scope) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2564,7 +2575,19 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
-        out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
+        const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
+        const uint32_t total_binder_harts =
+            scope == SemScope::DM_LOCAL_CACHED
+                ? sem_solver::BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
+                : 0u;
+        TT_FATAL(
+            total_binder_harts <= 0x7FFFu,
+            "Semaphore '{}' has {} binder harts; the cached seed protocol supports at most 32767",
+            semaphore_binding.semaphore_spec_name,
+            total_binder_harts);
+        out.emplace(
+            semaphore_binding.accessor_name,
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
     }
     return out;
 }
@@ -2695,8 +2718,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgs& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
@@ -2742,8 +2764,8 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot) {
-    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
+    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
@@ -2769,7 +2791,8 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+ComputeConfig MakeGen1ComputeConfig(
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
@@ -2779,7 +2802,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot, hal);
 
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
@@ -2819,7 +2843,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
@@ -2828,7 +2852,8 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot, hal);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -2892,20 +2917,27 @@ namespace {
 
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
+    const Hal& hal = metal_ctx.hal();
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1b: Census the semaphore binders, using the kernel node sets from Step 1a. Runs
+    // unconditionally because it also rejects a kernel that binds the same semaphore twice.
+    const sem_solver::SemaphoreBinderCensus semaphore_binders =
+        sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
+
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
-        ValidateProgramSpec(spec, collected);
+        ValidateProgramSpec(spec, collected, metal_ctx);
     }
 
     // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
     //  - Gen1: processor is user-specified in Gen1Config
     KernelRiscMaskMap kernel_to_risc_mask =
-        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+        is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
     // Step 2b: For multi-binding DFBs, all KernelSpecs on the same role must end up with
     // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
@@ -2941,7 +2973,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 if (mask == first_mask) {
                     continue;
                 }
-                if (is_gen2_arch()) {
+                if (is_gen2_arch(hal)) {
                     TT_THROW(
                         "Internal error: Gen2 solver produced disagreeing risc_masks for DFB '{}' "
                         "{} bindings ('{}' = 0x{:x} vs '{}' = 0x{:x}). The coupling-group solver "
@@ -3055,7 +3087,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
-    // Create Semaphores and build name -> ID map.
+    // Create Semaphores and build the name -> ID map.
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
@@ -3067,6 +3099,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
+    // Pick each semaphore's access mechanism.
+    const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders);
+
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
@@ -3076,7 +3112,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
             MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
@@ -3121,7 +3157,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
         constexpr bool is_metal2_kernel = true;
 
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
@@ -3141,7 +3177,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
@@ -3175,7 +3211,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),

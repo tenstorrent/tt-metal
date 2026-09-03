@@ -146,6 +146,26 @@ Tensor reduce(
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
 
+    // A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense RM readers
+    // and the tilize into the tile path both step by H_logical, so every slice after the first lands
+    // on pad rows. Only a single slice padded up to the tile height is readable; refuse the rest.
+    // H alone, because H pad sits between pages: pad on W sits inside one, and the reader consumes
+    // only W_logical bytes of it over an identity-filled slab (see reader_unary_reduce_rm.cpp).
+    // Indexing is negative because reduce_impl normalizes every input to 4D before calling this.
+    if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        const auto& logical = input_tensor.logical_shape();
+        const auto& padded = input_tensor.padded_shape();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        TT_FATAL(
+            padded[-2] == logical[-2] ||
+                (padded[-4] * padded[-3] == 1 && padded[-2] == tt::div_up(logical[-2], tile_h) * tile_h),
+            "reduce: a ROW_MAJOR input padded on H is only supported when N and C fold to a single "
+            "slice and the padding rounds H up to the tile height, got logical {} padded {}. Convert "
+            "to TILE layout first, or drop the padding.",
+            logical,
+            padded);
+    }
+
     // A TILE request must be explicit: std::nullopt means "whatever the selected path emits".
     // The RM H path can emit both layouts, so it stays eligible; the RM W path can emit only
     // ROW_MAJOR, so a TILE request sends it back to the tilize + tile-reduce path.

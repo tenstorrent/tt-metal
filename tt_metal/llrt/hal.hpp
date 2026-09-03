@@ -342,7 +342,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::SemVer)>;
 
 private:
     tt::ARCH arch_;

@@ -61,3 +61,13 @@ def test_very_long_causes_are_bounded():
     out = section({"failed": [row(root_cause="x" * 1000)]})
     line = [l for l in out.splitlines() if l.startswith("- ")][0]
     assert len(line) < 400 and "..." in line
+
+
+def test_a_resolvable_job_gets_an_owner_note():
+    out = section({"failed": [row(job_name="Llama 3.1-8B e2e tests [bh_p150]")]})
+    assert " — owner: " in out and "(models)" in out
+
+
+def test_an_unresolvable_job_renders_without_an_owner_note():
+    out = section({"failed": [row(job_name="completely unknown job [x]")]})
+    assert "owner:" not in out

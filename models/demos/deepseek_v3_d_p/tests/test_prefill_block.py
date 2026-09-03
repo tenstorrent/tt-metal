@@ -23,13 +23,13 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -54,9 +54,12 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     create_hf_model,
+    decoder_layer_kwargs,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    mla_kvpe_width,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
@@ -109,7 +112,7 @@ def run_model(
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
     # Applying this skip would zero out Kimi's CI coverage for this test.
     # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_7":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
@@ -217,6 +220,21 @@ def run_model(
         torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
         ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
+        # A cache written before the KVPE fix holds the reference's EXPANDED per-head keys, not the
+        # compressed latent the device stores. Existence alone would reuse it and keep reporting the
+        # -1.0 rows this change removes, so check the stored width and recompute if it is stale --
+        # otherwise the fix is silently bypassed on every cache a developer already has.
+        if ref_cache_loadable and pcc_validation:
+            expected_kvpe_width = mla_kvpe_width(config)
+            if expected_kvpe_width is not None:
+                probe = torch.load(torch_ref_cache, weights_only=True).get("ref_kvpe")
+                if probe is not None and probe.shape[-1] != expected_kvpe_width:
+                    logger.warning(
+                        f"Cached reference at {torch_ref_cache} stores KVPE of width "
+                        f"{probe.shape[-1]}, expected {expected_kvpe_width} (pre-fix expanded keys); "
+                        f"recomputing the reference instead of reusing it."
+                    )
+                    ref_cache_loadable = False
         need_hf_model = not ttnn_cache_complete or (
             (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
         )
@@ -277,18 +295,18 @@ def run_model(
             position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
             attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
             ref_cache = DynamicCache()
+            # Bound to the layer's own signature, and reused below for the KVPE line.
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
             with torch.no_grad():
-                layer_out = hf_model.layers[layer_idx](
-                    torch_input,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                torch_output = layer_out[0]
+                layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
-                ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
+                ref_kvpe = reference_kvpe_for_layer(
+                    hf_model.layers[layer_idx], layer_idx, torch_input, layer_kwargs, ref_cache, config
+                )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
             profiler.end("torch_reference")
 
@@ -646,7 +664,7 @@ def test_ds_prefill_block(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -654,7 +672,7 @@ def test_ds_prefill_block(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")

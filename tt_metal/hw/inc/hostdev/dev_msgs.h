@@ -27,7 +27,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/debug_ring_buffer_common.h"
 
