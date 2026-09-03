@@ -68,22 +68,20 @@ def _upload_dispatch_buffer(
     dtype,
     mesh_device,
 ):
-    """Put a full-capacity dispatch buffer on device, copying only the tokens dispatch wrote.
+    """Put a full-capacity dispatch buffer on device out of the `used_tokens` a router fills.
 
     The flat dispatch buffer is sized for the worst-case router -- one expert receiving the whole
     dispatch group -- and a real router fills a few percent of it: under 4% for DeepSeek V3 at seq
-    640 with capacity factor 8, which is 35 GiB of host tensor whose every value outside that prefix
-    is the constant dispatch left there. `from_torch` on the whole thing spends nearly all of its
-    time converting and shipping that constant, and at 8x4 that one call was the single largest cost
-    in this test: ~30s of the ~40s a phase took.
+    640 with capacity factor 8, where the worst case is 35 GiB. Everything past `used_tokens` is the
+    constant dispatch initialised the buffer to, so `ttnn.pad` writes it back on device in
+    milliseconds rather than the host converting and shipping it (29.5s measured, per phase).
 
-    So upload the prefix and let `ttnn.pad` write the constant back on device, which costs
-    milliseconds. The op gets a bit-identical input either way -- the tail dispatch leaves is
-    exactly `pad_value` -- and it still sees a full-capacity buffer, so nothing about what is
-    measured changes.
+    The op gets a bit-identical input either way -- the tail dispatch leaves is exactly `pad_value`
+    -- and it still sees a full-capacity buffer, so nothing about what is measured changes.
 
     `used_tokens` is one number for the whole mesh, not one per chip, which keeps this a single
     mesh-wide upload and a single mesh-wide op: a prefix that covers the busiest chip covers them all.
+    A `host_buffer` already cut to that prefix is uploaded as it is; one at full capacity is sliced.
     """
     assert used_tokens <= capacity_tokens, f"{used_tokens=} is past the end of a {capacity_tokens}-token buffer"
 
@@ -221,7 +219,20 @@ def run_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
 
-    # Initialize torch dispatch module with num_dispatch_groups support
+    # How much of the worst-case buffer this router will fill. Known from the expert regions the gate
+    # outputs above already lay out, so it is known before dispatch runs rather than after. Both the
+    # buffer and its metadata share the dispatch buffer's token layout, so one prefix bounds both.
+    used_tokens = dispatch_buffer_used_tokens(expert_token_counts, expert_region_offsets)
+    logger.debug(f"{used_tokens=} of {max_dispatch_buffer_token_size=} dispatch buffer tokens")
+
+    # Initialize torch dispatch module with num_dispatch_groups support.
+    #
+    # Sized to the prefix the router fills, not to the worst-case capacity the device buffer has: the
+    # rest of that capacity is a constant, and `_upload_dispatch_buffer` puts it back on device. At
+    # 8x4 with DeepSeek V3 that is the difference between generating a 35 GiB host tensor per phase
+    # and a 1.3 GiB one -- 3.7% of it held tokens. Every index dispatch writes comes from
+    # expert_offsets, which is bounded by exactly this prefix, so a wrong prefix would raise here
+    # rather than quietly hand the op a truncated buffer.
     torch_dispatch_module = TorchDispatchModule(
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -229,7 +240,7 @@ def run_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+        max_dispatch_buffer_token_size=used_tokens,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -241,11 +252,6 @@ def run_combine(
 
     # Use different sharding: shard both dimensions
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
-
-    # How much of the worst-case buffer this router actually filled. Both the buffer and its metadata
-    # share the dispatch buffer's token layout, so one prefix bounds both.
-    used_tokens = dispatch_buffer_used_tokens(expert_token_counts, expert_region_offsets)
-    logger.debug(f"{used_tokens=} of {max_dispatch_buffer_token_size=} dispatch buffer tokens")
 
     tt_dispatched_buffer = _upload_dispatch_buffer(
         dispatched_buffer,
