@@ -919,19 +919,19 @@ std::vector<Tensor> selu_bw(
 }
 
 // Hardswish
-// result: torch.where(input < -3,0.0,torch.where(input <= 3, grad * ((input / 3) + 0.5), grad),)
+// result: torch.where(input <= -3,0.0,torch.where(input < 3, grad * ((input / 3) + 0.5), grad),)
 std::vector<Tensor> hardswish_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
-        ttnn::lt(input, -3.0f, std::nullopt, output_mem_config),
+        ttnn::le(input, -3.0f, std::nullopt, output_mem_config),
         0.f,
         where(
-            ttnn::le(input, 3.0f, std::nullopt, output_mem_config),
+            ttnn::lt(input, 3.0f, std::nullopt, output_mem_config),
             ttnn::multiply(
                 grad,
                 ttnn::add(
-                    ttnn::multiply(input, 0.3333f, std::nullopt, output_mem_config),
+                    ttnn::multiply(input, 1.0f / 3.0f, std::nullopt, output_mem_config),
                     0.5f,
                     std::nullopt,
                     output_mem_config),
