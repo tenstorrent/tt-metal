@@ -31,3 +31,11 @@ def test_spec_decode_traced_1x8(mesh_device, reset_seeds):
 )
 def test_mtp_current_path_breakdown_1x8(mesh_device, reset_seeds):
     return _sd.test_mtp_current_path_breakdown(mesh_device, reset_seeds)
+
+
+@parametrize_mesh_with_fabric(
+    mesh_shapes=[(1, 8)],
+    device_params_extra={"trace_region_size": 192_000_000},
+)
+def test_fused_trace_reuse_second_prompt_1x8(mesh_device, reset_seeds):
+    return _sd.test_fused_trace_reuse_second_prompt(mesh_device, reset_seeds)

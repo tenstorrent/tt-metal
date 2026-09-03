@@ -2820,11 +2820,31 @@ def test_mtp_current_path_breakdown(mesh_device, reset_seeds):
         outputs = build()
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        start = time.perf_counter()
-        for _ in range(reps):
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        elapsed_ms = (time.perf_counter() - start) * 1e3 / reps
+        profile = os.environ.get("TT_METAL_DEVICE_PROFILER", "0") == "1"
+        if profile:
+            # One measured replay only — profiler + multi-replay traces mismatch.
+            try:
+                from tracy import signpost as _signpost
+            except ModuleNotFoundError:
+                _signpost = None
+            try:
+                ttnn.ReadDeviceProfiler(mesh_device)
+            except Exception:
+                pass
+            ttnn.synchronize_device(mesh_device)
+            if _signpost is not None:
+                _signpost("start")
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            if _signpost is not None:
+                _signpost("stop")
+            ttnn.synchronize_device(mesh_device)
+            elapsed_ms = float("nan")
+        else:
+            start = time.perf_counter()
+            for _ in range(reps):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            elapsed_ms = (time.perf_counter() - start) * 1e3 / reps
         ttnn.release_trace(mesh_device, trace_id)
         for tensor in outputs:
             tensor.deallocate(True)
@@ -2925,6 +2945,95 @@ def test_mtp_current_path_breakdown(mesh_device, reset_seeds):
         f"accept={mean_accept:.2f}/{K} tokens/iter={tokens_per_iter:.2f} "
         f"steady={tokens_per_iter/(loop_ms/1e3):.2f} tok/s setup={spec._last_fused_setup_s:.2f} s"
     )
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_fused_trace_reuse_second_prompt(mesh_device, reset_seeds):
+    """Phase 2: second generate in the same process must restage, not recapture.
+
+    Graph-key reuse is already committed; this is the in-process proof that a
+    new prompt does not pay the 3–4 s capture again.
+    """
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+
+    max_seq_len = 1024
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    block_size = 64
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+    )
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(1, paged_attention_config)
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3)),
+    )
+    spec._use_trace = True
+
+    def _run(prompt):
+        in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+            [prompt], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        # Prefill must stay untraced: a live fused MTP CCL trace plus a traced
+        # prefill in the same process deadlocks Wormhole fabric (second prompt hang).
+        generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            enable_trace=False,
+            warmup_prefill=False,
+        )
+        token = int(encoded[0][prefill_lens[0] - 1])
+        pos = prefill_lens[0] - 1
+        spec.generate_fused(token, pos, n_new)
+        ttnn.synchronize_device(mesh_device)
+        return spec._last_fused_setup_s, bool(getattr(spec, "_last_fused_reused", False))
+
+    setup1, reused1 = _run("Write a short paragraph about the history of the Eiffel Tower.")
+    setup2, reused2 = _run("Explain why the sky is blue in two sentences.")
+    logger.info(
+        f"[trace-reuse] first setup={setup1:.3f}s reused={reused1}; " f"second setup={setup2:.3f}s reused={reused2}"
+    )
+    assert not reused1, "first prompt should capture a new fused trace"
+    assert reused2, "second prompt must reuse the fused graph (restage seed + I/O only)"
+    assert setup2 < 1.0, f"second-prompt setup {setup2:.3f}s looks like a recapture"
 
 
 @_needs_assistant
