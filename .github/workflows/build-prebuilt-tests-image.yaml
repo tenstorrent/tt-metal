@@ -165,6 +165,12 @@ jobs:
             echo "::error::artifact-name is empty; the upstream build did not produce one"
             exit 1
           fi
+          # source-ref cannot affect the image when no source is checked out, so
+          # neither validate nor hash it there: doing so would mint a distinct tag
+          # for a byte-identical image and churn retention for nothing.
+          if [ "$CHECKOUT_SOURCE" != "true" ]; then
+            SOURCE_REF=""
+          fi
           # A branch or tag can move, so re-running would recompute the same tag
           # while checking out different source and overwrite the image with it.
           if [ -n "$SOURCE_REF" ] && ! printf '%s' "$SOURCE_REF" | grep -qE '^[0-9a-f]{40}$'; then
