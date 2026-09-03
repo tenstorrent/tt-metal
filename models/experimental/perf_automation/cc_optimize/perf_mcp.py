@@ -5079,6 +5079,46 @@ def _fullpipe_ms_now():
         return None
 
 
+# --- the structural gates and the levers that clear them -----------------------------------------
+# A structural gate blocks until its lever lands, and it recognises that lever by KIND NAME. Three
+# separate places have to agree on those names: the gate, which counts attempts carrying them;
+# record_kernel_attempt, which must accept them WITHOUT a custom-kernel marker, because folding two
+# projections or preparing conv weights at load is a restructure and has no generic_op/@ttl/.cpp to
+# find; and _rung_allowance, which must permit as many tries as the gate will ask for before it
+# yields. Spelled out separately those three drift, and the drift is a DEADLOCK rather than an
+# untidiness: the gate re-emits the same target forever while the recorder refuses the very rung
+# that would clear it. The host bucket has already failed exactly this way once -- see the
+# trace-capture note in _KNOB_KINDS, where a cap of three met an allowance of two.
+#
+# Each entry is (kinds the gate accepts, env var holding its attempt cap).
+_FOLD_LEVER = (("fold", "structural-fold"), "PERF_MCP_MAX_FOLD_ATTEMPTS")
+_ORDER_LEVER = (("order", "structural-order"), "PERF_MCP_MAX_ORDER_ATTEMPTS")
+_CONV_LEVER = (("conv-prep", "structural-conv"), "PERF_MCP_MAX_CONV_ATTEMPTS")
+_GATE_LEVERS = (_FOLD_LEVER, _ORDER_LEVER, _CONV_LEVER)
+_GATE_ATTEMPT_DEFAULT = "3"
+_GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds)
+
+
+def _gate_cap(cap_env: str) -> int:
+    """How many recorded attempts retire a structural gate that was never won."""
+    return int(os.environ.get(cap_env, _GATE_ATTEMPT_DEFAULT) or _GATE_ATTEMPT_DEFAULT)
+
+
+def _gate_rung_allowance(rung: str) -> int | None:
+    """Tries the recorder must accept for a structural-gate rung; None when it is not one.
+
+    The gate keeps asking until its cap, so anything less than the cap here strands it: the agent
+    records what it was told to, is refused as CLOSED on the next round, and has no way left to
+    clear a gate that goes on blocking. `none: <evidence>` is a legitimate outcome these gates
+    invite by name, and it changes no code -- so the profile is identical next round and the same
+    target comes back. That path in particular has to be able to run to the cap.
+    """
+    for kinds, cap_env in _GATE_LEVERS:
+        if rung in kinds:
+            return _gate_cap(cap_env)
+    return None
+
+
 def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tuple[int, int]:
     """(attempts already made, how many are permitted) for this (op, rung).
 
@@ -5113,7 +5153,12 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
     if rung in _KNOB_RUNG_NAMES:
         allowed = 1 if went_deeper else _MAX_KNOB_RETRIES
     else:
-        allowed = 1
+        # A structural gate's own cap, when the rung belongs to one. Every other deep rung keeps its
+        # single attempt: one measured tt-lang or C++ kernel is the proof that rung was explored,
+        # and there is no gate re-asking for a second. A gate rung is different precisely because
+        # something IS re-asking, up to its cap, and refusing it earlier than the cap leaves the
+        # gate with no route to clear.
+        allowed = _gate_rung_allowance(rung) or 1
     return tries, allowed
 
 
@@ -5166,7 +5211,12 @@ def record_kernel_attempt(
         # transform correctly does not have, and host_overhead was re-emitted as next_target
         # forever with no recordable rung left. Same species as the three fixes in f41ac046a5.
         "trace-capture",
-    }
+        # The structural gates' own levers, from the one table that defines them. They are the same
+        # kind of change as the rest of this set -- fold rewrites a call into a wider one, order
+        # swaps two ops, conv-prep moves weight preparation to load time -- and none of the three
+        # leaves a custom-kernel marker to detect, so requiring one refuses them all. Unioned rather
+        # than typed out again so the names cannot fall out of step with the gates that ask for them.
+    } | _GATE_KINDS
     is_knob = (kernel_kind or "").lower() in _KNOB_KINDS
     is_tp = (kernel_kind or "").lower() == "tp-fracture"
     ev = _scan_kernel_evidence()
@@ -5753,12 +5803,12 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds = ("fold", "structural-fold")
+    _kinds, _cap_env = _FOLD_LEVER
     clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
     if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
         return None
     wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_FOLD_ATTEMPTS", "3") or "3"):
+    if (len(clean) + wedged) >= _gate_cap(_cap_env):
         return None  # (3) capped
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
     return {
@@ -5842,12 +5892,12 @@ def _order_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds = ("order", "structural-order")
+    _kinds, _cap_env = _ORDER_LEVER
     clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
     if any(_ledger().is_win(a) for a in clean):  # (2)
         return None
     wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_ORDER_ATTEMPTS", "3") or "3"):
+    if (len(clean) + wedged) >= _gate_cap(_cap_env):
         return None  # (3)
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
     _pair = str(worst.get("next_op") or worst.get("prev_op") or "the adjacent reshape")
@@ -5906,12 +5956,12 @@ def _conv_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in convs)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    _kinds = ("conv-prep", "structural-conv")
+    _kinds, _cap_env = _CONV_LEVER
     clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
     if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
         return None
     wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
-    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_CONV_ATTEMPTS", "3") or "3"):
+    if (len(clean) + wedged) >= _gate_cap(_cap_env):
         return None  # (3) capped
     _codes = ", ".join(sorted({str(o.get("op_code") or "") for o in convs})[:4])
     return {
@@ -6740,19 +6790,33 @@ def termination_check() -> dict:
     # SOLE-AUTHORITY decision: stop iff no material op has a reachable rung left. This is driven only
     # by the gate's own ladder analysis — there is no "OR a kernel was attempted" escape, and the
     # at_floor field is informational evidence, not an independent stop license.
-    host_block = _host_gate(prof, blocking, attempts)
+    # EVERY GATE SEES WHAT THE LADDER SEES. `open_ops` is built by residual_report and returned in
+    # ITS dict; it has never been a field on the profile. The conv, fold and order gates all read
+    # `prof["open_ops"]` as their first act, so all three found an empty list, bailed on their
+    # applicability check, and had fired exactly zero times since the day they landed -- three
+    # transforms present in the source and absent from every run. Their unit tests hand them
+    # {"device_ms": ..., "open_ops": [...]} directly, which is the shape the gates expect and not
+    # the shape this caller had, so the gate logic was pinned while the wiring between the two was
+    # never exercised at all.
+    #
+    # A merged view rather than a mutation: `prof` is the cached profile object, and the roofline's
+    # work queue is a derived reading of it, not a property of the capture. Handed to every gate,
+    # including the two that read other fields today, so the next gate to read open_ops cannot
+    # inherit this by being wired the older way.
+    _gate_prof = {**prof, "open_ops": rep.get("open_ops") or []}
+    host_block = _host_gate(_gate_prof, blocking, attempts)
     if host_block:
         blocking.append(host_block)
-    decode_block = _decode_gate(prof, attempts)
+    decode_block = _decode_gate(_gate_prof, attempts)
     if decode_block:
         blocking.append(decode_block)
-    conv_block = _conv_gate(prof, attempts)
+    conv_block = _conv_gate(_gate_prof, attempts)
     if conv_block:
         blocking.append(conv_block)
-    fold_block = _fold_gate(prof, attempts)
+    fold_block = _fold_gate(_gate_prof, attempts)
     if fold_block:
         blocking.append(fold_block)
-    order_block = _order_gate(prof, attempts)
+    order_block = _order_gate(_gate_prof, attempts)
     if order_block:
         blocking.append(order_block)
     blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))

@@ -81,6 +81,8 @@ def test_not_foldable_is_a_legitimate_outcome(monkeypatch):
 
 
 def test_it_is_wired_into_the_stop_gate():
+    """Called AND handed the dict that carries open_ops -- matching `prof` here passed for months
+    while the gate read an empty list and never fired once."""
     src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
-    i = src.index("conv_block = _conv_gate(prof, attempts)")
-    assert "_fold_gate(prof, attempts)" in src[i : i + 400]
+    i = src.index("conv_block = _conv_gate(_gate_prof, attempts)")
+    assert "_fold_gate(_gate_prof, attempts)" in src[i : i + 400]

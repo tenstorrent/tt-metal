@@ -71,7 +71,14 @@ def test_it_yields_after_the_attempt_cap(monkeypatch):
 
 def test_it_is_wired_into_the_stop_gate():
     """A gate nothing calls is prose. _decode_gate and _host_gate are appended in termination_check;
-    this must be too, or it can never block a stop."""
+    this must be too, or it can never block a stop.
+
+    BEING CALLED IS NOT ENOUGH, which is what this test used to settle for. It matched the literal
+    `_conv_gate(prof, attempts)` -- and `prof` was the one dict that does NOT carry open_ops, so the
+    gate this asserted was consulted returned None on its first line every time it ran. It must be
+    handed the view that carries the roofline's work queue; test_the_gates_see_the_open_ops pins
+    what that view is built from.
+    """
     src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
-    i = src.index("decode_block = _decode_gate(prof, attempts)")
-    assert "_conv_gate(prof, attempts)" in src[i : i + 400], "the conv gate is never consulted"
+    i = src.index("decode_block = _decode_gate(_gate_prof, attempts)")
+    assert "_conv_gate(_gate_prof, attempts)" in src[i : i + 400], "the conv gate is never consulted"
