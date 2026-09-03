@@ -246,6 +246,26 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+# Mistral-Small-4-119B chunked-prefill perf baselines. Same shape and the same two-table split as the
+# Kimi tables above, and for the same reason: traced and untraced are different regimes, so a baseline
+# from one can never gate the other.
+#
+# EMPTY UNTIL MEASURED. A missing key leaves the run record-only (print_duration_table prints the
+# table and asserts nothing), which is exactly the state every Mistral row is in today. Populate from
+# a green CI run's per-chunk medians -- NOT from a galaxy box, which runs the same work ~2.4x slower --
+# then the row gates itself with no further change.
+#
+# Read the PER-CHUNK MEDIAN from the rendered table, not `iter N done ... in Xs`: the iteration total
+# carries fixed overhead that does not scale with the window and understates throughput by 17-30%
+# (see test_mistral4_prefill_transformer_chunked_no_pcc's docstring).
+MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # (num_layers, n_chunks, num_iters): [per-chunk median seconds]
+    # (36, 20, 10): [...],  # 102,400 tokens; fill from the gated CI row
+}
+MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
+    # (36, 20, 10): [...],
+}
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1172,8 +1192,32 @@ def test_mistral4_prefill_transformer_chunked_padded(
     )
 
 
+def mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, perf_margin=None):
+    """``(baseline_chunk_times_s, margin)`` for one Mistral parametrization, mirroring
+    ``kimi_chunked_perf_gate``.
+
+    No ``preload_isl`` axis: the Mistral rows always start from an empty cache, so there is no
+    preload depth to disqualify a baseline. Everything else is the same contract -- a baseline of
+    None leaves the run record-only, and the mode picks both the table and the default margin so a
+    traced baseline can never arm an untraced run.
+
+    Both tables are empty today, so every row is record-only. That is deliberate: the first CI run of
+    the gated row is what produces the numbers to put in them.
+    """
+    table, default_margin = (
+        (MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S, TRACED_PERF_MARGIN)
+        if use_trace
+        else (MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters))
+    return baseline, (default_margin if perf_margin is None else perf_margin)
+
+
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("num_iters", [2], ids=["two_iters"])
+# 2 iters is the exploration sweep (one warmup, one measured) and stays record-only. 10 iters is the
+# gate-capable row: the gate reads the MEDIAN of the post-warmup iterations, and one measured
+# iteration has no median. Kimi gates at 10 iters for the same reason.
+@pytest.mark.parametrize("num_iters", [2, 10], ids=["two_iters", "ten_iters"])
 # Zero-padded: `-k chunks5` would substring-match chunks51 (the rows below hack around the same
 # collision with the ad-hoc id `chunks_eleven`).
 @pytest.mark.parametrize(
@@ -1227,6 +1271,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     from the rendered table, not `iter N done ... in Xs` -- the iteration total carries fixed overhead
     that does not scale with the window, so window/iter_total understates throughput by 17-30%.
     """
+    baseline_chunk_times_s, perf_margin = mistral4_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters)
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1243,6 +1288,9 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         # chunks51 is 261,120 tokens; sized per-row so the longest sweep needs no env var and the
         # other variants' baselines keep the 100k default.
         seq_cache=max(SEQ_CACHE_NOPCC, n_chunks * CHUNK),
+        # Record-only until the tables carry this key; see mistral4_chunked_perf_gate.
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=perf_margin,
     )
 
 
