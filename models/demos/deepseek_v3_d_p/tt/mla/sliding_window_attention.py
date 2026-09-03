@@ -185,15 +185,7 @@ class TtSWA(LightweightModule):
         )
 
     def _build_masks(self, seq_local: int):
-        """Additive masks over the key layout ``[halo | own rows]``, keyed on whether the carry is empty.
-
-        Both halves of the layout are chip-local and the chip offset cancels, so ``i < j <= i + sw`` is
-        the whole band and one replicated mask serves every chip. float32 because bfloat16 cannot hold
-        the column index exactly.
-
-        The empty-carry variant sends the halo columns to -inf on chip 0 only: a zero key still enters
-        the softmax denominator, and on the first chunk chip 0's halo is the zeroed carry while every
-        other chip's lies inside this same chunk."""
+        """Both masks over the key layout ``[halo | own rows]``, built here and never touched again."""
         sw = self.sliding_window
         width = sw + seq_local
 
@@ -208,12 +200,12 @@ class TtSWA(LightweightModule):
         )
         keep = ttnn.nez(ttnn.add(ttnn.nez(chip), ttnn.ge(jc, float(sw))))
         empty_carry = ttnn.typecast(ttnn.log(keep), self.dtype)
+        # Only chunk 0 differs: there chip 0's halo is the zeroed carry, and a zero key still
+        # counts in the softmax denominator.
         self._masks = {False: band, True: ttnn.add(band, empty_carry)}
 
     def _build_halo_bounds(self, chunk: int, seq_local: int):
-        """This chip's halo: rows ``[d*seq_local, d*seq_local + sw)`` of ``[carry | gathered chunk]``.
-        SP-sharded bound tensors, so only their shape is in the program and one program serves all
-        ``sp`` offsets. They must be 1-D."""
+        """Which part of the gathered KV each chip takes as its halo."""
         sw, sp = self.sliding_window, self.sp_factor
         starts = torch.tensor([v for d in range(sp) for v in (0, 0, d * seq_local, 0)], dtype=torch.int32)
         ends = torch.tensor(
@@ -223,19 +215,13 @@ class TtSWA(LightweightModule):
         self._halo_bounds = tuple(
             self.ops.from_torch(t, mapper, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT) for t in (starts, ends)
         )
-        # ttnn.slice sizes its output as in_rows / num_devices.
         self._halo_num_devices = (sw + chunk) // sw
 
     def _carry_key(self, real_len: int):
-        """Rounds down, which only the final chunk may do. See V4_HCA_next_steps.MD for migration."""
         return (int(real_len) // TILE_HEIGHT) * TILE_HEIGHT
 
     def _build_carry_index(self, chunk: int):
-        """Bounds for the carry slice, one pair per real_len a chunk can have.
-
-        The carry is the last ``sw`` keys of the accumulated prefix, which in ``[carry | chunk]`` is
-        ``[real_len, real_len + sw)``. For a chunk shorter than ``sw`` that range reaches back into the
-        previous carry."""
+        """Which part of ``[carry | chunk]`` becomes the carry for the next chunk, one pair per real_len."""
         sw = self.sliding_window
 
         def idx(vals):
