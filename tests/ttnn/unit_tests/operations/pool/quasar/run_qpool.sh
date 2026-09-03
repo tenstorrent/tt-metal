@@ -22,6 +22,10 @@
 #                               while span-ab runs.
 #
 # Extra args after the mode are passed to pytest.
+#
+# WH/BH silicon cross-check leg (not via this runner): conftest.py skips this directory unless the
+# target is Quasar, so prefix with QPOOL_RUN_ON_ANY_ARCH=1, e.g.
+#   QPOOL_RUN_ON_ANY_ARCH=1 pytest -q -s -k test_qpool_matrix tests/ttnn/unit_tests/operations/pool/quasar/test_qpool_sweep.py
 set -euo pipefail
 
 # =============================== CONFIG — edit me ===============================

@@ -182,7 +182,10 @@ FactoryParameters get_factory_parameters(
     uint32_t in_h,
     uint32_t in_w,
     const Layout& output_layout,
-    bool single_reader_stream = false);
+    bool single_reader_stream = false,
+    // GCD of every core's output stick count (0 = unknown). Quasar only: sticks are dealt whole to
+    // (reader thread, NEO) lanes, so num_threads_per_cluster is the largest of {4, 2, 1} dividing it.
+    uint32_t out_nhw_per_core_gcd = 0);
 
 pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,

@@ -13,8 +13,9 @@ stride 1, batch 2, tall/wide inputs, a natural wide-reduction case (C=280 = 9 ti
 3-tile c-blocks via largest_uniform_block_width), avg pool (basic + chunked large kernel), and
 block/width sharding. A craq-sim-sized subset of the WH/BH nightly pool coverage.
 
-Case constraints (asserted per case): N*H*W % 32 == 0; per-core output sticks % num_threads == 0
-(the factory TT_FATALs otherwise); torch golden needs padding <= kernel/2; total volume is kept
+Case constraints (asserted per case): N*H*W % 32 == 0; torch golden needs padding <= kernel/2
+(num_threads is chosen by the factory as the largest of {4, 2, 1} dividing every core's output
+stick count, so any per-core count is legal — see the *_T1 / *_T2 unit cases); total volume is kept
 <= ~16KB to dodge the open craq-sim halo corruption class (large kernels run single-core: halo
 exchange scales with kernel size). Cases print their banner BEFORE running so a hang names the
 case in flight; OOM/ERROR are caught per-case.
@@ -23,7 +24,9 @@ Cases tagged sim_skip=... are auto-skipped when TT_METAL_SIMULATOR is set: they 
 identically at num_threads=1 on craq-sim but pass exact-PCC on WH silicon (open sim bug class,
 same as the C >= 384 sweep skips). QPOOL_NO_SIM_SKIP=1 forces them to run anyway.
 
-Run via run_qpool.sh sweep (C ladder) / run_qpool.sh matrix (this matrix).
+Run via run_qpool.sh sweep (C ladder) / run_qpool.sh matrix (this matrix). On WH/BH silicon
+(the cross-check leg) set QPOOL_RUN_ON_ANY_ARCH=1 — conftest.py skips this directory otherwise so
+the WH/BH sanity pool group does not run the quasar op.
 """
 
 import os
@@ -350,6 +353,30 @@ UNIT_CASES = [
         ),
     ),
     ("c24_k3x3", dict(channels=24, cores=1)),
+    # Thread-count policy (pool_utils get_factory_parameters): num_threads = largest of {4, 2, 1}
+    # dividing every core's output stick count. The matrix/sweep cases all land on T=4; these pin
+    # the T=1 and T=2 lanes. gap_* mirror the resnet50 global avg pool (batch 1, width-sharded,
+    # 1 output stick per core) which TT_FATALed under a fixed T=4.
+    (
+        "gap_b1_width_avg_T1",
+        dict(pool="avg", in_h=4, in_w=8, kernel=(4, 8), stride=(1, 1), padding=(0, 0), shard="width", grid_yx=(1, 2)),
+    ),
+    (
+        "gap_b1_width_max_T1",
+        dict(
+            in_h=4,
+            in_w=8,
+            kernel=(4, 8),
+            stride=(1, 1),
+            padding=(0, 0),
+            shard="width",
+            grid_yx=(1, 2),
+            sim_skip="craq-sim HANG (whole-window max class; avg twin passes on sim, exact on WH)",
+        ),
+    ),
+    ("stick1_1core_T1", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
+    ("sticks2_k3_s4_2cores_T2", dict(in_h=8, in_w=8, stride=(4, 4), cores=2)),  # 2 output sticks per core
+    ("sticks6_b3_1core_T2", dict(batch=3, in_h=8, in_w=4, stride=(4, 4), cores=1)),  # 6 output sticks
     ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),
     (
         "bf8b_k7x7_large",
