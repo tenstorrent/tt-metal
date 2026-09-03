@@ -1,9 +1,6 @@
-# No `dispatch:` list here on purpose. ttsim does not model the Quasar dispatch-engine tiles and
-# exits the whole process on the first access to one, so listing them breaks every ttsim leg.
-# Use quasar_32_arch_dispatch_engines.yaml on simulators that do model them (craq-sim).
 # grid is the full NOC coordinate-space extent and must contain every core's coords
 grid:
-  x_size: 10
+  x_size: 11
   y_size: 8
 
 arc:
@@ -49,6 +46,9 @@ harvested_workers:
 
 router_only:
   [0-2]
+
+dispatch:
+  [10-1, 10-6, 1-6]
 
 worker_l1_size:
   4194304
