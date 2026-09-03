@@ -902,13 +902,15 @@ def test_edge_classes_partition_every_probe_a_variant_can_drive():
     and one matched by two is driven under two markers, so a divergence on it can be excused by
     either.
 
-    Both split sweeps are checked here rather than in their own modules, because the property is
-    about the classifier and not about a device: the ternary three-way split of an operand probe
-    (finite / NaN / infinity) and the logsigmoid two-way split of a derived pair (NaN golden /
-    the rest).
+    All three split sweeps are checked here rather than in their own modules, because the
+    property is about the classifier and not about a device: the ternary three-way split of an
+    operand probe (finite / NaN / infinity), the logsigmoid two-way split of a derived pair (NaN
+    golden / the rest), and the binary edge classifier, whose signed-zero qualifier makes the
+    class name a *computed* string and so the first one that can name a class no variant drives.
     """
     import test_eltwise_binary_sfpu as binary
     import test_sfpu_ternary as ternary
+    from helpers.param_config import input_output_formats
     from helpers.sfpu_domains import edge_values
 
     total_probes = 0
@@ -969,6 +971,103 @@ def test_edge_classes_partition_every_probe_a_variant_can_drive():
         edge_class=binary._LOGSIGMOID_CLASS_NAN,
     )
     assert nan_pairs and all(math.isnan(a) for a, _b in nan_pairs)
+
+    # The binary sweep files each pair by a name _classify_edge_pair builds, so the failure to
+    # guard against is a class that exists in the classifier and not on the axis: the pair is
+    # then in no variant's tensor and its silence reads as coverage. Over every cell, not only
+    # the two that deliver a -0.0 operand -- which cells those are is itself a derivation, and a
+    # qualifier that fired somewhere unexpected is exactly the case worth catching.
+    classified = 0
+    for op in binary._BINARY_EDGE_OPS:
+        for formats in input_output_formats([DataFormat.Float16_b, DataFormat.Float32]):
+            for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+                for a, b in edge_pair_values(
+                    op,
+                    formats.input_format,
+                    formats.output_format,
+                    specials=True,
+                    dest_acc=dest_acc,
+                ):
+                    edge_class = binary._classify_edge_pair(op, a, b)
+                    assert edge_class in binary._EDGE_CLASSES, (
+                        f"{op.name} files ({a!r}, {b!r}) as {edge_class!r}, which is not on "
+                        "the edge_class axis -- no variant drives it and nothing fails"
+                    )
+                    classified += 1
+    assert classified > 0, "the binary edge sweep has no pair to classify any more"
+
+    # And the qualifier is not inert: if it ever stopped firing the two markers below would go
+    # back to spanning the +0.0 pairs beside them, silently.
+    qualified = {
+        edge_class
+        for (_op, edge_class) in binary._BINARY_EDGE_COMBINATIONS
+        if edge_class.endswith(binary._SIGNED_ZERO_IN_SUFFIX)
+    }
+    assert qualified, (
+        "no divergence is registered against a signed-zero-operand class -- either the "
+        "qualifier stopped classifying or the entries drifted back onto the result classes"
+    )
+
+
+# What the mixed-magnitude block actually costs each block-float format, in lanes flushed to
+# zero out of a 64x64 tile. Recorded in prose above test_eltwise_unary_sfpu_block_spread, which
+# the ternary half defers to, and until this nothing executed it -- the comment had drifted onto
+# a 2**-8 spread that BLOCK_SPREAD_DECADES does not contain, so it described a variant no job
+# runs. Measured on the host quantizer, which is the same model the goldens compare against.
+_BLOCK_SPREAD_FLUSHED_LANES = {
+    (DataFormat.Bfp8_b, 4): 0,
+    (DataFormat.Bfp8_b, 12): 1792,
+    (DataFormat.Bfp8_b, 24): 2816,
+    (DataFormat.Bfp4_b, 4): 2048,
+    (DataFormat.Bfp4_b, 12): 3328,
+    (DataFormat.Bfp4_b, 24): 3584,
+    (DataFormat.Bfp2_b, 4): 3840,
+    (DataFormat.Bfp2_b, 12): 3840,
+    (DataFormat.Bfp2_b, 24): 3840,
+}
+
+
+def test_block_spread_flushes_the_lanes_the_ledger_claims():
+    """The block-float spread quantizes away the number of lanes the comments say it does.
+
+    A stimulus that stopped spreading would keep every sweep green -- the goldens quantize the
+    same way, so a block that no longer spans a shared exponent still agrees with itself. The
+    counts are the only statement that the variants exercise anything, so they are asserted
+    rather than described.
+
+    The 2**-4 row is the control and is deliberately 0: it says the spread is narrow enough for
+    Bfp8_b's seven magnitude bits to hold the whole block, which is what makes the other two
+    rows a measurement of the shared exponent rather than of the format's floor.
+    """
+    from helpers.golden_generators import quantize_input_to_unpack_format
+    from helpers.sfpu_domains import BLOCK_SPREAD_DECADES, block_spread_spec
+    from helpers.stimuli_generator import generate_stimuli
+
+    assert set(BLOCK_SPREAD_DECADES) == {
+        decades for _fmt, decades in _BLOCK_SPREAD_FLUSHED_LANES
+    }, (
+        "the ledger and BLOCK_SPREAD_DECADES disagree about which spreads are driven: "
+        f"{sorted(BLOCK_SPREAD_DECADES)} against "
+        f"{sorted({d for _f, d in _BLOCK_SPREAD_FLUSHED_LANES})}"
+    )
+
+    for (stimuli_format, decades), expected in sorted(
+        _BLOCK_SPREAD_FLUSHED_LANES.items(),
+        key=lambda item: (item[0][0].name, item[0][1]),
+    ):
+        tile, *_ = generate_stimuli(
+            stimuli_format_A=stimuli_format,
+            input_dimensions_A=[64, 64],
+            spec_A=block_spread_spec(decades),
+        )
+        quantized = quantize_input_to_unpack_format(tile.flatten(), stimuli_format)
+        flushed = int((quantized == 0).sum())
+        assert flushed == expected, (
+            f"{stimuli_format.name} at 2**-{decades} flushes {flushed} of "
+            f"{quantized.numel()} lanes, not the {expected} the block-spread comments record. "
+            "Re-measure and move the comments with the table -- the counts are what says the "
+            "variant drives a mixed block at all."
+        )
 
 
 def test_coverage_counts_exclude_the_ops_no_sweep_can_drive():

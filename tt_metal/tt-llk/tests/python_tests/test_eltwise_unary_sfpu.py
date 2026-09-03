@@ -46,6 +46,8 @@ from helpers.sfpu_domains import (
     for_op,
     for_op_pipeline,
     format_extremes,
+    nan_sign_is_unspecified,
+    nan_survives_to_l1,
     negative_zero_delivered,
     op_edge_points,
     sfpu_unary_ops,
@@ -887,6 +889,80 @@ assert set(EXTREMES_READY_OPS) <= set(_EDGE_SWEEP_OPS), (
 )
 
 
+_EXTREME_CELLS = tuple(
+    (formats, dest_acc)
+    for formats in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+)
+
+
+def _extremes_generate_nan(mathop, formats, dest_acc):
+    """Does the golden answer NaN at any cat-F probe on this pipeline?
+
+    The probes are finite, so the question is not whether one is a NaN but whether the op *makes*
+    one out of them -- acos and asin at either ceiling, acosh and atanh, sqrt and log1p at the
+    negative one. That distinction is what decides whether this sweep is asserting a NaN sign,
+    and no property of the format axis predicts it, so it is evaluated rather than tabulated.
+
+    UnarySFPUGolden is instantiated directly rather than through get_golden_generator for the
+    reason test_eltwise_binary_sfpu._classify_edge_result gives: under --compile-producer the
+    harness swaps in a stub with no `ops` mapping, and this runs in both phases.
+    """
+    golden = UnarySFPUGolden()
+    golden.data_format = formats.output_format
+    golden.dst_format = formats.output_format
+    golden.dest_acc = dest_acc
+    for value in extreme_values(formats.input_format, formats.output_format, dest_acc):
+        result = golden.ops[mathop](float(value))
+        if isinstance(result, float) and math.isnan(result):
+            return True
+    return False
+
+
+# What keeps this sweep's assertions sound where the golden's NaN becomes an observable infinity.
+#
+# On six of the eight cells nan_survives_to_l1() is False, so a NaN the op invents is packed to an
+# infinity and its *sign* becomes the result. The golden canonicalises that NaN positive, so on
+# those cells the sweep asserts a sign bit -- and Wormhole's SFPMAD.md says of a generated NaN
+# that the sign "might or might not be set". The edge sweep meets the same problem and answers it
+# with _gate_unspecified_nan_sign(); cat F needs the equivalent, and it cannot simply reuse
+# GENERATED_NAN_SIGN_OPS as the predicate, because that set's members are largely ops that do not
+# produce a NaN from a finite extreme at all.
+#
+# The gate is in the test body, on both halves: the op invents a NaN *here*, and its sign is one
+# the ISA leaves open. What makes the six ops below safe today is not that gate -- none of them is
+# in GENERATED_NAN_SIGN_OPS -- but the cat-B measurement that put them outside it: driving the
+# specials set through every enrolled op on a Wormhole n300 found their generated NaN sign-clear.
+# That is a real dependency of this sweep on another one's measurement and it was nowhere
+# recorded, so it is asserted here. An op enrolled for cat F that can invent a NaN without cat B
+# having ever driven one out of it fails at import, rather than quietly pinning a sign nothing
+# measured.
+_EXTREMES_NAN_OPS = frozenset(
+    mathop
+    for mathop in _EXTREME_SWEEP_OPS
+    for formats, dest_acc in _EXTREME_CELLS
+    if extremes_safe(formats.input_format, formats.output_format, dest_acc)
+    and not nan_survives_to_l1(formats.input_format, formats.output_format, dest_acc)
+    and _extremes_generate_nan(mathop, formats, dest_acc)
+)
+
+assert _EXTREMES_NAN_OPS <= set(SPECIALS_READY_OPS), (
+    "these ops invent a NaN from a cat-F probe on a cell that packs it to an infinity, so this "
+    "sweep asserts the sign Wormhole leaves unspecified -- and cat B never drove a NaN out of "
+    "them, so GENERATED_NAN_SIGN_OPS makes no statement about that sign either: "
+    f"{sorted(op.name for op in _EXTREMES_NAN_OPS - set(SPECIALS_READY_OPS))}. "
+    "Measure the sign through cat B before enrolling the op for cat F, or read the raw pattern "
+    "back on Wormhole and add it to GENERATED_NAN_SIGN_OPS if the bit is set."
+)
+
+# Not vacuous: if the probes or the goldens moved so that nothing invents a NaN any more, the
+# assertion above would hold over an empty set and stop saying anything.
+assert _EXTREMES_NAN_OPS, (
+    "no cat-F op invents a NaN from a format extreme any more, so the sign dependency this "
+    "records is gone -- delete it with the gate in the sweep body rather than leaving both"
+)
+
+
 @pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
@@ -909,6 +985,22 @@ def test_eltwise_unary_sfpu_extremes(
         pytest.skip(
             reason="this pipeline cannot deliver a magnitude extreme intact "
             "(see sfpu_domains.extremes_safe)"
+        )
+
+    # See _EXTREMES_NAN_OPS. Inert while no NaN-inventing cat-F op is in GENERATED_NAN_SIGN_OPS,
+    # which is the state the assertion there pins; it exists so that adding one withdraws the
+    # variant instead of turning the sweep red against a sign the ISA declines to promise.
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+        and nan_sign_is_unspecified(
+            mathop, formats.input_format, formats.output_format, dest_acc
+        )
+        and _extremes_generate_nan(mathop, formats, dest_acc)
+    ):
+        pytest.skip(
+            reason=f"{mathop.name} invents a NaN at a format extreme and this pipeline packs "
+            "it to an infinity, whose sign Wormhole's SFPMAD leaves unspecified "
+            "(see tt-metal#52938)"
         )
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
@@ -1100,10 +1192,14 @@ def test_eltwise_unary_sfpu_saturation(
 #
 # The stimulus is sfpu_domains.block_spread_spec(), shared with the ternary suite so the two
 # cannot come to model the same quantization differently; its shape and the decades it walks are
-# argued for there. What the block does is measured here: in Bfp8_b, 512 of 4096 elements flush
-# to zero at 2**-8 and 2816 at 2**-24, and Bfp2_b collapses fifteen of every sixteen at every
-# spread. Measured against Abs on a Blackhole p150 first, at all three formats and every spread,
-# with zero mismatching lanes: the host quantizer models a mixed block the way the unpacker
+# argued for there. What the block does is measured here, over the three spreads the sweeps
+# actually drive (BLOCK_SPREAD_DECADES = 4, 12, 24): in Bfp8_b, 0, 1792 and 2816 of 4096 elements
+# flush to zero -- 2**-4 leaves the block intact and is the control -- while Bfp4_b takes 2048,
+# 3328 and 3584, and Bfp2_b collapses fifteen of every sixteen at every spread. Those nine counts
+# are pinned by test_sfpu_domains.test_block_spread_flushes_the_lanes_the_ledger_claims, so this
+# paragraph cannot drift away from the stimulus the way it did when it recorded a 2**-8 spread
+# nothing drives. Measured against Abs on a Blackhole p150 first, at all three formats and every
+# spread, with zero mismatching lanes: the host quantizer models a mixed block the way the unpacker
 # does, so a failure here is the op. Two variants, because the questions are independent --
 # whether an op survives a block with its small elements quantized away, and whether each format
 # quantizes as modelled (op-independent, so one pass-through op is the instrument). On a Bfp4_b

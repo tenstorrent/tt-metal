@@ -510,7 +510,12 @@ def _comparison_stimuli_specs():
 # B is not a free operand: the kernel's contract is in1 == exp(-in0), so it is built *from* A.
 # Both come from one position ramp, as _isclose_stimuli_specs() and _comparison_stimuli_specs()
 # already do it, so they cannot drift apart.
-_LOGSIGMOID_EXP_BRANCH = 4.0
+#
+# Where the branch sits is BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH's to say -- it is the constant
+# the golden actually switches on, and test_sfpu_domains reads the same one. The low end of the
+# dedicated above-branch variant is derived from it below rather than restated here, so a
+# threshold that moves takes the stimulus with it.
+_LOGSIGMOID_ABOVE_BRANCH = BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH + 0.25
 
 
 def _logsigmoid_x(size, low, high):
@@ -1205,13 +1210,15 @@ def test_eltwise_binary_sfpu_logsigmoid_exp_branch(formats, dest_acc, mathop):
     from 8.0 to 6e-6 across [-8, 12], so PCC there is decided by the passthrough lanes and every
     above-threshold lane could be wrong without moving the verdict.
 
-    Starts just above 4.0, not at it: the kernel takes the polynomial arm at exactly 4.0 (its
-    `v_elseif` is `>= -4 && < 4` on the negated operand), so including it would put two branches
-    back in one tensor.
+    Starts just above the branch, not at it: the kernel takes the polynomial arm at exactly the
+    threshold (its `v_elseif` is `>= -4 && < 4` on the negated operand), so including it would
+    put two branches back in one tensor. _LOGSIGMOID_ABOVE_BRANCH derives that start from the
+    golden's own constant, and its 0.25 margin is eight bfloat16 ULPs at 4.0, so the narrowing
+    cells start above the branch too.
     """
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
-    spec_A, spec_B = _logsigmoid_stimuli_specs(low=4.25, high=12.0)
+    spec_A, spec_B = _logsigmoid_stimuli_specs(low=_LOGSIGMOID_ABOVE_BRANCH, high=12.0)
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
@@ -1874,6 +1881,38 @@ _EDGE_CLASS_ORDINARY = "ordinary"
 # respectively -- one xfail over two causes.
 _EDGE_CLASS_SPECIALS_IN = "specials_in"
 
+_EDGE_RESULT_CLASSES = (
+    _EDGE_CLASS_ORDINARY,
+    _EDGE_CLASS_BOTH_ZERO,
+    _EDGE_CLASS_NAN,
+    _EDGE_CLASS_NEGATIVE_ZERO,
+)
+
+# The second input-side split, and the reason the four result classes are not enough on the cells
+# that deliver a -0.0. A negative zero driven *in* is a different question from one coming out,
+# and on the result axis the two sit in the same bucket as the +0.0 pair next to them:
+# `xlogy(1, -0.0)` and `xlogy(1, +0.0)` are both `ordinary` -inf poles and only the first
+# diverges, and `fmod(0, -0.0)` shares `both_zero` with the `fmod(0, +0.0)` its own reason string
+# concedes passes. One aggregate passed_test per variant, so one xfail retires the probe beside
+# it -- and those probes were asserted before this sweep gained the signed-zero operand.
+#
+# A *qualifier* on the result class rather than a class of its own, which is where it differs
+# from specials_in. A single signed-zero-in bucket would only move the mixing rather than end it:
+# fmod diverges at `(0, -0.0)` and agrees at `(x, -0.0)`, so its one marker would retire four
+# NaN-golden pairs instead of one both-zero pair. One result class per marker is the property
+# that makes the marker mean something, and the qualifier has to preserve it.
+#
+# Not applied to specials_in: that class is already an input-side one, `(inf, -0.0)` is a cat-B
+# pair whatever the zero's sign is, and qualifying it would split cat B on a property cat B is
+# not about.
+_SIGNED_ZERO_IN_SUFFIX = "_signed_zero_in"
+
+
+def _signed_zero_in(edge_class):
+    """The negative-zero-operand variant of *edge_class*."""
+    return f"{edge_class}{_SIGNED_ZERO_IN_SUFFIX}"
+
+
 # Order is documentation, not mechanism: whichever class comes first builds the shared ELF for the
 # compile-producer pass (conftest._collapse_runtime_only_variants keeps one item per compile key),
 # and the test body guards against an empty or gated representative starving the others of a
@@ -1881,12 +1920,14 @@ _EDGE_CLASS_SPECIALS_IN = "specials_in"
 #
 # 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the kernel's own composition (a
 # reciprocal, an exp(b·ln a)), a different cause from x % 0 even where both goldens are NaN.
+#
+# The qualified half is empty except on signed_zero_pole_cells() -- two of the eight cells -- so
+# it collects and skips everywhere else. That is the price of the axis being global; the
+# alternative is a marker that spans two causes.
 _EDGE_CLASSES = (
-    _EDGE_CLASS_ORDINARY,
-    _EDGE_CLASS_BOTH_ZERO,
-    _EDGE_CLASS_NAN,
-    _EDGE_CLASS_NEGATIVE_ZERO,
+    *_EDGE_RESULT_CLASSES,
     _EDGE_CLASS_SPECIALS_IN,
+    *(_signed_zero_in(edge_class) for edge_class in _EDGE_RESULT_CLASSES),
 )
 
 
@@ -1897,6 +1938,15 @@ def _classify_edge_pair(mathop, a, b):
     # every cat-B pair would be filed as nan_golden alongside `x % 0`.
     if not (math.isfinite(a) and math.isfinite(b)):
         return _EDGE_CLASS_SPECIALS_IN
+
+    result_class = _classify_edge_result(mathop, a, b)
+    if any(v == 0.0 and math.copysign(1.0, v) < 0.0 for v in (a, b)):
+        return _signed_zero_in(result_class)
+    return result_class
+
+
+def _classify_edge_result(mathop, a, b):
+    """Which class the golden's *answer* for (*a*, *b*) puts the pair in."""
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
@@ -2012,12 +2062,16 @@ assert _BINARY_EDGE_OPS, (
 #
 #   The finite poles agreed all along (div(-2, ±1/64) = ∓128, every ±inf lines up).
 #
-# Those groups are the classes the probe partitions into, and _EDGE_CLASS_NEGATIVE_ZERO -- the
-# documented one -- is now the only class with an entry left below. _EDGE_CLASS_BOTH_ZERO
-# (indeterminate forms, 0**0) and _EDGE_CLASS_NAN (x % 0) were emptied by the retraction above
-# and by the pow fix, so they are asserted rather than tolerated. _EDGE_CLASS_ORDINARY holds
-# everything that agreed -- ±inf poles, finite quotients, exact remainders -- likewise
-# asserted, which is only possible now it does not share a tensor with the others.
+# Those groups are the classes the probe partitions into. Of the unqualified ones only
+# _EDGE_CLASS_NEGATIVE_ZERO -- the documented case -- still has an entry below.
+# _EDGE_CLASS_BOTH_ZERO (indeterminate forms, 0**0) and _EDGE_CLASS_NAN (x % 0) were emptied by
+# the retraction above and by the pow fix, so they are asserted rather than tolerated.
+# _EDGE_CLASS_ORDINARY holds everything that agreed -- ±inf poles, finite quotients, exact
+# remainders -- likewise asserted, which is only possible now it does not share a tensor with
+# the others. What the signed-zero *operand* does is a separate question and lives on the
+# qualified classes, so the two entries it produced do not reach back over the pairs beside them:
+# `xlogy(x, -0.0)` no longer retires `xlogy(x, +0.0)`, and `fmod(0, -0.0)` no longer retires
+# `fmod(0, +0.0)`.
 #
 # Non-strict xfails per Phase 0's approximate-exp precedent, so a case still executes and reports
 # XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
@@ -2059,8 +2113,14 @@ _BINARY_EDGE_COMBINATIONS = {
     # six with a zero pole; div and atan2 agree, which is the result worth having -- the whole
     # point of the probe is that div(x, -0.0) must be the opposite sign from div(x, +0.0), and
     # it is.
-    (MathOperation.SfpuBinaryFmod, _EDGE_CLASS_BOTH_ZERO): _signed_zero_pole_cells(),
-    (MathOperation.SfpuXlogy, _EDGE_CLASS_ORDINARY): _signed_zero_pole_cells(),
+    (
+        MathOperation.SfpuBinaryFmod,
+        _signed_zero_in(_EDGE_CLASS_BOTH_ZERO),
+    ): _signed_zero_pole_cells(),
+    (
+        MathOperation.SfpuXlogy,
+        _signed_zero_in(_EDGE_CLASS_ORDINARY),
+    ): _signed_zero_pole_cells(),
 }
 
 _ZERO_SIGN_ISA_NOTE = (
@@ -2079,18 +2139,27 @@ _BINARY_EDGE_REASON = {
     MathOperation.SfpuXlogy: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
-        _EDGE_CLASS_ORDINARY: "xlogy(x, -0.0) returns NaN; IEEE gives x * log(-0) = -inf. "
+        _signed_zero_in(
+            _EDGE_CLASS_ORDINARY
+        ): "xlogy(x, -0.0) returns NaN; IEEE gives x * log(-0) = -inf. "
         "The log is a composition the ISA specifies only inside a stated range, so what it "
         "does at a signed zero is an LLK decision -- the same section 5.6 Q1 question that "
-        "keeps this op out of cat B. Only on the cells that deliver a real -0.0.",
+        "keeps this op out of cat B. Only on the cells that deliver a real -0.0, and only on "
+        "the pairs that carry one: the +0.0 poles are the unqualified `ordinary` class and are "
+        "asserted.",
     },
     MathOperation.SfpuBinaryFmod: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
         f"({_ZERO_SIGN_ISA_NOTE}).",
-        _EDGE_CLASS_BOTH_ZERO: "fmod(0, -0.0) returns +0.0; IEEE gives NaN, as it does for "
-        "fmod(0, +0.0), which this kernel gets right. So the divergence is the *signed* zero "
-        "divisor specifically, reached through the quotient's reciprocal composition. Only on "
-        "the cells that deliver a real -0.0.",
+        _signed_zero_in(
+            _EDGE_CLASS_BOTH_ZERO
+        ): "fmod(0, -0.0) returns +0.0; IEEE gives NaN, as it does for "
+        "fmod(0, +0.0), which this kernel gets right and which is the unqualified `both_zero` "
+        "class, asserted. So the divergence is the *signed* zero divisor over a zero numerator "
+        "specifically, reached through the quotient's reciprocal composition -- `fmod(x, -0.0)` "
+        "for a non-zero x answers NaN and agrees, which is why the qualifier keeps the result "
+        "classes apart instead of pooling every signed-zero operand into one. Only on the cells "
+        "that deliver a real -0.0.",
     },
     MathOperation.SfpuBinaryRemainder: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
@@ -2137,7 +2206,11 @@ assert all(
 # (both_zero, nan_golden) are not gated here -- see the retraction above
 # _BINARY_EDGE_COMBINATIONS; what remains of them on Wormhole is handled per lane by
 # generated_nan_sign_is_asserted().
-_WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
+# The qualified twin is listed with it: the cause is the same SFPMAD flush whether the negative
+# zero the kernel loses came out of the arithmetic or went in as an operand.
+_WORMHOLE_ONLY_EDGE_CLASSES = frozenset(
+    {_EDGE_CLASS_NEGATIVE_ZERO, _signed_zero_in(_EDGE_CLASS_NEGATIVE_ZERO)}
+)
 
 
 @pytest.mark.nightly

@@ -163,9 +163,11 @@ class StimuliSpec:
         at an edge value is visible; and the tolerance verdict is
         computed over the probes rather than over a tensor that is
         mostly 0.0, which otherwise dominates PCC and every aggregate.
-        The *values* list may also be longer than a face when this is
-        set — tiling a long list is well defined, where writing one at
-        the head is not.  Defaults to False.
+        It does not relax the length rule: *values* must still fit a
+        face on either branch, because tiling an over-long list drops
+        its tail in every face rather than covering it more weakly.
+        Use custom_faces() to spread a longer list across faces.
+        Defaults to False.
     mean: float
         Mean for "gaussian" and "gaussian_linspace".  Defaults to
         0.0.
