@@ -131,7 +131,7 @@ def test_minimax_h3_vsa_block_perf(
         sparsity=SPARSITY,
         k_chunk_blocks=K_CHUNK_BLOCKS,
         placement=placement,
-        padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1",
+        padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,

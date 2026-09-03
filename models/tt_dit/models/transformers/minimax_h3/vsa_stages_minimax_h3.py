@@ -55,8 +55,9 @@ class MiniMaxH3VSAConfig:
     placement: str = DEFAULT_VSA_PLACEMENT
     k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk (v1 kernel only)
     streaming: bool = True  # vsa_sdpa kernel: streaming leader/worker (default) or the v1 per-row gather
-    # pooled K^T/V gathers tile-aligned via a padded per-shard coarse numbering (needs streaming)
-    padded_pooling: bool = False
+    # pooled K^T/V gathers tile-aligned via a padded per-shard coarse numbering (needs streaming);
+    # default on: -1.1 ms per block at 15 s, validated by the stage oracle, sparsity-0 and block tests
+    padded_pooling: bool = True
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

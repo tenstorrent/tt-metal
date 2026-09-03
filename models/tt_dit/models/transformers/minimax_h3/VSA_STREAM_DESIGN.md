@@ -178,7 +178,7 @@ deterministic windows; 5/10 s with the earlier approx-exp / timing-window kernel
 |---|---|---|---|---|---|
 | 5 s  | 15.8 / 17.5 ms | 19.0 / 20.3 ms | 7.4 ms  | 3.3 ms  | 6.2 ms  |
 | 10 s | 39.5 / 41.2 ms | 37.4 / 39.0 ms | 24.7 ms | 9.0 ms  | 11.7 ms |
-| 15 s | 73.4 / 75.4 ms | 62.7 / 63.3 ms | 51.4 ms | 19.8 ms | 19.2 ms |
+| 15 s | 73.4 / 75.4 ms | 58.9 / 59.6 ms | 51.4 ms | 19.6 ms | 15.6 ms |
 
 Component breakdown (ms, device 0):
 
@@ -187,10 +187,10 @@ Component breakdown (ms, device 0):
 | attention core (ring SDPA / `vsa_sdpa`) | 7.44 | 3.26 | 24.70 | 9.01 | 51.43 | 20.10 |
 | full K/V all-gather (fine-stage input) | - | 3.02 | - | 5.43 | - | 8.11 |
 | coarse pooling q/k/v | - | 0.33 | - | 0.59 | - | 2.30 |
-| pooled K/V gather + assembly | - | 0.40 | - | 1.03 | - | 1.63 |
+| pooled K/V gather + assembly | - | 0.40 | - | 1.03 | - | ~0.5 (was 1.63; now two aligned all-gathers) |
 | coarse scores + mask + softmax | - | 0.46 | - | 0.79 | - | 0.28 |
 | coarse output o_c (probs@V, tile->token) | - | 0.40 | - | 0.72 | - | 1.11 |
-| top-k selection + index assembly | - | 0.43 | - | 1.08 | - | 2.92 |
+| top-k selection + index assembly | - | 0.43 | - | 1.08 | - | 0.45 (was 2.92 with host-side assembly) |
 | gate branch (gate proj, heads, blend) | - | 1.16 | - | 2.03 | - | 2.93 |
 | shared ops (norms, projections, MLP, adaLN) | 8.34 | 9.52 | 14.78 | 16.74 | 22.00 | 23.75 |
 
@@ -241,7 +241,11 @@ the host-assembled path (`test_vsa_sdpa_raw_selection_matches_assembled`).
 falling into all_gather's composite path (broadcast + concat, ~1.6 ms at 15 s) because 226 tiles per shard
 is not tile-aligned. With padding to 256 slots per shard the gathers are plain ring all-gathers; scores
 and top-k run in the padded per-shard numbering and the kernel maps ids back
-(`coarse_slots_shift`/`coarse_real_per_shard`). Pending its block-level A/B.
+(`coarse_slots_shift`/`coarse_real_per_shard`). Block-level A/B at 15 s: 60.0 / 60.5 -> 58.9 / 59.6 ms
+(the two small aligned gathers cost ~0.5 ms where the composite cost 1.56); now the default.
+
+With device-side assembly and padded pooling the 15 s block is 58.9 ms on device 0 / 59.6 ms on the
+slowest device (dense 73.4 / 75.4): VSA is 21% faster than dense at 15 s, up from 15% this morning.
 
 ## 5b. Planned kernel work (not started)
 

@@ -141,7 +141,7 @@ def test_vsa_transformer_sparsity0_matches_dense(
         mesh_device,
         is_fsdp,
         state,
-        MiniMaxH3VSAConfig(sparsity=0.0, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1"),
+        MiniMaxH3VSAConfig(sparsity=0.0, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1"),
         geometry,
         sp_axis,
     )
@@ -193,7 +193,7 @@ def test_vsa_transformer_striped_matches_identity(
         )
         model = _build_tt_model(
             inputs, mesh_device, is_fsdp, state,
-            MiniMaxH3VSAConfig(sparsity=0.75, placement=placement, k_chunk_blocks=2, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1"), geometry, sp_axis,
+            MiniMaxH3VSAConfig(sparsity=0.75, placement=placement, k_chunk_blocks=2, padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1"), geometry, sp_axis,
         )  # fmt: skip
         assert not model.transformer_blocks[0].attn.gate_compress_is_zero
         vsa_tt = {**inputs.tt, **_vsa_metadata(inputs, geometry, mesh_device, sp_axis)}

@@ -116,7 +116,7 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
         k_chunk_blocks=2,
         streaming=os.environ.get("VSA_KERNEL", "stream") != "v1",
         placement=placement,
-        padded_pooling=os.environ.get("VSA_PADDED_POOLING", "0") == "1",
+        padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,
