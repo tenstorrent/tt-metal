@@ -1064,29 +1064,69 @@ def _logsigmoid_derived_pairs(formats, dest_acc, edge_class=None):
     return list(zip(x.tolist(), torch.exp(-x).tolist()))
 
 
-# What the derived probe found on a Blackhole p150: one pair of the five, the NaN.
+# What the derived probe found: one pair of the five, the NaN.
 #
-# calculate_logsigmoid seeds `result = x` then negates before its branch select, so a NaN -- whose
-# handling SFPSETCC's contract explicitly excludes -- takes the polynomial arm and comes out
-# sign-flipped. The golden canonicalises an emitted NaN's sign to positive, as it must: IEEE
-# leaves it unspecified and SFPMAD promises 0x7fc00000 on Blackhole.
+# The arm it takes is measured, not read off the source. `calculate_logsigmoid` is
+#
+#     result = x; x = -x;
+#     v_if(x < -4)        result = -exp_neg_x;   # the exp arm, and the only one reading operand B
+#     v_elseif(-4<=x<4)   result = -poly(x);
+#     v_endif;                                   # else result = x, forwarded
+#
+# and read in IEEE terms a NaN satisfies neither predicate, so it would fall through forwarded
+# and unnegated. It does not. Driving operand B to a finite value separates the arms -- only the
+# exp arm can produce one -- and on a Wormhole n300 at Float32->Float32 dest_acc=Yes, the cell
+# that carries a NaN to L1 intact, `logsigmoid(+NaN, B=3.0)` returns -3.0 and `(+NaN, B=-7.5)`
+# returns +7.5. A `+NaN` operand takes the **exp arm** and the result is **-operand B**. The
+# polynomial arm is not involved and negates nothing here.
+#
+# Why the predicate fires: the SFPU has no ordered compare. `x < -4` is a sign-bit test on the
+# difference, so it answers from a NaN's sign bit instead of excluding it -- and `x = -x` has
+# just set the sign bit of a `+NaN` operand. So `+NaN` takes the exp arm while `-NaN`, whose
+# negation clears the bit, falls through: driven, `(-NaN, B=3.0)` and `(-NaN, B=-7.5)` both
+# return 0xFFC00000, the forwarded operand, ignoring B. edge_values() emits `+NaN` only, so the
+# exp arm is the one this probe drives.
+#
+# `result = -B` is what makes the divergence a *sign* divergence, and it is why operand B's
+# delivery decides it. The pair is derived, not listed: B = exp(-A), and torch propagates a NaN's
+# sign through both steps, so `A = +NaN` (0x7FC00000) gives `B = -NaN` (0xFFC00000) -- pinned by
+# test_sfpu_domains.test_logsigmoid_nan_pair_carries_a_negative_b, since the whole divergence
+# hangs on that bit. Negated, a delivered `B = -NaN` yields `+NaN` and agrees with the golden.
+#
+# Which is the whole of the second condition below. Measured on the n300 with A held at `+NaN`
+# and only B's sign varied:
+#
+#     cell                              B=+NaN   B=-NaN
+#     Float32  -> Float16_b  Yes          -inf     +inf     B's sign arrives
+#     Float16_b-> Float16_b  No           -inf     -inf     B's sign does not
+#
+# On the unpack-to-dest path the result is exactly -sign(B). On the datacopy path both signs give
+# -inf, so B arrived as `+NaN` whatever was written to L1 -- the same sign flattening
+# negative_zero_delivered() already records for a -0.0, which is why that predicate is reused
+# below rather than a new one written: it is the identical fact about the identical boundary,
+# asked of the operand rather than of a zero.
+#
+# The golden canonicalises an emitted NaN's sign to positive, as it must -- IEEE leaves it
+# unspecified -- so where the pack substitutes a signed infinity the kernel's -inf meets a +inf.
 #
 # Two conditions, both needed -- deriving on the first alone marks three passing cells, which is
 # how the second was found. The pack must narrow, since while a NaN survives to L1 the
 # comparator's both-NaN clause accepts either sign (nan_survives_to_l1()'s question). And the
-# datum must arrive by the datacopy: measured, the flip appears on a Float16_b input but not on a
-# Float32 one at dest_acc=Yes -- the same unpack-to-dest boundary that decides whether a -0.0 or
-# a subnormal survives. What SrcA does to a NaN's sign is not established here; that it is the
-# same boundary is.
+# datum must arrive by the datacopy, for the reason tabulated above. First measured on a p150,
+# now re-measured on the n300: whole-tile, Float16_b -> Float16_b at dest_acc=No is -inf on all
+# 32768 lanes, while Float32 -> Float16_b at dest_acc=Yes tracks the golden's signs exactly, six
+# runs out of six.
 #
 # The other four pairs agree everywhere, and are driven unmarked by
 # test_eltwise_binary_sfpu_logsigmoid_specials -- this reason belongs to the NaN pair and to
 # nothing else, which is what splitting the two variants makes true rather than merely stated.
 _LOGSIGMOID_NAN_SIGN_REASON = (
-    "logsigmoid(NaN) returns a sign-flipped NaN -- the polynomial arm negates, and SFPSETCC's "
-    "contract excludes a NaN operand -- so where the pack substitutes a signed infinity the "
-    "kernel gives -inf against the golden's +inf. Only where the pack narrows *and* the datum "
-    "arrived by the datacopy; a 32-bit input at dest_acc=Yes agrees."
+    "logsigmoid(+NaN) takes the *exp* arm -- `x = -x` sets the sign bit and the SFPU's `<` is a "
+    "sign test on the difference, not an ordered compare -- so the result is -operand B. The "
+    "derived pair's B is exp(-NaN) = -NaN, which negates to a +NaN that agrees; where the "
+    "datacopy delivers it sign-cleared instead, the result is a -NaN and the pack substitutes "
+    "-inf against the golden's +inf. Only where the pack narrows *and* the datum arrived by the "
+    "datacopy; a 32-bit input at dest_acc=Yes delivers B's sign and agrees."
 )
 
 
@@ -1157,31 +1197,20 @@ def test_eltwise_binary_sfpu_logsigmoid_nan(request, formats, dest_acc, mathop):
     """
     _skip_logsigmoid_specials_unsupported(formats, dest_acc)
 
-    # logsigmoid(NaN) leaves the polynomial arm as a NaN the datapath *built*, not the operand
-    # forwarded, so `SFPMAD.md`'s wording covers it: canonical 0x7fc00000 on Blackhole, "might or
-    # might not" set on Wormhole. Where the pipeline also narrows, that sign becomes the
-    # observable result -- an infinity of one sign or the other -- and there is nothing sound to
-    # assert on Wormhole. Same gate and same per-lane relaxation the edge sweep applies at its
-    # nan_golden class; every measurement behind the xfail below is a p150, where this is False
-    # and the full assertion stands.
-    unspecified_sign = generated_nan_sign_is_asserted(
+    # No generated-NaN relaxation here, and the arm above is the reason: this NaN's sign is not
+    # one the ISA leaves open. `generated_nan_sign_is_asserted()` stands for a NaN the arithmetic
+    # *invented* out of finite operands, whose sign `SFPMAD.md` says "might or might not be set"
+    # on Wormhole. logsigmoid never invents one -- it negates an operand that arrived a NaN, and
+    # a negation is a sign-bit flip with nothing unspecified in it. Measured: the result sign is
+    # exactly -sign(B) wherever B's sign is delivered, and fixed at -inf where it is not, six
+    # runs out of six on an n300. So the sign is fully determined by the stimulus and the
+    # pipeline, and relaxing it would excuse a bit the hardware does pin -- on the one variant
+    # whose whole subject is that bit. An xfail records the divergence; the relaxation hid it.
+    if (
         formats.input_format,
         formats.output_format,
         dest_acc,
-        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
-    )
-
-    # Only where the sign *is* asserted: with the comparison relaxed to magnitude the divergence
-    # cannot be observed, and the marker would be an XPASS every run.
-    if (
-        not unspecified_sign
-        and (
-            formats.input_format,
-            formats.output_format,
-            dest_acc,
-        )
-        in _logsigmoid_nan_sign_cells()
-    ):
+    ) in _logsigmoid_nan_sign_cells():
         request.node.add_marker(
             pytest.mark.xfail(reason=_LOGSIGMOID_NAN_SIGN_REASON, strict=False)
         )
@@ -1194,7 +1223,6 @@ def test_eltwise_binary_sfpu_logsigmoid_nan(request, formats, dest_acc, mathop):
         dest_acc,
         mathop,
         src_A_override=_build_paired_tile_override(pairs, torch.float32),
-        unspecified_nonfinite_sign=unspecified_sign,
     )
 
 
@@ -2318,13 +2346,23 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
 # so a spec asking for INT32_MIN silently yields INT32_MIN + 1, the worst failure mode for
 # an edge test.
 #
-# Scope is deliberately narrow, and _INT_BINARY_STIMULI above is why: almost every int
-# binary kernel documents a *sub-range* it is valid on (div/fmod < 2**24 for an exact
-# int->fp32 reciprocal, mul < ~46340 so the product stays under 2**31, lcm assuming
-# |a|,|b| < 2**15, max/min non-negative so signed and unsigned agree). Feeding those the
-# int32 extremes would produce failures that are documented limitations rather than
-# findings. The bitwise ops are the exception — "exact on the full default int range" — so
-# they and the exact eq/ne comparisons are what cat C can honestly cover here.
+# What the enrolment turns on is the *pair*, not the op's general range. Most int binary kernels
+# document a sub-range they are accurate on (div/fmod < 2**24 for an exact int->fp32 reciprocal,
+# mul < ~46340 so the product stays under 2**31, lcm assuming |a|,|b| < 2**15), and reading those
+# suggested cat C could only honestly cover the bitwise ops -- "exact on the full default int
+# range" -- and the exact eq/ne comparisons. Measured, that reading was wrong about the values
+# this probe actually drives: those are *accuracy* bounds over a random sweep, and cat C asks
+# about the values rather than about the bulk. For the divide family the reason is explicit --
+# every pair integer_specials() produces is degenerate for a quotient (x/1, x/x, 0/x), so it is
+# exact whatever the magnitude of the operand. For the rest the enrolment rests on the
+# measurement itself and claims nothing more: eight of the ten arithmetic ops answered exactly
+# at these pairs on a p150. The measurement, and the one op it did reject, are in
+# _INT_EXTREMES_OUT_OF_RANGE above.
+#
+# So the scope is narrow per pair rather than per op: an op is enrolled when its answers *at
+# these pairs* are defined and were measured, which is a weaker claim than its documented range
+# reaching the extremes, and is why two narrowings still apply on top -- a zero divisor
+# (_INT_ZERO_UNDEFINED_DIVISOR) and fmod's golden (_INT_EXTREMES_NON_NEGATIVE).
 #
 # INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
 # cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
@@ -2342,10 +2380,12 @@ _INT_EXTREME_OPS = [
     MathOperation.SfpuEqInt,
     MathOperation.SfpuNeInt,
     *_INT_COMPARISON_OPS,
-    # The arithmetic ops whose documented range reaches the extremes, all measured there before
-    # being added. Every one takes the full signed set except fmod, whose *golden* -- not the
-    # kernel -- is only valid on the non-negative half; that narrowing is
-    # _INT_EXTREMES_NON_NEGATIVE's, applied by _build_int_extremes_src.
+    # The arithmetic ops measured to answer exactly at these pairs -- not ops whose documented
+    # range reaches the extremes, which for most of them it does not; see the header above and
+    # _INT_EXTREMES_OUT_OF_RANGE, whose single entry is the op the measurement did reject.
+    # Every one takes the full signed set except fmod, whose *golden* -- not the kernel -- is
+    # only valid on the non-negative half; that narrowing is _INT_EXTREMES_NON_NEGATIVE's,
+    # applied by _build_int_extremes_src.
     MathOperation.SfpuDivInt32,
     MathOperation.SfpuDivInt32Floor,
     MathOperation.SfpuFmodInt32,

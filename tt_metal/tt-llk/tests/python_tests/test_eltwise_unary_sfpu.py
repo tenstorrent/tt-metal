@@ -46,6 +46,7 @@ from helpers.sfpu_domains import (
     for_op,
     for_op_pipeline,
     format_extremes,
+    integer_specials,
     nan_sign_is_unspecified,
     nan_survives_to_l1,
     negative_zero_delivered,
@@ -1383,6 +1384,118 @@ def test_eltwise_unary_sfpu_int(
         FastMode.No,
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
+    )
+
+
+# Cat C for the unary integer ops. Its own sweep because test_eltwise_unary_sfpu_int above
+# cannot reach these values: its shifts draw from [0, 1e6], eleven binades short of INT32_MAX,
+# and its max/min straddle a scalar with a spread over [0, 2000], twenty short. Until this
+# existed the coverage floor credited all six _INT_UNARY_OPS with cat C and no collected
+# variant delivered it -- the same shape as the ReluMin defect round 4 fixed, with an
+# enrolment table standing in for a sweep that was not there.
+#
+# INT32_MIN is out for every op and is not a gap: sign-magnitude Dst reads 0x80000000 as
+# "negative zero" and cannot round-trip it, which the binary suite records the same way and
+# covers with a dedicated xfail. INT32_MIN + 1 stands in.
+#
+# Every enrolment below is a measurement on a Wormhole n300, not a reading of the kernel.
+_INT32_MIN = -(2**31)
+
+_INT_UNARY_EXTREME_OPS = [
+    MathOperation.RightShift,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
+    MathOperation.UnaryMaxUint32,
+    MathOperation.UnaryMinUint32,
+]
+
+# Driven at the *non-negative* extremes only, for the kernel's reason rather than the golden's.
+#
+# Measured: at the full signed set the right shift diverges on both negative values --
+# `(INT32_MIN + 1) >> 3` comes back as INT32_MIN + 1 unshifted and `-1 >> 3` as 0x90000000,
+# against -268435456 and -1 from the two's-complement golden. That is the sign-magnitude Dst
+# limitation SFPU_INT32_SHIFT.md documents and the binary suite already xfails, reached here
+# through a magnitude rather than through INT32_MIN. Restricting the probe keeps the op covered
+# at the extreme it can answer -- INT32_MAX >> 3 is exact -- instead of recording a second copy
+# of a divergence that is not cat C's finding to make.
+_INT_UNARY_EXTREMES_NON_NEGATIVE = frozenset({MathOperation.RightShift})
+
+# The one op with no answer at its extreme, recorded rather than driven or silently dropped.
+#
+# The exclusion is the *golden's*: with the fixed shift of 3 that sfpu_operations.h emits,
+# `INT32_MAX << 3` does not fit in int32 and torch refuses the conversion outright
+# ("value cannot be converted to type int32 without overflow"), so there is no reference answer
+# to compare against -- the run errors before reaching the device. The largest input the op can
+# be driven at is (2**31 - 1) >> 3, which is not a format extreme, so cat C has nothing to ask
+# here. A shift-amount axis would change that; SFPU_SHIFT_AMOUNT exists and
+# test_eltwise_unary_sfpu_int_shift drives it, but even at amount 1 the ceiling is one binade
+# below INT32_MAX and the class would still be out of reach.
+_INT_UNARY_EXTREMES_NO_ANSWER = {
+    MathOperation.LeftShift: "INT32_MAX << 3 overflows int32 and the golden cannot represent "
+    "it, so the extreme has no reference answer; the op's reachable ceiling is INT32_MAX >> 3, "
+    "which is not a format extreme",
+}
+
+# Totality: every op the int sweep drives is either enrolled at its extremes or carries a
+# recorded reason. Without this an op could join _INT_UNARY_OPS and be credited by neither,
+# which is the state this whole block was added to end.
+_INT_UNARY_EXTREMES_UNDECIDED = (
+    set(_INT_UNARY_OPS)
+    - set(_INT_UNARY_EXTREME_OPS)
+    - set(_INT_UNARY_EXTREMES_NO_ANSWER)
+)
+assert not _INT_UNARY_EXTREMES_UNDECIDED, (
+    "these unary int ops are neither enrolled for cat C nor recorded as having no answer "
+    f"there: {sorted(op.name for op in _INT_UNARY_EXTREMES_UNDECIDED)}"
+)
+assert not (
+    set(_INT_UNARY_EXTREME_OPS) & set(_INT_UNARY_EXTREMES_NO_ANSWER)
+), "an op cannot be both enrolled for cat C and recorded as having no answer there"
+
+
+def _int_unary_extreme_values(mathop):
+    """The extremes *mathop* is driven at: its format's, less what it cannot answer."""
+    int_format = (
+        DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
+    )
+    vals = [v for v in integer_specials(int_format) if v != _INT32_MIN]
+    if mathop in _INT_UNARY_EXTREMES_NON_NEGATIVE:
+        vals = [v for v in vals if v >= 0]
+    return int_format, vals
+
+
+@parametrize(
+    mathop=_INT_UNARY_EXTREME_OPS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_int_extremes(
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """The int32/uint32 extremes through the unary integer kernels (cat C).
+
+    In the standard profile rather than nightly, matching test_eltwise_unary_sfpu_int, which
+    drives these ops through the same driver at the same one cell: five variants, and splitting
+    the profile would only make the class harder to see than the sweep it belongs to.
+
+    cycle=True rather than custom()'s zero-fill: the list is three to five values long, so a
+    zero-filled face would drive the probe on a handful of lanes and an ordinary zero on the
+    other ~250 -- and for max/min a zero is a below-scalar value the base sweep already covers.
+    """
+    int_format, vals = _int_unary_extreme_values(mathop)
+    assert vals, f"{mathop.name} is enrolled for cat C but has no extreme left to drive"
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(int_format, int_format),
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec.custom(values=[float(v) for v in vals], cycle=True, seed=0),
     )
 
 

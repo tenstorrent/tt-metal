@@ -840,7 +840,7 @@ _COVERAGE_FLOORS = {
     "G": 17,
 }
 _SUITE_FLOORS = {
-    "C integer extremes": 30,
+    "C integer extremes": 29,
     "E operand parameters": 7,
     "F saturation sweeps": 9,
 }
@@ -853,11 +853,16 @@ def _suite_coverage_counts():
     import test_sfpu_ternary as ternary
 
     return {
+        # Enrolment tables, not op inventories: _INT_UNARY_EXTREME_OPS is the five ops the
+        # unary extremes sweep drives, where _INT_UNARY_OPS is every op the *ordinary* int
+        # sweep drives -- and that sweep reaches no extreme at all (shifts over [0, 1e6],
+        # max/min over [0, 2000]). Counting the latter credited six ops with a class no
+        # collected variant delivered and put this floor six above the truth.
         "C integer extremes": len(
             set(binary._INT_EXTREME_OPS)
             | set(binary._SHIFT_EDGE_OPS)
             | set(binary._UINT32_BINARY_OPS)
-            | set(unary._INT_UNARY_OPS)
+            | set(unary._INT_UNARY_EXTREME_OPS)
         ),
         "E operand parameters": len(
             set(unary._UNARY_SHIFT_OPS)
@@ -868,6 +873,44 @@ def _suite_coverage_counts():
             set(unary._SATURATION_PROBES) | set(binary._BINARY_SATURATION_PAIRS)
         ),
     }
+
+
+def test_int_unary_extremes_sweep_really_drives_an_extreme():
+    """Each op the cat-C floor credits must be driven at its format's actual extreme.
+
+    The floor now counts _INT_UNARY_EXTREME_OPS, so this is what keeps that count meaning
+    something: an enrolment table is only coverage while the stimulus it names still reaches
+    the values the class is about. Narrowing _int_unary_extreme_values() -- the way the
+    ordinary int sweep is narrowed to [0, 1e6] for the shifts, and for the same
+    sign-magnitude reason -- would otherwise leave the floor crediting five ops that no
+    longer see an extreme, which is exactly the defect this class was found in.
+
+    Asks for the format ceiling on every op, and the floor only where the op is not
+    restricted to the non-negative half: RightShift is, by measurement, and the restriction
+    is recorded rather than derived here so that widening it later has to come past this
+    test.
+    """
+    import test_eltwise_unary_sfpu as unary
+    from helpers.sfpu_domains import integer_specials
+
+    for mathop in unary._INT_UNARY_EXTREME_OPS:
+        int_format, vals = unary._int_unary_extreme_values(mathop)
+        specials = integer_specials(int_format)
+        assert vals, f"{mathop.name} is enrolled for cat C with an empty stimulus"
+        assert max(specials) in vals, (
+            f"{mathop.name} is enrolled for cat C but its stimulus tops out at {max(vals)}, "
+            f"not at {int_format.name}'s {max(specials)}"
+        )
+        if mathop not in unary._INT_UNARY_EXTREMES_NON_NEGATIVE:
+            # INT32_MIN is excluded everywhere, so the negative end of the probe is
+            # INT32_MIN + 1 -- the same stand-in the binary suite uses.
+            assert min(vals) == min(v for v in specials if v != -(2**31)), (
+                f"{mathop.name} is not restricted to the non-negative half, so it must be "
+                f"driven at the negative extreme; its stimulus starts at {min(vals)}"
+            )
+        assert not any(
+            v == -(2**31) for v in vals
+        ), f"{mathop.name} drives INT32_MIN, which cannot round-trip a sign-magnitude Dst"
 
 
 def test_coverage_does_not_regress():
@@ -1275,6 +1318,39 @@ def test_uint32_probe_reaches_above_the_signed_boundary_on_both_sides():
         "2**31 is the sign-magnitude negative-zero pattern and cannot round-trip; use "
         "2**31 + 1 as INT32_MIN + 1 stands in on the signed side"
     )
+
+
+def test_logsigmoid_nan_pair_carries_a_negative_b():
+    """The derived NaN pair's operand B must stay a *sign-set* NaN, or the divergence moves.
+
+    logsigmoid(+NaN) takes the kernel's exp arm and returns -operand B, so the sign of the
+    result -- the entire subject of _LOGSIGMOID_NAN_SIGN_REASON -- is decided by the sign of B
+    rather than by anything the arithmetic invents. B is derived as exp(-A), and it is a -NaN
+    only because torch propagates a NaN's sign bit through both the negation and the exp.
+
+    Pinned because nothing else would notice it changing. A torch release that canonicalised
+    that sign to positive would silently move the recorded divergence to the cells that
+    currently agree and off the ones that carry the xfail, and every variant would stay green
+    while the reason string described the opposite of what was driven.
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    pairs = binary._logsigmoid_derived_pairs(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        edge_class=binary._LOGSIGMOID_CLASS_NAN,
+    )
+    assert pairs, "the NaN class delivers no derived pair"
+    for a, b in pairs:
+        assert math.isnan(a) and math.isnan(b), (a, b)
+        a_bits = struct.unpack("<I", struct.pack("<f", a))[0]
+        b_bits = struct.unpack("<I", struct.pack("<f", b))[0]
+        assert not a_bits >> 31, f"operand A is a -NaN (0x{a_bits:08X}), not the +NaN"
+        assert b_bits >> 31, (
+            f"operand B is 0x{b_bits:08X}, a sign-clear NaN. The kernel returns -B, so a "
+            "sign-clear B negates to the -NaN that diverges everywhere rather than to the "
+            "+NaN that agrees on the unpack-to-dest path -- the recorded cells are then wrong."
+        )
 
 
 def test_logsigmoid_exp_branch_is_a_logsigmoid():
