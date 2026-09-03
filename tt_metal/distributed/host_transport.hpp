@@ -206,15 +206,11 @@ public:
 
     virtual void set_recording(bool) {}
 
-    // Pairwise rendezvous with this endpoint's peer -- an MPI_Sendrecv of one token, NOT a
-    // collective. Deliberately: a collective would couple the barrier's correctness to every
-    // endpoint being barriered the same number of times, and the callers walk a peer table.
-    //
     // Needed before any cross-host verification: our
     // RX arenas are filled by the PEER, and our own scanner stopping says nothing about
     // whether the peer has finished sending. Without this a two-host run checks arenas
     // the peer is still writing and reports a failure that is really a race.
-    virtual std::string barrier(uint32_t timeout_ms = 60000) = 0;
+    virtual std::string barrier() = 0;
 
     // Writes `count` into the peer's credit register for `core`. One 8-byte RMA, no completion
     // waited: a credit is idempotent and monotonic, so a lost one is corrected by the next, and

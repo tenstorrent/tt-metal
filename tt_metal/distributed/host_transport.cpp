@@ -597,14 +597,13 @@ public:
     // this becomes a correctness coupling rather than a detail: N ranks each barriering N-1 times
     // agree only while N is uniform. The alternative -- ctx->send/recv with the peer -- is a
     // three-line change, and that comment is the reason to keep it in mind.
-    std::string barrier(uint32_t timeout_ms) override {
-        (void)timeout_ms;  // a collective has no timeout; a hung peer hangs here by design
+    std::string barrier() override {
         const ContextPtr& ctx = MpiWindow::instance().context();
         if (!ctx) {
             return "barrier: the transport is not connected";
         }
         ctx->barrier();
-        return {};
+        return std::string{};
     }
 
     // MPI always provides MPI_Fetch_and_op. Whether it is a hardware FetchAdd or an emulation is

@@ -821,7 +821,7 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     const uint32_t barrier_ms = static_cast<uint32_t>(60000 + std::min<uint64_t>(msgs, 600000));
     if (transport != nullptr) {
         for (Transport* t : sock->peers_for_barrier()) {
-            if (const std::string be = t->barrier(barrier_ms); !be.empty()) {
+            if (const std::string be = t->barrier(); !be.empty()) {
                 std::cerr << "  end-of-send barrier failed (host " << t->peer().host_id << "): " << be
                           << "\n";
             }
