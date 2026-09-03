@@ -8,7 +8,7 @@
 //
 // Used by both DRAM-sender transports -- GlobalCircularBuffer
 // (CreateGlobalCircularBufferForTensorPrefetcher) and PrefetcherPipe
-// (BuildTensorPrefetcherSenderMapping) -- so the two agree on sender placement, the
+// (CreatePrefetcherPipesForTensorPrefetcher) -- so the two agree on sender placement, the
 // dual-sender receiver split, and slab numbering. The Tensor prefetcher's receiver-contiguous
 // contract depends on all three matching what the consumer op computes independently.
 

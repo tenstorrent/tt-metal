@@ -11,8 +11,6 @@
 #include <variant>
 #include <vector>
 
-#include <memory>
-
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -29,18 +27,21 @@ class MeshDevice;
 namespace ttnn::operations::experimental {
 
 // One Tensor-prefetcher delivery target: the PrefetcherPipes of every DRAM sender core, all
-// sharing one entry size and ring geometry. A PrefetcherPipe is one sender, so a target that
-// spans the DRAM banks is a list of them; this bundles the list with the geometry every pipe in
-// it agrees on, which is what the prefetcher and the consumer op both name.
+// sharing one entry size and ring geometry. A PrefetcherPipe is one sender and a bank may be
+// driven by two of them, so a target that spans the DRAM banks is a per-bank group of pipes; this
+// bundles those groups with the geometry every pipe in them agrees on, which is what the
+// prefetcher and the consumer op both name.
 //
-// `pipes` is in BuildTensorPrefetcherSenderMapping order, which is semantic: a bank's pipes are
-// adjacent, and the first of them owns that bank's leading receivers (bank-local slab index 0).
+// Order is semantic and is the one CreatePrefetcherPipesForTensorPrefetcher returned: within a
+// bank, the first pipe owns that bank's leading receivers (bank-local slab index 0). Everything
+// that enumerates pipes here does so bank-major, so a pipe's position in `attach()`'s ids matches
+// its position in `sender_receiver_core_mapping()`.
 //
 // Copyable: the pipes are shared. Keep a copy alive for as long as any program has Attached them
 // or the prefetcher may still deliver into them -- an attached Program holds a non-owning pointer
 // to each pipe, and dropping the last copy frees the rings and config pages.
 struct TensorPrefetcherPipes {
-    std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> pipes;
+    std::vector<tt::tt_metal::experimental::TensorPrefetcherBankPipes> banks;
     // Per-receiver push granularity, shared by every pipe. Every Attach and every queued tensor
     // must match it: a DRAM sender is never dispatched to and so cannot answer a resize.
     uint32_t entry_size = 0;
@@ -49,12 +50,15 @@ struct TensorPrefetcherPipes {
 
     // Bytes of ring per receiver.
     uint32_t ring_size() const { return entry_size * num_entries; }
+    uint32_t num_banks() const { return static_cast<uint32_t>(banks.size()); }
+    // Pipes across every bank, which is one per DRAM sender core.
+    uint32_t num_pipes() const;
     // Every receiver across every pipe. This is the core set a consumer program attaches.
     CoreRangeSet receiver_cores() const;
-    // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, in list order.
+    // Sender core (DRAM-logical, x == bank id) -> its receivers. One entry per pipe, bank-major.
     std::vector<std::pair<tt::tt_metal::CoreCoord, CoreRangeSet>> sender_receiver_core_mapping() const;
     // Attach every pipe to `program` on its own receiver cores, at the shared entry size. Returns
-    // the program-local pipe id per pipe, in list order; a receiver core's kernel takes the id of
+    // the program-local pipe id per pipe, bank-major; a receiver core's kernel takes the id of
     // the one pipe it belongs to (as a runtime argument, since one kernel serves receivers of
     // different pipes).
     std::vector<uint8_t> attach(tt::tt_metal::Program& program) const;
