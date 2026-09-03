@@ -659,7 +659,7 @@ early collapse, no doubled tokens, no control-token leakage.
 |---|---|
 | `tests/test_full_model.py` (batch 1, all 47 layers) | **47 passed** (251 s, `logs/fm023/pytest_full_model_only.log`) |
 | `tests/test_full_model_perf.py` | **2 passed** (216 s, `logs/fm023/pytest_full_model_perf.log`) |
-| `tests/test_full_model_batch.py` (`GLM47_FM_BATCH=32`, `GLM47_FM_BATCH_SEQ=8192`, echoed into the log) | **10 passed** (307 s) |
+| `tests/test_full_model_batch.py` (`GLM47_FM_BATCH=32`, `GLM47_FM_BATCH_SEQ=8192`, echoed into the log) | **10 passed** (298 s, `logs/fm023/pytest_full_model_batch32.log`) |
 | `tests/test_prefill_padding.py` (bucket-padding non-leakage, the supported-context boundary, the inactive-slot cache proof) | **13 passed** (46 s, `logs/pytest_prefill_padding.log`) |
 | `tests/test_full_context.py` (202733-token prefill, decode to 202751, needle read) | **3 passed** (40 min), periodic continuation 9/9, needle top-1 correct |
 | `test_full_model.py` + `test_prefill_padding.py` in one session (`logs/fm023/pytest_full_model_and_prefill_padding.log`) | **60 passed** (294 s) |
@@ -670,12 +670,14 @@ early collapse, no doubled tokens, no control-token leakage.
 
 Every row above comes from one sweep, `tests/run_evidence_sweep.sh` (committed,
 so the ordering and flags are reproducible rather than reconstructable), run
-against a committed source tree with no stage source changes in it - with three
-exceptions, all from FM-023, which added two tests to
-`tests/test_full_model.py` after that sweep: the three rows citing
+against a committed source tree with no stage source changes in it - with four
+exceptions, all from FM-023, which changed `tt/generator.py` and added two
+tests to `tests/test_full_model.py` after that sweep: the four rows citing
 `logs/fm023/` were re-run afterwards, on the same device, one suite at a time.
 Their sweep-run counterparts are still in `logs/` (`pytest_full_model_only.log`
 at 45 passed, `pytest_full_model.log` at 58) and are the pre-FM-023 record.
+The two suites *not* re-run are `test_full_context.py` (40 minutes) and the
+Tracy profile run, and the README's Known limitations says so.
 `logs/fm023/` also holds the same sampling tests re-run under
 `TT_METAL_TRACE_ALLOC_TRACKING=1`, which is the unsafe-allocation gate for the
 mid-loop recapture FM-023 added. That is
@@ -870,8 +872,13 @@ and the remaining findings do not change what the model does.
   sweep the review budget rules out; none of them exercises a
   `sampling_params` change, which is the only path FM-023 alters, and
   `perf.json`'s `eager_sampling_steps 0` is the direct evidence that the
-  measured path is unchanged. The three re-run pytest logs live in
-  `logs/fm023/` and the Tests table names them.
+  measured path is unchanged. The four re-run pytest logs live in
+  `logs/fm023/` and the Tests table names them. Two suites were **not** re-run
+  against the change: `test_full_context.py` (40 minutes) and the Tracy
+  profile run, whose figures the Performance accounting section quotes. Both
+  drive `decode_step_traced` with fixed sampling params, which is the branch
+  FM-023 leaves untouched, and the batch-32 suite re-run covers the same
+  traced decode loop at the wider batch.
 * **Two artifacts are not from the recorded sweep.**
   `logs/trace_alloc_full_model.log` was re-run on its own after the sweep,
   because a stray signal from a previous session's cleanup terminated the
@@ -993,7 +1000,7 @@ doc/full_model/tracy/                            tt-perf-report txt/csv(.gz)/png
 doc/full_model/qualitative/                      prompt format, HF control, side by side
 doc/full_model/degenerate_check.json             degeneracy verdict
 doc/full_model/logs/                             every run above, incl. watcher/*.log.gz
-doc/full_model/logs/fm023/                       the three suites re-run after FM-023, plus the tracker gate
+doc/full_model/logs/fm023/                       the four suites re-run after FM-023, plus the tracker gate
 doc/full_model/logs/sweep_provenance.log         HEAD, tracked + untracked files, sha256 of every stage source file, at both ends
 doc/full_model/logs/sweep_run.log                the sweep's own stdout: every step's exit code and watcher fault count
 tests/run_evidence_sweep.sh                      the sweep itself

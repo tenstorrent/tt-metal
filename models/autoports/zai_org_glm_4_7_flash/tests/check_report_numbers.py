@@ -334,6 +334,7 @@ ALLOWED = {
     "216": "the perf-suite duration in logs/fm023/pytest_full_model_perf.log",
     "251": "the batch-1 suite duration in logs/fm023/pytest_full_model_only.log",
     "294": "the combined-session duration in logs/fm023/pytest_full_model_and_prefill_padding.log",
+    "298": "the batch-32 suite duration in logs/fm023/pytest_full_model_batch32.log",
     "217": "a perf-suite duration from the sweep log",
     "307": "a batch-suite duration from the sweep log",
     "583.6": "the value the checker's own explanation quotes as the one that satisfied the old presence check",
