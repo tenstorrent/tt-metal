@@ -812,6 +812,13 @@ void kernel_main() {
                 fabric_direction_connection,
                 pkt_hdr_seminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
+            // The mux client is opened in eager-staging mode: a packet only reaches the mux once a flush
+            // has completed the connection. Every other send in this kernel flushes right after its first
+            // packet; this one must as well. A worker that owns no pages sends nothing before reaching
+            // here, so without the flush this increment sits in the staging slot forever and the peer
+            // below never leaves its batch_ready_sem wait (observed with tt-triage: the zero-page
+            // writers parked on the wait below, everything else DONE, the mux waiting for them to close).
+            mf.flush();
             noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(

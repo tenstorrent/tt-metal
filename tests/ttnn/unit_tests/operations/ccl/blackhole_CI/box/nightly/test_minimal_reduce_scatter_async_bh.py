@@ -269,6 +269,20 @@ def run_reduce_scatter_impl(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # Zero-page worker regression. Scattering on dim 1 divides the Ht*Wt pages of one channel
+        # between num_links * workers-per-direction workers, so single-tile H and W can leave a
+        # worker with no pages at all. The multi-worker path routes sends through a FabricMuxV2 mux
+        # core whose client is opened in eager-staging mode, and a worker with no pages DEADLOCKED
+        # there: its only fabric transaction was the end-of-batch increment, whose send path did not
+        # complete the staged connection, so the increment never left the staging slot and the peer
+        # waited on batch_ready_sem forever -- silently, no TT_FATAL, no watcher trip, board reset
+        # needed. Confirmed with tt-triage on an 8-device, 2-link ring as [8,8,32,32] and [8,8,32,64].
+        # The ring writer now flushes that send like every other send.
+        # First case: 1 page, 2 workers -> one worker owns nothing (the deadlock). Second: 2 pages,
+        # 2 workers -> one page each. Third: 4 pages, two each; always worked.
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [4, 4, 32, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [4, 4, 64, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -283,6 +297,9 @@ def run_reduce_scatter_impl(
         "composite_rs_test_two",
         "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
+        "one_page_per_worker",
+        "two_pages_per_worker",
     ],
 )
 @pytest.mark.parametrize(
@@ -385,6 +402,12 @@ def test_reduce_scatter_async_4dev_ring(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # Same three splits on the line topology. The line writer opens its mux with a blocking
+        # connect and has no batch-ready send, so it never had the ring writer's staging deadlock;
+        # these pin that a worker with no pages completes there too.
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (4, [4, 4, 32, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (4, [4, 4, 64, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -399,6 +422,9 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_two",
         # "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
+        "one_page_per_worker",
+        "two_pages_per_worker",
     ],
 )
 @pytest.mark.parametrize(
