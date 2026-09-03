@@ -22,12 +22,18 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
     torus_xy_device_params,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
+    ACTIVATION_CLAMPED_SILU_GLU,
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+    TtSharedExpert,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import get_num_links
@@ -87,10 +93,17 @@ def shared_expert_sub_device(mesh_device):
             DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
             ACTIVATION_SILU,
         ),
+        # ...and the same shape on the activation the V4 checkpoints actually use.
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            ACTIVATION_CLAMPED_SILU_GLU,
+        ),
     ],
     # Ids name what differs from the case above (the 6144 shared intermediate, the activation, the
     # v4_pro shape).
-    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072"],
+    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072", "isl_5k-v4pro-3072-clamped"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -152,6 +165,11 @@ def test_shared_expert_pcc(
         situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+    # Only read on the clamped path. The reference's default weight init leaves the projections
+    # far short of the clamp, so the gate and up weights are scaled up to reach it.
+    is_clamped = activation == ACTIVATION_CLAMPED_SILU_GLU
+    clamp_limit = DeepSeekV4ProConfig.SWIGLU_LIMIT
+    gate_up_scale = 4.5 if is_clamped else 1.0
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
@@ -171,6 +189,13 @@ def test_shared_expert_pcc(
     # ========================================
     logger.debug("Creating TorchExpert reference")
     torch_model = TorchExpert(emb_dim, hidden_dim, activation=activation, **situ_betas)
+
+    # In place, so both sides are graded on one set of weights. down_proj only rescales the
+    # output, so it is left alone.
+    if gate_up_scale != 1.0:
+        with torch.no_grad():
+            torch_model.gate_proj.mul_(gate_up_scale)
+            torch_model.up_proj.mul_(gate_up_scale)
 
     # Extract weights for TTNN model
     torch_weights = {
@@ -196,6 +221,7 @@ def test_shared_expert_pcc(
             activation=activation,
             subdevice_id=subdevice_id,
             subdevice_cores=subdevice_cores,
+            clamped_silu_glu_limit=clamp_limit,
             **situ_betas,
         )
 
@@ -221,6 +247,9 @@ def test_shared_expert_pcc(
         # ========================================
         # Step 4: Run forward passes
         # ========================================
+        if is_clamped:
+            assert_clamp_coverage(torch_model, torch_input, clamp_limit)
+
         logger.debug("Running torch forward pass")
         torch_output = torch_model(torch_input)
         logger.debug(f"Torch output shape: {torch_output.shape}")

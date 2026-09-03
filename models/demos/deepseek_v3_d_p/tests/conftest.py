@@ -1151,3 +1151,33 @@ def pytest_collection_finish(session):
     if summary_path:
         with open(summary_path, "a") as fh:
             fh.write(f"⚠️ **Unexpected test count** — {msg}\n")
+
+
+def assert_clamp_coverage(torch_model, torch_input, limit: float, min_tail_frac: float = 0.02) -> None:
+    """Assert every clamp tail of ``limit`` is observably reached by ``torch_input``.
+
+    Grading a clamped activation against a clamped golden proves nothing unless the projections
+    reach the clamp. Each tail is counted on its own: a clamp applied to one side only would
+    otherwise pass on the other side's coverage.
+
+    Only the first 512 rows are projected -- coverage is distributional, and the full projection at
+    the prefill chunk depth is ~1.8 TFLOP on host.
+    """
+    rows = torch_input.reshape(-1, torch_input.shape[-1])[:512]
+    with torch.no_grad():
+        gate_out = torch.nn.functional.linear(rows, torch_model.gate_proj)
+        up_out = torch.nn.functional.linear(rows, torch_model.up_proj)
+
+    # The up tails are joined with gate > 0 because silu(gate) is ~4e-4 where the gate is deeply
+    # negative, so an up-tail element there does not reach the output. gate < -limit is included
+    # even though the gate is not clamped from below: it is the only region where clamping it from
+    # below too would differ, and PCC cannot see that difference at any threshold.
+    tails = {
+        f"gate>{limit}": (gate_out > limit).float().mean().item(),
+        f"gate<-{limit}": ((gate_out < -limit) & (up_out.abs() > 1.0)).float().mean().item(),
+        f"up>{limit}": ((up_out > limit) & (gate_out > 0)).float().mean().item(),
+        f"up<-{limit}": ((up_out < -limit) & (gate_out > 0)).float().mean().item(),
+    }
+    logger.info("clamp coverage: " + ", ".join(f"{name}: {frac:.1%}" for name, frac in tails.items()))
+    for name, frac in tails.items():
+        assert frac >= min_tail_frac, f"{name} coverage {frac:.1%} below {min_tail_frac:.1%}"
