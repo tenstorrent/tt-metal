@@ -298,10 +298,18 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::SELU:
             result.type = KernelActivation::SELU;
-            // param0 is alpha (default 1.67326)
-            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3fd637bdu;
-            // param1 is lambda (default 1.05070)
-            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f8674f5u;
+            // selu(x) is scale * x for x >= 0, and scale * alpha * (exp(x) - 1) for x < 0.
+            // selu_tile_pack takes the scale first and alpha second.
+            //
+            // Each default is the nearest float to the published SELU constant. Shown below as
+            // the published value and the exact value of the float it rounds to, which is what
+            // the bit patterns hold:
+            //   scale  1.0507009873554804934193349852946 -> 1.05070102214813232421875
+            //   alpha  1.6732632423543772848170429916717 -> 1.67326319217681884765625
+            // param0 is scale
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3f867d5fu;
+            // param1 is alpha
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3fd62d7du;
             break;
 
         case UnaryOpType::SOFTPLUS:
