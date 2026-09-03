@@ -61,14 +61,10 @@ void kernel_main() {
     constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
-// Fused-key stable mode (factory-injected define): the local cores sent packed [bf16|u16] key
-// tiles; the merge tree runs the unstable network on them and the defuse splits them back into
-// value + index outputs at the very end.
-#if defined(TOPK_FUSED_STABLE_KEYS) && TOPK_FUSED_STABLE_KEYS
-    constexpr bool fused_keys = true;
-#else
-    constexpr bool fused_keys = false;
-#endif
+    // Fused-key stable mode: the local cores sent packed [bf16|u16] key tiles; the merge tree runs
+    // the unstable network on them and the defuse splits them back into value + index outputs at
+    // the very end.
+    constexpr bool fused_keys = get_compile_time_arg_val(15) == 1;
     constexpr bool network_stable = stable_sort && !fused_keys;
 
     // dest indices for where to unpack the tiles for the llk

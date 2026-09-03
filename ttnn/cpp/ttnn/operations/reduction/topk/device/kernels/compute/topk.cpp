@@ -144,15 +144,11 @@ void kernel_main() {
     constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
-// Rank-stamped stable mode (factory-injected define): sort [bf16 value | local-rank tag] keys
-// with the unstable network while the true u32 indices ride the index-tracking swaps, instead of
-// running the index-aware comparator network on every compare. The stamp before each local sort
-// provides the torch-stable tie order; the value intermediates travel as raw Float32 tiles.
-#if defined(TOPK_RANK_STAMPED_STABLE) && TOPK_RANK_STAMPED_STABLE
-    constexpr bool rank_stamped = true;
-#else
-    constexpr bool rank_stamped = false;
-#endif
+    // Rank-stamped stable mode: sort [bf16 value | local-rank tag] keys with the unstable network
+    // while the true u32 indices ride the index-tracking swaps, instead of running the index-aware
+    // comparator network on every compare. The stamp before each local sort provides the
+    // torch-stable tie order; the value intermediates travel as raw Float32 tiles.
+    constexpr bool rank_stamped = get_arg(args::rank_stamped) == 1;
     // The rank tag IS the stable tie-break; the network itself runs unstable in rank-stamped mode.
     constexpr bool network_stable = stable_sort && !rank_stamped;
 

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+
 #include "sort_device_operation.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
@@ -127,7 +129,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // the logical width (padding was already applied in pre_sort_transform_tensor).
     const uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
     TT_FATAL(
-        checked_w >= 64 && (checked_w & (checked_w - 1)) == 0,
+        checked_w >= 64 && std::has_single_bit(checked_w),
         "Input shape inner dim {} must be a power of two >= 64. Use ttnn.sort, which pads the sort dimension "
         "with +/-infinity to the next power of two.",
         checked_w);
