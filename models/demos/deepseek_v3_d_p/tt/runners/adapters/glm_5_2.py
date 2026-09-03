@@ -40,7 +40,9 @@ class GLM52Adapter(MLAPrefillAdapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
-    l1_small_size = 1152
+    # 1216, not GLM-5.1's 1152: the tp_sharded fallback gather (used wherever the snake ring
+    # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
+    l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
     supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 

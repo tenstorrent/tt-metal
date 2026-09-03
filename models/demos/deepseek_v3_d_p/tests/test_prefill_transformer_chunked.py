@@ -40,7 +40,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -1192,8 +1192,9 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs.
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1152),
+            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
+            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -2116,11 +2117,23 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs.
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1152),
+            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
+            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # Plain Fabric2D: the only leg where the tp_sharded FALLBACK gather runs at production shape,
+        # since TORUS_XY always prefers the snake. Not comparable to the torus leg (all axes go Linear).
+        pytest.param(
+            (8, 4),
+            # 1216 like the torus legs: at 1152 the region is full, so the fallback's extra 64 B/bank
+            # makes the MoE routing's all_gather in offset_cumsum fail instead. Measured floor is 1168.
+            fabric2d_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
