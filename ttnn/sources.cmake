@@ -47,6 +47,7 @@ set(TTNN_CORE_SRCS
     core/services/layer_ack_service.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
+    cpp/ttnn/kernel_lib/host/reduce_host.cpp
     core/tensor/tensor_utils.cpp
     core/tensor/unit_mesh/unit_mesh_utils.cpp
     core/tensor/xtensor/partition.cpp

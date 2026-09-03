@@ -33,6 +33,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_matmul.cpp
     test_mcast_host.cpp
     test_normalization.cpp
+    test_reduce_host.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp

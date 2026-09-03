@@ -45,7 +45,7 @@ void kernel_main() {
 
     // Scaler = 1/N -> SUM reduce produces means directly. For non-tile-aligned W, also emit a
     // partial scaler tile that zeros out positions beyond partial_w; the compute kernel selects it
-    // for the last W-tile of the last block via ReducePartialScaler::with_partial().
+    // for the last W-tile of the last block via ReducePartialMode::Scaler.
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     if constexpr (HAS_PARTIAL_W) {
         dataflow_kernel_lib::prepare_partial_reduce_scalers<

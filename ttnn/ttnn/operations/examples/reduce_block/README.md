@@ -18,12 +18,104 @@ A single-strip reduce that collapses a `1 × W` (or `H × 1`) row of tiles into 
 - **A structural bonus, not just speed:** because each output tile uses **one** DEST register (accumulate, then finalize in place), the fast path reduces an arbitrary block one DEST at a time — it never hits the DEST/chunk limit the library's `REDUCE_COL` datapath chunks around.
 
 ## The methods being compared
+
+> **Current interface:** the program descriptor is now driven entirely by the host planner. The historical
+> `reduce_tile`, `accumulate_via_add`, `accumulate_via_add_inline`, and `dispatch` labels remain accepted for
+> report compatibility, but they no longer override the planner's choice. The measurements below characterize
+> the paths that informed automatic planning; they are not separate implementations in the current descriptor.
+
 | Variant | What it does | Why it should differ |
 |---|---|---|
-| `reduce_tile` *(baseline)* | the reduce library, default datapath (`ReduceAlgorithm::Auto → ReduceTile`, FPU matmul-with-ones), AVG so the `1/N` is per dim | — |
+| `reduce_tile` *(baseline)* | the reduce library, default datapath (`ReduceAlgorithm::ReduceTile`, FPU matmul-with-ones), AVG so the `1/N` is per dim | — |
 | `accumulate_via_add` | the reduce library with the opt-in `ReduceAlgorithm::AccumulateViaAdd` (accumulate + SFPU-finalize inside the library) | trades `N` matmul-reduce datapaths for `N` cheap adds + one SFPU finalize; pays a per-`reduce()`-call init |
-| `accumulate_via_add_inline` | the same algorithm as a standalone hand-written kernel, with the one-time init **hoisted out** of the perf loop | the init-hoisted reference — shows the algorithm's steady-state cost without the per-call init `accumulate_via_add` pays |
-| `dispatch` | picks `accumulate_via_add` when the reduced tile-count per output (`row=Wt`, `col=Ht`, `scalar=Ht*Wt`) `≥` a **per-dim** threshold, else `reduce_tile` | so it is never slower than the library |
+| `accumulate_via_add_inline` | the same algorithm as the historical standalone hand-written kernel | the reference used to validate the library implementation |
+| `dispatch` | the historical rule that picked `accumulate_via_add` when the reduced tile-count per output (`row=Wt`, `col=Ht`, `scalar=Ht*Wt`) crossed a **per-dim** threshold | its measured crossover is now planner input rather than a kernel argument |
+
+## Planner-backed reduce-helper flow
+
+This is the canonical example of the new interface. One call to
+`ttnn.reduce_planner.make_reduce_sequence_plan(...)` creates one **planning unit** with two independent pieces:
+
+- an ordered list of complete compute-call descriptors; and
+- exactly one aggregate auxiliary-tile descriptor, including its CB ID, shared by every call in the unit.
+
+The host appends each piece after that kernel's existing compile-time arguments. In this example the compute
+kernel owns `kernel_iters` at offset 0, so the reduction suffix begins at offset 1:
+
+```python
+compute_compile_time_args = [kernel_iters]
+sequence.append_to(compute_compile_time_args)
+# [kernel_iters][call_count][call_0]...[call_(call_count - 1)]
+
+auxiliary_compile_time_args = []
+sequence.auxiliary.append_to(auxiliary_compile_time_args)
+# [one aggregate auxiliary descriptor]
+```
+
+The equivalent C++ host calls are `sequence.append_to(compute_args)` and
+`sequence.append_auxiliary_to(dataflow_args)`. Multiple planner invocations are appended to both streams in
+the same order; each compute block keeps its own count and each unit keeps its own auxiliary descriptor. The
+device kernels receive these flat words—no sequence object is passed to either kernel.
+
+The compute kernel reads the unit's length and addresses the fixed-width calls in their planned order:
+
+```cpp
+constexpr uint32_t reduce_args_offset = 1;  // after kernel_iters
+constexpr uint32_t call_count = get_compile_time_arg_val(reduce_args_offset);
+constexpr uint32_t first_call_args_offset =
+    reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+
+template <uint32_t I>
+using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, I>;
+
+template <uint32_t I = 0>
+ALWI void issue_calls() {
+    if constexpr (I < call_count) {
+        using Call = CallAt<I>;
+        // Prepare/refill Call::input_cb_id or run other fused work here.
+        compute_kernel_lib::reduce<Call>();
+        // The kernel may do more work before issuing the next planned call.
+        issue_calls<I + 1>();
+    }
+}
+
+void kernel_main() {
+    using First = CallAt<0>;
+    constexpr uint32_t startup_src_b =
+        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
+            ? First::input_cb_id
+            : First::auxiliary_cb_id;
+    compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
+    issue_calls();
+}
+```
+
+The loop above is example-owned convenience, not part of the reduce interface. A fused kernel may issue
+`CallAt<I>` at its own cadence and place arbitrary operations between calls. Repeated input CB IDs are valid:
+the kernel can consume one tensor, refill the same CB—for example with the next elementwise-multiply result—and
+then issue the next call.
+
+`call_count` is only the bound used to walk the serialized calls. It must never be used with the call index to
+infer accumulation, finalization, or partial-tile behavior. Every `Call` carries those decisions explicitly,
+including its accumulation mode/index, `partial_mode`, algorithm, CB IDs, shape, input policy, reconfiguration,
+chunking, post-scale, and slice of the shared auxiliary CB. `compute_kernel_lib::reduce<Call>()` lowers that
+descriptor directly to the retained explicit overload. Compute hardware startup remains kernel-owned and is
+performed once before any calls; the first call supplies the startup CBs as shown above and in
+`_PLANNED_REDUCE_KERNEL`.
+
+The dataflow kernel does not receive or walk the call list:
+
+```cpp
+using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+
+void kernel_main() {
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+}
+```
+
+That single invocation materializes and pushes the planning unit's aggregate auxiliary CB once. Calls select
+their planned slices from it. Kernel authors do not decode the physical recipe to discover scaler versus mask
+handling; `Call::partial_mode` is authoritative and the helper hides the recipe's physical details.
 
 ## CLI — measure your own shapes/params
 This example is runnable on **any** block you care about, not just the predefined sweep:
@@ -35,7 +127,7 @@ python -m ttnn.operations.examples.reduce_block [options]
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--dim` | `{all,row,col,scalar}…` | `all` | reduce dimension(s) |
-| `--variant` | `{all,reduce_tile,accumulate_via_add,accumulate_via_add_inline}…` | `all` | which path(s) to compare |
+| `--variant` | `{all,reduce_tile,accumulate_via_add,accumulate_via_add_inline}…` | `all` | historical report labels; all use automatic planning in the current descriptor |
 | `--shape` | `Ht Wt NC` (repeatable) | *(built-in sweep)* | a block to reduce; overrides the sweep, applied to every selected dim |
 | `--trials` | int | `5` | timed passes; median ± std |
 | `--kernel-iters` | int | `200` | in-kernel loop count (`1` = per-launch latency; large = steady-state) |
@@ -45,7 +137,7 @@ python -m ttnn.operations.examples.reduce_block [options]
 # is the fast path worth it for a wide (32-tile) scalar reduce on my box?
 python -m ttnn.operations.examples.reduce_block --dim scalar --shape 4 8 1
 
-# a batched row reduce, both library and inline paths
+# a batched row reduce under two historical report labels (both planner-backed now)
 python -m ttnn.operations.examples.reduce_block --dim row --shape 2 8 4 --variant reduce_tile accumulate_via_add_inline
 ```
 
@@ -102,4 +194,8 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 Writes [`report.md`](report.md) (the 2-D block comparison) and [`report_reduced_sweep.md`](report_reduced_sweep.md) (the crossover-vs-reduced-tiles sweep + the linearity check) when `REDBLK_REPORT` / `REDBLK_SWEEP_REPORT` point at them.
 
 ## Code
-`program_descriptor_with_inline_kernels.py` — the inline fast kernel (per-output-tile accumulate with the per-dim input-subset map + SFPU finalize), the library kernel (`algo` selects `ReduceTile` vs `AccumulateViaAdd`), and the AVG scaler dataflow kernel; `dispatch` routes between the library paths per `(dim, reduced-tile-count)`.
+`program_descriptor_with_inline_kernels.py` contains the complete planner-backed integration: it builds one
+planning unit, appends `[call_count][calls...]` after `kernel_iters`, appends the independent aggregate auxiliary
+descriptor to the reader arguments, decodes each `ReduceCallAtT`, and invokes `reduce<Call>()`. The same compute
+source handles both one-call reductions and cross-call accumulation; the separate dataflow source invokes
+`prepare_reduce_auxiliary_tiles<Auxiliary>()` once per unit.

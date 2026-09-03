@@ -19,11 +19,13 @@
 #include "ttnn/operations/reduction/topk/topk_nanobind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
+#include "ttnn/operations/reduction/reduce_planner_nanobind.hpp"
 
 namespace ttnn::operations::reduction {
 
 void py_module(nb::module_& mod) {
     export_enum<reduction_common::ReduceType>(mod, "ReduceType");
+    detail::bind_reduce_planner(mod);
 
     // Special reductions
     detail::bind_reduction_argmax_operation(mod);
