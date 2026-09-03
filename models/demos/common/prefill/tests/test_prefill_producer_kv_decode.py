@@ -4,7 +4,12 @@
 import pytest
 import torch
 
-from models.demos.common.prefill.runners.prefill_producer import _decode_kv_chunk
+from models.demos.common.prefill.runners.prefill_producer import (
+    CHUNK_SIZE,
+    ProducerConfig,
+    _decode_kv_chunk,
+    _resolve_slot_prompts,
+)
 
 
 @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.bfloat16], ids=["fp8_e4m3", "bfloat16"])
@@ -50,3 +55,32 @@ def test_decode_packed_scaled_fp8_kv_chunk_with_page_padding():
 def test_decode_unknown_kv_chunk_rejected(expect_error):
     with expect_error(ValueError, "unsupported"):
         _decode_kv_chunk(bytes(17), head_dim=576)
+
+
+def test_synthetic_tokens_do_not_require_golden_trace(monkeypatch, expect_error):
+    monkeypatch.setenv("PREFILL_PRODUCER_SYNTHETIC_TOKENS", "1")
+    monkeypatch.setenv("PREFILL_TRACE_DIR", "/path/does/not/exist")
+    cfg = ProducerConfig(
+        num_users=2,
+        chunks_min=1,
+        chunks_max=2,
+        max_requests=1,
+        duration_s=1,
+        p_gap=0,
+        p_burst=0,
+        gap_ms=(0, 0),
+        mid_chunk_end_prob=0,
+        seed=1,
+        verify=False,
+        pcc_threshold=0.9,
+    )
+
+    slot_traces, slot_lengths, pools = _resolve_slot_prompts(cfg)
+
+    assert slot_lengths is None
+    assert slot_traces == {0: "<synthetic>", 1: "<synthetic>"}
+    assert pools == {"<synthetic>": [1] * (2 * CHUNK_SIZE)}
+
+    cfg.verify = True
+    with expect_error(ValueError, "cannot be used"):
+        _resolve_slot_prompts(cfg)
