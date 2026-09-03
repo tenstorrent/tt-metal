@@ -14,6 +14,8 @@ cd ~/sfpi-uplift/galaxy-kit
 # 2. red/green pilot, then the full run (job 75439 = the owner's hold)
 ./run_bench.sh -j 75439 --pilot exp            # must reproduce the board's exp cell
 ./run_bench.sh -j 75439 -c all -r 5 -k 8       # 32 chips, 5 reps, 8 chips/row
+#                                    -B 8 (default) batches 8 ops per pytest
+#                                    session (~10x fewer sessions; -B 0 = legacy)
 
 # 3. pull results + build the ledger
 ./collect.sh -w ~/my-run
@@ -57,6 +59,39 @@ Outputs land in the workdir: `REPLICATION-LEDGER.tsv` (every rep),
 - **Not canon**: galaxy cycles are NOT p150-canon. The valid statistic is
   the same-chip sem/hand ratio; the p150 board stays canon.
 
+## Session batching (and why it is honest)
+
+One pytest session per measurement pays a few seconds of harness startup
+~14,000 times per campaign.  With `-B N` (default 8) a worker claims N ops
+and runs ONE pytest session per chunk, nodes ordered so each op's block
+stays intact and adjacent: `[op corr sem, op corr hand, op perf sem x reps,
+op perf hand x reps]`, then the next op.  Locally measured ~5x wall-time
+on a 3-op chunk (audits included); bigger chunks amortize more.
+
+Batching must not change what a measurement means, so the kit's pytest
+plugin (`lib/lk_batch_plugin.py`) enforces, in-session: the exact requested
+node order (anything else aborts before device work), the corr gate (a
+failed correctness node makes that arm's perf nodes SKIP, not run), and
+per-occurrence CSV attribution through the harness's own postprocess
+pipeline (the harness alone would merge module-mates and silently AVERAGE
+same-key reps).  The known tt-llk reconfig-escape hazard (HW state can
+leak between kernel reconfigurations inside one session) is guarded three
+ways: a corr fail inside a batch is never booked — the op re-runs SOLO,
+and a solo pass is flagged `BATCH-ESCAPE-SUSPECT`; the first op of every
+chunk also gets one solo perf session per arm (`-A`, default on) that the
+ledger compares against the batched reps (`AUDIT-OK`/`AUDIT-DIVERGE` —
+reps are cycle-identical, so any difference is a signal); and every
+batched rep records its batch id, position, and predecessor node
+(`batch.txt`), so the ledger's note column makes every value attributable.
+Anything anomalous — order violation, session crash or timeout, a device
+hang (`TENSIX TIMED OUT` makes the plugin bail out of the whole session so
+nothing runs on a hung chip), failed or empty perf item — falls back to
+the proven solo path for that op.
+Validated on a p150: batch and solo agree per-rep to the cycle (the only
+diffs seen were the same ±1-cycle jitter the solo baseline itself shows),
+and `REPLICATION-VERDICTS.tsv` gained an `honesty_flags` column that rolls
+`AUDIT-DIVERGE`/`ESCAPE-SUSPECT`/`R1-OUTLIER` up per verdict.
+
 ## Anatomy
 - `stage.sh`  spec generation (`lib/gen_spec.py`), one
   `pytest --compile-producer` session per flag/env group, bundle pack
@@ -64,7 +99,8 @@ Outputs land in the workdir: `REPLICATION-LEDGER.tsv` (every rep),
   only — no compiler ships), streamed to `/data` through the relay.
 - `run_bench.sh`  seeds the queue (`lib/seed.py`) and starts one
   `worker.py` per chip via `srun --overlap` (`lib/galaxy_launch.sh`).
-  `--pilot <op>` runs one row on one chip; `--status` shows progress.
+  `--pilot <op>` runs one row on one chip; `--status` shows progress;
+  `-B`/`-A` control session batching and the batch audit (above).
 - `collect.sh`  streams `results/` home and runs `lib/ledger.py`.
 - Everything is resume-safe: re-running any stage skips finished builds,
   finished queue items, and finished sessions.

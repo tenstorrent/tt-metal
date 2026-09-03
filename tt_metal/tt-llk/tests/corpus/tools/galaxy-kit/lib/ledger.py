@@ -9,9 +9,22 @@ from a pulled results/ tree.
 Cycle extraction mirrors sweep_2x2.py _perf_value/_kernel_value: within one
 post CSV, sum mean(<metric>) over rows whose marker matches; the KERNEL
 cell is absolute (the verdict metric); the diagnostic cell divides by
-tile_cnt when per_tile=1.  Solo perf sessions make attribution trivial;
-anomalies (MULTICSV, NO-KERNEL-ROW) are flagged, never silently booked.
+tile_cnt when per_tile=1.  Attribution is per session dir: a solo session
+holds one test's CSVs, and a BATCHED rep dir holds exactly the one
+per-occurrence post CSV the kit's pytest plugin wrote for it (same
+postprocess pipeline).  Anomalies (MULTICSV, NO-KERNEL-ROW) are flagged,
+never silently booked.
 Band (sweep_2x2.py): WIN < -0.5 <= PARITY <= +0.5 < LOSS.
+
+Batch-honesty checks emitted in the note columns:
+  batch:<id>#<seq>   provenance of a batched rep (from batch.txt)
+  AUDIT-OK / AUDIT-DIVERGE:<arm>=solo<v>vs<batch-median>
+                     the solo audit session vs the batched reps (reps are
+                     expected cycle-identical, so ANY divergence is a
+                     reconfig-escape signal, not noise)
+  R1-OUTLIER:<arm>   rep 1 differs while reps 2..N agree exactly — the
+                     signature of HW state left by a preceding batch item
+  ESCAPE-SUSPECT:<arm>  corr failed in-batch but passed solo (worker flag)
 """
 import argparse
 import csv
@@ -24,9 +37,8 @@ ap.add_argument("--work", required=True, help="workdir with ROWS.tsv/ARMS.tsv")
 ap.add_argument("--results", required=True, help="pulled results/ tree")
 ap.add_argument("--out", default="", help="output dir (default: workdir)")
 ap.add_argument("--reps", type=int, default=5)
-ap.add_argument(
-    "--headline", default="", help="free-text provenance line for the ledger header"
-)
+ap.add_argument("--headline", default="",
+                help="free-text provenance line for the ledger header")
 a = ap.parse_args()
 
 WORK = Path(a.work)
@@ -78,6 +90,18 @@ def cells_of(sdir, marker, metric, per_tile):
     return kvals[0], (dvals[0] if dvals else None), note
 
 
+def batch_prov(sdir):
+    """'batch:<id>#<seq>' when this session dir was booked from a batched
+    pytest session (worker.py wrote batch.txt); '' for a solo session."""
+    bt = sdir / "batch.txt"
+    if not bt.is_file():
+        return ""
+    kv = dict(
+        f.split("=", 1) for f in bt.read_text().strip().split("\t") if "=" in f
+    )
+    return f"batch:{kv.get('batch', '?')}#{kv.get('seq', '?')}".strip()
+
+
 led = (OUT / "REPLICATION-LEDGER.tsv").open("w")
 led.write(
     "# galaxy-kit replication ledger — CRAQ-SFPI sem vs expert hand arms, "
@@ -121,8 +145,10 @@ for opdir in sorted(RES.iterdir()):
                 led.write(
                     f"{op}\t{leg}\t{meta['set']}\t{meta['board_class']}\t{chip}"
                     f"\t{arm}\tcorr\t{corr_rc}\t\t\t{marker}\t{metric}\t"
-                    f"{meta['per_tile']}\t{fk}\t\n"
+                    f"{meta['per_tile']}\t{fk}\t{batch_prov(cd)}\n"
                 )
+            if (chipdir / f"BATCH-ESCAPE-SUSPECT-{arm}.txt").is_file():
+                notes.append(f"ESCAPE-SUSPECT:{arm}")
             for k in range(1, a.reps + 1):
                 sdir = chipdir / f"{arm}-perf-r{k}"
                 if not (sdir / "rc.txt").is_file():
@@ -131,6 +157,8 @@ for opdir in sorted(RES.iterdir()):
                 kc, dc, note = cells_of(sdir, marker, metric, per_tile)
                 if rc == "0" and kc is not None:
                     kcells[arm].append(kc)
+                prov = batch_prov(sdir)
+                note = ";".join(filter(None, (note, prov)))
                 if note:
                     notes.append(f"{arm}-r{k}:{note}")
                 led.write(
@@ -139,6 +167,28 @@ for opdir in sorted(RES.iterdir()):
                     f"{'' if dc is None else dc}\t{marker}\t{metric}\t"
                     f"{meta['per_tile']}\t{fk}\t{note}\n"
                 )
+            # reconfig-escape checks (batched campaigns; absent dirs = no-op)
+            vals = kcells[arm]
+            if len(vals) >= 3 and max(vals) > min(vals) and \
+                    max(vals[1:]) == min(vals[1:]):
+                notes.append(f"R1-OUTLIER:{arm}")
+            adir = chipdir / f"{arm}-perf-audit"
+            if (adir / "rc.txt").is_file():
+                arc = (adir / "rc.txt").read_text().strip()
+                akc, adc, anote = cells_of(adir, marker, metric, per_tile)
+                led.write(
+                    f"{op}\t{leg}\t{meta['set']}\t{meta['board_class']}\t{chip}"
+                    f"\t{arm}\taudit\t{arc}\t{'' if akc is None else akc}\t"
+                    f"{'' if adc is None else adc}\t{marker}\t{metric}\t"
+                    f"{meta['per_tile']}\t{fk}\t{anote}\n"
+                )
+                if arc == "0" and akc is not None and vals:
+                    bmed = statistics.median(vals)
+                    if akc == bmed:
+                        notes.append(f"AUDIT-OK:{arm}")
+                    else:
+                        notes.append(
+                            f"AUDIT-DIVERGE:{arm}=solo{akc}vsbatch{bmed}")
         s, h = kcells["sem"], kcells["hand"]
         if s and h:
             sm, hm = statistics.median(s), statistics.median(h)
@@ -164,23 +214,30 @@ tally = {"MATCH": 0, "MISMATCH": 0}
 with (OUT / "REPLICATION-VERDICTS.tsv").open("w") as w:
     w.write(
         "op\tleg\tset\tboard_class\tchips\tvs_hand_median_pct\t"
-        "vs_hand_min_pct\tvs_hand_max_pct\treplica_class\tmatch\tchips_list\n"
+        "vs_hand_min_pct\tvs_hand_max_pct\treplica_class\tmatch\tchips_list\t"
+        "honesty_flags\n"
     )
     for (op, leg), cells in sorted(per_op.items()):
         vs = sorted(float(c["vs_hand_pct"]) for c in cells)
         med = statistics.median(vs)
         rc = band(med)
         bc = cells[0]["board_class"]
-        match = (
-            "MATCH"
-            if rc == bc
-            else ("MISMATCH" if bc in ("WIN", "PARITY", "LOSS") else "N/A")
-        )
+        match = ("MATCH" if rc == bc else
+                 ("MISMATCH" if bc in ("WIN", "PARITY", "LOSS") else "N/A"))
         if match in tally:
             tally[match] += 1
+        # roll batch-honesty flags up to the verdict row so a polluted cell
+        # can never hide inside a clean-looking verdict
+        flags = sorted({
+            tok.split(":")[0]
+            for c in cells
+            for tok in c.get("note", "").split(";")
+            if tok.startswith(("AUDIT-DIVERGE", "ESCAPE-SUSPECT",
+                               "R1-OUTLIER"))
+        })
         w.write(
             f"{op}\t{leg}\t{cells[0]['set']}\t{bc}\t{len(cells)}\t{med:+.2f}\t"
             f"{vs[0]:+.2f}\t{vs[-1]:+.2f}\t{rc}\t{match}\t"
-            f"{','.join(c['chip'] for c in cells)}\n"
+            f"{','.join(c['chip'] for c in cells)}\t{','.join(flags)}\n"
         )
 print(f"ledger written to {OUT} (verdict tally {tally})")

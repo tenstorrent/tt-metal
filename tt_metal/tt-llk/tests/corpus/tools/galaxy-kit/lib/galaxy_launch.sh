@@ -13,7 +13,7 @@ if [ "$CHIPS" = "all" ]; then CHIPS=$(seq -s, 0 31);
 elif [[ "$CHIPS" =~ ^[0-9]+$ ]] && [ "$CHIPS" -le 32 ] && [[ "$CHIPS" != *,* ]]; then
   CHIPS=$(seq -s, 0 $((CHIPS-1)))
 fi
-echo "LK-GALAXY host=$(hostname) chips=$CHIPS reps=${LK_REPS:-5} $(date -u +%FT%TZ)"
+echo "LK-GALAXY host=$(hostname) chips=$CHIPS reps=${LK_REPS:-5} batch=${LK_BATCH_OPS:-8} audit=${LK_BATCH_AUDIT:-1} $(date -u +%FT%TZ)"
 mkdir -p "$BASE/results" "$BASE/wlogs" "$BASE/claims"
 if [ ! -f "$BASE/results/.reset-done-$(hostname)" ]; then
   "$BASE/venv/bin/tt-smi" -r > "$BASE/results/tt-smi-reset-$(hostname).log" 2>&1

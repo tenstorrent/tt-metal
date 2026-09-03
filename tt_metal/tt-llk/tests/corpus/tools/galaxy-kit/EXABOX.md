@@ -68,6 +68,12 @@ on the same chip in the same session, corr/golden gates first, multiple reps,
 chip id recorded per cell. Replication data informs the paper and dashboard;
 the p150 board remains the booking authority.
 
+Workers batch several ops into one pytest session (README "Session
+batching") to amortize harness startup; the batch keeps every invariant
+above in-session, guards the tt-llk reconfig-escape hazard (solo re-run on
+any in-batch corr failure, a per-chunk solo audit session per arm, per-rep
+provenance), and degrades to solo sessions on any anomaly.
+
 ## The kit
 
 stage.sh (compile on quietbox at a pinned toolchain, ship ELFs — the nodes

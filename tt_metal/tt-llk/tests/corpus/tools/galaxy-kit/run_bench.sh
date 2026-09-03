@@ -2,17 +2,27 @@
 # galaxy-kit run_bench.sh — launch the parallel benchmark on the held galaxy.
 #
 #   run_bench.sh -j <jobid> -c <chips> [-n <node>] [-r <reps>] [-k <copies>] \
-#                [-o <ops>] [-d <dest>] [--pilot <op[__leg]> [--chip N]] \
+#                [-B <batch>] [-A 0|1] [-o <ops>] [-d <dest>] \
+#                [--pilot <op[__leg]> [--chip N]] \
 #                [--seed-only | --no-seed] [--status]
 #
 #   -j  Slurm job id of the OWNER'S HOLD (srun --overlap only; this kit
 #       never scancels or releases anything)
 #   -c  chips: "all" (0-31) | a count N (0..N-1) | a comma list
-#   -n  node name (adds -w <node> to srun; usually unneeded — the hold
-#       pins the node)
 #   -r  perf reps per cell (default 5)
 #   -k  chip-copies per row (default 4): each row is measured on K
 #       DISTINCT chips (work-stealing; same-chip sem/hand pairs always)
+#   -B  SESSION BATCHING: ops per pytest session (default 8; 0 = one
+#       session per measurement, the legacy grain).  Batching amortizes
+#       the few seconds of pytest/harness startup that otherwise repeats
+#       ~12x per (op, chip) cell; the worker keeps every honesty
+#       invariant in-session and falls back to solo sessions on any
+#       anomaly (see worker.py docstring).
+#   -A  batch audit (default 1): one extra SOLO perf session per arm for
+#       the first op of every chunk; the ledger flags any batch-vs-solo
+#       cycle difference (reps are expected cycle-identical).
+#   -n  node name (adds -w <node> to srun; usually unneeded — the hold
+#       pins the node)
 #   -o  comma list of ops to seed (default: every staged row)
 #   --pilot  run ONE row on ONE chip first (red/green: reproduce a known
 #            board cell before trusting anything)
@@ -21,6 +31,7 @@ KIT=$(cd "$(dirname "$0")" && pwd)
 source "$KIT/lib/remote.sh"
 
 JOBID=""; CHIPS=""; NODE=""; REPS=5; COPIES=4; OPS=""; PILOT=""; PCHIP=0
+BATCH=8; AUDIT=1
 SEED=1; SEED_ONLY=0; STATUS=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,6 +40,8 @@ while [ $# -gt 0 ]; do
     -n) NODE=$2; shift 2;;
     -r) REPS=$2; shift 2;;
     -k) COPIES=$2; shift 2;;
+    -B) BATCH=$2; shift 2;;
+    -A) AUDIT=$2; shift 2;;
     -o) OPS=$2; shift 2;;
     -d) LK_DEST=$2; shift 2;;
     --pilot) PILOT=$2; shift 2;;
@@ -50,7 +63,7 @@ fi
 if [ -n "$PILOT" ]; then
   case "$PILOT" in *__*) :;; *) PILOT="${PILOT}__plain";; esac
   echo "PILOT: $PILOT on chip $PCHIP (jobid $JOBID)"
-  exa "cd $LK_DEST && mkdir -p queue claims && $SRUN bash -c 'ulimit -u \$(ulimit -Hu); hostname; LK_BASE=$LK_DEST LK_REPS=$REPS $LK_DEST/venv/bin/python $LK_DEST/worker.py --chip $PCHIP --item $PILOT'"
+  exa "cd $LK_DEST && mkdir -p queue claims && $SRUN bash -c 'ulimit -u \$(ulimit -Hu); hostname; LK_BASE=$LK_DEST LK_REPS=$REPS LK_BATCH_OPS=$BATCH LK_BATCH_AUDIT=$AUDIT $LK_DEST/venv/bin/python $LK_DEST/worker.py --chip $PCHIP --item $PILOT'"
   exit $?
 fi
 
@@ -60,5 +73,5 @@ fi
 [ "$SEED_ONLY" = 1 ] && exit 0
 
 : "${CHIPS:?-c <chips> required}"
-echo "launching workers: chips=$CHIPS reps=$REPS copies=$COPIES jobid=$JOBID"
-exa "LK_BASE=$LK_DEST LK_REPS=$REPS $SRUN bash $LK_DEST/galaxy_launch.sh $CHIPS"
+echo "launching workers: chips=$CHIPS reps=$REPS copies=$COPIES batch=$BATCH audit=$AUDIT jobid=$JOBID"
+exa "LK_BASE=$LK_DEST LK_REPS=$REPS LK_BATCH_OPS=$BATCH LK_BATCH_AUDIT=$AUDIT $SRUN bash $LK_DEST/galaxy_launch.sh $CHIPS"
