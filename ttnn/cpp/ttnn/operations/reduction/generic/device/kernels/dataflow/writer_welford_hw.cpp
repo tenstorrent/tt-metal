@@ -120,6 +120,9 @@ void kernel_main() {
     constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
+#ifdef WELFORD_SFPU_LEAF_COMBINE
+    static_assert(W % tile_width == 0, "SFPU leaf combine requires every input tile to have a full-width population");
+#endif
 
     constexpr std::uint32_t num_partials = reduce_batch_size * W;
     static_assert(num_partials > 0);
