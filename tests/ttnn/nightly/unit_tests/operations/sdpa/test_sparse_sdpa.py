@@ -215,6 +215,7 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
 #      gather/DMA dominates), so we gate on wall-clock device duration. Needs no tracy build. ----
 # Observed run-to-run spread is <1%; 5% leaves headroom for board/thermal variance while catching a regression.
 SPARSE_PERF_MARGIN = 0.05
+SPARSE_PROD_DENSE_EXPECTED_MS = 3.33
 
 # nv (valid keys/token) patterns. Chunk-skip benefit is sparsity-dependent, so sweep it.
 _NV = {
@@ -258,7 +259,9 @@ def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
 @pytest.mark.parametrize(
     "S,T,TOPK,kc,nv,expected_ms",
     [
-        (640, 56320, 2048, 256, "dense", 3.33),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
+        # Production shape (Q[32,640,576], KV[56320,576], idx[640,2048]). The paged gate below
+        # deliberately reuses this exact target and margin.
+        (640, 56320, 2048, 256, "dense", SPARSE_PROD_DENSE_EXPECTED_MS),
         (640, 56320, 2048, 256, "half", 1.78),
         (640, 56320, 2048, 256, "causal", 0.732),
         (640, 56320, 2048, 256, "sparse", 0.576),
@@ -369,7 +372,14 @@ def test_sparse_sdpa_paged_perf_matches_contiguous(device):
     paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
     ratio = paged_ms / contiguous_ms
     logger.info(
-        f"sparse_sdpa paged perf: contiguous={contiguous_ms:.3f} ms, paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+        f"sparse_sdpa paged perf: contiguous={contiguous_ms:.3f} ms, paged={paged_ms:.3f} ms, ratio={ratio:.4f}; "
+        f"production target={SPARSE_PROD_DENSE_EXPECTED_MS:.3f} ms +/- {SPARSE_PERF_MARGIN * 100:.0f}%"
+    )
+    lower = SPARSE_PROD_DENSE_EXPECTED_MS * (1 - SPARSE_PERF_MARGIN)
+    upper = SPARSE_PROD_DENSE_EXPECTED_MS * (1 + SPARSE_PERF_MARGIN)
+    assert lower <= paged_ms <= upper, (
+        f"paged sparse_sdpa device time {paged_ms:.3f} ms outside the contiguous production band "
+        f"[{lower:.3f}, {upper:.3f}] ms"
     )
     assert ratio <= 1.03, f"paged sparse_sdpa regressed production device time by {(ratio - 1) * 100:.2f}%"
 

@@ -33,6 +33,7 @@ pytestmark = [pytest.mark.requires_host_iommu, pytest.mark.use_module_device]
 # run-to-run spread is <1%; 5% leaves comfortable headroom for board/thermal variance while still catching a
 # real regression. Duration (unlike math util) is not normalized for clock/board, so keep some slack here.
 MSA_PERF_MARGIN = 0.05
+MSA_PROD_EXPECTED_MS = {ttnn.bfloat8_b: 0.774, ttnn.bfloat16: 1.430}
 
 
 def _assert_msa_duration(device, run_fn, expected_ms, label):
@@ -61,7 +62,9 @@ def _assert_msa_duration(device, run_fn, expected_ms, label):
 
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "kv_dtype, expected_ms", [(ttnn.bfloat8_b, 0.774), (ttnn.bfloat16, 1.417)], ids=["bfp8", "bf16"]
+    "kv_dtype, expected_ms",
+    list(MSA_PROD_EXPECTED_MS.items()),
+    ids=["bfp8", "bf16"],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
@@ -186,6 +189,14 @@ def test_msa_paged_perf_matches_contiguous(device, kv_dtype, page_size, shard_he
     ratio = paged_ms / contiguous_ms
     logger.info(
         f"sparse_sdpa_msa {kv_dtype} page={page_size} shard={shard_height} perf: contiguous={contiguous_ms:.3f} ms, "
-        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}; "
+        f"production target={MSA_PROD_EXPECTED_MS[kv_dtype]:.3f} ms +/- {MSA_PERF_MARGIN * 100:.0f}%"
+    )
+    expected_ms = MSA_PROD_EXPECTED_MS[kv_dtype]
+    lower = expected_ms * (1 - MSA_PERF_MARGIN)
+    upper = expected_ms * (1 + MSA_PERF_MARGIN)
+    assert lower <= paged_ms <= upper, (
+        f"paged sparse_sdpa_msa device time {paged_ms:.3f} ms outside the contiguous production band "
+        f"[{lower:.3f}, {upper:.3f}] ms"
     )
     assert ratio <= 1.10, f"paged sparse_sdpa_msa regressed production device time by {(ratio - 1) * 100:.2f}%"

@@ -136,23 +136,35 @@ void kernel_main() {
             constexpr uint32_t k_feature_tiles = k_tiles_per_block / block_tile_rows;
             constexpr uint32_t v_feature_tiles = v_tiles_per_block / block_tile_rows;
             if constexpr (paged_kv) {
+                static_assert(k_feature_tiles % 2 == 0 && v_feature_tiles % 2 == 0);
+                constexpr uint32_t k_feature_half = k_feature_tiles / 2;
+                constexpr uint32_t v_feature_half = v_feature_tiles / 2;
+                uint32_t tile_row_bases[block_tile_rows];
                 for (uint32_t row = 0; row < block_tile_rows; ++row) {
                     const uint32_t tile_row_base = sparse_sdpa_msa::
                         cache_tile_id<true, kv_cache_page_size, kv_cache_num_layers, kv_cache_layer_idx>(
                             0, block_id * block_tile_rows + row, 0, k_feature_tiles, n_kv, kv_group, page_bundle_l1);
-                    for (uint32_t feature = 0; feature < k_feature_tiles; feature += 2) {
-                        const uint32_t i = row * k_feature_tiles + feature;
-                        ring.read(k, k_cb, k_tile_bytes, tile_row_base + feature, i * k_tile_bytes);
-                    }
+                    tile_row_bases[row] = tile_row_base;
+                    const uint32_t i = row * k_feature_tiles;
+                    ring.read(k, k_cb, k_feature_half * k_tile_bytes, tile_row_base, i * k_tile_bytes);
                 }
                 for (uint32_t row = 0; row < block_tile_rows; ++row) {
-                    const uint32_t tile_row_base = sparse_sdpa_msa::
-                        cache_tile_id<true, kv_cache_page_size, kv_cache_num_layers, kv_cache_layer_idx>(
-                            0, block_id * block_tile_rows + row, 0, v_feature_tiles, n_kv, kv_group, page_bundle_l1);
-                    for (uint32_t feature = 0; feature < v_feature_tiles; feature += 2) {
-                        const uint32_t i = row * v_feature_tiles + feature;
-                        ring.read(v, v_cb, v_tile_bytes, tile_row_base + feature, i * v_tile_bytes);
+                    uint32_t tile_row_base;
+                    if constexpr (k_feature_tiles == v_feature_tiles) {
+                        tile_row_base = tile_row_bases[row];
+                    } else {
+                        tile_row_base = sparse_sdpa_msa::
+                            cache_tile_id<true, kv_cache_page_size, kv_cache_num_layers, kv_cache_layer_idx>(
+                                0,
+                                block_id * block_tile_rows + row,
+                                0,
+                                v_feature_tiles,
+                                n_kv,
+                                kv_group,
+                                page_bundle_l1);
                     }
+                    const uint32_t i = row * v_feature_tiles;
+                    ring.read(v, v_cb, v_feature_half * v_tile_bytes, tile_row_base, i * v_tile_bytes);
                 }
             } else {
                 for (uint32_t i = 0; i < k_half; ++i) {
