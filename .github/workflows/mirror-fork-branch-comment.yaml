@@ -36,11 +36,18 @@ jobs:
             echo "Could not resolve fork owner/branch for PR #$PR_NUMBER"
             exit 1
           fi
-          TARGET=$(echo "$COMMENT_BODY" | sed -n 's|^/mirror[[:space:]]*||p' | xargs)
-          echo "Dispatching mirror-fork-branch.yaml for ${FORK_OWNER}:${SRC_BRANCH} (target: ${TARGET:-default})"
+          TARGET_RAW=$(echo "$COMMENT_BODY" | sed -n 's|^/mirror[[:space:]]*||p')
+          read -r TARGET <<< "$TARGET_RAW"
+          if [ -n "$TARGET" ]; then
+            case "$TARGET" in
+              mirror/*) TARGET_BRANCH="$TARGET" ;;
+              *) TARGET_BRANCH="mirror/$TARGET" ;;
+            esac
+          fi
+          echo "Dispatching mirror-fork-branch.yaml for ${FORK_OWNER}:${SRC_BRANCH} (target: ${TARGET_BRANCH:-default})"
           gh workflow run mirror-fork-branch.yaml --repo "$REPO" \
             --field source="${FORK_OWNER}:${SRC_BRANCH}" \
-            ${TARGET:+--field target_branch="$TARGET"}
+            ${TARGET_BRANCH:+--field target_branch="$TARGET_BRANCH"}
 
       - name: React to comment
         env:
