@@ -231,6 +231,45 @@ class BgeM3ForEmbedding:
             **kwargs,
         )
 
+    def _pool_helper_tensor(self, host: torch.Tensor) -> ttnn.Tensor:
+        """Stage one mean-pool helper, sharded to match the output rows."""
+        return ttnn.from_torch(
+            host,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _refill_pool_helpers(self, attention_mask: torch.Tensor) -> None:
+        """Rewrite the mean-pool helpers for the current valid lengths.
+
+        The helpers are allocated once, before the trace capture, because a device
+        allocation during a live trace is unsafe. Their contents still depend on the
+        request: reusing the lengths from the capture pools later requests over the
+        wrong token span.
+        """
+        keep = attention_mask.to(torch.bfloat16)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                keep.unsqueeze(-1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            ),
+            self._pool_mask,
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                keep.sum(dim=1, keepdim=True).clamp(min=1.0).unsqueeze(-1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            ),
+            self._pool_counts,
+        )
+
     def _capture_trace(self, staged: dict[str, torch.Tensor]) -> None:
         """Stage the inputs once, then record one forward over them.
 
@@ -251,24 +290,15 @@ class BgeM3ForEmbedding:
 
         # Allocate the pooling helpers now. Allocating a device buffer while a trace
         # is live is unsafe, and Metal warns about it, so nothing may allocate after
-        # capture. Both helpers shard on the batch dimension to match the output.
-        keep = staged["attention_mask_2d"].to(torch.bfloat16)
-        self._pool_mask = ttnn.from_torch(
-            keep.unsqueeze(-1),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # capture. Both helpers shard on the batch dimension to match the output, and
+        # _refill_pool_helpers rewrites them for every later request.
+        self._pool_mask = self._pool_helper_tensor(
+            torch.zeros_like(staged["attention_mask_2d"], dtype=torch.bfloat16).unsqueeze(-1)
         )
-        self._pool_counts = ttnn.from_torch(
-            keep.sum(dim=1, keepdim=True).clamp(min=1.0).unsqueeze(-1),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self._pool_counts = self._pool_helper_tensor(
+            torch.ones((staged["attention_mask_2d"].shape[0], 1, 1), dtype=torch.bfloat16)
         )
+        self._refill_pool_helpers(staged["attention_mask_2d"])
 
         self._traced_output = self.model.capture_trace(**device_inputs, mesh_device=self.device, cq_id=0)
         self._traced_inputs = device_inputs
@@ -309,6 +339,8 @@ class BgeM3ForEmbedding:
                 ttnn.copy_host_to_device_tensor(
                     self._to_device_dp(staged[source_key], on_device=False), self._traced_inputs[name]
                 )
+            # The mean-pool helpers hold the valid lengths, so they follow the inputs.
+            self._refill_pool_helpers(attention_mask)
 
         self.model.execute_trace(blocking=True)
 
