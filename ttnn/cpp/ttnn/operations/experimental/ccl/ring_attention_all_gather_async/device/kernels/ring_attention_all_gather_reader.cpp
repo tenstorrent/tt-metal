@@ -175,7 +175,9 @@ void kernel_main() {
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_cache_batch_extent[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        if constexpr (has_metadata) {
+            input_cache_batch_extent[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        }
         input_valid_pages[input_idx] = valid_pages;
         const auto link_page_range =
             ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
