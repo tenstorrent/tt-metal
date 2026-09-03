@@ -170,3 +170,14 @@ TT_METAL_FORCE_JIT_COMPILE=1 pytest "models/experimental/llama32_1b_quasar/tests
 *Session note: audit-only run per the uplift recipe. Mainline is RED (not ported in place by #54468);
 the fork is genuinely M2 and largely Quasar-ready for the causal interleaved path, with the
 fifo_page_size ring-rewind and the §8.5 remap as the tracked concerns. Delete this report before merge.*
+
+## Emulator run 2026-09-03 (emu-quasar-1x3) — fork is RED on Quasar
+
+`ttnn.experimental.quasar.transformer.scaled_dot_product_attention` (1 head, seq 128, grid 1x1, bf16 K/V) fails at
+kernel JIT: `compute_streaming.hpp` uses WH/BH-only compute APIs with no Quasar implementation —
+`api/compute/experimental/matmul_custom.h` (`mm_no_mop_init_short`, `mm_no_mop_reinit_short`, `matmul_block_no_mop`),
+`api/compute/experimental/sdpa_sub_custom.h` (`sub_bcast_cols_init_short_custom`, `sub_tiles_bcast_cols_custom`),
+`exp_packthread_tile_init`, `log_tile_init`, and raw LLK internals (`t6_semaphore_wait_on_zero`,
+`ckernel::semaphore::PACK_DONE`). This audit only flagged `fifo_page_size`; the custom-LLK dependency is the real
+blocker and needs LLK/op-owner work. Also: the captured bf8 K/V cannot run on Quasar (no Bfp8_b).
+Test: `tests/graph_ops/test_emu_direct.py::test_sdpa_prefill_fork` (strict xfail).

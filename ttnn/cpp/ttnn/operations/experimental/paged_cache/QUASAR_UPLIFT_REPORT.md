@@ -101,3 +101,28 @@ TT_METAL_FORCE_JIT_COMPILE=1 pytest models/experimental/llama32_1b_quasar/tests/
 TT_METAL_FORCE_JIT_COMPILE=1 pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_fill_cache.py
 ```
 Start with `TT_METAL_LLK_ASSERTS` **on**; re-run with it unset. DPRINT needs `unset TT_METAL_LLK_ASSERTS` + the `DPRINT("fmt {}", args)` form. Purge `~/.cache/tt-metal-cache` between baseline and post-port runs.
+
+## Emulator run 2026-09-03 (emu-quasar-1x3) — update_cache was NOT GREEN; fixed
+
+- The captured case cannot run on Quasar at all: the bf8 cache is rejected (`DFB 'cache' has data format 'Bfp8_b'
+  which is not supported on architecture quasar`, program_spec.cpp:1727). Quasar has no Bfp8_b; the model's
+  `kv_cache_dtype` is a model-level decision. Emulator variant = same geometry with a bf16 cache
+  (`tests/graph_ops/test_emu_small_grid.py`).
+- With bf16 the op **ran to completion but wrote nothing** (`0 of the 512 cell(s) the page table maps hold the
+  written value`); the same variant passes on WH. Cause = the audit's §7/§8 gotcha class this report missed
+  (the audit was structural, no run): both DM kernels fed `get_write_ptr()` / `get_read_ptr()` addresses to NoC
+  APIs via `CoreLocalMem` (reader: index, page_table, Wt cache tiles; writer: Wt cache tiles) — on Quasar DM the
+  getters return the uncached L1 alias, which the NoC does not accept, so the reads/writes never land — plus the
+  writer's NoC **loopback self-read** (input row -> untilized cache row, own L1 to own L1), the recipe §6 emulator
+  hazard.
+- Fix applied (`ARCH_QUASAR`-guarded, Gen1 branches textually unchanged): NoC calls take the DFB endpoint
+  (cached address) with `.offset_bytes = t * tile_bytes` for the per-tile loops; the self-read is a direct RISC
+  word copy through the uncached aliases. Gen1-only locals (`noc_id`, `my_noc_x/y`, `local_src`) moved under
+  `#ifndef ARCH_QUASAR`.
+- **Re-validation (same day)**: the DM path is now correct — a host-side diff shows the op writes exactly the
+  page-table-selected block (page 0 x every head x the full 32-row block, nothing else) — but the block lands as
+  **all zeros**, i.e. the compute path (`compute_kernel_lib::untilize(cache)` -> writer patch -> `tilize(untilized_cache2)`)
+  produces zeros on Quasar. Same symptom class as rms_norm (all-zero output). Suspects, both runtime-owned: the
+  `alias_with` DFB pair (`untilized_cache`/`untilized_cache2` name the same L1 through two DFBs) and the recipe §8.5
+  intra-tensix tile-counter aliasing (LayerNorm is a listed candidate). Repro:
+  `tests/graph_ops/test_emu_small_grid.py::...paged_update_cache_128x8x32x64_bf16...`. Still RED on Quasar.

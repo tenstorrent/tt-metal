@@ -145,3 +145,24 @@ has a sanctioned in-API answer (DFB endpoints). Owner-decision construct? No —
 is a compute self-loop (Gen2-legal). Un-guardable fix / experimental-quasar copy? No — both fixes
 guarded in place. Stub LLK? Typecast LLK is format-driven; the uint* format gap is flagged, not
 stubbed. → GREEN stands.
+
+## Emulator run 2026-09-03 (emu-quasar-1x3)
+
+- **Audit miss, now fixed**: all three factories hardcoded `ComputeGen1Config` (interleaved `make_compute_config`,
+  sharded, rm_chunked). On Quasar `ValidateProgramSpec` (program_spec.cpp:891) rejected the compute KernelSpec
+  before any kernel built. Fixed with the paged_cache/tilize idiom: arch-branched `ComputeGen2Config{enable_32_bit_dest,
+  unpack_modes}` under `device->arch() == tt::ARCH::QUASAR`; WH/BH path textually unchanged.
+- The captured cases (`bf16 -> bfloat8_b`) cannot run on Quasar at all: Quasar has no Bfp8_b
+  (`is_supported_quasar`), so the output DFB is rejected. Emulator variant = `bf16 -> float32` on [1,1,32,64]
+  (`tests/graph_ops/test_emu_small_grid.py`). The model's activation-dtype choice is a model-level decision.
+
+### Emulator result (same day) — RED: wrong values on Quasar
+
+With the Gen2 hw_config fix the TILE-interleaved factory builds and runs on Quasar, but `bf16 -> float32` on
+[1,1,32,64] returns wrong values (PCC 0.687, max abs err 3.45 on N(0,1) data); the identical variant passes on WH.
+The DM kernels already use DFB endpoints (no pointer-getter/NoC hazard), so the suspect is the compute side:
+Quasar's `typecast_tile` (api/compute/eltwise_unary/typecast.h, `#ifdef ARCH_QUASAR` branch) routes every
+non-trivial conversion through a single unified Quasar SFPU typecast kernel, run here with `enable_32_bit_dest`
+(fp32_dest_acc_en is forced on for a Float32 output) and empty unpack_modes. Needs LLK/Quasar-SFPU owner triage
+(cf. #53529 SFPI Quasar master issue); repro = `test_emu_small_grid.py::...typecast_32x64_bf16_to_fp32...` on
+emu-quasar-1x3.

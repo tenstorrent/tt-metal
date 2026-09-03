@@ -66,3 +66,14 @@ Quasar (emulator; per the craqsim runbook env — currently exercises the forbid
 ```
 pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode.py
 ```
+
+## Emulator run 2026-09-03 (emu-quasar-1x3) — fork is RED on Quasar
+
+`paged_scaled_dot_product_attention_decode` (fork) with the captured geometry on a 1x1 grid and bf16 caches fails in
+`ValidateProgramSpec` (program_spec.cpp:1288): DFB `out_o` sets `allow_instance_multi_binding` (tree-reduction
+shape — writer PRODUCER `out_o` + CONSUMER `out_worker`, compute PRODUCER + CONSUMER `out_o`). Gen2 rejects the
+flag itself, independent of whether a reduction happens. Fix direction: split into two DFBs (compute->writer `out_o`,
+writer->compute `out_worker`) and rename the compute-side consumer accessor; owner-level change to the fork's
+factory + kernels. Also: the captured bf8 K/V caches cannot run on Quasar (no Bfp8_b).
+Tests: `tests/graph_ops/test_emu_small_grid.py` (captured geometry, grid 1x1) and `test_emu_direct.py::test_sdpa_decode_fork`
+(torch reference) — both strict xfail.

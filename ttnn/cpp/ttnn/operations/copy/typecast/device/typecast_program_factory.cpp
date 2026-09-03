@@ -67,8 +67,11 @@ ComputeUnpackModes make_unpack_modes(
 //   bfp8_pack_precise -> bfp_pack_precision_mode; math_approx_mode=false -> sfpu_precision_mode.
 // dst_full_sync_en was left at its legacy default (false), which is double_buffer_dest = true (the
 // Metal 2.0 default), so it needs no explicit setting.
-ComputeGen1Config make_compute_config(const TypecastParams& args, ComputeUnpackModes unpack_modes) {
-    return ComputeGen1Config{
+//
+// Quasar (Gen2) takes a ComputeGen2Config carrying the same dest width / unpack modes; WH/BH keep the
+// Gen1 config unchanged.
+ComputeHardwareConfig make_compute_config(tt::ARCH arch, const TypecastParams& args, ComputeUnpackModes unpack_modes) {
+    ComputeGen1Config compute_gen1{
         .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
         .bfp_pack_precision_mode =
@@ -76,6 +79,14 @@ ComputeGen1Config make_compute_config(const TypecastParams& args, ComputeUnpackM
         .enable_32_bit_dest = args.fp32_dest_acc_en,
         .unpack_modes = std::move(unpack_modes),
     };
+    if (arch == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        return ComputeHardwareConfig{ComputeGen2Config{
+            .enable_32_bit_dest = compute_gen1.enable_32_bit_dest,
+            .unpack_modes = compute_gen1.unpack_modes,
+        }};
+    }
+    return ComputeHardwareConfig{std::move(compute_gen1)};
 }
 
 }  // namespace
@@ -174,7 +185,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
                  // per_core_block_dim is always 1 (works for both tiled and row-major)
                  {"per_core_block_dim", 1u}},
             .hw_config =
-                ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input))},
+                make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format_input)),
         };
     };
 
@@ -334,7 +345,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
-        .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
+        .hw_config = make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format)),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

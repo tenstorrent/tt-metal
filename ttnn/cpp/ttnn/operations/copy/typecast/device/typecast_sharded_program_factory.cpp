@@ -191,6 +191,24 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     // Field values carried over from the legacy ComputeConfigDescriptor: math_fidelity=HiFi4,
     // fp32_dest_acc_en, bfp8_pack_precise, math_approx_mode=false. dst_full_sync_en was left at its
     // legacy default (false) = double_buffer_dest true, which is also the Metal 2.0 default.
+    ComputeGen1Config compute_gen1{
+        .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+        .bfp_pack_precision_mode =
+            args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+        .enable_32_bit_dest = args.fp32_dest_acc_en,
+        .unpack_modes = std::move(unpack_modes),
+    };
+    // Quasar (Gen2) takes a ComputeGen2Config with the same dest width / unpack modes; WH/BH keep Gen1 unchanged.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw = ComputeGen2Config{
+            .enable_32_bit_dest = compute_gen1.enable_32_bit_dest,
+            .unpack_modes = compute_gen1.unpack_modes,
+        };
+    }
+
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
@@ -202,14 +220,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args = {{"per_core_block_cnt", 1u}, {"per_core_block_dim", num_tile_per_core}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-            .bfp_pack_precision_mode =
-                args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
-            .enable_32_bit_dest = args.fp32_dest_acc_en,
-            .unpack_modes = std::move(unpack_modes),
-        }},
+        .hw_config = compute_hw,
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

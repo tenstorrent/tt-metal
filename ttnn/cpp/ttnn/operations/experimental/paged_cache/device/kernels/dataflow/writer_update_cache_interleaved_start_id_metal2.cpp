@@ -112,11 +112,15 @@ void kernel_main() {
 #endif
 
     dfb_untilized_input.wait_front(Wt);  // input tensor
+#ifndef ARCH_QUASAR
+    // Gen1 patches the new row into the untilized cache block with a NoC loopback read from our own
+    // L1; Quasar copies directly (see the ARCH_QUASAR branch below), so these are Gen1-only.
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
-    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr();
     UnicastEndpoint local_src;
+#endif
+    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr();
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Wait on compute to untilize a block. Update that block in L1.
@@ -127,6 +131,19 @@ void kernel_main() {
         // through two logical buffers. The new row is written in place through the first, then
         // republished through the second for compute to re-tilize.
         uint32_t cache_l1_write_addr = dfb_untilized_cache.get_read_ptr() + cache_tile_offset_B;
+#ifdef ARCH_QUASAR
+        // Quasar: this is a local L1->L1 self-copy. A NoC loopback read on the emulator can spin on
+        // can_post or silently drop (recipe §6), and the DFB pointer getters return the UNCACHED
+        // alias the NoC will not accept — so copy directly with the RISC through the uncached
+        // aliases (both rows are 16 B aligned, Wbytes is a multiple of 4).
+        {
+            volatile tt_l1_ptr uint32_t* src_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_read_addr);
+            volatile tt_l1_ptr uint32_t* dst_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cache_l1_write_addr);
+            for (uint32_t w = 0; w < Wbytes / sizeof(uint32_t); ++w) {
+                dst_row[w] = src_row[w];
+            }
+        }
+#else
         noc.async_read(
             local_src,
             CoreLocalMem<uint32_t>(cache_l1_write_addr),
@@ -134,18 +151,28 @@ void kernel_main() {
             {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
             {});
         noc.async_read_barrier();
+#endif
         dfb_untilized_cache2.push_back(Wt);
         dfb_untilized_cache.pop_front(Wt);  // NEW
 
         // Wait on compute to tilize an updated block. Write that block to DRAM
         dfb_cache.wait_front(Wt);
         if (!skip_update) {
+#ifdef ARCH_QUASAR
+            // Quasar: DFB endpoint (cached address) + per-tile offset into the Wt-entry front,
+            // instead of walking the uncached get_read_ptr() alias (see the self-copy above).
+            for (uint32_t t = 0; t < Wt; ++t) {
+                noc.async_write(
+                    dfb_cache, s0, cache_tile_bytes, {.offset_bytes = t * cache_tile_bytes}, {.page_id = cache_id + t});
+            }
+#else
             uint32_t out_l1_read_addr = dfb_cache.get_read_ptr();
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
                 noc.async_write(
                     CoreLocalMem<uint32_t>(out_l1_read_addr), s0, cache_tile_bytes, {}, {.page_id = curr_cache_id});
                 out_l1_read_addr += cache_tile_bytes;
             }
+#endif
 
             noc.async_writes_flushed();
         }

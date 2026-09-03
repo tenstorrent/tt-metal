@@ -152,3 +152,10 @@ TT_METAL_FORCE_JIT_COMPILE=1 pytest tests/ttnn/unit_tests/operations/data_moveme
 # graph_ops harness (confirm the host-tilize workaround can be relaxed for tilize):
 pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_untilize.py
 ```
+
+## Emulator run 2026-09-03 (emu-quasar-1x3) — PASS
+
+`ttnn.tilize` of a row-major interleaved DRAM tensor on device ([1,1,32,64] and [1,1,64,128], bf16) and
+`from_torch(layout=TILE, device=mesh)` both pass PCC 0.9999 (`tests/graph_ops/test_emu_direct.py`). The default
+Metal 2.0 factory + Gen2 hw_config works on Quasar, so the `graph_case.build_tensor` host-tilize workaround
+(308191f2d91) can be retired for interleaved inputs. The to_memory_config/i2s workaround still stands.
