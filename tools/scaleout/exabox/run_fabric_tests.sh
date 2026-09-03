@@ -574,8 +574,20 @@ fi
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
+# test_tt_fabric resolves report paths against its own root_dir unless it is
+# given an absolute path, which under Docker is a container-internal directory
+# that --rm destroys on exit. Hand it an absolute path here so rank 0 writes
+# the reports straight into the output dir instead.
+OUTPUT_DIR_ABS="$(cd "$OUTPUT_DIR" && pwd)"
+SUMMARY_REPORT="$OUTPUT_DIR_ABS/pairwise_validation_summary.log"
+DETAIL_REPORT="$OUTPUT_DIR_ABS/pairwise_validation_detailed.log"
+
+# Drop leftovers so a report from a previous run into the same output dir
+# cannot be mistaken for this run's.
+rm -f "$SUMMARY_REPORT" "$DETAIL_REPORT"
+
 RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$OUTPUT_DIR/fabric_tests_${RUN_TIMESTAMP}.log"
+LOG_FILE="$OUTPUT_DIR_ABS/fabric_tests_${RUN_TIMESTAMP}.log"
 Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
 
 echo "=========================================="
@@ -620,6 +632,8 @@ echo ""
 EXTRA_BINARY_ARGS=()
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
     EXTRA_BINARY_ARGS+=(--show-progress-detail --show-workers --progress-interval 1)
+    EXTRA_BINARY_ARGS+=(--validation-summary-file "$SUMMARY_REPORT")
+    EXTRA_BINARY_ARGS+=(--validation-detail-file "$DETAIL_REPORT")
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS+=(--filter "$FILTER")
@@ -627,6 +641,12 @@ fi
 if [[ -n "$NUM_PACKETS" ]]; then
     EXTRA_BINARY_ARGS+=(--num-packets "$NUM_PACKETS")
 fi
+
+# Rank 0 writes the reports, and under Docker it needs the output dir visible
+# at the same absolute path inside its container. mpi-docker mounts only $HOME,
+# /tmp and hugepages by default. Requires $OUTPUT_DIR to be on storage the rank
+# 0 host can see (e.g. NFS) when that host is not this one.
+DOCKER_VOLUME_ARGS=(--volume "$OUTPUT_DIR_ABS")
 
 # Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several
 # hosts; we launch one MPI rank per host and let OpenMPI round-robin the ranks
@@ -890,11 +910,7 @@ write_quad_split_rankfile() {
     Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
 }
 
-# Marker used to detect reports written during this run (vs. stale ones from a
-# previous run). We compare report mtimes against this file with bash's `-nt`.
-RUN_START_MARKER="$(mktemp)"
 cleanup_run_artifacts() {
-    rm -f "$RUN_START_MARKER"
     [[ -n "$Z_RANKFILE" ]] && rm -f "$Z_RANKFILE"
 }
 trap cleanup_run_artifacts EXIT
@@ -1164,6 +1180,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
             --mpi-interface "$MPI_IF" \
+            "${DOCKER_VOLUME_ARGS[@]}" \
             "${Z_DOCKER_MPI_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
@@ -1210,6 +1227,7 @@ elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
         --mpi-interface "$MPI_IF" \
+        "${DOCKER_VOLUME_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$SINGLE_HOST" \
@@ -1226,6 +1244,7 @@ else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
         --mpi-interface "$MPI_IF" \
+        "${DOCKER_VOLUME_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$HOSTS" \
@@ -1237,18 +1256,49 @@ echo "=========================================="
 echo "Tests completed at $(date)"
 echo "Results logged to: $LOG_FILE"
 
-# Copy any pairwise-validation reports written by test_tt_fabric (only rank 0
-# writes them, and only when a hang is detected) into the user's --output dir
-# so all artifacts for this run live in one place. Only copy reports that were
-# written during this run (newer than $RUN_START_MARKER) so we don't pick up
-# stale files from a previous invocation.
-REPORT_SRC_DIR="${TT_METAL_HOME:-.}/generated/fabric"
-for report in pairwise_validation_summary.log pairwise_validation_detailed.log; do
-    if [[ -f "$REPORT_SRC_DIR/$report" && "$REPORT_SRC_DIR/$report" -nt "$RUN_START_MARKER" ]]; then
-        cp "$REPORT_SRC_DIR/$report" "$OUTPUT_DIR/"
-        echo "Copied report: $OUTPUT_DIR/$report"
+# rank 0 is the only rank that writes the pairwise-validation reports, and only
+# when a hang is detected. It is frequently not this host, and $OUTPUT_DIR is
+# not necessarily shared storage, so bring the files back here to guarantee that
+# every artifact for this run lands on the machine the operator ran this from.
+# rank 0 logs the absolute path it wrote; use that rather than assuming one.
+mapfile -t WRITTEN_REPORTS < <(
+    sed -nE 's/.*(Summary|Detailed) report written to: ([^ ]+\.log).*/\2/p' "$LOG_FILE" 2>/dev/null | sort -u
+)
+
+# --tag-output prefixes rank 0's lines with "[1,0]<stream>: [host:pid]".
+RANK0_HOST="$(sed -nE 's/^\[1,0\]<std(out|err)>: \[([^]:]+):[0-9]+\].*/\2/p' "$LOG_FILE" 2>/dev/null | head -1)"
+if [[ -z "$RANK0_HOST" ]]; then
+    RANK0_HOST="${HOSTS%%,*}"
+fi
+
+# Same ssh options mpirun is launched with, plus BatchMode/ConnectTimeout so an
+# unreachable rank 0 fails fast instead of blocking the script on a prompt.
+SCP_OPTS=(
+    -q
+    -o BatchMode=yes
+    -o StrictHostKeyChecking=false
+    -o UserKnownHostsFile=/dev/null
+    -o LogLevel=ERROR
+    -o ConnectTimeout=15
+)
+
+for report in "${WRITTEN_REPORTS[@]}"; do
+    dest="$OUTPUT_DIR_ABS/$(basename "$report")"
+    if [[ "$report" == "$dest" && -f "$dest" ]]; then
+        echo "Hang report: $dest"
+    elif [[ -f "$report" ]] && cp "$report" "$dest"; then
+        echo "Hang report: $dest"
+    elif scp "${SCP_OPTS[@]}" "$RANK0_HOST:$report" "$dest" 2>/dev/null; then
+        echo "Hang report: $dest (fetched from rank 0 host $RANK0_HOST)"
+    else
+        echo "WARNING: rank 0 ($RANK0_HOST) wrote $report but it could not be retrieved." >&2
+        echo "         Retrieve it with: scp $RANK0_HOST:$report $OUTPUT_DIR_ABS/" >&2
     fi
 done
+
+if [[ ${#WRITTEN_REPORTS[@]} -eq 0 ]] && grep -q "confirmed hung cluster-wide" "$LOG_FILE" 2>/dev/null; then
+    echo "WARNING: a hang was detected but rank 0 never logged a report write." >&2
+fi
 
 print_fabric_final_summary "$LOG_FILE"
 FABRIC_RESULT=$?
