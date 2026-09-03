@@ -54,7 +54,7 @@ constexpr std::size_t NUM_FPU_COUNTERS = 3;
 // unpacker2/thread0 and sel 10 is unpacker0/thread1 (the Blackhole names do not carry over).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
-     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -63,10 +63,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK2_BUSY_THREAD0, 9},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 10},
-     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_OVR, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_PORT, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
@@ -79,7 +79,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
      {PerfCounterType::PACKER_BUSY, 18},
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
+     {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
 // INSTRN readout: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35
@@ -106,10 +106,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 55> instrn_counters =
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_1, 17},
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_2, 18},
      {PerfCounterType::INSTISSUE_INSTRN_AVAILABLE_3, 19},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_0, 20},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_1, 21},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_2, 22},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_3, 23},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_0, 20},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_1, 21},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_2, 22},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_3, 23},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_0, 24},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_1, 25},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_2, 26},

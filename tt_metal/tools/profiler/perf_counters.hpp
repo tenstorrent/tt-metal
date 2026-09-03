@@ -207,11 +207,15 @@ enum PerfCounterType : uint16_t {
     CFG_INSTRN_AVAILABLE_3,
     SYNC_INSTRN_AVAILABLE_3,
     THCON_INSTRN_AVAILABLE_3,
-    FPU_INSTRN_AVAILABLE_3,
     UNPACK_INSTRN_AVAILABLE_3,
     PACK_INSTRN_AVAILABLE_3,
     THREAD_STALLS_3,
     THREAD_INSTRUCTIONS_3,
+    // The math class counts math and instissue instructions (the RTL unions them)
+    MATH_INSTRN_AVAILABLE_0,
+    MATH_INSTRN_AVAILABLE_1,
+    MATH_INSTRN_AVAILABLE_2,
+    MATH_INSTRN_AVAILABLE_3,
     // Instruction classes that only exist on Quasar
     XSEARCH_INSTRN_AVAILABLE_0,
     XSEARCH_INSTRN_AVAILABLE_1,
@@ -241,9 +245,14 @@ enum PerfCounterType : uint16_t {
     QUASAR_L1_CLIENT_EVENT,
     // Quasar runs 3 unpackers per thread.
     UNPACK2_BUSY_THREAD0,
+    // Honest names for signals the tt-1xx enums misdescribe (same sels, correct semantics)
+    MATH_NOT_D2S_STALLED,
+    SRCB_WRITE_NOT_BLOCKED_OVR,
+    SRCA_WRITE_NOT_BLOCKED_PORT,
+    MATH_NOT_SCOREBOARD_STALLED,
     // counter_type is a uint32_t:8 bitfield — keep all values below 256.
 };
-static_assert(UNPACK2_BUSY_THREAD0 <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(MATH_NOT_SCOREBOARD_STALLED <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {

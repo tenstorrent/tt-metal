@@ -220,36 +220,43 @@ COUNTER_TYPE_NAMES = {
     181: "CFG_INSTRN_AVAILABLE_3",
     182: "SYNC_INSTRN_AVAILABLE_3",
     183: "THCON_INSTRN_AVAILABLE_3",
-    184: "FPU_INSTRN_AVAILABLE_3",
-    185: "UNPACK_INSTRN_AVAILABLE_3",
-    186: "PACK_INSTRN_AVAILABLE_3",
-    187: "THREAD_STALLS_3",
-    188: "THREAD_INSTRUCTIONS_3",
-    189: "XSEARCH_INSTRN_AVAILABLE_0",
-    190: "XSEARCH_INSTRN_AVAILABLE_1",
-    191: "XSEARCH_INSTRN_AVAILABLE_2",
-    192: "XSEARCH_INSTRN_AVAILABLE_3",
-    193: "INSTISSUE_INSTRN_AVAILABLE_0",
-    194: "INSTISSUE_INSTRN_AVAILABLE_1",
-    195: "INSTISSUE_INSTRN_AVAILABLE_2",
-    196: "INSTISSUE_INSTRN_AVAILABLE_3",
-    197: "TILE_COUNTER_STALL_PACK",
-    198: "TILE_COUNTER_STALL_UNPACK",
-    199: "SRCS_STALL_PACK",
-    200: "SRCS_STALL_SFPU",
-    201: "SRCS_STALL_UNPACK",
-    202: "DEST_STALL_PACK",
-    203: "DEST_STALL_SFPU",
-    204: "DEST_STALL_MATH",
-    205: "DEST_STALL_UNPACK",
-    206: "SFPU_DATA_HAZARD_STALL",
-    207: "FPU_DATA_HAZARD_STALL",
-    208: "SRCB_STALL_UNPACK",
-    209: "SRCA_STALL_UNPACK",
-    210: "DVALID_STALL_MATH",
-    211: "SRCA_STALL_MATH",
-    212: "QUASAR_L1_CLIENT_EVENT",
-    213: "UNPACK2_BUSY_THREAD0",
+    184: "UNPACK_INSTRN_AVAILABLE_3",
+    185: "PACK_INSTRN_AVAILABLE_3",
+    186: "THREAD_STALLS_3",
+    187: "THREAD_INSTRUCTIONS_3",
+    188: "MATH_INSTRN_AVAILABLE_0",
+    189: "MATH_INSTRN_AVAILABLE_1",
+    190: "MATH_INSTRN_AVAILABLE_2",
+    191: "MATH_INSTRN_AVAILABLE_3",
+    192: "XSEARCH_INSTRN_AVAILABLE_0",
+    193: "XSEARCH_INSTRN_AVAILABLE_1",
+    194: "XSEARCH_INSTRN_AVAILABLE_2",
+    195: "XSEARCH_INSTRN_AVAILABLE_3",
+    196: "INSTISSUE_INSTRN_AVAILABLE_0",
+    197: "INSTISSUE_INSTRN_AVAILABLE_1",
+    198: "INSTISSUE_INSTRN_AVAILABLE_2",
+    199: "INSTISSUE_INSTRN_AVAILABLE_3",
+    200: "TILE_COUNTER_STALL_PACK",
+    201: "TILE_COUNTER_STALL_UNPACK",
+    202: "SRCS_STALL_PACK",
+    203: "SRCS_STALL_SFPU",
+    204: "SRCS_STALL_UNPACK",
+    205: "DEST_STALL_PACK",
+    206: "DEST_STALL_SFPU",
+    207: "DEST_STALL_MATH",
+    208: "DEST_STALL_UNPACK",
+    209: "SFPU_DATA_HAZARD_STALL",
+    210: "FPU_DATA_HAZARD_STALL",
+    211: "SRCB_STALL_UNPACK",
+    212: "SRCA_STALL_UNPACK",
+    213: "DVALID_STALL_MATH",
+    214: "SRCA_STALL_MATH",
+    215: "QUASAR_L1_CLIENT_EVENT",
+    216: "UNPACK2_BUSY_THREAD0",
+    217: "MATH_NOT_D2S_STALLED",
+    218: "SRCB_WRITE_NOT_BLOCKED_OVR",
+    219: "SRCA_WRITE_NOT_BLOCKED_PORT",
+    220: "MATH_NOT_SCOREBOARD_STALLED",
 }
 
 # Quasar stall reasons are OR-reduced across the 4 threads.
@@ -270,7 +277,17 @@ QUASAR_STALL_REASON_METRICS = {
     "DValid Stall Math Rate": "DVALID_STALL_MATH",
     "SrcA Stall Math Rate": "SRCA_STALL_MATH",
 }
-QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
+# Quasar renames signals the tt-1xx enums misdescribe; metrics written against the old names
+# resolve through these aliases so both arches compute identically.
+QUASAR_COUNTER_ALIASES = {
+    "DATA_HAZARD_STALLS_MOVD2A": "MATH_NOT_D2S_STALLED",
+    "SRCB_WRITE_ACTUAL": "SRCB_WRITE_NOT_BLOCKED_OVR",
+    "SRCA_WRITE_ACTUAL": "SRCA_WRITE_NOT_BLOCKED_PORT",
+    "AVAILABLE_MATH": "MATH_NOT_SCOREBOARD_STALLED",
+    **{f"FPU_INSTRN_AVAILABLE_{t}": f"MATH_INSTRN_AVAILABLE_{t}" for t in range(4)},
+}
+
+QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
 
 
 # Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or
@@ -302,7 +319,7 @@ def quasar_l1_client_label(sel):
 
 
 # (class, thread) pairs already covered by the tt-1xx metric names above them.
-_QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("FPU", 1), ("UNPACK", 0), ("PACK", 2)}
+_QUASAR_CLASS_PAIRS_COVERED = {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
 
 
 # Perf counter headers are only included in CSV output when perf counter data is available.
@@ -580,9 +597,9 @@ PERF_COUNTER_CSV_HEADERS = [
     ],
     *[
         f"{cls} Instrn Avail Rate T{thread} {stat} (%)"
-        for cls in ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "FPU", "UNPACK", "PACK")
+        for cls in ("CFG", "SYNC", "THCON", "XSEARCH", "INSTISSUE", "MATH", "UNPACK", "PACK")
         for thread in range(4)
-        if (cls, thread) not in {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("FPU", 1), ("UNPACK", 0), ("PACK", 2)}
+        if (cls, thread) not in {("CFG", 0), ("SYNC", 0), ("THCON", 0), ("MATH", 1), ("UNPACK", 0), ("PACK", 2)}
         for stat in ("Min", "Median", "Max", "Avg")
     ],
     *[f"T3 Instrn Issue Rate {stat}" for stat in ("Min", "Median", "Max", "Avg")],
@@ -1003,7 +1020,15 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     _SERIES_INDEX = ["run_host_id", "trace_id_count", "core_x", "core_y", "risc_type"]
 
+    _present = set(perf_counter_df["counter type"].values)
+
+    def _resolve(counter_name):
+        if counter_name not in _present and QUASAR_COUNTER_ALIASES.get(counter_name) in _present:
+            return QUASAR_COUNTER_ALIASES[counter_name]
+        return counter_name
+
     def _counter_column(counter_name, column):
+        counter_name = _resolve(counter_name)
         mask = perf_counter_df["counter type"] == counter_name
         series = perf_counter_df[mask].set_index(_SERIES_INDEX)[column]
         # risc_type keeps each NEO reader distinct; averaging repeated launches keeps cross-counter
@@ -1017,7 +1042,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         return _counter_column(counter_name, "ref cnt")
 
     def has_counter(counter_name):
-        return counter_name in perf_counter_df["counter type"].values
+        return _resolve(counter_name) in _present
 
     def compute_util_metric(counter_name, scale=100):
         """Compute value / ref_cnt * scale per core, aggregate by op."""
@@ -1622,6 +1647,12 @@ def compute_device_only_metrics(
     ).reset_index()
 
     eff_pivot.columns = ["_".join(col).strip("_") if col[1] else col[0] for col in eff_pivot.columns.values]
+
+    for legacy, honest in QUASAR_COUNTER_ALIASES.items():
+        for kind in ("value", "ref_cnt"):
+            src, dst = f"{kind}_{honest}", f"{kind}_{legacy}"
+            if src in eff_pivot.columns and dst not in eff_pivot.columns:
+                eff_pivot[dst] = eff_pivot[src]
 
     def safe_div(num, denom):
         return (num / denom * 100) if denom > 0 else nan
