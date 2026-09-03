@@ -792,11 +792,14 @@ def _run_spec_decode(
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
+    # Fused MTP owns this process's one CCL capture. Traced prefill interleaved
+    # with that capture deadlocks Wormhole. Spec prefill stays eager; decode
+    # tracing is still ``spec._use_trace`` below.
     prefill_enable_trace, device_sampling_params = _prepare_demo_prefill_warmup(
         generator=generator,
         tt_kv_cache=tt_kv_cache,
         sampling_params=sampling_params,
-        enable_trace=enable_trace,
+        enable_trace=False,
         max_seq_len=max_seq_len,
         model_args_list=model_args_list,
         batch_size=batch_size,
@@ -1016,7 +1019,7 @@ def _run_spec_decode_batched(
         generator=generator,
         tt_kv_cache=tt_kv_cache,
         sampling_params=sampling_params,
-        enable_trace=enable_trace,
+        enable_trace=False,
         max_seq_len=max_seq_len,
         model_args_list=model_args_list,
         batch_size=B,
