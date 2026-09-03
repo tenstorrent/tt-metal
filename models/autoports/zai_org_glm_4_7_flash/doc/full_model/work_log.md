@@ -1515,11 +1515,13 @@ working as intended. The arm was re-run on its own afterwards and passed;
 one log is the only artifact in `doc/full_model/` that is not from the single
 run recorded in `sweep_provenance.log`.
 
-**Closing state.** The stage has run nine independent `$stage-review` rounds
-(FM-011, FM-012, FM-015 through FM-020, and the round-9 review recorded in the
-README's "Known limitations"). Rounds 1 through 7 each found at least one
-correctness defect and each was fixed with a regression test. Round 8 found no
-correctness defect, and the review budget for this stage caps further rounds:
+**Closing state as of this entry** (superseded by FM-023, which records round
+10 and the two defects it found). The stage has run nine independent
+`$stage-review` rounds (FM-011, FM-012, FM-015 through FM-020, and the round-9
+review recorded in the README's "Known limitations"). Rounds 1 through 7 each
+found at least one correctness defect and each was fixed with a regression
+test. Round 8 found no correctness defect, and the review budget for this stage
+caps further rounds:
 remaining freshness, provenance and documentation-polish findings are recorded
 as limitations rather than chased with more sweeps, because each sweep is 90
 minutes of hardware and the functional gates have been green since FM-014.
@@ -1609,6 +1611,16 @@ exceptions naming them as superseded. The remaining artifacts carry the
 pre-change `tt/generator.py` hash; that is recorded as a limitation in the
 README rather than fixed.
 
+**Closing state.** Ten `$stage-review` rounds (FM-011, FM-012, FM-015 through
+FM-023). Rounds 1 through 7 each found at least one correctness defect; round 8
+found none; round 9's findings are the README's "Known limitations"; round 10
+found the mid-loop sampling-mode capture above, and diagnosing it found the
+ignored request seed. Both are fixed, each with a regression test, and both
+tests run on the full 47-layer model. The review budget is spent: no
+correctness defect is open, every functional gate is green, and the remaining
+findings are the freshness and provenance items the README lists rather than
+anything the model does wrong.
+
 ## FM-011b: checkpoint
 
 Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
@@ -1636,6 +1648,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `188541a6a7b` | round-8 source fixes (FM-020): the absence-checking figure check, the LM-head docstrings and `in0_block_w` sweep, the failing sweep, and the tightened terminal-path assertion |
 | `d91df21262a` | FM-021: `in0_block_w` back to 4 after the readiness gates measured what it costs |
 | `3c1ff5dcbb0` | the FM-020/021/022 evidence sweep and the report rebuilt from it |
+| `486a011258e` | FM-023: the mid-loop sampling-mode capture, the refused request seed, four regenerated artifacts and the report updated from them |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
