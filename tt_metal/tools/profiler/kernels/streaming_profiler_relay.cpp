@@ -364,6 +364,7 @@ struct SpoolPump {
 // is the coordinate, one address and the send.
 constexpr uint32_t kCvCmdBuf = write_at_cmd_buf;
 constexpr uint32_t kHeadCmdBuf = write_cmd_buf;
+constexpr uint32_t kGatherTxn = 1;
 
 FORCE_INLINE bool host_released(volatile tt_l1_ptr uint32_t* stop) {
     invalidate_l1_cache();
@@ -540,10 +541,11 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
 }
 
 static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
-    // Both read buffers use transaction id 0: the NIU's outstanding count for that id is the batch barrier.
+    // Gathers carry transaction id kGatherTxn and tail reads id 0: the NIU's outstanding count per id lets the
+    // batch barrier wait for the gathers alone, and the tail reads are waited for where they are consumed.
     while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
     }
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_PACKET_TAG, 0);
+    NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(kGatherTxn));
     // Worker L1 addresses fit 32 bits, so the address-mid word is zero and set_state is the coordinate alone.
     NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_MID, 0);
     while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
@@ -950,6 +952,11 @@ void kernel_main() {
                 const bool more = cur < n_end;
                 if (more) {
                     retire_gen(gen);
+                    // The tails this batch consumes were refreshed a batch ago (or probed at sweep start); they are
+                    // waited for here, not at the gather barrier.
+                    while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
+                    }
+                    invalidate_l1_cache();
                     n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
                     batch = &ship_list[cur];
                     const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
@@ -989,10 +996,10 @@ void kernel_main() {
                     }
                 }
 
-                // Hardware-counted read barrier: every read carries transaction id 0, so the NIU's per-id outstanding
-                // count is the barrier. The spin doubles as the pump's slot only at full pressure, where the pump's
-                // GDDR reads no longer contend with the gathers.
-                while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
+                // Hardware-counted read barrier on the gathers' transaction id. The spin doubles as the pump's slot
+                // only at full pressure, where the pump's GDDR reads no longer contend with the gathers. The heads are
+                // NIU-sourced from L1, so no cache invalidate is needed before posting them.
+                while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(kGatherTxn)) != 0) {
                     if constexpr (kSpool) {
                         // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                         if (pump.level >= SpoolPump::kLevelInline) {
@@ -1000,7 +1007,6 @@ void kernel_main() {
                         }
                     }
                 }
-                invalidate_l1_cache();
                 advance_heads(n, batch);
 
                 pend_n = n;
