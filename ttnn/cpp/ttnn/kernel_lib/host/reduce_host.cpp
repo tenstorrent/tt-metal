@@ -845,6 +845,50 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
     return true;
 }
 
+bool same_auxiliary_tile(const ReduceAuxiliaryTileSpec& lhs, const ReduceAuxiliaryTileSpec& rhs) {
+    return lhs.type == rhs.type && lhs.num_valid_elements == rhs.num_valid_elements &&
+           std::bit_cast<std::uint32_t>(lhs.value) == std::bit_cast<std::uint32_t>(rhs.value);
+}
+
+bool auxiliary_recipe_matches_at(
+    const std::vector<ReduceAuxiliaryTileSpec>& aggregate,
+    const std::vector<ReduceAuxiliaryTileSpec>& recipe,
+    std::size_t offset,
+    std::size_t count) {
+    return std::equal(
+        recipe.begin(), recipe.begin() + count, aggregate.begin() + offset, [](const auto& lhs, const auto& rhs) {
+            return same_auxiliary_tile(lhs, rhs);
+        });
+}
+
+std::uint32_t append_auxiliary_recipe(
+    std::vector<ReduceAuxiliaryTileSpec>& aggregate, const std::vector<ReduceAuxiliaryTileSpec>& recipe) {
+    TT_FATAL(!recipe.empty(), "Reduce sequence planner: an auxiliary recipe must not be empty");
+
+    if (recipe.size() <= aggregate.size()) {
+        for (std::size_t offset = 0; offset + recipe.size() <= aggregate.size(); ++offset) {
+            if (auxiliary_recipe_matches_at(aggregate, recipe, offset, recipe.size())) {
+                return checked_u32(offset, "auxiliary tile offset");
+            }
+        }
+    }
+
+    // Preserve a shared prefix when a later recipe extends the aggregate's
+    // suffix, e.g. [mask] followed by [mask, zero].
+    const std::size_t max_overlap = std::min(aggregate.size(), recipe.size());
+    for (std::size_t overlap = max_overlap; overlap > 0; --overlap) {
+        const std::size_t offset = aggregate.size() - overlap;
+        if (auxiliary_recipe_matches_at(aggregate, recipe, offset, overlap)) {
+            aggregate.insert(aggregate.end(), recipe.begin() + overlap, recipe.end());
+            return checked_u32(offset, "auxiliary tile offset");
+        }
+    }
+
+    const auto offset = checked_u32(aggregate.size(), "auxiliary tile offset");
+    aggregate.insert(aggregate.end(), recipe.begin(), recipe.end());
+    return offset;
+}
+
 }  // namespace
 
 ReduceSequencePlan make_reduce_sequence_plan(
@@ -869,8 +913,6 @@ ReduceSequencePlan make_reduce_sequence_plan(
     const auto& first_config = reductions.front().second;
     std::vector<ReducePlan> plans;
     plans.reserve(reductions.size());
-    std::vector<std::uint32_t> input_cb_ids;
-    input_cb_ids.reserve(reductions.size());
 
     for (const auto& [input_cb_id, config] : reductions) {
         TT_FATAL(
@@ -878,11 +920,6 @@ ReduceSequencePlan make_reduce_sequence_plan(
                 (!accumulates || input_cb_id != cb_ids.accumulator_cb_id),
             "Reduce sequence planner: input CB {} collides with a shared reduction CB",
             input_cb_id);
-        TT_FATAL(
-            std::find(input_cb_ids.begin(), input_cb_ids.end(), input_cb_id) == input_cb_ids.end(),
-            "Reduce sequence planner: input CB {} appears more than once",
-            input_cb_id);
-        input_cb_ids.push_back(input_cb_id);
 
         if (accumulates) {
             TT_FATAL(
@@ -1016,12 +1053,25 @@ ReduceSequencePlan make_reduce_sequence_plan(
     }
 
     ReduceSequencePlan sequence;
+    sequence.auxiliary.cb_id = cb_ids.auxiliary_cb_id;
+    std::vector<std::uint32_t> auxiliary_tile_offsets;
+    auxiliary_tile_offsets.reserve(plans.size());
+    for (const auto& plan : plans) {
+        auxiliary_tile_offsets.push_back(append_auxiliary_recipe(sequence.auxiliary.tiles, plan.auxiliary_tiles));
+    }
+    TT_FATAL(
+        sequence.auxiliary.tiles.size() <= reduce_plan_args::auxiliary_header::tile_count_mask,
+        "Reduce sequence planner: aggregate auxiliary recipe has {} tiles, but at most {} are encodable",
+        sequence.auxiliary.tiles.size(),
+        reduce_plan_args::auxiliary_header::tile_count_mask);
+
     sequence.calls.reserve(reductions.size());
     for (std::size_t i = 0; i < reductions.size(); ++i) {
         const bool is_last = i + 1 == reductions.size();
         sequence.calls.push_back(
             {.input_cb_id = reductions[i].first,
              .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
+             .auxiliary_tile_offset = auxiliary_tile_offsets[i],
              .output_cb_id = accumulates && !is_last ? cb_ids.accumulator_cb_id : cb_ids.output_cb_id,
              .accumulator_cb_id = accumulates ? std::optional<std::uint32_t>{cb_ids.accumulator_cb_id} : std::nullopt,
              .accumulation_mode = !accumulates ? ReduceAccumulationMode::None
@@ -1114,26 +1164,40 @@ std::uint32_t encode_circular_buffers(const ReduceCallPlan& call) {
            insert(accumulator_cb_id, circular_buffers::accumulator_shift, circular_buffers::id_mask);
 }
 
-std::uint32_t encode_chunk_and_auxiliary(const ReducePlan& plan) {
+std::uint32_t encode_chunk_and_auxiliary(const ReduceCallPlan& call) {
     using namespace reduce_plan_args;
+    const auto& plan = call.plan;
     const auto tile_count = auxiliary_tile_count(plan);
     check_fits(
         plan.chunk.output_tiles, chunk_and_auxiliary::output_tiles_mask, "output tiles per synchronization chunk");
+    check_fits(call.auxiliary_tile_offset, chunk_and_auxiliary::auxiliary_tile_offset_mask, "auxiliary tile offset");
     check_fits(tile_count, chunk_and_auxiliary::auxiliary_tile_count_mask, "auxiliary tile count");
     return insert(
                plan.chunk.output_tiles,
                chunk_and_auxiliary::output_tiles_shift,
                chunk_and_auxiliary::output_tiles_mask) |
            insert(
+               call.auxiliary_tile_offset,
+               chunk_and_auxiliary::auxiliary_tile_offset_shift,
+               chunk_and_auxiliary::auxiliary_tile_offset_mask) |
+           insert(
                tile_count,
                chunk_and_auxiliary::auxiliary_tile_count_shift,
                chunk_and_auxiliary::auxiliary_tile_count_mask);
 }
 
-std::uint32_t encode_auxiliary_tile_configuration(std::uint32_t cb_id, const ReduceAuxiliaryTileSpec& tile) {
+std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary) {
+    using namespace reduce_plan_args;
+    TT_FATAL(auxiliary.cb_id < no_cb_id, "Reduce plan args: auxiliary CB ID must fit in one byte");
+    const auto tile_count = checked_u32(auxiliary.tiles.size(), "aggregate auxiliary tile count");
+    check_fits(tile_count, auxiliary_header::tile_count_mask, "aggregate auxiliary tile count");
+    return insert(auxiliary.cb_id, auxiliary_header::cb_id_shift, auxiliary_header::cb_id_mask) |
+           insert(tile_count, auxiliary_header::tile_count_shift, auxiliary_header::tile_count_mask);
+}
+
+std::uint32_t encode_auxiliary_tile_configuration(const ReduceAuxiliaryTileSpec& tile) {
     using namespace reduce_plan_args;
     const auto type = static_cast<std::uint32_t>(tile.type);
-    TT_FATAL(cb_id < no_cb_id, "Reduce plan args: auxiliary CB ID must fit in one byte");
     check_fits(type, auxiliary_configuration::tile_type_mask, "auxiliary tile type");
     check_fits(tile.num_valid_elements, auxiliary_configuration::valid_elements_mask, "auxiliary valid element count");
     TT_FATAL(
@@ -1143,8 +1207,7 @@ std::uint32_t encode_auxiliary_tile_configuration(std::uint32_t cb_id, const Red
         tile.type != ReduceAuxiliaryTileType::Zero ||
             (tile.num_valid_elements == 0 && std::bit_cast<std::uint32_t>(tile.value) == 0),
         "Reduce plan args: a zero auxiliary tile must have value 0 and zero valid elements");
-    return insert(cb_id, auxiliary_configuration::cb_id_shift, auxiliary_configuration::cb_id_mask) |
-           insert(type, auxiliary_configuration::tile_type_shift, auxiliary_configuration::tile_type_mask) |
+    return insert(type, auxiliary_configuration::tile_type_shift, auxiliary_configuration::tile_type_mask) |
            insert(
                tile.num_valid_elements,
                auxiliary_configuration::valid_elements_shift,
@@ -1187,7 +1250,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
             plan.chunk.output_tiles > 0 && !plan.auxiliary_tiles.empty(),
         "Reduce plan args: call contains zero-sized kernel geometry");
 
-    compile_time_args_.reserve(reduce_plan_args::call_compile_time_arg_count(auxiliary_tile_count(plan)));
+    compile_time_args_.reserve(reduce_plan_args::call_compile_time_arg_count());
     const std::uint32_t record[] = {
         encode_configuration(call),
         encode_circular_buffers(call),
@@ -1197,23 +1260,19 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         plan.input_row_stride_tiles,
         plan.reduce_factor,
         plan.chunk.reduce_axis_tiles,
-        encode_chunk_and_auxiliary(plan),
+        encode_chunk_and_auxiliary(call),
         std::bit_cast<std::uint32_t>(plan.post_scale),
         call.accumulation_index,
     };
     static_assert(std::size(record) == static_cast<std::size_t>(CallWord::Count));
     compile_time_args_.insert(compile_time_args_.end(), std::begin(record), std::end(record));
-
-    for (const auto& tile : plan.auxiliary_tiles) {
-        compile_time_args_.push_back(encode_auxiliary_tile_configuration(call.auxiliary_cb_id, tile));
-        compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
-    }
 }
 
 ReduceCallArgs::ReduceCallArgs(const ReducePlan& plan, const ReduceCallCbIds& cb_ids) :
     ReduceCallArgs(ReduceCallPlan{
         .input_cb_id = cb_ids.input_cb_id,
         .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
+        .auxiliary_tile_offset = 0,
         .output_cb_id = cb_ids.output_cb_id,
         .accumulator_cb_id = std::nullopt,
         .accumulation_mode = ReduceAccumulationMode::None,
@@ -1227,6 +1286,22 @@ void ReduceCallArgs::append_to(std::vector<std::uint32_t>& compile_time_args) co
 
 std::vector<std::uint32_t> ReduceCallArgs::get_compile_time_args() const { return compile_time_args_; }
 
+ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
+    TT_FATAL(!auxiliary.tiles.empty(), "Reduce plan args: an aggregate auxiliary recipe must not be empty");
+    compile_time_args_.reserve(reduce_plan_args::auxiliary_compile_time_arg_count(auxiliary.tiles.size()));
+    compile_time_args_.push_back(encode_auxiliary_header(auxiliary));
+    for (const auto& tile : auxiliary.tiles) {
+        compile_time_args_.push_back(encode_auxiliary_tile_configuration(tile));
+        compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
+    }
+}
+
+void ReduceAuxiliaryArgs::append_to(std::vector<std::uint32_t>& compile_time_args) const {
+    compile_time_args.insert(compile_time_args.end(), compile_time_args_.begin(), compile_time_args_.end());
+}
+
+std::vector<std::uint32_t> ReduceAuxiliaryArgs::get_compile_time_args() const { return compile_time_args_; }
+
 void ReduceSequencePlan::append_to(std::vector<std::uint32_t>& compile_time_args) const {
     TT_FATAL(!calls.empty(), "Reduce plan args: a call sequence must not be empty");
     compile_time_args.push_back(checked_u32(calls.size(), "reduce call count"));
@@ -1238,6 +1313,16 @@ void ReduceSequencePlan::append_to(std::vector<std::uint32_t>& compile_time_args
 std::vector<std::uint32_t> ReduceSequencePlan::get_compile_time_args() const {
     std::vector<std::uint32_t> compile_time_args;
     append_to(compile_time_args);
+    return compile_time_args;
+}
+
+void ReduceSequencePlan::append_auxiliary_to(std::vector<std::uint32_t>& compile_time_args) const {
+    ReduceAuxiliaryArgs(auxiliary).append_to(compile_time_args);
+}
+
+std::vector<std::uint32_t> ReduceSequencePlan::get_auxiliary_compile_time_args() const {
+    std::vector<std::uint32_t> compile_time_args;
+    append_auxiliary_to(compile_time_args);
     return compile_time_args;
 }
 

@@ -140,6 +140,25 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("type", &host::ReduceAuxiliaryTileSpec::type)
         .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements);
 
+    nb::class_<host::ReduceAuxiliaryPlan>(planner, "ReduceAuxiliaryPlan")
+        .def_ro("cb_id", &host::ReduceAuxiliaryPlan::cb_id)
+        .def_ro("tiles", &host::ReduceAuxiliaryPlan::tiles)
+        .def_prop_ro(
+            "compile_time_args",
+            [](const host::ReduceAuxiliaryPlan& self) {
+                return host::ReduceAuxiliaryArgs(self).get_compile_time_args();
+            },
+            "One aggregate auxiliary-CB record for a complete planning unit.")
+        .def(
+            "append_to",
+            [](const host::ReduceAuxiliaryPlan& self, nb::list compile_time_args) {
+                for (const auto arg : host::ReduceAuxiliaryArgs(self).get_compile_time_args()) {
+                    compile_time_args.append(nb::cast(arg));
+                }
+            },
+            nb::arg("compile_time_args"),
+            "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.");
+
     nb::class_<host::DenseRowMajorPlan>(planner, "DenseRowMajorPlan")
         .def_ro("H_logical", &host::DenseRowMajorPlan::H_logical)
         .def_ro("W_logical", &host::DenseRowMajorPlan::W_logical)
@@ -194,7 +213,16 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("input_cb_id"),
             nb::arg("auxiliary_cb_id"),
             nb::arg("output_cb_id"),
-            "Serialize one complete non-accumulating call for the caller's CB namespace.");
+            "Serialize one fixed-size non-accumulating compute call for the caller's CB namespace.")
+        .def(
+            "auxiliary_compile_time_args",
+            [](const host::ReducePlan& self, std::uint32_t auxiliary_cb_id) {
+                return host::ReduceAuxiliaryArgs(
+                           host::ReduceAuxiliaryPlan{.cb_id = auxiliary_cb_id, .tiles = self.auxiliary_tiles})
+                    .get_compile_time_args();
+            },
+            nb::arg("auxiliary_cb_id"),
+            "Serialize this single call's independent auxiliary-CB record.");
 
     nb::class_<host::ReduceCallConfig>(planner, "ReduceCallConfig")
         .def(
@@ -253,6 +281,7 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::class_<host::ReduceCallPlan>(planner, "ReduceCallPlan")
         .def_ro("input_cb_id", &host::ReduceCallPlan::input_cb_id)
         .def_ro("auxiliary_cb_id", &host::ReduceCallPlan::auxiliary_cb_id)
+        .def_ro("auxiliary_tile_offset", &host::ReduceCallPlan::auxiliary_tile_offset)
         .def_ro("output_cb_id", &host::ReduceCallPlan::output_cb_id)
         .def_ro("accumulator_cb_id", &host::ReduceCallPlan::accumulator_cb_id)
         .def_ro("accumulation_mode", &host::ReduceCallPlan::accumulation_mode)
@@ -261,15 +290,20 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_prop_ro(
             "compile_time_args",
             [](const host::ReduceCallPlan& self) { return host::ReduceCallArgs(self).get_compile_time_args(); },
-            "One complete, independently decodable reduce call record.");
+            "One fixed-size, independently decodable compute-call record.");
 
     nb::class_<host::ReduceSequencePlan>(planner, "ReduceSequencePlan")
         .def_ro("calls", &host::ReduceSequencePlan::calls)
+        .def_ro("auxiliary", &host::ReduceSequencePlan::auxiliary)
         .def_prop_ro("call_count", [](const host::ReduceSequencePlan& self) { return self.calls.size(); })
         .def_prop_ro(
             "compile_time_args",
             &host::ReduceSequencePlan::get_compile_time_args,
-            "The flat call-count-plus-calls suffix without any kernel-owned prefix.")
+            "The compute-kernel call-count-plus-fixed-calls suffix without any kernel-owned prefix.")
+        .def_prop_ro(
+            "auxiliary_compile_time_args",
+            &host::ReduceSequencePlan::get_auxiliary_compile_time_args,
+            "The independent aggregate auxiliary-CB suffix without any kernel-owned prefix.")
         .def(
             "append_to",
             [](const host::ReduceSequencePlan& self, nb::list compile_time_args) {
@@ -278,7 +312,16 @@ void bind_reduce_planner(nb::module_& mod) {
                 }
             },
             nb::arg("compile_time_args"),
-            "Append call count and complete calls to a caller-owned compile-time argument list.")
+            "Append call count and fixed compute calls to a caller-owned compile-time argument list.")
+        .def(
+            "append_auxiliary_to",
+            [](const host::ReduceSequencePlan& self, nb::list compile_time_args) {
+                for (const auto arg : self.get_auxiliary_compile_time_args()) {
+                    compile_time_args.append(nb::cast(arg));
+                }
+            },
+            nb::arg("compile_time_args"),
+            "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.")
         .def("__len__", [](const host::ReduceSequencePlan& self) { return self.calls.size(); });
 
     planner.def(
@@ -310,7 +353,7 @@ void bind_reduce_planner(nb::module_& mod) {
         nb::arg("reductions"),
         nb::arg("cb_ids"),
         nb::arg("hardware"),
-        "Plan an explicitly ordered sequence of reductions over distinct input CB IDs.");
+        "Plan an explicitly ordered sequence of reductions; input descriptions may reuse a CB ID.");
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -126,6 +126,8 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     const auto sequence = make_reduce_sequence_plan(
         reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
     ASSERT_EQ(sequence.calls.size(), 2U);
+    ASSERT_EQ(sequence.auxiliary.tiles.size(), 1U);
+    EXPECT_EQ(sequence.auxiliary.cb_id, 2U);
     EXPECT_EQ(sequence.calls[0].input_cb_id, 0U);
     EXPECT_EQ(sequence.calls[0].output_cb_id, 4U);
     EXPECT_EQ(sequence.calls[0].accumulator_cb_id, 4U);
@@ -136,12 +138,25 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(sequence.calls[1].accumulator_cb_id, 4U);
     EXPECT_EQ(sequence.calls[1].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Final);
     EXPECT_EQ(sequence.calls[1].accumulation_index, 1U);
+    EXPECT_EQ(sequence.calls[0].auxiliary_tile_offset, 0U);
+    EXPECT_EQ(sequence.calls[1].auxiliary_tile_offset, 0U);
     for (const auto& call : sequence.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
         EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
         EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 2U);
         EXPECT_EQ(call.plan.chunk.output_tiles, 8U);
     }
+
+    auto repeated_cb_reductions = reductions;
+    repeated_cb_reductions[1].first = repeated_cb_reductions[0].first;
+    const auto repeated_cb_sequence = make_reduce_sequence_plan(
+        repeated_cb_reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
+    ASSERT_EQ(repeated_cb_sequence.calls.size(), 2U);
+    EXPECT_EQ(repeated_cb_sequence.calls[0].input_cb_id, 0U);
+    EXPECT_EQ(repeated_cb_sequence.calls[1].input_cb_id, 0U);
+    EXPECT_EQ(repeated_cb_sequence.calls[0].accumulation_index, 0U);
+    EXPECT_EQ(repeated_cb_sequence.calls[1].accumulation_index, 1U);
+    EXPECT_EQ(repeated_cb_sequence.auxiliary.tiles.size(), 1U);
 
     const auto partial_input = make_tiled_spec(Shape{1, 1, 32, 5 * 32 + 7});
     const std::vector<ReduceCbConfig> partial_reductions{
@@ -165,6 +180,11 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     const auto partial_sequence = make_reduce_sequence_plan(
         partial_reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
     ASSERT_EQ(partial_sequence.calls.size(), 2U);
+    ASSERT_EQ(partial_sequence.auxiliary.tiles.size(), 2U);
+    EXPECT_EQ(partial_sequence.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::FirstRow);
+    EXPECT_EQ(partial_sequence.auxiliary.tiles[1].type, ReduceAuxiliaryTileType::Zero);
+    EXPECT_EQ(partial_sequence.calls[0].auxiliary_tile_offset, 0U);
+    EXPECT_EQ(partial_sequence.calls[1].auxiliary_tile_offset, 0U);
     EXPECT_EQ(partial_sequence.calls[0].plan.partial_mode, compute_kernel_lib::ReducePartialMode::Mask);
     EXPECT_EQ(partial_sequence.calls[1].plan.partial_mode, compute_kernel_lib::ReducePartialMode::Mask);
     ASSERT_EQ(partial_sequence.calls[0].plan.auxiliary_tiles.size(), 1U);
@@ -178,18 +198,17 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(partial_sequence.calls[1].plan.find_cb(ReduceCbRole::Auxiliary)->page_count, 2U);
     const auto first_serialized = ReduceCallArgs(partial_sequence.calls[0]).get_compile_time_args();
     const auto second_serialized = ReduceCallArgs(partial_sequence.calls[1]).get_compile_time_args();
+    EXPECT_EQ(first_serialized.size(), ttnn::kernel_lib::reduce_plan_args::call_word_count);
+    EXPECT_EQ(second_serialized.size(), ttnn::kernel_lib::reduce_plan_args::call_word_count);
     constexpr std::uint32_t kernel_owned_arg = 17U;
     std::vector<std::uint32_t> serialized{kernel_owned_arg};
     partial_sequence.append_to(serialized);
     namespace plan_args = ttnn::kernel_lib::reduce_plan_args;
-    ASSERT_EQ(
-        serialized.size(),
-        1 + plan_args::call_count_word_count + 2 * plan_args::call_word_count +
-            3 * plan_args::auxiliary_tile_word_count);
+    ASSERT_EQ(serialized.size(), 1 + plan_args::call_count_word_count + 2 * plan_args::call_word_count);
     EXPECT_EQ(serialized[0], kernel_owned_arg);
     EXPECT_EQ(serialized[1], 2U);
     const std::uint32_t first_offset = 1 + plan_args::call_count_word_count;
-    const auto second_offset = first_offset + static_cast<std::uint32_t>(first_serialized.size());
+    const auto second_offset = first_offset + plan_args::call_word_count;
     const auto second_configuration =
         serialized[plan_args::call_word_offset(second_offset, plan_args::CallWord::Configuration)];
     EXPECT_EQ(
@@ -204,9 +223,42 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(
         plan_args::extract(second_cbs, plan_args::circular_buffers::output_shift, plan_args::circular_buffers::id_mask),
         3U);
-    const auto auxiliary_offset = plan_args::call_auxiliary_tiles_offset(second_offset);
-    const auto zero_config = serialized[plan_args::auxiliary_tile_word_offset(
-        auxiliary_offset, 1, plan_args::AuxiliaryTileWord::Configuration)];
+    const auto second_chunk_and_auxiliary =
+        serialized[plan_args::call_word_offset(second_offset, plan_args::CallWord::ChunkAndAuxiliary)];
+    EXPECT_EQ(
+        plan_args::extract(
+            second_chunk_and_auxiliary,
+            plan_args::chunk_and_auxiliary::auxiliary_tile_offset_shift,
+            plan_args::chunk_and_auxiliary::auxiliary_tile_offset_mask),
+        0U);
+    EXPECT_EQ(
+        plan_args::extract(
+            second_chunk_and_auxiliary,
+            plan_args::chunk_and_auxiliary::auxiliary_tile_count_shift,
+            plan_args::chunk_and_auxiliary::auxiliary_tile_count_mask),
+        2U);
+
+    constexpr std::uint32_t auxiliary_kernel_owned_arg = 23U;
+    std::vector<std::uint32_t> auxiliary_serialized{auxiliary_kernel_owned_arg};
+    partial_sequence.append_auxiliary_to(auxiliary_serialized);
+    ASSERT_EQ(
+        auxiliary_serialized.size(),
+        1 + plan_args::auxiliary_header_word_count +
+            partial_sequence.auxiliary.tiles.size() * plan_args::auxiliary_tile_word_count);
+    const auto auxiliary_header = auxiliary_serialized[1];
+    EXPECT_EQ(
+        plan_args::extract(
+            auxiliary_header, plan_args::auxiliary_header::cb_id_shift, plan_args::auxiliary_header::cb_id_mask),
+        2U);
+    EXPECT_EQ(
+        plan_args::extract(
+            auxiliary_header,
+            plan_args::auxiliary_header::tile_count_shift,
+            plan_args::auxiliary_header::tile_count_mask),
+        2U);
+    const auto auxiliary_tiles_offset = plan_args::auxiliary_tiles_offset(1);
+    const auto zero_config = auxiliary_serialized[plan_args::auxiliary_tile_word_offset(
+        auxiliary_tiles_offset, 1, plan_args::AuxiliaryTileWord::Configuration)];
     EXPECT_EQ(
         plan_args::extract(
             zero_config,
