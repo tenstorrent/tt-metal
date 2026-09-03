@@ -176,16 +176,3 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       prebuilt-image: ${{ needs.bake-test-env.outputs.image }}
-
-  # TEMPORARY, remove before review. The artifact-path arm: same run, same build,
-  # same SKU as the job above, differing only in prebuilt-image being unset, so
-  # setup timings can be compared without a cross-run baseline.
-  ab-artifact-arm:
-    needs: [check-harbor, build-artifact, resolve-skus, bake-test-env]
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
-    uses: ./.github/workflows/runtime-unit-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
