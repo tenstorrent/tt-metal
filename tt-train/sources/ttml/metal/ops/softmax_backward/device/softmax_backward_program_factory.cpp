@@ -132,18 +132,24 @@ static void get_tensor_properties(
     const ttnn::Tensor& tensor_return_value) {
     const uint32_t dim = operation_attributes.dim;
     TT_FATAL(
-        dim == softmax_output.logical_shape().rank() - 1 || dim == static_cast<uint32_t>(-1),
+        dim == softmax_output.logical_shape().rank() - 1,
         "Currently only supporting softmax_backward on last dimension");
-    const uint32_t height = softmax_output.logical_shape()[-2];
-    const uint32_t width = softmax_output.logical_shape()[-1];
+    // Tile counts must come from the padded shape: physical_volume includes tile padding,
+    // so dividing it by logical H/W overcounts rows and the kernels index past both input
+    // tensors and the output buffer. Padded-H tile-rows are processed like any other row;
+    // every compute step is per-lane (elementwise mul, matmul-with-ones reduction, COL
+    // broadcast), so padding lanes never contaminate valid lanes.
+    const auto& padded_shape = softmax_output.padded_shape();
+    const uint32_t padded_height = padded_shape[-2];
+    const uint32_t padded_width = padded_shape[-1];
     const auto tile = softmax_output.tensor_spec().tile();
     const uint32_t tile_height = tile.get_height();
     const uint32_t tile_width = tile.get_width();
-    const uint32_t height_tiles = height / tile_height;
-    width_tiles = tt::div_up(width, tile_width);
+    const uint32_t height_tiles = padded_height / tile_height;
+    width_tiles = padded_width / tile_width;
     const uint32_t logical_width = softmax_output.logical_shape()[-1];
     mask_w = logical_width % tile_width;
-    const uint64_t num_outer_dims = softmax_output.physical_volume() / height / width;
+    const uint64_t num_outer_dims = softmax_output.physical_volume() / padded_height / padded_width;
     num_rows = num_outer_dims * height_tiles;
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());

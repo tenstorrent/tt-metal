@@ -91,12 +91,15 @@ ttnn:
     wh_galaxy: 120
     bh_galaxy: 40
     bh_p100: 805
-    bh_p150b_civ2: 1045
-    wh_n150_civ2: 1215
+    bh_p150b_civ2: 840
+    wh_n150_civ2: 1010
     wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
     bh_quietbox_2: 60
+  package_and_release:
+    wh_n150_civ2: 205
+    bh_p150b_civ2: 205
   e2e:
     wh_llmbox: 90
     wh_galaxy: 0
@@ -166,6 +169,7 @@ ttsim:
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    sim_quasar: 30
 
 shield:
   e2e_tier2:
