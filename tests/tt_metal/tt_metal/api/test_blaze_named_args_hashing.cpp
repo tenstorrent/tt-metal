@@ -200,6 +200,13 @@ TEST(NamedArgsHashSchema, CPU_CountCollisionGuard) {
 // Tier 1b -- hash_kernel_descriptor via public std::hash<ProgramDescriptor>
 // ============================================================================
 
+TEST(NamedArgsHashProgramDescriptor, CPU_CompileTimeValueChangesProgramHash) {
+    NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
+    NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
+    EXPECT_NE(blaze_program_hash(a), blaze_program_hash(b))
+        << "Compile-time values change the generated header and must change the program hash";
+}
+
 TEST(NamedArgsHashProgramDescriptor, CPU_SchemaDifferenceChangesProgramHash) {
     // Two descriptors identical except for a named-arg field name.
     EXPECT_NE(blaze_program_hash(blaze_common_scalar("a.x", 0)), blaze_program_hash(blaze_common_scalar("a.y", 0)))

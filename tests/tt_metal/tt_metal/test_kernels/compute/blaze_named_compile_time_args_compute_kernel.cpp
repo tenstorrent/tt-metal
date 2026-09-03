@@ -14,8 +14,8 @@
 // never carried to the remote/JIT-server path). This kernel exercises the
 // relocated genfiles emit + prolog #include instead.
 //
-// Reads named compile-time args via the blaze_ct_args:: namespace and writes them to
-// L1 at WRITE_ADDRESS (PACK only) so the host can verify the values.
+// Reads typed and legacy named compile-time args and writes them to L1 at
+// WRITE_ADDRESS (PACK only) so the host can verify the values.
 
 #include <cstdint>
 
@@ -27,5 +27,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* l1_ptr = (volatile tt_l1_ptr uint32_t*)WRITE_ADDRESS;
     l1_ptr[0] = blaze_ct_args::my_kernel::param_a;
     l1_ptr[1] = blaze_ct_args::my_kernel::param_b;
+    l1_ptr[2] = get_named_compile_time_arg_val("legacy_param");
 #endif
 }

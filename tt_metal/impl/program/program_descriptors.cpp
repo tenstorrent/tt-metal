@@ -142,6 +142,7 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
+        kernel.blaze_named_args.named_compile_time_args,
         // Blaze-only experimental named args (issue #50953): hash the named-RT-arg schema
         // (names/lengths/dispatch), NOT values — values don't affect the JIT build.
         experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
