@@ -92,6 +92,12 @@ class _TraceKey:
     bucket: int | None = None
 
 
+# precompile(all_configs=True) enumerates every combination of the bool fields above. Derive the
+# count so a new flag breaks the unpacking there instead of silently leaving its programs
+# uncompiled -- which reopens TT_FATAL !is_capturing_trace on the first request needing it.
+_TRACE_KEY_FLAGS = sum(f.type in (bool, "bool") for f in fields(_TraceKey))
+
+
 class SamplingGenerator:
     """
     High-level sampling helper that owns both `TTSampling` and `TTPenalties`
@@ -381,7 +387,7 @@ class SamplingGenerator:
         saved_enabled = list(log_probs.logprobs_enabled)
         saved_num_logprobs = list(log_probs.num_logprobs)
         try:
-            for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=3):
+            for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=_TRACE_KEY_FLAGS):
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
                 # the live request params, and only the flag selects the program being compiled.
@@ -396,10 +402,8 @@ class SamplingGenerator:
         finally:
             self._penalties_active = saved_penalties
             self.tt_sampling._force_argmax_sampling = saved_force_argmax
-            log_probs.logprobs_enabled = saved_enabled
-            log_probs.num_logprobs = saved_num_logprobs
-            log_probs.enable_log_probs = any(saved_enabled)
-            log_probs.topk_logprobs_needed = log_probs.enable_log_probs
+            # Restore through the setter that owns the derived flags rather than re-deriving them here.
+            log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
             self._log_probs_active = log_probs.enable_log_probs
 
     def capture_trace(
@@ -476,6 +480,9 @@ class SamplingGenerator:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
+
+        ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
+        the trace at capture time, so a replay always performs it.
         """
 
         penalties_on = self._penalties_active
@@ -484,6 +491,8 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
+        if use_internal_trace and not count_tokens:
+            raise ValueError("count_tokens=False cannot be honoured on a traced sample(); pass enable_trace=False.")
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,

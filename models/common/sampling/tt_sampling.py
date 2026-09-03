@@ -145,16 +145,29 @@ class TTSampling(LightweightModule):
         return self._force_argmax_sampling
 
     def _normalize_device_params(self, k, temp):
-        """Clamp k to the candidate row the kernel actually holds and replace the greedy temp=0.
+        """Map k and temp onto the contract ttnn.sampling actually implements.
 
-        ttnn.sampling walks k entries of each user's two-face candidate row, so a k above max_top_k
-        (callers pass vocab_size to mean "no top-k filter") runs the top-p scan and the draw off the
-        end of that row into unrelated L1. temp multiplies the logits before the softmax, so a caller
-        encoding greedy as temp=0 flattens every candidate to an equal probability and turns the draw
-        uniform -- the opposite of the argmax it asked for.
+        Mirrors the rewrites format_sampling_params() applies, so the device is guarded even when a
+        caller reaches reset_params() directly:
+
+        * ``k`` outside [1, max_top_k]. ttnn.sampling walks k entries of each user's two-face
+          candidate row. A k above max_top_k (callers pass vocab_size to mean "no top-k filter")
+          runs the top-p scan and the draw off the end of that row into unrelated L1, and k < 1
+          -- the documented "no restriction" encoding -- is worse: from_torch(dtype=uint32) turns
+          a negative k into ~4.3e9. Both collapse to max_top_k.
+        * ``temp == 0``. temp multiplies the logits before the softmax, so the greedy encoding
+          flattens every candidate to an equal probability and turns the draw uniform. Greedy is
+          the triple (temp=1, k=1), so rewrite k too -- temp alone would leave a caller passing
+          temp=0 with k=50 sampling from the top 32 instead of taking the argmax.
+
+        ``k`` and ``temp`` are required; None was only ever tolerated by the force_argmax path.
         """
-        k = torch.clamp(torch.as_tensor(k), max=self.max_top_k)
+        if k is None or temp is None:
+            raise ValueError("k and temp are required; pass format_sampling_params() output.")
+        k = torch.as_tensor(k)
         temp = torch.as_tensor(temp, dtype=torch.float32)
+        k = torch.where(k < 1, torch.full_like(k, self.max_top_k), k).clamp(max=self.max_top_k)
+        k = torch.where(temp == 0.0, torch.ones_like(k), k)
         temp = torch.where(temp == 0.0, torch.ones_like(temp), temp)
         return k, temp
 
