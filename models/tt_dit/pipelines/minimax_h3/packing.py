@@ -362,15 +362,24 @@ def build_rope_tables(
 MINIMAX_H3_ADALN_ROLES = ("video", "audio", "condition_video", "condition_audio")
 
 
-def build_slot_routing(layout: MiniMaxH3PackedSequence) -> tuple[torch.Tensor, tuple[str, ...]]:
+def build_slot_routing(
+    layout: MiniMaxH3PackedSequence, roles: tuple[str, ...] | None = None
+) -> tuple[torch.Tensor, tuple[str, ...]]:
     """Fixed per-row AdaLN slot assignment.
 
     A row's noise level is fixed by its role -- generated video and text at the video level,
     generated audio at the audio level, conditioning rows pinned at their augmentation level -- so
-    the row->slot map is constant for the whole request. Roles with no rows are dropped, so a
-    request carries the minimum fixed slot count: two for ``t2va``, three for ``fl2va`` and four for
-    ``ref2va``. Duplicate levels stay as separate slots; merging would change ``time_embedder``'s
-    batch mid-request and break the trace.
+    the row->slot map is constant for the whole request. With ``roles=None``, roles with no rows are
+    dropped and a request carries the minimum fixed slot count: two for ``t2va``, three for
+    ``fl2va`` and four for ``ref2va``. Duplicate levels stay as separate slots; merging would change
+    ``time_embedder``'s batch mid-request and break the trace.
+
+    ``roles`` pins the slot set instead: the returned roles are exactly the given tuple, whether or
+    not each role has rows, so the slot count -- and every downstream shape it drives (the
+    ``timestep`` tensor, ``temb``, the modulation tables) -- is constant across requests and one
+    trace serves them all. A pinned-but-absent role's table rows are computed and never gathered,
+    so numerics are identical (the same argument that keeps duplicate levels as separate slots).
+    A layout with rows for a role outside the pinned set is an error, not a silent mis-slot.
 
     Returns ``(row_slot, roles)``: ``row_slot[r]`` is row ``r``'s slot index and ``roles`` names
     each slot in order, so :func:`slot_levels` builds the matching per-step level vector.
@@ -385,7 +394,13 @@ def build_slot_routing(layout: MiniMaxH3PackedSequence) -> tuple[torch.Tensor, t
         "condition_video": num_cond_video > 0,
         "condition_audio": num_cond_audio > 0,
     }
-    roles = tuple(role for role in MINIMAX_H3_ADALN_ROLES if present[role])
+    if roles is None:
+        roles = tuple(role for role in MINIMAX_H3_ADALN_ROLES if present[role])
+    else:
+        missing = tuple(role for role, has_rows in present.items() if has_rows and role not in roles)
+        if missing:
+            msg = f"the layout has rows for roles {missing} but the pinned slot roles are {roles}"
+            raise ValueError(msg)
     slot = {role: index for index, role in enumerate(roles)}
 
     # Default (text + generated video) at the video slot, then override the conditioning and

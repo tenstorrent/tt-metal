@@ -179,7 +179,7 @@ class MiniMaxH3Attention(Module):
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
-        self._sdpa_program_configs: dict[tuple[int, bool], ttnn.SDPAProgramConfig] = {}
+        self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
 
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
         # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
@@ -259,7 +259,7 @@ class MiniMaxH3Attention(Module):
 
     # ------------------------------------------------------------------ helpers
 
-    def _sdpa_program_config(self, seq_local: int, *, ring: bool) -> ttnn.SDPAProgramConfig:
+    def _sdpa_program_config(self, seq_local: int, *, ring: bool, windowed: bool = False) -> ttnn.SDPAProgramConfig:
         """Ring SDPA chunk sizes for a given per-device sequence length.
 
         Measured points come from the sweep in
@@ -284,8 +284,15 @@ class MiniMaxH3Attention(Module):
         optimum in it is sharp rather than a plateau: at 5s q=288 measured 10.43 ms against q=320's
         7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
         the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
+
+        `windowed` caps k at 256: windowed SDPA synthesizes its mask on device into a circular
+        buffer of q_chunk x k_chunk tiles, double-buffered, in Float16_b (the streaming compute
+        path cannot decode block-float masks) -- at (256, 512) that is 512 KB on top of a CB budget
+        the maskless chunk sizes were tuned to fill, past the 1.5 MB L1 limit. (256, 256) leaves
+        ~490 KB headroom. Only the token refiner runs windowed, once per request, so the smaller k
+        is not worth sweeping.
         """
-        key = (seq_local, ring)
+        key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
@@ -294,6 +301,8 @@ class MiniMaxH3Attention(Module):
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if windowed:
+                k_chunk = min(k_chunk, 256)
             grid = (
                 ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
             )
@@ -346,14 +355,19 @@ class MiniMaxH3Attention(Module):
         when the resident total does not fit, the factory sizes c_0 to a single chunk and the reader
         re-reads each pass's Q every ring iteration. The op selects the mode itself from this same
         arithmetic; the model only needs it to know which (q, k) shapes are buildable.
+
+        The state FIFO (c_6/c_11/c_7) holds `p + 1` entries: the factory forces its one-chunk spare
+        on the logical_n-tensor path, which H3 always uses. This mirror MUST match the factory's
+        `state_fifo_entries` or the search picks (q, k) whose CBs overflow.
         """
         dh_t = self.head_dim // ttnn.TILE_SIZE
+        fifo_entries = p + 1  # factory's forced one-chunk spare
         tiles = (
             (p if resident_q else 1) * sq_t * dh_t  # c_0 Q: one chunk per pass, or one when streamed
             + 4 * sk_t * dh_t  # c_1/c_14 K and c_2/c_15 V, double buffered
             + 7  # c_3 mask, scalars, reciprocal scratch
-            + 2 * p * sq_t  # c_6 / c_11 state FIFO running max and sum
-            + p * sq_t * dh_t  # c_7 state FIFO partial output
+            + 2 * fifo_entries * sq_t  # c_6 / c_11 state FIFO running max and sum
+            + fifo_entries * sq_t * dh_t  # c_7 state FIFO partial output
             + sq_t  # c_17 stats out (c_10 is dead on this path and not allocated)
             + 16  # c_16 streaming output ping-pong
             + sq_t * sk_t  # c_24 qk intermediate
@@ -446,6 +460,7 @@ class MiniMaxH3Attention(Module):
         rope_sin: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        cu_window_seqlens: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -457,10 +472,20 @@ class MiniMaxH3Attention(Module):
         addcmul_residual/addcmul_gate: when both are given, the gated residual
             `addcmul_residual + to_out(...) * addcmul_gate` is folded into the to_out matmul's
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
+        cu_window_seqlens: cumulative window boundaries (1-D int32/uint32 ROW_MAJOR device tensor,
+            `[0, ..., N]`) for the plain-SDPA (non-ring) path only: SDPA's windowed mode restricts
+            attention to block-diagonal windows, with the mask synthesized on device from the
+            boundaries. The token refiner runs over a fixed-capacity text buffer and passes
+            `[0, true_len, N]`, so real tokens attend only to real tokens; boundary content is
+            runtime data, so per-request lengths never recompile. The ring paths mask their pad
+            tail via `logical_n` instead and take no windows.
 
         Returns the attention output with the same distribution as the input.
         """
         assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
+        assert (
+            cu_window_seqlens is None or not self.use_ring
+        ), "cu_window_seqlens is only for the plain-SDPA (non-ring) path"
         assert (rope_cos is None) == (rope_sin is None), "rope_cos and rope_sin must be given together"
         # The fused RoPE consumes head_dim-wide tables, not the reference's rotary_dim-wide ones: the
         # pass-through channels must be present as cos=1 / sin=0. Passing the raw reference tables
@@ -581,11 +606,13 @@ class MiniMaxH3Attention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
+                cu_window_seqlens=cu_window_seqlens,
                 is_causal=False,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=False),
+                program_config=self._sdpa_program_config(
+                    q_BHNE.shape[2], ring=False, windowed=cu_window_seqlens is not None
+                ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
-
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 

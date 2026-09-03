@@ -47,9 +47,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import torch
@@ -84,6 +84,7 @@ from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
 from .packing import (
+    MINIMAX_H3_ADALN_ROLES,
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
@@ -134,6 +135,96 @@ AUDIO_SHIFT = 3.0
 # Cache namespace under TT_DIT_CACHE_DIR. `utils.cache` keys each entry on this plus the subfolder,
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
+
+# The ladder of padded packed lengths served by resident denoise traces, ascending. One capture per
+# rung; a request pads to the smallest rung that fits. Multiples of 1024 so every rung satisfies the
+# `sp_factor * TILE_SIZE` alignment on both supported meshes (256 at SP=8, 1024 at SP=32). The values
+# span the t2va/fl2va envelope: 5 s at 1:1 (~21.8k packed rows) up to 15 s at the 1044 rows/frame
+# canvas ceiling with two keyframes and a generous prompt (~118.5k). The top rung is the admission
+# cap: a longer request raises, it is not served untraced. A property of the sequence-length
+# envelope rather than of the mesh, hence a module default and a constructor knob, not a preset.
+MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 118784)
+
+# ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
+# push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
+# image) to the audit's R-B ceiling (~245.8k, all-image / single-video-ref requests); requests above
+# it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
+MINIMAX_H3_REF2VA_BUCKET_LADDER = (61440, 86016, 118784, 176128, 245760)
+
+
+def default_bucket_ladder(task: str) -> tuple[int, ...]:
+    return MINIMAX_H3_REF2VA_BUCKET_LADDER if task == "ref2va" else MINIMAX_H3_BUCKET_LADDER
+
+
+def validate_bucket_ladder(ladder: tuple[int, ...], alignment: int) -> None:
+    """Raise unless `ladder` is non-empty, strictly ascending and rung-aligned to `alignment`."""
+    if not ladder:
+        raise ValueError("bucket_ladder must not be empty")
+    if list(ladder) != sorted(set(ladder)):
+        raise ValueError(f"bucket_ladder must be strictly ascending, got {ladder}")
+    misaligned = tuple(rung for rung in ladder if rung % alignment)
+    if misaligned:
+        raise ValueError(f"bucket_ladder rungs {misaligned} are not multiples of sp_factor * TILE = {alignment}")
+
+
+def select_bucket(seq_len: int, ladder: tuple[int, ...]) -> int:
+    """The smallest rung >= `seq_len`. The top rung is the admission cap: beyond it raises."""
+    for rung in ladder:
+        if seq_len <= rung:
+            return rung
+    raise ValueError(
+        f"packed sequence length {seq_len} exceeds the top trace bucket {ladder[-1]} "
+        f"(ladder {ladder}); shorten the request or deploy with a taller ladder"
+    )
+
+
+@dataclass(frozen=True)
+class MiniMaxH3ArenaCaps:
+    """Fixed row capacities of the device arenas -- one set per deployment, not per request.
+
+    The caps are the per-stream admission limits: a request exceeding one raises. Allocated before
+    any capture and never rebound -- see the arena block in `MiniMaxH3Pipeline.__init__`. All
+    multiples of TILE_SIZE so the transformer's fixed-extent source concat stays on the TILE path.
+    `for_task` gives the t2va/fl2va and ref2va defaults.
+    """
+
+    prompt: int = 2048  # deployment policy; the documented working points run 39-512 tokens
+    video_rows: int = 111712  # 15 s at the 1044 rows/frame canvas ceiling, x32-aligned
+    audio_rows: int = 1216  # 1206 audio rows at 15 s, x32-aligned
+    condition_video_rows: int = 2112  # two keyframe anchors at 1044 rows/frame, x32-aligned
+    condition_audio_rows: int = 1216  # ref2va soundtracks, <= 15 s total, x32-aligned
+
+    @classmethod
+    def for_task(cls, task: str) -> "MiniMaxH3ArenaCaps":
+        """Defaults sized to the task's envelope. t2va/fl2va use the field defaults; ref2va needs a
+        larger prompt (vision tokens: ~36.9k for nine image references) and much larger conditioning
+        (nine 2048px images at 4096 rows each). Sizes trace the audit's card-compliant class table."""
+        if task == "ref2va":
+            return cls(prompt=40960, condition_video_rows=40960, condition_audio_rows=2048)
+        return cls()
+
+    def validate(self) -> None:
+        for cap in fields(self):
+            value = getattr(self, cap.name)
+            if value <= 0 or value % ttnn.TILE_SIZE:
+                raise ValueError(f"arena cap {cap.name}={value} must be a positive multiple of {ttnn.TILE_SIZE}")
+
+
+@dataclass
+class _BucketState:
+    """Per-rung device state: everything whose shape is a function of the padded length.
+
+    Bound exactly once, during the rung's untraced pass, and never rebound after -- see the arena
+    block in `MiniMaxH3Pipeline.__init__`.
+    """
+
+    rope_cos: StateTensor = field(default_factory=StateTensor)  # [1, 1, rung, rotary_dim] fp32, SP-sharded
+    rope_sin: StateTensor = field(default_factory=StateTensor)  # same
+    adaln: StateTensor = field(default_factory=StateTensor)  # [1, 1, 1, rung] int32, SP-sharded
+    tsi: StateTensor = field(default_factory=StateTensor)  # same
+    assembly_idx: StateTensor = field(default_factory=StateTensor)  # [1, 1, 1, rung] int32, replicated
+    warm: bool = False  # this rung has had its untraced pass; its next traced call may capture
+
 
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
 # shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
@@ -265,6 +356,9 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        bucket_ladder: tuple[int, ...] | None = None,
+        arena_caps: MiniMaxH3ArenaCaps | None = None,
+        adaln_slot_roles: tuple[str, ...] | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -289,36 +383,32 @@ class MiniMaxH3Pipeline:
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
-        # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
-        # The request a live trace was captured at: packed shapes plus the AdaLN slot count.
-        # A capture is only valid for that exact request, so both are compared before reusing it.
-        self._trace_signature: tuple | None = None
-        # Persistent per-step trace I/O for the denoise loop, the LTX / Flux2 pattern: a ttnn trace
-        # bakes its inputs' addresses, so the buffers that change every step live in one place and are
-        # refreshed *in* (via `ttnn.copy` when traced) rather than reallocated. The static per-request
-        # inputs -- rope, prompt, conditioning, and the resident routing indices -- are built once in
-        # the preamble instead. `update(traced=False)` on the first, untraced pass allocates each
-        # buffer; a shape change releases the trace and the next untraced pass rebinds them.
-        self._tt_video = StateTensor()
-        self._tt_audio = StateTensor()
-        self._tt_timestep = StateTensor()
-        # The per-request-constant trace inputs. They never change across steps, but they are read on
-        # *every* traced step, so they must live in buffers whose address is stable across the capture
-        # call and every later replay call -- otherwise the tracer copies a freshly allocated (post-
-        # capture) tensor into the trace each step, and it is clobbered by `execute_trace` after the
-        # first step (see `Tracer`'s "allocated after capture may be overwritten" contract). Updated
-        # once in the preamble with `traced=traced`: the untraced warmup pass allocates the buffer
-        # before capture, and traced passes `ttnn.copy` into that same buffer. `_tt_cond` is a list
-        # because ref2va packs several conditioning blocks; it is sized on demand in the preamble.
-        self._tt_rope_cos = StateTensor()
-        self._tt_rope_sin = StateTensor()
-        self._tt_prompt = StateTensor()
-        self._tt_adaln = StateTensor()
-        self._tt_tsi = StateTensor()
+        # Per-rung device state -- one `_BucketState` per bucket-ladder rung the pipeline has served,
+        # keyed by the rung (or by 0 when tracing is off, where rebinding is harmless and one slot
+        # avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
+        self._buckets: dict[int, _BucketState] = {}
+        # Forces `_select_bucket` onto one rung regardless of the request's natural rung; `warmup`
+        # uses it to walk the ladder with a single representative request.
+        self._force_bucket: int | None = None
+        # Persistent device buffers whose shapes are request-independent (the arena caps, or literal
+        # constants), the LTX / Flux2 pattern taken one step further: a ttnn trace bakes its inputs'
+        # addresses AND replay rewrites every address the capture touched, so every buffer that must
+        # survive a replay -- trace inputs and the eager shell's inputs alike -- must be allocated
+        # before any capture and refreshed by same-shape `ttnn.copy`, never rebound. Fixed capacities
+        # are what make that possible: the true lengths ride in index-tensor content and `logical_n`,
+        # not in shapes. All bound on the first (untraced) pass; `_denoise` releases every capture
+        # before any pass that rebinds.
+        self._tt_video = StateTensor()  # target video latents, [1, 1, video_rows cap, 96]
+        self._tt_audio = StateTensor()  # target audio latents, [1, 1, audio_rows cap, 32]
+        self._tt_prompt = StateTensor()  # prompt embeds, [1, 1, prompt cap, text_dim]
+        self._tt_cond_video = StateTensor()  # video conditioning rows in packed-walk order
+        self._tt_cond_audio = StateTensor()  # audio conditioning rows (ref2va deployments only)
+        self._tt_video_out_idx = StateTensor()  # output row selection, [1, 1, 1, video_rows cap]
+        self._tt_audio_out_idx = StateTensor()  # output row selection, [1, 1, 1, audio_rows cap]
+        self._tt_timestep = StateTensor()  # per-slot noise levels, [1, 1, num_slots, 1]; per step
         # The true packed length, a [1, 1, 1, 1] uint32 for ring attention. Per-request-constant, so a
         # resident trace input alongside the index tensors.
         self._tt_logical_n = StateTensor()
-        self._tt_cond: list[StateTensor] = []
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -333,6 +423,38 @@ class MiniMaxH3Pipeline:
             msg = f"tp_axis and sp_axis must differ, both are {tp_axis}"
             raise ValueError(msg)
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
+
+        # The trace-bucket ladder and the arena capacities: both are admission limits (a request
+        # beyond the top rung or any cap raises), both default to the task's envelope, both validated
+        # now that the SP alignment is known.
+        self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
+        validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
+        self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
+        self.arena_caps.validate()
+        # The two admission checks must agree: a request that passes every cap must also fit the top
+        # rung, or it would clear cap admission and then fail bucket selection at serving time. The
+        # default cap/ladder pairs satisfy this; a custom pairing that does not is a config error.
+        if self.trace_denoise:
+            caps = self.arena_caps
+            admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
+            if task == "ref2va":
+                admissible += caps.condition_audio_rows
+            if admissible > self.bucket_ladder[-1]:
+                raise ValueError(
+                    f"the arena caps admit a packed length up to {admissible}, beyond the top trace "
+                    f"bucket {self.bucket_ladder[-1]}; raise the ladder or lower the caps"
+                )
+        # The AdaLN slot roles, pinned per deployment so `num_slots` -- and every shape it drives
+        # (`timestep`, `temb`, the modulation tables) -- is constant across requests and tasks: one
+        # trace per rung serves t2va and fl2va alike. A pinned-but-absent role's table rows are
+        # computed and never gathered, so numerics are identical; see `build_slot_routing`.
+        # `condition_audio` exists only in ref2va, which is its own deployment (separate weights).
+        if adaln_slot_roles is None:
+            adaln_slot_roles = MINIMAX_H3_ADALN_ROLES if task == "ref2va" else ("video", "audio", "condition_video")
+        unknown = tuple(role for role in adaln_slot_roles if role not in MINIMAX_H3_ADALN_ROLES)
+        if unknown:
+            raise ValueError(f"unknown AdaLN slot roles {unknown}; valid roles are {MINIMAX_H3_ADALN_ROLES}")
+        self.adaln_slot_roles = tuple(adaln_slot_roles)
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -470,6 +592,9 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
+        bucket_ladder: tuple[int, ...] | None = None,
+        arena_caps: MiniMaxH3ArenaCaps | None = None,
+        adaln_slot_roles: tuple[str, ...] | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -478,7 +603,11 @@ class MiniMaxH3Pipeline:
 
         `dit_fsdp=True` shards the DiT over the SP axis. `trace_denoise` defaults to the mesh preset
         (on for the quad only); pass `True` to trace the denoise step on other shapes, e.g. to
-        exercise the traced resident path on one 4x8 Galaxy.
+        exercise the traced resident path on one 4x8 Galaxy. The three deployment knobs default to
+        the task's envelope: `bucket_ladder` is the traced padded lengths and the admission cap
+        (`default_bucket_ladder`; only consulted when tracing is on), `arena_caps` the per-stream
+        admission limits (`MiniMaxH3ArenaCaps.for_task`), and `adaln_slot_roles` the pinned AdaLN
+        slot set (3 slots for t2va/fl2va, all 4 for ref2va).
         """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
@@ -496,6 +625,9 @@ class MiniMaxH3Pipeline:
             task=task,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
+            bucket_ladder=bucket_ladder,
+            arena_caps=arena_caps,
+            adaln_slot_roles=adaln_slot_roles,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1066,7 +1198,6 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
-            cache_padding=self.trace_denoise,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1140,6 +1271,118 @@ class MiniMaxH3Pipeline:
             dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, None],
+        )
+
+    def _replicated_indices(self, values: torch.Tensor) -> ttnn.Tensor:
+        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard.
+
+        For the assembly and output-selection gathers, which run on SP-replicated tensors (before
+        `mesh_partition` and after the SP output gathers respectively).
+        """
+        return from_torch(
+            values.to(torch.int32).reshape(1, 1, 1, -1),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[..., None, None],
+        )
+
+    def _select_bucket(self, seq_len: int) -> int:
+        """The rung this request pads to: `warmup`'s forced rung, else the smallest that fits."""
+        if self._force_bucket is not None:
+            rung = self._force_bucket
+            if rung not in self.bucket_ladder:
+                raise ValueError(f"forced bucket {rung} is not in the ladder {self.bucket_ladder}")
+            if seq_len > rung:
+                raise ValueError(f"forced bucket {rung} is smaller than the packed length {seq_len}")
+            return rung
+        return select_bucket(seq_len, self.bucket_ladder)
+
+    @staticmethod
+    def _pad_host_rows(rows: torch.Tensor, capacity: int) -> torch.Tensor:
+        """`[n, C] -> [capacity, C]`, zero tail. The caps were checked before any upload."""
+        if rows.shape[0] == capacity:
+            return rows
+        return torch.cat([rows, torch.zeros(capacity - rows.shape[0], rows.shape[-1], dtype=rows.dtype)])
+
+    def _assembly_source_offsets(self, caps: MiniMaxH3ArenaCaps) -> dict[str, int]:
+        """Row offset of each stream segment in the transformer's concatenated source table.
+
+        Must mirror the segment order `forward` concatenates: `[text | condition video |
+        condition audio | audio | video]`, a condition segment present only when its arena is passed
+        (condition audio exists only in ref2va deployments).
+        """
+        offsets = {"text": 0, "condition_video": caps.prompt}
+        cursor = caps.prompt + caps.condition_video_rows
+        if self.task == "ref2va":
+            offsets["condition_audio"] = cursor
+            cursor += caps.condition_audio_rows
+        offsets["audio"] = cursor
+        offsets["video"] = cursor + caps.audio_rows
+        return offsets
+
+    def _assembly_indices(
+        self,
+        condition_spec: Sequence[tuple[str, int]],
+        caps: MiniMaxH3ArenaCaps,
+        l_len: int,
+        a_len: int,
+        v_len: int,
+        rung: int,
+    ) -> ttnn.Tensor:
+        """Source-table row of each packed row: `[text | condition blocks | audio | video | pad]`.
+
+        The walk over `condition_spec` is the same packed-order walk that built the layout, with a
+        cursor per modality into that modality's contiguously-packed condition arena. Pad rows point
+        at source row 0 -- a real text row, so the gathered content is finite; ring attention masks
+        them via `logical_n` and nothing selects their output.
+        """
+        src = self._assembly_source_offsets(caps)
+        indices = torch.zeros(rung, dtype=torch.int32)
+        indices[:l_len] = torch.arange(l_len)
+        pos = l_len
+        cursors = {"video": 0, "audio": 0}
+        for modality, rows in condition_spec:
+            base = src[f"condition_{modality}"] + cursors[modality]
+            cursors[modality] += rows
+            indices[pos : pos + rows] = torch.arange(base, base + rows)
+            pos += rows
+        indices[pos : pos + a_len] = torch.arange(src["audio"], src["audio"] + a_len)
+        pos += a_len
+        indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
+        return self._replicated_indices(indices)
+
+    def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
+        """Padded-global-sequence row of each target row of one modality, at the arena capacity.
+
+        Entries past `count` duplicate the first target row: the tail of the gathered velocity is
+        then finite real data, added onto arena tail rows nothing reads back.
+        """
+        indices = torch.full((capacity,), start, dtype=torch.int32)
+        indices[:count] = torch.arange(start, start + count)
+        return self._replicated_indices(indices)
+
+    def _prompt_windows(self, l_len: int, cap: int) -> ttnn.Tensor | None:
+        """Window boundaries `[0, l_len, cap]` for the token refiner's windowed SDPA: the true
+        tokens and the prompt arena's pad tail become separate attention windows, so no real token
+        attends to a pad row. Pad *rows* attend only among themselves and produce garbage the
+        assembly gather then drops.
+
+        Three integers cross PCIe; SDPA synthesizes the actual mask on device from them, per chunk
+        -- no O(L_cap^2) mask tensor exists anywhere, on host or device (at the ref2va prompt
+        capacity a dense mask would be GiB-scale). The boundary *content* is runtime data to the
+        op, so per-request prompt lengths replay the same compiled program. Consumed once per
+        request by `prepare_static_sources`, so it is a transient, not an arena. None when the
+        prompt fills the capacity exactly (a single full window is just unmasked attention).
+        """
+        if l_len >= cap:
+            return None
+        return from_torch(
+            torch.tensor([0, l_len, cap], dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None],
         )
 
     # ------------------------------------------------------------------ decode
@@ -1759,45 +2002,119 @@ class MiniMaxH3Pipeline:
         width: int | None = None,
         aspect_ratio: tuple[float, float] = (16, 9),
         num_inference_steps: int = 50,
+        rung_requests: Mapping[int, dict] | None = None,
     ) -> None:
         """Compile and allocate everything a real call needs, so the next call measures compute only.
 
-        The analogue of `LTXPipeline.warmup_buffers`. Runs one full generation at the target shape,
-        including the text-encoder forward, so the encoder's own kernels compile here too. Every
-        program, every per-shape conv3d blocking and every persistent buffer this working point
-        touches is resident afterwards.
+        The analogue of `LTXPipeline.warmup_buffers`. Runs one full generation at the request's own
+        (natural) ladder rung, including the text-encoder forward, so the encoder's kernels compile
+        here too -- and, when tracing is on, walks the whole ladder: every rung is bound with a
+        short untraced generation (largest-first, so the big per-rung pools allocate before anything
+        else fragments the space), then captured with a short traced one. Rungs above the natural
+        one reuse the caller's request padded up; rungs below take a frames-shrunken variant -- any
+        request that fits warms a rung completely, because every program is keyed on the rung or on
+        the arena caps and the true lengths are index content -- or the matching `rung_requests`
+        entry (generation kwargs, per rung) where frames are not the right knob (a ref2va deployment
+        shrinks references instead). Afterwards every rung holds a resident capture and serving pays
+        neither a compile pass nor a capture; a rung nothing fits stays cold (logged) and is bound
+        lazily by its first real request. Already-warm rungs skip the bind and already-captured
+        rungs skip the capture, so a repeated warmup only fills gaps.
 
         "Fully warm" in every number this pipeline reports means *after* this.
 
-        **Pass the real `prompt` and the real keyframes or references**, not the defaults. Every program
-        in the 50-block stack is keyed on the *padded* packed length, so warming a different one warms
-        nothing. `t2va` survives the one-token default only because 1 and 39 tokens both round up to
-        37888; a keyframe's ~1010-row vision block does not. `ref2va` is further still: its padded
-        lengths run 46080 to 111616 against t2va's 37888 and depend on the *number and resolution of
-        the references*, so a warmup with different references warms nothing even at the same prompt.
-        `last_padded_len` is exposed so a caller can assert the warm and measured lengths agree.
+        **Pass a representative `prompt` and keyframes or references**: the block-stack programs are
+        keyed on the padded packed length, so the request decides which rungs are reachable, and the
+        eager shell's programs (projections at the arena capacities, the assembly and selection
+        gathers per rung) compile on exactly the passes this runs. `last_padded_len` is exposed so a
+        caller can assert the warm and measured rungs agree.
         """
+        generation_kwargs = dict(
+            image=image,
+            last_image=last_image,
+            references=references,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            aspect_ratio=aspect_ratio,
+        )
         self._log_generation = False
         try:
-            self(
-                prompt,
-                image=image,
-                last_image=last_image,
-                references=references,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                aspect_ratio=aspect_ratio,
-                num_inference_steps=num_inference_steps,
-            )
+            self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
+            if not self.trace_denoise:
+                return
+            natural = self.last_padded_len
+            overrides = dict(rung_requests or {})
+            # Bind every rung untraced, largest-first, then capture each: two short generations per
+            # rung -- shapes, not step counts, key every program, and the traced pass captures at
+            # step 0 and replays from step 1. All binds precede all captures, so every capture bakes
+            # the final arena and pool addresses. A bind mid-walk releases live captures (the safety
+            # rule in `_denoise`), which is why the capture loop re-checks every rung rather than
+            # only the ones this walk bound.
+            fitted: dict[int, dict] = {}
+            shrunk = generation_kwargs
+            for rung in sorted(self.bucket_ladder, reverse=True):
+                bucket = self._buckets.get(rung)
+                shrink = rung < natural and rung not in overrides
+                request = overrides.get(rung, shrunk if shrink else generation_kwargs)
+                if bucket is None or not bucket.warm:
+                    request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
+                    if request is None:
+                        self._host_log(f"warmup: no shrunken request fits rung {rung}; it stays cold")
+                        continue
+                    if shrink:
+                        shrunk = request
+                fitted[rung] = request
+            for rung in sorted(fitted, reverse=True):
+                if not self._rung_captured(rung):
+                    shrink = rung < natural and rung not in overrides
+                    if self._run_forced_fit(rung, prompt, fitted[rung], shrink=shrink) is None:
+                        self._host_log(f"warmup: no shrunken request fits rung {rung}; it stays uncaptured")
         finally:
             self._log_generation = True
 
+    def _run_forced(self, rung: int, prompt: str, generation_kwargs: dict) -> None:
+        """One short generation padded to `rung` regardless of its natural rung -- warmup's ladder walk."""
+        self._force_bucket = rung
+        try:
+            self(prompt, num_inference_steps=2, **generation_kwargs)
+        finally:
+            self._force_bucket = None
+
+    def _run_forced_fit(self, rung: int, prompt: str, generation_kwargs: dict, *, shrink: bool) -> dict | None:
+        """`_run_forced`; with `shrink`, halve `num_frames` until the request fits `rung` -- how
+        warmup reaches rungs below the caller's natural packed length. The forced-rung admission
+        error is the fit oracle, so none of the packing arithmetic is duplicated here; a missed
+        probe costs one text encode. Returns the kwargs that ran, or None when even the shortest
+        video does not fit (the rung stays cold).
+        """
+        kwargs = dict(generation_kwargs)
+        while True:
+            try:
+                self._run_forced(rung, prompt, kwargs)
+                return kwargs
+            except ValueError as error:
+                if not shrink or "smaller than the packed length" not in str(error):
+                    raise
+                frames = kwargs.get("num_frames") or 124
+                if frames <= 5:
+                    return None
+                kwargs["num_frames"] = max(5, frames // 2)
+
+    def _rung_captured(self, rung: int) -> bool:
+        """Whether the denoise block stack holds a live capture keyed on this rung."""
+        transformer = self._transformer
+        if transformer is None:
+            return False
+        run_blocks = type(transformer).run_blocks
+        tracer = run_blocks._tracers_keyed.get(transformer, {}).get(rung)
+        return tracer is not None and tracer.trace_captured
+
     def release_traces(self) -> None:
-        """Release the captured denoise trace, as `WanPipeline.release_traces` does.
+        """Release every captured denoise trace, across all ladder rungs.
 
         A trace holds device buffers for the whole request and nothing else drops them. A no-op when
-        nothing was traced.
+        nothing was traced. Warm rungs keep their `_BucketState` bindings, so each re-captures
+        automatically on its next traced call (~one forward), never a re-warm.
         """
         transformer = self._transformer
         if transformer is None:
@@ -1843,108 +2160,151 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time()
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
+
+        # Admission control: a request exceeding an arena cap is rejected before anything is
+        # uploaded. `condition_audio` exists only in ref2va deployments.
+        caps = self.arena_caps
+        l_len = prompt_embeds.shape[1]
+        v_target = video_rows.shape[0] - num_cond
+        a_target = audio_rows.shape[0] - num_cond_audio
+        over = [
+            f"{name} {count} > {cap}"
+            for name, count, cap in (
+                ("prompt tokens", l_len, caps.prompt),
+                ("target video rows", v_target, caps.video_rows),
+                ("target audio rows", a_target, caps.audio_rows),
+                ("condition video rows", num_cond, caps.condition_video_rows),
+                ("condition audio rows", num_cond_audio, caps.condition_audio_rows if self.task == "ref2va" else 0),
+            )
+            if count > cap
+        ]
+        if over:
+            raise ValueError(f"request exceeds the arena caps: {', '.join(over)} (see MiniMaxH3ArenaCaps)")
+
+        # The padded length: the trace-bucket rung when tracing, natural SP alignment otherwise.
         alignment = self.sp_factor * ttnn.TILE_SIZE
-        padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
-        self.last_padded_len = padded_len
+        if self.trace_denoise:
+            rung = self._select_bucket(layout.sequence_length)
+        else:
+            rung = ((layout.sequence_length + alignment - 1) // alignment) * alignment
+        self.last_padded_len = rung
         self._log(
-            f"packed sequence {layout.sequence_length} -> {padded_len} padded, "
-            f"{padded_len // self.sp_factor} rows/device, {num_cond} condition rows"
+            f"packed sequence {layout.sequence_length} -> {rung} padded, "
+            f"{rung // self.sp_factor} rows/device, {num_cond} condition rows"
         )
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
 
-        # AdaLN routing is constant for the whole request: a row's noise level is fixed by its role.
-        # Slot count is fixed -- duplicates included -- because tracing demands a constant shape;
-        # when video and audio share `t = 0` at step 0, both slots are still embedded. Only
-        # `slot_roles` -- which sizes the per-step timestep vector -- is needed before the trace
-        # signature; the index tensors it implies are built once below, after `traced` is known, so
-        # they land in the persistent buffers the trace bakes rather than a fresh per-call allocation.
-        row_slot, slot_roles = build_slot_routing(layout)
+        # The index tensors this routing implies are built once below, after `traced` is known, so
+        # they land in the persistent buffers the trace bakes rather than a fresh per-call
+        # allocation.
+        row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         # Trace the block stack where the preset asks for it, as Wan does on the quad only. At SP=32 a
         # step is dominated by dispatching 50 blocks from host across four MPI ranks rather than by the
         # matmuls, and `transformer.run_blocks` replaces that dispatch with one replay.
         #
-        # `run_blocks` has one unkeyed `Tracer` per transformer, so a capture is valid only for the
-        # request it was taken at: a different packed length fails the tracer's shape checks. Release
-        # the trace whenever the signature changes -- which also lets the transformer reallocate its
-        # padding buffer at the new shape without a live trace referencing the old one.
+        # One capture per ladder rung, keyed by `tracer_trace_key=pad_to` inside the transformer.
+        # Within a rung every request-varying quantity is data (index-tensor content, `logical_n`,
+        # uploaded values), so a warm rung replays for any request that fits it -- nothing to compare.
         #
-        # Modulation is projected in-trace from the per-step `timestep`, so the signature is shapes
-        # plus `num_slots` (the timestep width) -- a new schedule at the same resolution reuses the
-        # capture and never retraces.
-        signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape), len(slot_roles))
-        warm = signature == self._trace_signature
-        if not warm:
+        # The safety rule: replay rewrites every address its capture touched and the allocator does
+        # not track trace-touched space, so any pass that allocates something long-lived -- the first
+        # pass at a rung binds that rung's `_BucketState` (and, first time ever, the arenas), and any
+        # untraced pass may compile programs whose cache entries hold device buffers -- must not run
+        # under live captures. Release them all first; `warm` rungs keep their bindings and their
+        # next traced call re-captures automatically (~one forward each), never a re-warm.
+        state = self._buckets.setdefault(rung if self.trace_denoise else 0, _BucketState())
+        traced = self.trace_denoise and state.warm
+        if self.trace_denoise and not state.warm:
             self.release_traces()
-            self._trace_signature = None
 
-        # Not on the first generation at a signature: a capture can neither compile a program nor
-        # allocate a buffer, and `CCLManager` fills its persistent buffers lazily. One untraced
-        # generation does both, so the first pass at a shape runs untraced and later ones are traced.
-        traced = self.trace_denoise and warm
-
-        # Per-request-constant trace inputs -> persistent StateTensors, updated once now that the
-        # trace decision is made. A ttnn trace bakes its inputs' addresses, so each must occupy one
-        # stable buffer across the capture call and every replay; a per-call `from_torch` would be a
-        # post-capture allocation the tracer's contract lets `execute_trace` clobber mid-replay --
-        # exactly the corruption that surfaced once a pure-replay call followed the capture. `update`
-        # allocates the buffer on the untraced warmup pass and `ttnn.copy`s into it when traced.
+        # Per-request-constant device state, updated once now that the trace decision is made: the
+        # rung-shaped tensors in this rung's `_BucketState`, the capacity-shaped arenas and index
+        # tensors as pipeline globals. `update` binds the buffer on the untraced pass (all captures
+        # released above) and `ttnn.copy`s into it when traced -- never rebound, see `__init__`.
         t_rope = time.time()
-        rope_cos, rope_sin = self._device_metadata(layout, padded_len)
-        self._tt_rope_cos.update(rope_cos, traced=traced)
-        self._tt_rope_sin.update(rope_sin, traced=traced)
+        rope_cos, rope_sin = self._device_metadata(layout, rung)
+        state.rope_cos.update(rope_cos, traced=traced)
+        state.rope_sin.update(rope_sin, traced=traced)
         t_rope = time.time() - t_rope
 
-        # [1, L, 5120] -> [1, 1, L, 5120], replicated: the model refines the text stream before the
-        # packed sequence is fractured, so every device needs all of it.
+        # [1, L, 5120] -> [1, 1, L_cap, 5120], replicated: the model refines the text stream before
+        # the packed sequence is fractured, so every device needs all of it. Host-padded to the
+        # prompt arena's capacity; the refiner fences the pad tail off via `_prompt_windows` and
+        # the assembly gather drops the pad rows' output.
         self._tt_prompt.update(
-            prompt_embeds.reshape(1, 1, -1, prompt_embeds.shape[-1]),
+            self._pad_host_rows(prompt_embeds.reshape(-1, prompt_embeds.shape[-1]), caps.prompt).reshape(
+                1, 1, caps.prompt, -1
+            ),
             traced=traced,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
         )
 
-        # Conditioning blocks are invariant -- the loop writes only rows from `num_cond` /
-        # `num_cond_audio` on, and the anchor check below raises if one moved. One resident buffer per
-        # block, sized on demand; `t2va` has none, so `tt_cond` stays None.
-        tt_cond = None
-        if condition_spec:
-            while len(self._tt_cond) < len(condition_spec):
-                self._tt_cond.append(StateTensor())
-            tt_cond = []
-            video_cursor = audio_cursor = 0
-            for block, (modality, rows) in enumerate(condition_spec):
-                if modality == "audio":
-                    chunk = audio_rows[audio_cursor : audio_cursor + rows]
-                    audio_cursor += rows
-                else:
-                    chunk = video_rows[video_cursor : video_cursor + rows]
-                    video_cursor += rows
-                self._tt_cond[block].update(
-                    chunk.unsqueeze(0).unsqueeze(0), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device
-                )
-                tt_cond.append((self._tt_cond[block].value, modality))
+        # Conditioning rows are invariant -- the loop writes only target rows, and the anchor check
+        # below raises if one moved. One arena per modality, in packed-walk order (which is exactly
+        # the order the host rows already have); the per-block interleave is assembly-index content.
+        # The video arena exists in every deployment (zero-filled for t2va); the audio one only in
+        # ref2va, whose soundtracks are the only source of audio conditioning rows.
+        self._tt_cond_video.update(
+            self._pad_host_rows(video_rows[:num_cond], caps.condition_video_rows).reshape(
+                1, 1, caps.condition_video_rows, -1
+            ),
+            traced=traced,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+        if self.task == "ref2va":
+            self._tt_cond_audio.update(
+                self._pad_host_rows(audio_rows[:num_cond_audio], caps.condition_audio_rows).reshape(
+                    1, 1, caps.condition_audio_rows, -1
+                ),
+                traced=traced,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+            )
 
-        # Index tensors are constant across the request, so uploaded once here. `logical_n` joins them:
-        # the true (unpadded) packed length as a device tensor.
-        self._tt_adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), padded_len), traced=traced)
-        self._tt_tsi.update(self._row_indices(row_slot, padded_len), traced=traced)
+        # The step-invariant streams -- refined text and the condition projections -- run once per
+        # request rather than on every step: at the ref2va prompt capacity the refiner's O(L_cap^2)
+        # attention would otherwise dominate every step. The window boundaries are consumed inside
+        # this call only, so they live as a transient, never as an arena.
+        transformer.prepare_static_sources(
+            prompt_1BLP=self._tt_prompt.value,
+            prompt_windows=self._prompt_windows(l_len, caps.prompt),
+            condition_video_1BKC=self._tt_cond_video.value,
+            condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
+            traced=traced,
+        )
+
+        # Index tensors are constant across the request, so uploaded once here. `logical_n` joins
+        # them: the true (unpadded) packed length as a device tensor.
+        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+        state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
+        state.assembly_idx.update(
+            self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
+        )
         self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
+        audio_start = l_len + num_cond + num_cond_audio
+        video_start = audio_start + a_target
+        self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
+        self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
 
-        # Target latents: uploaded once and advanced in place on device by the Euler step below, so
-        # they stay resident across the loop -- no per-step re-upload, no host round-trip. Under
-        # tracing `update` copies the fresh initial noise into the same buffer the capture read, which
-        # both resets it for each replay and keeps the trace's input address valid.
+        # Target latents: uploaded once at arena capacity and advanced in place on device by the
+        # Euler step below, so they stay resident across the loop -- no per-step re-upload, no host
+        # round-trip. Under tracing `update` copies the fresh initial noise into the same buffer the
+        # capture read, which both resets it for each replay and keeps the trace's input address
+        # valid. The zero tails accumulate duplicated real velocities (see `_output_indices`);
+        # nothing reads them back.
         self._tt_video.update(
-            video_rows[num_cond:].unsqueeze(0).unsqueeze(0),
+            self._pad_host_rows(video_rows[num_cond:], caps.video_rows).reshape(1, 1, caps.video_rows, -1),
             traced=traced,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
         )
         self._tt_audio.update(
-            audio_rows[num_cond_audio:].unsqueeze(0).unsqueeze(0),
+            self._pad_host_rows(audio_rows[num_cond_audio:], caps.audio_rows).reshape(1, 1, caps.audio_rows, -1),
             traced=traced,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
@@ -1979,14 +2339,16 @@ class MiniMaxH3Pipeline:
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
-                prompt_1BLP=self._tt_prompt.value,
-                condition_blocks=tt_cond,
+                assembly_indices=state.assembly_idx.value,
+                video_out_indices=self._tt_video_out_idx.value,
+                audio_out_indices=self._tt_audio_out_idx.value,
                 timestep=self._tt_timestep.value,
-                adaln_indices=self._tt_adaln.value,
-                timestep_indices=self._tt_tsi.value,
-                rope_cos=self._tt_rope_cos.value,
-                rope_sin=self._tt_rope_sin.value,
+                adaln_indices=state.adaln.value,
+                timestep_indices=state.tsi.value,
+                rope_cos=state.rope_cos.value,
+                rope_sin=state.rope_sin.value,
                 logical_n=self._tt_logical_n.value,
+                pad_to=rung,
                 traced=traced,
             )
 
@@ -2009,8 +2371,9 @@ class MiniMaxH3Pipeline:
                 self._log(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
             on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
-        # This request is now warm: a later call with the same signature may trace.
-        self._trace_signature = signature
+        # This rung is now warm: any later request that pads to it may trace. Set only after the loop
+        # completes, so an exception mid-loop leaves the rung cold rather than falsely warm.
+        state.warm = True
         steady_steps = max(len(timesteps) - 1, 1)
         self._log(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
@@ -2019,14 +2382,19 @@ class MiniMaxH3Pipeline:
         )
 
         # One read-back of the resident latents into the target region of the host rows. The
-        # condition rows were never uploaded, so `[:num_cond]` stays pristine -- the return contract
-        # (cond | target, cond first) and the decoders are unchanged, and the anchor check below is
-        # then structural. The model holds only the target rows, so reshape to the row width.
+        # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return
+        # contract (cond | target, cond first) and the decoders are unchanged, and the anchor check
+        # below is then structural. The arenas hold the target rows leading; the capacity tail is
+        # duplicated-velocity garbage and is sliced off here.
         video_rows[num_cond:] = (
-            local_device_to_torch(self._tt_video.value).reshape(-1, video_rows.shape[-1]).to(video_rows.dtype)
+            local_device_to_torch(self._tt_video.value)
+            .reshape(-1, video_rows.shape[-1])[:v_target]
+            .to(video_rows.dtype)
         )
         audio_rows[num_cond_audio:] = (
-            local_device_to_torch(self._tt_audio.value).reshape(-1, audio_rows.shape[-1]).to(audio_rows.dtype)
+            local_device_to_torch(self._tt_audio.value)
+            .reshape(-1, audio_rows.shape[-1])[:a_target]
+            .to(audio_rows.dtype)
         )
 
         # RuntimeError, not AssertionError: these are real failures of the loop, not caller errors, and

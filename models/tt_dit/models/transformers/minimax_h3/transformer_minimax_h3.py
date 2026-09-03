@@ -143,57 +143,64 @@ class MiniMaxH3Transformer3DModel(Module):
     ----------------------
     The reference builds the packed sequence with `index_copy` at caller-supplied row indices. A
     general scatter across an already-fractured sequence-parallel tensor would need cross-device
-    movement, so the assembly happens *before* fracturing instead: each modality is projected while
-    replicated on SP, the streams are concatenated into the full packed sequence in natural order
-    `[text | condition | audio | target video]`, the tail is zero-padded up to a multiple of
-    `sp_factor * TILE`, and `ttnn.mesh_partition` then fractures that global sequence across the SP
-    axis.
+    movement, so the assembly happens *before* fracturing instead -- and, so that every dispatched
+    program has a request-independent shape (the property that lets one ttnn trace serve every
+    request in a padded-length bucket), it is a **row gather over fixed-capacity streams** rather
+    than a per-request concat:
 
-    The condition stream sits between text and audio, and that position is not a choice:
-    `packing.build_packed_sequence` and `packing_ref2va.build_ref2va_packed_sequence` both put the
-    conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's order.
+    - Every input stream arrives at a fixed row capacity, a multiple of `TILE_SIZE`, with the true
+      rows leading and a zero (or stale, equally ignored) tail: `prompt_1BLP` at `L_cap`,
+      `condition_video_1BKC` / `condition_audio_1BKC` at their per-modality capacities,
+      `audio_1BAC` at `A_cap`, `video_1BVC` at `V_cap`.
+    - Each stream is projected at full capacity while replicated on SP (fixed-M matmuls; a per-row
+      GEMM is row-independent, so the pad rows cost compute but change nothing), and the projections
+      are concatenated -- fixed extents -- into one source table in the fixed segment order
+      `[text | condition video | condition audio | audio | video]` (a condition segment exists only
+      when its stream is passed, which is fixed per deployment). The text and condition segments are
+      step-invariant, so `prepare_static_sources` refines and projects them **once per request**
+      into a persistent prefix; `forward` projects only the two per-step streams (audio, video) and
+      appends them.
+    - `assembly_indices` ([1, 1, 1, pad_to] integers) then gathers the source rows into packed order
+      `[text | condition blocks in packed order | audio | target video | pad]`. The packed
+      interleave -- ref2va packs a reference's soundtrack rows immediately before its own video
+      rows -- is index *content*, not shape, as is the true length of every stream. Pad indices
+      point at row 0; pad rows are masked from attention by `logical_n` and their output is never
+      selected, so their content is irrelevant.
+    - `ttnn.mesh_partition` fractures the assembled `[1, 1, pad_to, hidden]` sequence across SP.
 
-    It is a **list of typed blocks**, `[(tensor, modality), ...]`, in packed order:
+    The condition segment sits between text and audio in packed order, and that position is not a
+    choice: `packing.build_packed_sequence` and `packing_ref2va.build_ref2va_packed_sequence` both
+    put the conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's
+    order. Two condition streams rather than one because the two modalities need different
+    projections: audio rows go through `audio_proj_in` (32 wide) and video rows through `proj_in`
+    (96 wide), so they cannot share a buffer at all.
 
-    - `t2va` passes `None` and gets the three-stream `[text | audio | video]` assembly unchanged;
-    - `fl2va` passes one `("video")` block, its keyframe anchors;
-    - `ref2va` passes one block per reference *medium*, and the region is modality-interleaved --
-      `[(ref1 audio, "audio"), (ref1 video, "video"), (ref2 video, "video"), ...]` -- because a video
-      reference's soundtrack rows are packed immediately before its own video rows.
+    The load-bearing invariant is **one frame of reference for row indices**. `assembly_indices` is
+    built by walking the condition blocks in packed order, which is the same walk that produced
+    `layout.position_ids`, `token_tags`, `video_indices` and `audio_indices`. There is no second
+    ordering to keep in step.
 
-    A list rather than one tensor because the two modalities need different projections: audio rows go
-    through `audio_proj_in` (32 wide) and video rows through `proj_in` (96 wide), so they cannot be
-    concatenated before projection at all. Projecting each block separately is bit-identical to
-    projecting a concatenation of same-modality blocks, because a per-row GEMM against a shared weight
-    is row-independent -- which is what lets the blocks be placed apart here.
-
-    The load-bearing invariant is **one frame of reference for row
-    indices**. The block list is assembled by walking the reference list in packed order, which is the
-    same walk that produced `layout.position_ids`, `token_tags`, `video_indices` and `audio_indices`.
-    There is no second ordering to keep in step.
-
-    Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`, `rope_sin`,
-    `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence in that same
-    natural order and sharded contiguously on SP -- no device-major permutation to keep in step with
-    the model. Outputs are gathered back on SP and sliced per modality, so each modality's rows come
-    back in its own order, matching what the reference returns.
-
-    Per-modality row counts are unconstrained. A concat in `TILE_LAYOUT` can only cut on a tile
-    boundary, so when every stream's length is a multiple of `TILE_SIZE` the assembly happens there
-    directly; otherwise the streams are converted to ROW_MAJOR, concatenated at row granularity, and
-    the assembled sequence -- whose padded length *is* tile aligned -- is converted back once.
-    Production t2va needs the second path: at 1344x768 / 124 frames the video rows are 37296
-    (= 16 mod 32) and the audio rows 414 (= 30 mod 32). So does fl2va, whose condition rows are
-    1008 per anchor (= 16 mod 32).
+    Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`,
+    `rope_sin`, `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence
+    in that same natural order and sharded contiguously on SP -- no device-major permutation to keep
+    in step with the model. Outputs are gathered back on SP and selected per modality by
+    `video_out_indices` / `audio_out_indices` -- again gathers with per-request content and fixed
+    capacity shapes -- so each modality's rows come back in its own order at its stream's capacity,
+    true rows leading.
 
     Padding
     -------
-    Trailing zero rows only, and they need no attention mask: ring attention's `logical_n` masks the
-    tail beyond the true sequence length internally. The reference's `-1`-tagged separate-document
-    mask is therefore unnecessary. Interior padding is what is *not* allowed -- a pad row between two
-    modalities is inside `logical_n`, so every real row would attend to it as a key and value. That is
-    why unaligned modalities are handled by changing the layout of the concat, not by padding each
-    modality up to a tile.
+    Pad rows -- the stream tails beyond each true length, and the packed tail beyond `logical_n` --
+    need no attention mask inside the packed sequence: ring attention's `logical_n` masks the tail
+    beyond the true sequence length internally, and the assembly gather keeps every stream's pad
+    rows *out* of `[0, logical_n)`, so no real row ever attends to one. Interior padding is what is
+    *not* allowed -- a pad row between two modalities would sit inside `logical_n` and every real
+    row would attend to it as a key and value -- and the gather is exactly what keeps the interior
+    dense while the streams stay fixed-capacity. The one place padding is masked is the token
+    refiner: it runs over the text stream *before* assembly, at `L_cap` and once per request
+    (`prepare_static_sources`), using SDPA's windowed mode -- `prompt_windows = [0, true_len,
+    L_cap]` fences the true tokens off from the pad tail, with the mask synthesized on device from
+    the boundaries; the refined pad rows are then dropped by the assembly gather.
 
     Precision
     ---------
@@ -233,28 +240,19 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        # Hold the sequence padding in one buffer instead of allocating it per forward. Only the
-        # traced path needs it -- `ttnn.zeros` writes to device and a capture rejects writes -- so it
-        # is off by default and the untraced path keeps its per-call allocation.
-        cache_padding: bool = False,
     ) -> None:
         super().__init__()
 
-        self.cache_padding = cache_padding
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        self._pad_key: tuple[int, ttnn.DataType, ttnn.Layout] | None = None
-        self._pad_buffer: ttnn.Tensor | None = None
-        # `norm_out` reads `temb` and `timestep_idx` *after* `run_blocks` replays its trace, so under
-        # tracing they must occupy buffers allocated before the capture and refreshed in place: a
-        # fresh per-step allocation lands where the capture baked an intermediate, and
-        # `execute_trace` overwrites it before `norm_out` reads it (see `Tracer`'s "tensors allocated
-        # after trace capture may be overwritten" contract). The untraced first pass binds each
-        # buffer; traced passes `ttnn.copy` into it.
         self._temb_state = StateTensor()
         self._timestep_idx_state = StateTensor()
+        # The projected [text | condition] source-table prefix, step-invariant and read by the eager
+        # shell after every trace replay -- same discipline as `_temb_state`: bound once before any
+        # capture, refreshed by same-shape copy. Written by `prepare_static_sources`.
+        self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
@@ -352,111 +350,145 @@ class MiniMaxH3Transformer3DModel(Module):
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
 
+    def prepare_static_sources(
+        self,
+        *,
+        prompt_1BLP: ttnn.Tensor,
+        prompt_windows: ttnn.Tensor | None = None,
+        condition_video_1BKC: ttnn.Tensor | None = None,
+        condition_audio_1BKC: ttnn.Tensor | None = None,
+        traced: bool = False,
+    ) -> None:
+        """Refine and project the step-invariant streams, once per request.
+
+        The text refinement and the condition projections depend only on the request, not on the
+        denoise step -- running them inside `forward` would repeat them every step, and at the
+        ref2va prompt capacity the refiner's O(L_cap^2) attention would dominate the step. The
+        projected `[text | condition video | condition audio]` source-table prefix is stored in a
+        persistent StateTensor that `forward` reads on every step: it is consumed by the eager
+        shell after every trace replay, so it follows the `_temb_state` discipline -- bound once
+        before any capture, refreshed by same-shape `ttnn.copy` when traced.
+
+        prompt_1BLP: [1, 1, L_cap, text_dim], replicated on SP and TP, true rows leading.
+        prompt_windows: `[0, true_len, L_cap]` window boundaries for the token refiner's windowed
+            SDPA (1-D integer device tensor, replicated), fencing the true tokens off from the pad
+            tail; None when the prompt exactly fills L_cap. Consumed here only, so it may be
+            transient.
+        condition_video_1BKC / condition_audio_1BKC: the conditioning rows of each modality, packed
+            contiguously in packed-walk order at their own capacity; None when the deployment has no
+            such stream (t2va/fl2va has no condition audio). Presence is fixed per deployment -- it
+            sets the prefix shape -- so a request without conditioning passes a zero-filled buffer,
+            not None.
+        """
+        tile = ttnn.TILE_SIZE
+        streams = {
+            "prompt_1BLP": prompt_1BLP,
+            "condition_video_1BKC": condition_video_1BKC,
+            "condition_audio_1BKC": condition_audio_1BKC,
+        }
+        for name, stream in streams.items():
+            # The prefix joins a TILE-layout concat, which cuts on tile boundaries only.
+            if stream is not None and stream.shape[2] % tile:
+                raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
+
+        # Conditioning rows use the same weights as the target rows of their modality: a conditioning
+        # row is a row of its own modality that happens to be pinned, and a per-row GEMM against a
+        # shared weight is row-independent, so projecting them from a separate buffer is bit-identical
+        # to projecting them in place.
+        segments = [self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)]
+        if condition_video_1BKC is not None:
+            segments.append(self.proj_in(condition_video_1BKC))
+        if condition_audio_1BKC is not None:
+            segments.append(self.audio_proj_in(condition_audio_1BKC))
+        prefix = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=2)
+        self._static_source_state.update(prefix, traced=traced)
+
     def forward(
         self,
         *,
         video_1BVC: ttnn.Tensor,
         audio_1BAC: ttnn.Tensor,
-        prompt_1BLP: ttnn.Tensor,
-        condition_blocks: list[tuple[ttnn.Tensor, str]] | None = None,
+        assembly_indices: ttnn.Tensor,
+        video_out_indices: ttnn.Tensor,
+        audio_out_indices: ttnn.Tensor,
         timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         logical_n: ttnn.Tensor,
+        pad_to: int,
         traced: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
-        video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
-            rows only --- conditioning rows go in `condition_blocks`, not prepended here.
-        audio_1BAC: [1, 1, A, audio_in_channels], replicated on SP and TP. Again the target rows only.
-        prompt_1BLP: [1, 1, L, text_dim], replicated on SP and TP
-        condition_blocks: `[(tensor, modality), ...]` in **packed order**, or None for t2va. A
-            `"video"` block is [1, 1, k, in_channels * prod(patch_size)] and an `"audio"` block
-            [1, 1, k, audio_in_channels]; per-block row counts are arbitrary. fl2va passes one
-            `"video"` block; ref2va passes one per reference medium, interleaved.
+        Every stream is a fixed-capacity buffer, its true rows leading (see the class docstring).
+        The step-invariant text and conditioning segments are not passed here: `prepare_static_sources`
+        projects them once per request and this reads the stored prefix.
+
+        video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. The
+            *target* rows only --- conditioning rows go through `prepare_static_sources`, not here.
+        audio_1BAC: [1, 1, A_cap, audio_in_channels], replicated on SP and TP. Again target rows only.
+        assembly_indices: [1, 1, 1, pad_to] integers, replicated -- source-table row of each packed
+            row, in packed order `[text | condition blocks | audio | video | pad]`; pad rows point
+            at row 0. Built against the segment order in the class docstring.
+        video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers,
+            replicated -- padded-global-sequence row of each target row, entries past the true
+            count pointing at any real row of that modality.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
-            for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
+            for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
+        pad_to: the padded packed length. Every per-device shape in the block stack is a function of
+            it (and of num_slots), so it keys the trace: one capture per `pad_to`, selected via
+            `tracer_trace_key`, replayed for any request whose true lengths -- all carried by the
+            index tensors and `logical_n` -- fit inside it.
 
-        V, A, L and K are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
-        packed length is derived here for slicing; `logical_n` carries the same value into the loop.
+        Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .],
+        replicated, true target rows leading, in that modality's row order.
 
-        Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
-
-        Both hold the **target rows only** --- `V` and `A` of them --- and not the
-        conditioning rows the reference's `video_indices` / `audio_indices` would also cover. The caller
-        discards conditioning-row velocity, because the loop re-imposes the anchors by only ever writing
-        rows from `num_condition_video_rows` / `num_condition_audio_rows` on. For ref2va the reference
-        blocks are not even contiguous with each other, so returning them would cost a slice per block
-        plus a concat every step for a value nobody reads.
-
-        No detection power is lost: attention is full, so every target row attends to every conditioning
-        row as a key and value, and a wrong conditioning rope, AdaLN tag or input projection shows up in
-        this output. That is also why the target rows stay a single contiguous slice regardless of how
-        many reference blocks precede them --- `audio_start = l_len + c_len` and
-        `video_start = audio_start + a_len` hold for any block list.
+        Both hold the **target rows only** and not the conditioning rows the reference's
+        `video_indices` / `audio_indices` would also cover. The caller discards conditioning-row
+        velocity, because the loop re-imposes the anchors by only ever writing target rows. No
+        detection power is lost: attention is full, so every target row attends to every conditioning
+        row as a key and value, and a wrong conditioning rope, AdaLN tag or input projection shows up
+        in this output. Entries past the true counts duplicate a real row's velocity; the caller's
+        in-place Euler step advances the buffer tails with them, and nothing reads those tails back.
         """
-        v_len = video_1BVC.shape[2]
-        a_len = audio_1BAC.shape[2]
-        l_len = prompt_1BLP.shape[2]
-        condition_blocks = condition_blocks or []
-        for index, (block, modality) in enumerate(condition_blocks):
-            if modality not in ("video", "audio"):
-                raise ValueError(f"condition_blocks[{index}] has modality {modality!r}, not 'video' or 'audio'")
-        condition_lengths = [block.shape[2] for block, _ in condition_blocks]
-        c_len = sum(condition_lengths)
-        seq_len = l_len + c_len + a_len + v_len
         tile = ttnn.TILE_SIZE
-        # A tile-layout concat can only cut on a tile boundary, so it needs every modality's row
-        # count to be a multiple of TILE. Production t2va satisfies none of that: at 1344x768 /
-        # 124 frames the video rows are 37 * 1008 = 37296 (= 16 mod 32) and the audio rows
-        # 207 * 2 = 414 (= 30 mod 32), and the text rows are whatever the prompt tokenizes to.
-        # Assembling in ROW_MAJOR instead costs two layout passes over the packed sequence and
-        # accepts any lengths. The tile path is kept for the aligned case because it is strictly
-        # cheaper.
-        # Every *block* is tested, not their sum: the concat cuts at each block boundary, so one
-        # unaligned block forces the ROW_MAJOR path even when the totals are aligned.
-        tile_aligned = not (
-            v_len % tile or a_len % tile or l_len % tile or any(length % tile for length in condition_lengths)
-        )
-
-        # 1. Project each modality and refine the text stream, all still replicated on SP, then
-        # assemble the full packed sequence in natural order.
-        video_embeds = self.proj_in(video_1BVC)
-        audio_embeds = self.audio_proj_in(audio_1BAC)
-        text_embeds = self.token_refiner(self.context_embedder(prompt_1BLP))
-        streams = [text_embeds]
-        for block, modality in condition_blocks:
-            # Same weights as the target rows of that modality: a conditioning row is a
-            # row of its own modality that happens to be pinned, and the reference
-            # projects it with the very same `proj_in` / `audio_proj_in`. A per-row GEMM
-            # against a shared weight is row-independent, so projecting the blocks
-            # separately is bit-identical to projecting them concatenated.
-            streams.append(self.audio_proj_in(block) if modality == "audio" else self.proj_in(block))
-        streams += [audio_embeds, video_embeds]
-
-        # 2. Zero-pad the tail up to a multiple of sp_factor * TILE, then fracture across SP.
-        # Ring attention masks the pad rows via logical_n = seq_len, so no attention mask is
-        # needed. The padding must stay at the tail: interior pad rows would be attended to as
-        # keys and values by every real row, which is why unaligned modalities are handled by
-        # changing the layout of the concat rather than by padding each modality.
         alignment = self.sp_factor * tile
-        padded_len = ((seq_len + alignment - 1) // alignment) * alignment
-        pad_layout = ttnn.TILE_LAYOUT if tile_aligned else ttnn.ROW_MAJOR_LAYOUT
-        if not tile_aligned:
-            streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
-        hidden = ttnn.concat(streams, dim=2)
-        if padded_len != seq_len:
-            hidden = ttnn.concat([hidden, self._padding_rows(padded_len - seq_len, hidden.dtype, pad_layout)], dim=2)
-        if not tile_aligned:
-            # `padded_len` is a multiple of sp_factor * TILE, so the assembled sequence is tile
-            # aligned even though none of its parts was.
-            hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
+        if pad_to % alignment:
+            raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
+        if assembly_indices.shape[-1] != pad_to:
+            raise ValueError(f"assembly_indices has {assembly_indices.shape[-1]} rows, pad_to is {pad_to}")
+        if video_out_indices.shape[-1] != video_1BVC.shape[2]:
+            raise ValueError("video_out_indices must match the video stream's capacity")
+        if audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
+            raise ValueError("audio_out_indices must match the audio stream's capacity")
+        for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
+            # The source table is assembled with a TILE-layout concat, which cuts on tile boundaries
+            # only -- and fixed capacities have no reason to be unaligned.
+            if stream.shape[2] % tile:
+                raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
+        static_prefix = self._static_source_state.value
+        if static_prefix is None:
+            raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
+
+        # Integer index tensors for the gathers. ttnn.embedding wants [batch, seq] uint32.
+        def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
+            t = ttnn.reshape(t, (1, t.shape[-1]))
+            return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
+
+        # 1. Project the two per-step streams at full capacity, still replicated on SP, and append
+        # them to the request's static prefix -- the source table in the fixed segment order.
+        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
+        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
+
+        # 2. Gather the source rows into packed order -- the layout is index content, so the shapes
+        # here depend only on the capacities and pad_to -- then fracture across SP.
+        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
+        hidden = ttnn.unsqueeze(hidden, 0)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         # 3. One timestep embedding per slot, shared by every AdaLN projection. Stabilized because it
@@ -464,16 +496,12 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
         temb = self._temb_state.value
 
-        # 4. Integer index tensors for the two gathers. ttnn.embedding wants [batch, seq] uint32.
-        def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
-            t = ttnn.reshape(t, (1, t.shape[-1]))
-            return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
-
         adaln_idx = as_indices(adaln_indices)
         # Only `norm_out`, after the replay, reads `timestep_idx` -- same hazard as `temb`.
         self._timestep_idx_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = self._timestep_idx_state.value
 
+        # 4. The traced block stack -- `pad_to` keys the capture, see its parameter doc above.
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -482,9 +510,10 @@ class MiniMaxH3Transformer3DModel(Module):
             rope_cos,
             rope_sin,
             traced=traced,
+            tracer_trace_key=pad_to,
         )
 
-        # 6. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
+        # 5. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
         # still SP-fractured and gathering afterwards moves far less data than gathering the 5376-wide
         # packed sequence would.
         hidden = self.norm_out(
@@ -501,38 +530,14 @@ class MiniMaxH3Transformer3DModel(Module):
             video_all = self.ccl_manager.all_gather_persistent_buffer(video_all, dim=2, mesh_axis=self.sp_mesh_axis)
             audio_all = self.ccl_manager.all_gather_persistent_buffer(audio_all, dim=2, mesh_axis=self.sp_mesh_axis)
 
-        # 7. Select each modality's rows out of the reassembled global sequence. The reference runs both
-        # heads over every row and selects afterwards, which is what this does.
-        audio_start = l_len + c_len
-        video_start = audio_start + a_len
-        video_out = ttnn.slice(video_all, [0, 0, video_start, 0], [1, 1, seq_len, video_all.shape[-1]])
-        audio_out = ttnn.slice(audio_all, [0, 0, audio_start, 0], [1, 1, video_start, audio_all.shape[-1]])
-        return video_out, audio_out
+        # 6. Select each modality's target rows out of the reassembled global sequence -- gathers
+        # with per-request index content and capacity-fixed shapes, mirroring the assembly. The
+        # reference runs both heads over every row and selects afterwards, which is what this does.
+        def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
+            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
 
-    def _padding_rows(self, rows: int, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
-        """The zero rows that pad the packed sequence up to `padded_len`.
-
-        Freshly allocated unless `cache_padding` is set, which the traced path needs: `ttnn.zeros`
-        writes to device and a trace capture forbids writes ("Writes are not supported during trace
-        capture"). `padded_len - seq_len` is fixed for a request and `concat` does not modify its
-        operands, so one buffer serves every step.
-
-        One slot, not a dict keyed by shape: `rows` stays below `sp_factor * TILE_SIZE`, so a dict
-        would be bounded rather than unbounded -- but the bound is 1024 entries at SP=32, of zeros no
-        later request reuses. The key is constant within a request, so one slot has the same hit rate.
-
-        Replacing the reference rather than deallocating: a trace captured at the old shape still
-        holds that buffer, and freeing it underneath the trace would be a use-after-free.
-        """
-        shape = [1, 1, rows, self.hidden_local]
-        if not self.cache_padding:
-            return ttnn.zeros(shape, dtype=dtype, layout=layout, device=self.mesh_device)
-
-        key = (rows, dtype, layout)
-        if self._pad_key != key:
-            self._pad_buffer = ttnn.zeros(shape, dtype=dtype, layout=layout, device=self.mesh_device)
-            self._pad_key = key
-        return self._pad_buffer
+        return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
@@ -556,6 +561,13 @@ class MiniMaxH3Transformer3DModel(Module):
         return hidden
 
     def release_traces(self) -> None:
-        tracer = type(self).run_blocks._tracers.get(self)
-        if tracer is not None:
-            tracer.release_trace()
+        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets.
+
+        The Tracers themselves stay: a released tracer re-captures on its next traced call, so this
+        costs each bucket one capture run, not a re-warm.
+        """
+        run_blocks = type(self).run_blocks
+        tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
+        for tracer in tracers:
+            if tracer is not None:
+                tracer.release_trace()
