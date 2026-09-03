@@ -61,7 +61,13 @@ OWNER = 5  # sender index along the ring (cluster) axis
         pytest.param(1024, 32, 0, 0, False, id="1024tiles_chunk32"),
         pytest.param(1024, 128, 0, 0, False, id="1024tiles_chunk128"),
         pytest.param(1024, 0, 300, 400, False, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
+        # L1-relay chunk sweep. The credit round-trip shifts the overhead balance, so re-find the knee here
+        # rather than assuming the DRAM optimum. chunk128 already fills the 768KB budget at num_slots=3;
+        # chunk192 (~1.125MB) probes the L1 ceiling and may fail to allocate — that failure locates the limit.
+        pytest.param(1024, 32, 0, 0, True, id="1024tiles_chunk32_l1"),
+        pytest.param(1024, 64, 0, 0, True, id="1024tiles_chunk64_l1"),
         pytest.param(1024, 128, 0, 0, True, id="1024tiles_chunk128_l1"),
+        pytest.param(1024, 192, 0, 0, True, id="1024tiles_chunk192_l1"),
     ],
 )
 def test_broadcast_ring(
