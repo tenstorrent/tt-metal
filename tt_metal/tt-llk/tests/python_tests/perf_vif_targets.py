@@ -1,23 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Perf coverage for the SFPU comparison kernels the shared sweep cannot reach.
+"""Perf for `calculate_comp_int`, which the shared sweep structurally cannot reach.
 
-This module deliberately measures only what `perf_eltwise_unary_sfpu.py` does
-not. `Sign`, `Heaviside`, `Hardshrink`, `UnaryGt`, `UnaryLt`, `UnaryGe` and
-`UnaryLe` are all in `_OP_DOMAIN_REGISTRY` and therefore already in
-`PERF_SWEEP_OPS` at exactly these parameters, and `run_llk_perf_wormhole.sh`
-collects the whole directory -- carrying them here too would measure every one
-of those rows twice in every perf shard. What is left is the genuine gap:
+`perf_eltwise_unary_sfpu.py` asserts its format matrix against `PERF_SWEEP_OPS`
+and does not carry Int32, but `calculate_comp_int` is reachable only with an
+Int32 input — so these six comparison-to-zero modes have no perf coverage
+anywhere. This module is the extra slice that supplies it, exactly as
+`test_perf_eltwise_unary_sfpu_comp_uint16` and `_comp_uint32` already do for
+their formats: a slice that bypasses `PERF_SWEEP_OPS` rather than widening it.
 
-* `UnaryEq` / `UnaryNe` sit outside `_OP_DOMAIN_REGISTRY`
-  (`helpers/sfpu_domains.py`), so they have no perf coverage anywhere.
-* `calculate_comp_int` is reachable only with an Int32 input, a format the
-  shared sweep's matrix does not carry, so it has none either.
+Nothing here duplicates the shared sweep. Every float op these kernels touch is
+already in `_OP_DOMAIN_REGISTRY`, hence in `PERF_SWEEP_OPS`, and measured at
+these same parameters; `run_llk_perf_wormhole.sh` collects the whole directory,
+so carrying them here too would measure those rows twice in every perf shard.
 
-Both slices follow the pattern `test_perf_eltwise_unary_sfpu_comp_uint16` and
-`_comp_uint32` already use: an extra slice that bypasses `PERF_SWEEP_OPS`
-rather than widening it. loop_factor/iterations/dimensions match the shared
-sweep so the numbers stay directly comparable with it.
+loop_factor/iterations/dimensions match the shared sweep so the numbers stay
+directly comparable with it.
 
 When A/B-ing header variants, wipe the ELF cache between runs.
 `TestConfig.variant_id` hashes the `-I` include-directory paths, not header
@@ -56,14 +54,6 @@ from helpers.test_variant_parameters import (
 )
 
 _DIMS = [[128, 64]]  # tile_cnt: 8, same as the main perf sweep
-
-# calculate_unary_eq / calculate_unary_ne: the two float comparison kernels with
-# no coverage in the shared sweep. The other seven touched float ops are already
-# measured there at these same parameters and are not repeated here.
-_FLOAT_OPS = [
-    MathOperation.UnaryEq,
-    MathOperation.UnaryNe,
-]
 
 # calculate_comp_int: reached only when the runtime math_format is Int32.
 _INT_COMP_OPS = [
@@ -112,23 +102,6 @@ def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
     )
-
-
-@skip_for_blackhole
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b], same=True),
-    mathop=_FLOAT_OPS,
-    input_dimensions=_DIMS,
-)
-def test_perf_vif_float(perf_report, formats, mathop, input_dimensions):
-    _config(
-        formats,
-        mathop,
-        DestAccumulation.No,
-        unpack_to_dest=False,
-        input_dimensions=input_dimensions,
-    ).run(perf_report)
 
 
 @skip_for_blackhole
