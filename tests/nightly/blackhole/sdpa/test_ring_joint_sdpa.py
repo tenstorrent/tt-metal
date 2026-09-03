@@ -1669,6 +1669,8 @@ def run_ring_joint_sdpa_chunked(
     use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
     reserve_llk_kernel_config: bool = True,
+    paged_kv_cache: bool = False,
+    kv_cache_page_size: int = 32,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1703,6 +1705,11 @@ def run_ring_joint_sdpa_chunked(
         assert model.nhk == 1, f"ring_mla requires one shared latent K/V head, got nhk={model.nhk}"
         assert not indexed_nd_sharded_kv_cache, "ring_mla chunked path here does not use the indexed ND-sharded cache"
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
+    if paged_kv_cache:
+        assert use_ring_mla, "paged_kv_cache is currently supported by this harness only for ring_mla"
+        assert not reuse_kv_buffer, "paged_kv_cache requires a right-sized physical page pool"
+        assert batch_size == 1 and model.nhk == 1, "paged ring_mla requires one batch and one shared KV head"
+        assert kv_cache_page_size > 0 and kv_cache_page_size % ttnn.TILE_SIZE == 0
     if use_attention_sink:
         assert not use_ring_mla, "attention sink coverage requires separate K/V ring joint SDPA"
 
@@ -1936,6 +1943,8 @@ def run_ring_joint_sdpa_chunked(
         # ring_mla uses one shared latent K/V tensor (width d_k); V is its first d_v columns.
         ring_mla_kv_shard_dims = [None, None]
         ring_mla_kv_shard_dims[sp_axis] = 2  # input KV sharded along seq across the ring
+        ring_mla_page_shard_dims = [None, None]
+        ring_mla_page_shard_dims[sp_axis] = 0  # flattened physical pages are private to each SP rank
         ring_mla_persistent_shard_dims = [None, None]  # gathered KV is replicated (full seq, single head)
 
         def upload_kv(kv_host):
@@ -1947,6 +1956,31 @@ def run_ring_joint_sdpa_chunked(
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=ring_mla_kv_shard_dims
                 ),
+            )
+
+        def upload_paged_kv(kv_host):
+            seq_len = kv_host.shape[2]
+            assert seq_len % (sp_size * kv_cache_page_size) == 0
+            return ttnn.from_torch(
+                kv_host.reshape(seq_len // kv_cache_page_size, 1, kv_cache_page_size, d_k),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=nd_sharded_dram_memory_config(mesh_device, d_k, kv_cache_page_size),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=ring_mla_page_shard_dims
+                ),
+            )
+
+        def upload_page_table(seq_len):
+            local_pages = seq_len // sp_size // kv_cache_page_size
+            return ttnn.from_torch(
+                torch.arange(local_pages, dtype=torch.int64).reshape(1, 1, 1, local_pages),
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
         def create_ring_mla_kv_buffer(seq_len, kv_buffer_batch):
@@ -1964,6 +1998,7 @@ def run_ring_joint_sdpa_chunked(
             f"Chunked prefill: model={model.name}, use_ring_mla={use_ring_mla}, total_seq={total_seq}, "
             f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
             f"qk_configs={qk_configs}, "
+            f"paged_kv_cache={paged_kv_cache}, kv_cache_page_size={kv_cache_page_size}, "
             f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}, "
             f"persistent_buffer_mode={persistent_buffer_mode}"
         )
@@ -2003,7 +2038,7 @@ def run_ring_joint_sdpa_chunked(
                     q_host, kv_host, *_ = build_kv_pad_rotation_mla_inputs(
                         K_full[:, :, :s, :], Q_chunk, K_chunk, s, sp_size, slab_rows
                     )
-                    return (s, e, b, None, upload_q(q_host), upload_kv(oversize(kv_host, nhk, d_k)), None)
+                    return (s, e, b, None, upload_q(q_host), upload_kv(oversize(kv_host, nhk, d_k)), None, None)
 
                 q_host, k_host, v_host, *_ = build_kv_pad_rotation_inputs(
                     K_full[:, :, :s, :],
@@ -2023,6 +2058,7 @@ def run_ring_joint_sdpa_chunked(
                     upload_q(q_host),
                     upload_k(oversize(k_host, nhk, d_k)),
                     upload_v(oversize(v_host, nhv, d_v)),
+                    None,
                 )
 
             Q_chunk = Q_full[:, :, s:e, :].contiguous()
@@ -2031,14 +2067,17 @@ def run_ring_joint_sdpa_chunked(
             kv_cache_batch_idx_arg = None
 
             if use_ring_mla:
+                tt_kv = upload_paged_kv(K_balanced) if paged_kv_cache else upload_kv(K_balanced)
+                tt_page_table = upload_page_table(e) if paged_kv_cache else None
                 return (
                     s,
                     e,
                     kv_buffer_batch,
                     kv_cache_batch_idx_arg,
                     upload_q(Q_chunk),
-                    upload_kv(K_balanced),
+                    tt_kv,
                     None,
+                    tt_page_table,
                 )
 
             V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
@@ -2061,6 +2100,7 @@ def run_ring_joint_sdpa_chunked(
                 upload_q(Q_chunk),
                 upload_k(K_input, memory_config=k_memory_config),
                 upload_v(V_input, memory_config=v_memory_config),
+                None,
             )
 
         def get_persistent_buffers(shared_persistent_buffers, chunk_persistent_buffers):
@@ -2081,9 +2121,18 @@ def run_ring_joint_sdpa_chunked(
             persistent_output_buffer_k,
             persistent_output_buffer_v,
             kv_cache_batch_idx_arg,
+            page_bundle_indices,
         ):
             try:
                 if use_ring_mla:
+                    paging = {}
+                    if page_bundle_indices is not None:
+                        paging = {
+                            "kv_cache_num_layers": 1,
+                            "kv_cache_layer_idx": 0,
+                            "page_bundle_indices": page_bundle_indices,
+                            "kv_cache_page_size": kv_cache_page_size,
+                        }
                     tt_out, _ = ttnn.transformer.ring_mla(
                         tt_Q,
                         tt_K,
@@ -2103,6 +2152,7 @@ def run_ring_joint_sdpa_chunked(
                         ccl_core_grid_offset=(ccl_column, 0),
                         use_column_major_ccl=True,
                         kv_actual_isl=s if reuse_kv_buffer else None,
+                        **paging,
                     )
                     return tt_out
 
@@ -2193,6 +2243,7 @@ def run_ring_joint_sdpa_chunked(
                 tt_Q,
                 tt_K,
                 tt_V,
+                tt_page_table,
             ) = prepare_chunk_inputs(i)
             chunk_persistent_buffers = None
             if persistent_buffer_mode != "reuse_max":
@@ -2230,6 +2281,7 @@ def run_ring_joint_sdpa_chunked(
                             persistent_output_buffer_k,
                             persistent_output_buffer_v,
                             kv_cache_batch_idx_arg,
+                            tt_page_table,
                         )
 
                         if use_device_determinism_compare:
@@ -2273,6 +2325,7 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_k,
                         persistent_output_buffer_v,
                         kv_cache_batch_idx_arg,
+                        tt_page_table,
                     )
                     # do_check=False (perf/profiling): the device op above already ran for the
                     # profiler; skip the host readback and PCC comparison against ref_full.
@@ -6426,6 +6479,75 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
+)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+)
+def test_ring_mla_paged_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+    """Require page-32 ring_mla to meet the same production utilization band as contiguous KV.
+
+    The logical workload, q32/k640 program config, persistent-buffer geometry, and expected
+    utilization are shared with test_ring_mla_chunked_perf_check. Only the KV representation changes:
+    each physical [32, hidden_dim] page is one full-width ND DRAM shard in a single bank.
+    """
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
+
+    model = RING_MLA_CHUNKED_MODEL_CONFIGS[model_name]
+    chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    perf_chunk = n_chunks - 1
+
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-paged32"
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    use_ring_mla=True,
+                    do_check=False,
+                    reuse_kv_buffer=False,
+                    paged_kv_cache=True,
+                    kv_cache_page_size=32,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+    )
+    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+
+    logger.info(
+        f"paged ring_mla chunked 50k+5k perf check {config_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(same expected utilization as contiguous: {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"profiler_records={len(perf_records)}"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Paged math utilization {utilization:.2f}% outside the contiguous-KV band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
     )
 
