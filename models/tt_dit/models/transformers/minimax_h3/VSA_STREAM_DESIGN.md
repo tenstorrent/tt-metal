@@ -178,7 +178,7 @@ deterministic windows; 5/10 s with the earlier approx-exp / timing-window kernel
 |---|---|---|---|---|---|
 | 5 s  | 15.8 / 17.5 ms | 19.0 / 20.3 ms | 7.4 ms  | 3.3 ms  | 6.2 ms  |
 | 10 s | 39.5 / 41.2 ms | 37.4 / 39.0 ms | 24.7 ms | 9.0 ms  | 11.7 ms |
-| 15 s | 73.4 / 75.4 ms | 58.9 / 59.6 ms | 51.4 ms | 19.6 ms | 15.6 ms |
+| 15 s | 73.4 / 75.4 ms | 58.6 / 59.2 ms | 51.4 ms | 19.6 ms | 15.3 ms |
 
 Component breakdown (ms, device 0):
 
@@ -186,7 +186,7 @@ Component breakdown (ms, device 0):
 |---|---|---|---|---|---|---|
 | attention core (ring SDPA / `vsa_sdpa`) | 7.44 | 3.26 | 24.70 | 9.01 | 51.43 | 20.10 |
 | full K/V all-gather (fine-stage input) | - | 3.02 | - | 5.43 | - | 8.11 |
-| coarse pooling q/k/v | - | 0.33 | - | 0.59 | - | 2.30 |
+| coarse pooling q/k/v | - | 0.33 | - | 0.59 | - | 1.96 (matmul 0.48 -> 0.34 with a full-grid program config; the 3 transposes, 0.9 ms, are DRAM-bound) |
 | pooled K/V gather + assembly | - | 0.40 | - | 1.03 | - | ~0.5 (was 1.63; now two aligned all-gathers) |
 | coarse scores + mask + softmax | - | 0.46 | - | 0.79 | - | 0.28 |
 | coarse output o_c (probs@V, tile->token) | - | 0.40 | - | 0.72 | - | 1.11 |

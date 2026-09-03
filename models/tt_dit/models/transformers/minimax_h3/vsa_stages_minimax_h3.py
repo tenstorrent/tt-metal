@@ -213,6 +213,28 @@ class MiniMaxH3VSACoarseStage:
             return x
         return self.ccl_manager.all_gather_persistent_buffer(x, dim=dim, mesh_axis=self.sp_axis)
 
+    def _pool_program_config(self, m: int, k: int):
+        """Full-grid multicast config for the [H*d, S_local] @ [S_local, slots] pooling product: the default
+        picked 80 cores and 0.48 ms at 15 s; 12x10 with in0_block_w=4 measured 0.34 ms
+        (test_vsa_pooling_perf.py). Cached per (m, k)."""
+        key = (m, k)
+        cache = self.__dict__.setdefault("_pool_cfg", {})
+        if key not in cache:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            m_tiles, n_tiles, k_tiles = m // 32, self.slots_per_shard // 32, k // 32
+            in0_block_w = next((w for w in (4, 2, 1) if k_tiles % w == 0), 1)
+            cache[key] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=-(-m_tiles // grid.y),
+                per_core_N=-(-n_tiles // grid.x),
+                transpose_mcast=False,
+                fused_activation=None,
+            )
+        return cache[key]
+
     def pool(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
         """[1, H, S_local, d] -> pooled [1, H, tiles_local, d] (fp math in bf16, matches oracle to bf16)."""
         _, num_heads, s_local, d = x_bhnd.shape
@@ -222,7 +244,9 @@ class MiniMaxH3VSACoarseStage:
         # As one [H*d, S_local] @ [S_local, tiles_local] product the same math spans 14x the output
         # tiles and the whole grid. Tile-aligned merge of adjacent dims: a view, no data movement.
         x_t = ttnn.reshape(x_t, [1, 1, num_heads * d, s_local])
-        pooled_t = ttnn.matmul(x_t, self.a_t_q if scaled else self.a_t_kv)  # [1, 1, H*d, tiles_local]
+        pooled_t = ttnn.matmul(
+            x_t, self.a_t_q if scaled else self.a_t_kv, program_config=self._pool_program_config(num_heads * d, s_local)
+        )  # [1, 1, H*d, slots]
         ttnn.deallocate(x_t)
         pooled_t = ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
         pooled = ttnn.transpose(pooled_t, 2, 3)  # [1, H, tiles_local, d]
