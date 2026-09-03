@@ -493,6 +493,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const bool reader_mcasts_up = (up_mode == 0 || up_mode == 2);  // reader NoC-0 mcasts up
     // Local same-core handshake sems (UP_SPLIT only): up_go (reader -> writer:
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
+    // COUNTS_BCAST: one core reads counts/idx and multicasts them; this gates the rest.
+    const uint32_t counts_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
@@ -985,8 +987,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  16..25: in0 multicast args
         //  26: act_ready_sem_id  27: act_valid_sem_id
         //  28: up_go_sem_id  29: up_done_sem_id
-        //  30..30+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  30+2*GRID_X: start_addr (expert_region_offsets)
+        //  30..36: COUNTS_BCAST (is_counts_reader, rect x0,y0,x1,y1, sem, receivers)
+        //  37..37+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
+        //  37+2*GRID_X: start_addr (expert_region_offsets)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             counts_buffer->address(),
@@ -1020,6 +1023,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_go_sem_id,
             up_done_sem_id,
         };
+        // COUNTS_BCAST args (7, at COUNTS_BCAST_RT). Every core needs counts/idx to
+        // derive its chunking, but all of them reading the same two DRAM pages at once
+        // serialises on one bank. Logical (0,0) reads them and multicasts to a rectangle
+        // spanning the whole worker grid; the non-loopback multicast drops the sender's
+        // own copy, so num_dests is one less than the grid.
+        {
+            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+            reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
+            reader_args.push_back(static_cast<uint32_t>(grid_first.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_first.y));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.y));
+            reader_args.push_back(counts_valid_sem_id);
+            reader_args.push_back(GRID_X * GRID_Y - 1);
+        }
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's

@@ -84,7 +84,9 @@ void kernel_main() {
 
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 30.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 30;
+    // COUNTS_BCAST occupies 7 args before the M-row NoC table.
+    constexpr uint32_t COUNTS_BCAST_RT = 30;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = COUNTS_BCAST_RT + 7;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -273,9 +275,63 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
-    noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
-    noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
-    noc_read.async_read_barrier();
+    {
+        // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
+        // Every core needs counts/idx to derive its chunking, but all of them hitting the
+        // same two DRAM pages at once serialises on a single bank. One read plus one L1
+        // multicast pays the DRAM latency once.
+        const bool is_counts_reader = get_arg_val<uint32_t>(COUNTS_BCAST_RT) != 0;
+        const uint32_t cb_nx_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 1);
+        const uint32_t cb_ny_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 2);
+        const uint32_t cb_nx_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 3);
+        const uint32_t cb_ny_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 4);
+        Semaphore<> counts_valid_sem(get_arg_val<uint32_t>(COUNTS_BCAST_RT + 5));
+        const uint32_t counts_num_receivers = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 6);
+        if (is_counts_reader) {
+            noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
+            noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
+            noc_read.async_read_barrier();
+            if (counts_num_receivers > 0) {
+                // linked=true so the valid-sem multicast is ordered behind both data
+                // multicasts on the same reserved path (as for the weight mcast).
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(counts_l1),
+                    MulticastEndpoint{},
+                    counts_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = counts_l1},
+                    /*linked=*/true);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(idx_l1),
+                    MulticastEndpoint{},
+                    idx_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = idx_l1},
+                    /*linked=*/true);
+                noc.async_writes_flushed();
+                counts_valid_sem.set(1);
+                counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                    noc, cb_nx_start, cb_ny_start, cb_nx_end, cb_ny_end, counts_num_receivers);
+            }
+        } else {
+            counts_valid_sem.wait(1);
+            // Reset our own copy rather than trusting the runtime to re-init semaphores on
+            // every launch: each core waits on its OWN L1 copy, so a cached program must
+            // not see a stale 1 and skip the wait — that would read the previous
+            // invocation's counts, silently correct only while consecutive calls agree.
+            counts_valid_sem.set(0);
+        }
+    }
     cb_counts_scratch_obj.push_back(1);
     cb_idx_scratch_obj.push_back(1);
 
