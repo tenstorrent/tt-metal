@@ -221,6 +221,7 @@ inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row
  * @param tensor_shape Shape of each input tile; only full 32x32 tiles are supported.
  * @param dst_index First destination tile slot to write.
  * @note Call @ref _llk_math_sub_bcast_cols_compensated_init_ before this operation.
+ * @note The input and anchor are consumed as TF32. Use an SFPU finaliser when FP32 mantissa preservation is required.
  */
 inline void _llk_math_sub_bcast_cols_compensated_(
     const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)

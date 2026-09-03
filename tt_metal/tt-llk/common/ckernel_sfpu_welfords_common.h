@@ -669,6 +669,9 @@ sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
 
 /**
  * Store a retained anchor, anchor-minus-mean correction, and variance for the compensated FPU finaliser.
+ * The consumer reads the input and anchor through TF32 Src registers, so this layout improves cancellation only
+ * when the input mantissa is representable in TF32. FP32 inputs requiring full mantissa preservation must use an
+ * SFPU finaliser instead.
  * @tparam dual_m2 Whether LREG6 must be folded into LREG5 first.
  * @param reciprocal_bits FP32 bit pattern for the reciprocal population count.
  */
