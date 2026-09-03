@@ -58,7 +58,7 @@ CBDescriptor cb_descriptor(uint32_t cb, uint32_t pages, const CoreRangeSet& core
 }
 
 // kv/gate pack the Ca and Cb halves side by side, so the head dimension is half the projection width.
-uint32_t head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] / 2; }
+uint32_t factory_head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] / 2; }
 
 KernelDescriptor state_kernel_descriptor(
     const CsaStateInputs& args,
@@ -66,7 +66,7 @@ KernelDescriptor state_kernel_descriptor(
     const CoreCoord& core,
     uint32_t local_valid,
     uint32_t absolute_start) {
-    const uint32_t head_dim = head_dim_of(args.kv);
+    const uint32_t head_dim = factory_head_dim_of(args.kv);
     std::vector<uint32_t> compile_args = {
         head_dim, 2 * head_dim / tt::constants::TILE_WIDTH, head_dim / tt::constants::TILE_WIDTH};
     TensorAccessorArgs(args.kv.buffer()).append_to(compile_args);
@@ -129,7 +129,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     TT_FATAL(grid.x > 1, "CSA compression requires at least two worker cores");
     const uint32_t local_seq = args.kv.logical_shape()[-2];
     const auto [local_valid, absolute_start] = local_runtime(params, local_seq, *mesh_dispatch_coordinate);
-    const uint32_t head_dim = head_dim_of(args.kv);
+    const uint32_t head_dim = factory_head_dim_of(args.kv);
     const uint32_t state_width_tiles = head_dim / tt::constants::TILE_WIDTH;
     const uint32_t input_width_tiles = 2 * state_width_tiles;
     const uint32_t output_height_tiles = (local_seq / 4 + 31) / 32;
