@@ -31,6 +31,7 @@ a rank boundary.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 HIDDEN_SIZE = 7168
 BLOCK_SIZE = 12
@@ -94,11 +95,13 @@ class TtAttnRes(LightweightModule):
             one chip: the read's exchange is what its one dispatch is built around,
             and there is no exchange to absorb at `tp_factor == 1`.
         num_links: fabric links for the statistics all-reduce.
-        topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Galaxy
-            prefill is `[LINE, RING]`; applying a scalar `Ring` to a linear axis
-            points a collective at a wrap link with no physical fabric edge.
-        stats_dtype: dtype the statistics all-reduce runs in. `ttnn.all_reduce`
-            reduces in bf16 unless the input is fp32 (`all_reduce_nanobind.cpp:48`).
+        topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Defaults to
+            what the opened fabric actually wraps, which is the only source that
+            cannot disagree with it: naming `Ring` on an axis the fabric does not
+            wrap points the collective at a link nothing services, and it waits
+            there for an arrival that is never routed.
+        stats_dtype: dtype the statistics all-reduce runs in. The collective
+            reduces in bf16 unless the input is fp32, which takes a dedicated path.
             The difference is small and it is free: measured over 186 chained reads
             at `d = 7168` on a 2x4 mesh, fp32 stats give PCC 0.9999500 against bf16
             stats' 0.9999401, for ~1.5 MB of extra traffic per read against ~900 MB
@@ -125,6 +128,10 @@ class TtAttnRes(LightweightModule):
             3 136 us read. Requires `STATS_FIDELITY`; see the note there. The
             squares half is width-gated and falls back on its own, so this stays
             a single knob for the caller — see `ONE_PASS_SQUARES_MAX_WIDTH`.
+        tt_ccl: the model's CCL semaphore pools, when the caller has them. The
+            statistics all-reduce needs a persistent set either way and makes its
+            own when this is `None`; sharing the model's costs nothing and gets
+            the cycling `_tp_semaphores` explains.
     """
 
     def __init__(
@@ -141,6 +148,7 @@ class TtAttnRes(LightweightModule):
         stats_dtype=ttnn.float32,
         fold_stats=True,
         one_pass_stats=True,
+        tt_ccl=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -153,17 +161,19 @@ class TtAttnRes(LightweightModule):
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
+        self.tt_ccl = tt_ccl
         # Sized by the token count, which reaches the op and not the constructor.
         self._exchange_scratch = {}
         self._exchange_sem = None
+        self._tp_sems = None
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
         self.sp_factor = mesh_shape[sp_axis]
-        self.topology = topology if topology is not None else [ttnn.Topology.Linear] * len(mesh_shape)
+        self.topology = list(per_axis_topology()) if topology is None else topology
         assert len(self.topology) == len(mesh_shape), (
             f"topology has {len(self.topology)} entries for a {len(mesh_shape)}-axis mesh; "
-            "pass one Topology per axis (Galaxy prefill is [LINE, RING])"
+            "pass one Topology per axis, or none and take the opened fabric's"
         )
 
         # The read is one program because the exchange runs inside it. Without a
@@ -277,6 +287,59 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(reduced)
         return narrow
 
+    def _tp_semaphores(self):
+        """Persistent CCL semaphores for the statistics all-reduce.
+
+        Handing the collective its semaphores is what keeps it off `ttnn.all_reduce`'s
+        fallback, which passes none and so has each leg allocate its own inside program
+        construction. That fallback costs twice. The set it takes is held for as long as
+        the program cache is, and the statistics shape carries the sealed set's width, so
+        a deeper seal hashes a new program and takes another set with it: the pool a walk
+        needs grows with seal depth instead of staying flat, and there is no depth at
+        which sizing it is safe. Worse, allocating one resets it through a mesh write the
+        allocator blocks on, so that the reset lands everywhere before the next program
+        runs; each new depth therefore stalls the walk on a full queue drain. One set for
+        the whole walk keeps the pool flat and keeps every allocation out of the walk.
+
+        A `tt_ccl` is the better source when the caller has one. Its scatter and gather
+        pools are double-buffered and handed out in turn, and that matters as soon as a
+        second component has a collective in flight on the same axis: two collectives
+        sharing one set of semaphores read each other's counts. A walk on its own is
+        serialized and cannot race itself, so the fallback below is a fixed set.
+
+        Sizes are the op's contract, not a choice — two barriers, index 0 for the
+        reduce-scatter and 1 for the all-gather, then the scatter's three and the
+        gather's two. The barrier pair is `tt_ccl`'s double-buffer slots used as that
+        pair, which is what the rest of the model passes.
+        """
+        if self.tt_ccl is not None:
+            return (
+                self.tt_ccl.barrier_semaphore_handles[self.tp_axis],
+                self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            )
+        if self._tp_sems is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+            new_set = lambda count: [ttnn.create_global_semaphore(self.mesh_device, cores, 0) for _ in range(count)]
+            self._tp_sems = (new_set(2), new_set(3), new_set(2))
+        return self._tp_sems
+
+    def _all_reduce(self, tensor):
+        """Sum `tensor` across the TP axis. Does not consume it."""
+        barriers, scatter, gather = self._tp_semaphores()
+        return ttnn.experimental.all_reduce_async(
+            tensor,
+            cluster_axis=self.tp_axis,
+            mesh_device=self.mesh_device,
+            barrier_semaphores=barriers,
+            rs_global_semaphores=scatter,
+            ag_global_semaphores=gather,
+            math_op=ttnn.ReduceType.Sum,
+            num_links=self.num_links,
+            topology=self.topology[self.tp_axis],
+        )
+
     def _collective(self, wide):
         """One all-reduce over the TP axis. Does not consume `wide`.
 
@@ -289,28 +352,22 @@ class TtAttnRes(LightweightModule):
         The fold is not bit-neutral. On reduce-scatter it reassociates the partial
         sums — measured against a replicated 4x reference it doubles the error,
         7.8e-3 -> 1.6e-2 at `C = 18` — and at `N` of one tile row it can switch
-        `all_reduce` to the composite algorithm outright, because the candidate
+        the collective to its composite algorithm outright, because the candidate
         axis was the only dim that could qualify for reduce-scatter and the folded
-        shape does not have it. Neither layout is exact to begin with and both stay
-        ~50x inside one bf16 ULP, so the gate is the 186-read depth PCC in
+        shape does not have it. Composite allocates its own semaphores whatever it
+        is handed, so only shapes above one tile row keep what `_tp_semaphores` buys;
+        the model's 640 rows per chip are well above it.
+
+        Neither layout is exact to begin with and both stay ~50x inside one bf16 ULP,
+        so the gate is the 186-read depth PCC in
         `tests/attn_res/model/test_forward_loop.py`, not exactness: measured there,
         the two differ by <=5e-6 in *either* direction, which is reassociation noise
         rather than a precision cost."""
         if not (self.fold_stats and wide.shape[-1] == 1 and FOLD_MIN_CANDIDATES <= wide.shape[1] <= ttnn.TILE_SIZE):
-            return ttnn.all_reduce(
-                wide,
-                cluster_axis=self.tp_axis,
-                num_links=self.num_links,
-                topology=self.topology[self.tp_axis],
-            )
+            return self._all_reduce(wide)
 
         folded = ttnn.permute(wide, [0, 3, 2, 1])
-        crossed = ttnn.all_reduce(
-            folded,
-            cluster_axis=self.tp_axis,
-            num_links=self.num_links,
-            topology=self.topology[self.tp_axis],
-        )
+        crossed = self._all_reduce(folded)
         ttnn.deallocate(folded)
         unfolded = ttnn.permute(crossed, [0, 3, 2, 1])
         ttnn.deallocate(crossed)

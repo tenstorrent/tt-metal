@@ -43,13 +43,13 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import (
     load_attn_res_state_dict,
 )
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
-    FABRIC,
     HIDDEN_SIZE,
     PER_CHIP_TOKENS,
     blackhole_only,
     compose,
     generator,
     place_case,
+    placements,
     random_case,
     random_queries,
     read_block,
@@ -75,7 +75,7 @@ TP_AXIS = 1
 # after the stack.
 LAYERS = 93
 
-PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
+PLACEMENTS = placements()
 
 on_placements = pytest.mark.parametrize(
     "mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"]

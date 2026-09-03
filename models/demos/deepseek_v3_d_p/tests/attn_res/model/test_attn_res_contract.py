@@ -36,14 +36,21 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_bit_id
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     FABRIC,
     HIDDEN_SIZE,
+    L1_SMALL_SIZE,
     PER_CHIP_TOKENS,
     blackhole_only,
     compose,
     generator,
     place_case,
+    placements,
     random_case,
     random_queries,
     read_block,
+)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 
@@ -55,13 +62,36 @@ READ_SITES = 24
 NUM_SEALED = 8
 
 # Trace capture needs its own region; the rest of the suite runs eager and does not reserve one.
-TRACED = {**FABRIC, "trace_region_size": 23887872}
+TRACE_REGION_SIZE = 23887872
+TRACED = {**FABRIC, "trace_region_size": TRACE_REGION_SIZE}
 
-on_mesh = pytest.mark.parametrize(
-    "mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True
-)
+on_mesh = pytest.mark.parametrize("mesh_device, device_params", placements(), indirect=True)
+# The traced arms mirror `placements()` rather than sampling it: a trace freezes the
+# fabric routes its captured programs resolved, so a route that only goes wrong on a
+# wrapped axis stays wrong for the whole replay and cannot be caught on the other arms.
+_TRACED_BOX = {"trace_region_size": TRACE_REGION_SIZE, "require_exact_physical_num_devices": True}
+
 on_traced_mesh = pytest.mark.parametrize(
-    "mesh_device, device_params", [pytest.param((2, 4), TRACED, id="mesh-2x4")], indirect=True
+    "mesh_device, device_params",
+    [
+        pytest.param((2, 4), TRACED, id="mesh-2x4"),
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            id="mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            id="torusx-mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            id="torusxy-mesh-8x4",
+        ),
+    ],
+    indirect=True,
 )
 
 pytestmark = blackhole_only

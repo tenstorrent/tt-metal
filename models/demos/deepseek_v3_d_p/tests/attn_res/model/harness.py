@@ -19,6 +19,11 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 
 HIDDEN_SIZE = 7168
 PER_CHIP_TOKENS = 640
@@ -30,11 +35,64 @@ PER_CHIP_TOKENS = 640
 # here is kept above the checkpoint's deliberately — it is the harder of the two.
 PROJ_STD = 0.02
 
+# The CCL factories place their global semaphores in L1_SMALL only when the pool is
+# non-empty, and ttnn defaults it to zero. A suite that leaves it unset pushes every
+# semaphore into main L1 instead, so it can neither exhaust the pool a real model config
+# gives it nor see the L1 fragmentation the fallback causes. 1152 is what K3 sets.
+L1_SMALL_SIZE = 1152
+
 # `ttnn.all_reduce` and the gather kernel's own fabric writes both need an initialized
 # fabric context on a real mesh; without it they die in the control plane rather than
 # returning wrong numbers. 2D is what the rest of this model runs on and what the op's
 # own unit test pins, and the two must agree — the op picks its route from the config.
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+# Each arm names the whole box it runs on, so the one that does not match this machine has
+# to drop out rather than open a submesh and stall in the ethernet handshake.
+EXACT_BOX = {"require_exact_physical_num_devices": True}
+
+FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": L1_SMALL_SIZE, **EXACT_BOX}
+
+
+def placements():
+    """The meshes this suite runs, one `pytest.param` per box.
+
+    Every test sizes its input as `PER_CHIP_TOKENS * op.sp_factor`, so the SP axis is what
+    picks the chunk: 2x4 holds 1280 tokens and 8x4 holds 5120, both at 640 rows per device,
+    which is the shape K3 prefills. That is why the wide arm is the whole 8x4 and not a
+    slice of it — a mesh narrower than the box it opens on is a submesh, and fabric does
+    not complete its ethernet handshake on one, so Galaxy has to take the full box. At the
+    full box the production fabric wraps both axes, which is the arm K3 actually ships on.
+
+    Galaxy carries three fabrics because they fail differently: unwrapped 2D isolates
+    whatever the op does on its own, and a wrapped arm is the only place where a route
+    chosen by rank order rather than by the routing tables can take a wrap link. Both
+    wrapped arms wrap the TP axis, the only axis this op sends on, so they hand the
+    collective the same ring and differ only in whether the SP axis wraps as well.
+    Ring/Ring is what ships; Line/Ring pins that the SP wrap is not what carries the
+    result, which holds because routing is dimension-ordered and a same-row peer takes
+    its first hop along TP whatever the SP axis is doing.
+
+    The profile helpers return a fresh dict per call so the arms cannot share mutable
+    fixture state.
+    """
+    return [
+        pytest.param((2, 4), FABRIC, id="mesh-2x4"),
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            id="mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            id="torusx-mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            id="torusxy-mesh-8x4",
+        ),
+    ]
+
 
 # The op was brought up and measured only on Blackhole, and its mixture runs on
 # `ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc`, which has no Wormhole coverage.

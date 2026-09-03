@@ -42,13 +42,13 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS, attn_res_stack
 from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_accurate
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
-    FABRIC,
     HIDDEN_SIZE,
     PER_CHIP_TOKENS,
     blackhole_only,
     compose,
     generator,
     place,
+    placements,
     random_hidden,
     random_queries,
 )
@@ -64,7 +64,7 @@ BLOCK_SIZE = 2
 # Scales each module's contribution so the accumulation stays in bf16's range.
 MODULE_SCALE = 0.02
 
-PLACEMENTS = [pytest.param((2, 4), FABRIC, id="mesh-2x4")]
+PLACEMENTS = placements()
 
 pytestmark = blackhole_only
 

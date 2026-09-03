@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import assert_requested_tp_wrap_was_realized
+
 
 @pytest.fixture(scope="session")
 def kimi_k3_checkpoint_dir() -> Path | None:
@@ -20,3 +22,22 @@ def kimi_k3_checkpoint_dir() -> Path | None:
     """
     value = os.getenv("KIMI_K3_CKPT")
     return Path(value) if value else None
+
+
+@pytest.fixture(autouse=True)
+def guard_the_requested_wrap(request):
+    """Hold every mesh test to the fabric its arm asked for.
+
+    A torus arm exists to put a ring under the TP-axis collective, and the control plane
+    answers a request it cannot cable with a quiet downgrade rather than an error. Checking
+    it once per test, after the device is open, is what keeps a downgraded box from
+    reporting the wrapped arm green.
+
+    Tests that never open a mesh are left alone, so this cannot pull a device into a
+    host-only case.
+    """
+    if "mesh_device" not in request.fixturenames:
+        yield
+        return
+    assert_requested_tp_wrap_was_realized(request.getfixturevalue("mesh_device"))
+    yield
