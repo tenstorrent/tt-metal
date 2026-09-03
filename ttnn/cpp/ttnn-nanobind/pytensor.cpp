@@ -55,6 +55,7 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -1467,6 +1468,28 @@ void pytensor_module(nb::module_& mod) {
                     addr = tensor.experimental_per_core_buffer_address(tensor.device_coords()[0], core)
                 else:
                     addr = tensor.buffer_address()
+
+        )doc")
+        .def(
+            "is_range_lockstep_allocated",
+            [](const Tensor& self) -> bool {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return false;
+                }
+                return experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                    self.mesh_buffer().device_local_config().sharding_args);
+            },
+            R"doc(
+            Returns True if this tensor was allocated with experimental range lockstep allocation.
+
+            The tensor still has one address, as with ordinary lockstep; the allocator only kept
+            that address clear of per-core allocations on the cores the tensor occupies, rather
+            than on every core. Reads the args the buffer was created with, so it reports what
+            reached the allocator rather than what the memory config asked for.
+
+            .. code-block:: python
+
+                assert tensor.is_range_lockstep_allocated()
 
         )doc")
         .def(
