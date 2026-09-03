@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 DTYPE_BYTES = {
@@ -307,13 +307,40 @@ def detect_architecture(cfg: dict) -> str:
     return "dense"
 
 
+# One architectural FACT per row, spelled as each config dialect spells it: HF transformers, the
+# GPT-2 lineage, and the Meta/Mistral-native params.json that a non-transformers checkpoint ships
+# in place of a config.json. These are alternative spellings of a quantity, never names of a model
+# or of a stage -- a new dialect adds a spelling to a row, and no call site grows a branch.
+_HIDDEN_SIZE_KEYS = ("hidden_size", "d_model", "dim")
+_ATTN_HEADS_KEYS = ("num_attention_heads", "n_head", "n_heads")
+_KV_HEADS_KEYS = ("num_key_value_heads", "n_kv_heads")
+_LAYER_COUNT_KEYS = ("num_hidden_layers", "num_layers", "n_layer", "n_layers")
+_MAX_POSITION_KEYS = ("max_position_embeddings", "max_seq_len")
+
+
+def _declared(cfg: dict, keys: Tuple[str, ...], default=None):
+    """The first of `keys` this config actually states, else `default`."""
+    for key in keys:
+        value = cfg.get(key)
+        if value:
+            return value
+    return default
+
+
 def build_arch_spec(cfg: dict, family: str) -> ArchitectureSpec:
-    """Pull the relevant fields out of a HF config dict into ArchitectureSpec."""
-    H = cfg.get("hidden_size") or cfg.get("d_model") or 0
-    Q = cfg.get("num_attention_heads") or cfg.get("n_head") or 1
-    KV = cfg.get("num_key_value_heads", Q)
+    """Pull the relevant fields out of a config dict into ArchitectureSpec.
+
+    Reads every dialect in the alias table above rather than the transformers one alone. A native
+    checkpoint states ``dim`` and ``n_layers``, so a reader keyed solely on ``hidden_size`` and
+    ``num_hidden_layers`` sized it as a zero-width, zero-layer model -- which the caller then
+    reported as a category downgrade to CNN, blaming a ``config.json`` the checkpoint had never
+    claimed to ship. The model was legible all along; nothing here had asked it in its own words.
+    """
+    H = _declared(cfg, _HIDDEN_SIZE_KEYS, 0)
+    Q = _declared(cfg, _ATTN_HEADS_KEYS, 1)
+    KV = _declared(cfg, _KV_HEADS_KEYS, Q)
     head_dim = cfg.get("head_dim") or (H // Q if Q else 0)
-    L = cfg.get("num_hidden_layers") or cfg.get("num_layers") or cfg.get("n_layer") or 0
+    L = _declared(cfg, _LAYER_COUNT_KEYS, 0)
 
     n_global = cfg.get("num_global_layers") or 0
     if "attention_layers" in cfg and isinstance(cfg["attention_layers"], list):
@@ -327,7 +354,7 @@ def build_arch_spec(cfg: dict, family: str) -> ArchitectureSpec:
         num_key_value_heads=KV,
         head_dim=head_dim,
         vocab_size=cfg.get("vocab_size", 0),
-        max_position_embeddings=cfg.get("max_position_embeddings", 0),
+        max_position_embeddings=_declared(cfg, _MAX_POSITION_KEYS, 0),
         kv_lora_rank=cfg.get("kv_lora_rank"),
         qk_rope_head_dim=cfg.get("qk_rope_head_dim"),
         sliding_window=cfg.get("sliding_window"),

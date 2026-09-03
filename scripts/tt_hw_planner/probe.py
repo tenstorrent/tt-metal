@@ -11,11 +11,28 @@ from typing import List, Optional, Tuple, Sequence
 _HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
 _HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
 
+COMPOSITE_INDEX_FILE = "model_index.json"
+ROOT_CONFIG_FILE = "config.json"
+# What a checkpoint that is not in transformers format calls the same document. A Mistral/Meta-native
+# drop ships this next to its consolidated weights and no ROOT_CONFIG_FILE at all -- the very case
+# reference_loader_resolver exists to serve, and it has read this name for as long as it has existed.
+NATIVE_CONFIG_FILE = "params.json"
+# Every document that, on its own, declares "a model lives in this directory". ONE list, because two
+# answers to that question is precisely the bug: the door asked only for ROOT_CONFIG_FILE and turned
+# away a native checkpoint whose config another part of the same tool was reading quite happily.
+MODEL_CONFIG_FILES = (ROOT_CONFIG_FILE, NATIVE_CONFIG_FILE)
+
 
 def _is_local_model_dir(model_id: str) -> bool:
-    return (
-        isinstance(model_id, str) and os.path.isdir(model_id) and os.path.isfile(os.path.join(model_id, "config.json"))
-    )
+    """Is this a directory with a model in it?
+
+    True when the directory declares itself with ANY config the tool understands, not only the
+    transformers one. Asking solely for ROOT_CONFIG_FILE refused a params.json-only checkpoint at
+    `_validate_hf_id` as an "invalid HuggingFace model id", naming neither the real cause nor the
+    thing it had actually been handed."""
+    if not isinstance(model_id, str) or not os.path.isdir(model_id):
+        return False
+    return any(os.path.isfile(os.path.join(model_id, name)) for name in MODEL_CONFIG_FILES)
 
 
 def _validate_hf_id(model_id: str) -> str:
@@ -782,11 +799,14 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     # transformers-style configs (keyed by ``model_type``); a component of a
     # composite describes itself with ``_class_name`` instead, and a local model
     # directory is not downloadable at all. Both are still perfectly good configs.
-    return fetch_repo_json(safe_id, ROOT_CONFIG_FILE)
-
-
-COMPOSITE_INDEX_FILE = "model_index.json"
-ROOT_CONFIG_FILE = "config.json"
+    # So is the one a non-transformers checkpoint ships: asking only for ROOT_CONFIG_FILE
+    # came back empty for exactly the checkpoints that have no such file, which then read
+    # downstream as "no architecture" rather than "a config this step never asked for".
+    for name in MODEL_CONFIG_FILES:
+        cfg = fetch_repo_json(safe_id, name)
+        if cfg:
+            return cfg
+    return None
 
 
 def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
@@ -898,8 +918,9 @@ def detect_composite_repo(model_id: str) -> Tuple[bool, List[str]]:
     file list plus the root config document. Never raises."""
     if not isinstance(model_id, str) or not model_id:
         return (False, [])
-    # A composite directory has no root config.json, which is exactly what
-    # _is_local_model_dir() requires -- so "is it on disk" is the local test here.
+    # A composite directory declares no model of its own -- its architecture lives in the per-
+    # component subfolders -- so it fails _is_local_model_dir() by design. "Is it on disk" is
+    # therefore the local test here, and this must stay independent of what counts as a declaration.
     local = os.path.isdir(model_id)
     if not local:
         try:
@@ -1300,9 +1321,19 @@ def _apply_transformer_config(
 
 
 def probe_model(model_id: str) -> ModelProbe:
-    _validate_hf_id(model_id)
     if _is_local_model_dir(model_id):
         return _probe_local_model(model_id)
+    # A path with no separator in it is a valid HF id by shape, so a directory reached by a plain
+    # relative name used to sail past _validate_hf_id and be looked up on the hub -- the run then
+    # died reporting the user's own folder as a repo that does not exist, never having opened it.
+    # Deciding "on disk?" before "well-formed id?" is the order fetch_repo_json already uses.
+    if isinstance(model_id, str) and os.path.isdir(model_id):
+        sys.exit(
+            f"ERROR: '{model_id}' is a directory, but no model declares itself in it: none of "
+            f"{', '.join(MODEL_CONFIG_FILES)} is present.\n"
+            "  Point the tool at a checkpoint directory, or pass a HuggingFace model id."
+        )
+    _validate_hf_id(model_id)
     try:
         from huggingface_hub import HfApi
     except ImportError:

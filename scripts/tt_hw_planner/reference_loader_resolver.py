@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .model_output import result_tensor
+from .probe import MODEL_CONFIG_FILES, NATIVE_CONFIG_FILE
 
 _LOADER_FILENAME = "_reference_loader.py"
 _LOADER_FUNC = "load_reference_model"
@@ -55,8 +56,10 @@ _RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
 _WEIGHT_GLOB = "*.safetensors"
 # Config numbers are copied verbatim, so anything but float round-trip noise is a real divergence.
 _CONSTANT_REL_TOL = 1e-9
-# What a non-transformers checkpoint calls its config; the case this whole module exists for.
-_NATIVE_CONFIG_FILE = "params.json"
+# What a non-transformers checkpoint calls its config; the case this whole module exists for. Spelled
+# once, in probe, so the gate deciding "is there a model in this directory" and the code reading that
+# model's config can never again disagree about which documents count as a declaration.
+_NATIVE_CONFIG_FILE = NATIVE_CONFIG_FILE
 # Positive evidence of a bug, as opposed to a check that could not run or a value that merely did
 # not turn up. Only these refuse a loader; everything else is reported and stays out of the way.
 # `no_match` earns its place here only because the sample now spans every shard: on a one-file
@@ -370,9 +373,7 @@ def _declared_constants(model_id: str) -> dict:
     into the loader by hand rather than read out of the weights, so nothing else in this gate can
     see them. The weights can be provably authentic while the constants applied to them are not.
     """
-    from .probe import ROOT_CONFIG_FILE
-
-    for name in (ROOT_CONFIG_FILE, _NATIVE_CONFIG_FILE):
+    for name in MODEL_CONFIG_FILES:
         for path in _checkpoint_files(model_id, name):
             try:
                 declared = json.loads(path.read_text())

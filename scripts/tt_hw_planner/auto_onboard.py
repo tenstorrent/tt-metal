@@ -51,7 +51,7 @@ from .module_tree import (
     _common_prefix_segments,
     discover_components_from_hf_id,
 )
-from .probe import probe_model
+from .probe import _VALID_CATEGORIES, probe_model
 
 
 @dataclass
@@ -151,7 +151,7 @@ Your output MUST be a single JSON object (no surrounding prose, no
 markdown fences) with these fields. The CLI will parse it directly:
 
 {{
-  "category": "<one of LLM | VLM | CNN | Image | STT | Embed | NLP>",
+  "category": "<one of {allowed_categories}>",
   "name": "<human-readable display name, e.g. 'Whatever (new arch)'>",
   "demo_path": "<repo-relative path to the demo dir for this model; if a structurally-similar existing demo lives in models/demos/, prefer that path so scaffold can clone it; otherwise propose a NEW path under models/demos/<slug>/ and the scaffold step will emit a category-aware skeleton via use_module_tree=True>",
   "routing_mode": "template",
@@ -208,6 +208,10 @@ def _build_prompt(
         new_model_type=new_model_type or "",
         new_pipeline_tag=new_pipeline_tag or "",
         inferred_category=inferred_category,
+        # Offered from the same set the answer is checked against. Typed into the prompt separately,
+        # the enum went stale and never named TTS, so the agent could not propose one however
+        # plainly the model announced itself -- and picked the nearest audio word instead.
+        allowed_categories=" | ".join(sorted(_ALLOWED_CATEGORIES)),
         closest_existing=(closest_existing.name if closest_existing else "(none)"),
         closest_score=closest_score,
         module_tree_summary=_summarize_module_tree(components),
@@ -242,7 +246,13 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return extract_json_from_llm_output(text)
 
 
-_ALLOWED_CATEGORIES = {"LLM", "VLM", "CNN", "Image", "STT", "Embed", "NLP"}
+# The probe's own answer for "I could not tell", which is never a thing to register a backend as.
+_UNCLASSIFIED_CATEGORY = "Unknown"
+# What a backend may be onboarded as: the categories the probe can actually produce, minus the one
+# that means it produced nothing. Derived rather than retyped -- the hand-written copy that used to
+# live here had drifted three categories behind (Video, TTS, AudioGen), so the probe could classify
+# a model this gate then had no word for. family_backends already registers a destination for each.
+_ALLOWED_CATEGORIES = {c for c in _VALID_CATEGORIES if c != _UNCLASSIFIED_CATEGORY}
 
 
 def _validate_proposal(
@@ -372,7 +382,11 @@ def auto_onboard(
             else (new_model_type or "unknown").lower().replace("-", "_")
         )
         stub = {
-            "category": category if category in _ALLOWED_CATEGORIES else "CNN",
+            # Whatever the probe concluded, unedited. This used to rewrite anything it did not
+            # recognise to a fixed category, which turned a missing word in the list above into a
+            # confident claim about the model -- a speech model was recorded as a vision one. An
+            # unclassified model now fails validation below and says so.
+            "category": category,
             "name": f"{model_id} (auto-onboard stub, not LLM-drafted)",
             "demo_path": f"models/demos/auto_onboard/{family_slug}",
             "routing_mode": "template",

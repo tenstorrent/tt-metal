@@ -131,7 +131,9 @@ def _load_hf_config(model_id: str) -> Dict[str, Any]:
         try:
             from huggingface_hub import hf_hub_download
 
-            p = hf_hub_download(model_id, "config.json")
+            from ..probe import ROOT_CONFIG_FILE
+
+            p = hf_hub_download(model_id, ROOT_CONFIG_FILE)
             with open(p, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
