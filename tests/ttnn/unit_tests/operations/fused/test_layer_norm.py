@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
@@ -93,7 +93,7 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 def test_layer_norm_welford_requires_reciprocal_tensor(device, expect_error):
     torch.manual_seed(17)
     h, w = 32, 64
