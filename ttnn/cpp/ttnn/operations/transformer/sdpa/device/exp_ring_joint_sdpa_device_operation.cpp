@@ -156,14 +156,13 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
+    // Trailing fully-pad shards are supported (the kernels skip them consistently on all devices).
+    // Only shard 0 must be real, so every device has >=1 active iteration and an output-drain point.
     TT_FATAL(
-        (N_global - args.logical_n) < N_local,
-        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
-        "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
-        "reduce the ring size or reduce padding by reducing the chunk size.",
-        N_global - args.logical_n,
-        N_local);
+        args.logical_n >= 1,
+        "Logical sequence length must be at least 1 (shard 0 must contain real tokens). Got logical sequence "
+        "length: {}",
+        args.logical_n);
 
     if (tensor_args.has_logical_n_tensor()) {
         const auto& t = tensor_args.logical_n_tensor.value();
@@ -177,9 +176,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             t.logical_volume() == 1,
             "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
             t.logical_volume());
-        // Live-value range is a caller contract (unverifiable on host, as with kv_actual_isl): a live
-        // value violating (N_global - live_n) < N_local would empty a ring iteration, which the reader's
-        // credit/gate counts assume never happens.
+        // Live-value range is a caller contract, unverifiable on host: live logical_n must be >= 1.
     }
 
     // Check shapes based on ring

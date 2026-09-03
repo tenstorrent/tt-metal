@@ -108,13 +108,18 @@ def run_exp_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
+    # Valid rows stay at fa_rand's unit scale, bf16-rounded so the torch golden shares the device's
+    # input quantization.
     Q = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
     K = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
     V = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
 
-    padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
-    padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
-    padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+    # Garbage (not zeros) past base_seq_len: pad rows must be masked/skipped by the op, and a
+    # leaked garbage row collapses the PCC where a leaked zero would barely move it.
+    pad_len = padded_seq_len - base_seq_len
+    padded_Q = torch.cat([Q, 8.0 * fa_rand(b, nh, pad_len, d)], dim=2)
+    padded_K = torch.cat([K, 8.0 * fa_rand(b, nh, pad_len, d)], dim=2)
+    padded_V = torch.cat([V, 8.0 * fa_rand(b, nh, pad_len, d)], dim=2)
 
     joint_Q = fa_rand(b, nh, joint_seq_len, d)
     joint_K = fa_rand(b, nh, joint_seq_len, d)
@@ -239,6 +244,7 @@ def run_exp_ring_joint_sdpa(
         gt_out = gt[:, :, :base_seq_len, :]
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
+        failures = []
         for i in range(n_iters):
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
@@ -261,15 +267,15 @@ def run_exp_ring_joint_sdpa(
             logger.debug(f"tt_out: {tt_out.shape}")
             logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
-            passing = True
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
             logger.debug("spatial")
             logger.debug(f"{out_pcc}")
             mse = ((gt_out - tt_out) ** 2).mean()
             logger.debug(f"mse: {mse}")
+            if not out_pass:
+                failures.append(f"iter {i}: spatial {out_pcc} < threshold {pcc_threshold}")
             if max_mse is not None and mse > max_mse:
-                passing = False
-            passing = passing and out_pass
+                failures.append(f"iter {i}: spatial mse {mse:.3e} > max_mse {max_mse:.3e}")
 
             if joint_seq_len > 0:
                 logger.debug("prompt")
@@ -279,11 +285,16 @@ def run_exp_ring_joint_sdpa(
                     logger.debug(f"{out_pcc}")
                     mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
                     logger.debug(f"mse: {mse}")
+                    if not out_pass:
+                        failures.append(f"iter {i}: joint replica {joint_replica_id} {out_pcc} < {pcc_threshold}")
                     if max_mse is not None and mse > max_mse:
-                        passing = False
-                    passing = passing and out_pass
+                        failures.append(
+                            f"iter {i}: joint replica {joint_replica_id} mse {mse:.3e} > max_mse {max_mse:.3e}"
+                        )
 
-            assert passing
+        # Score every iteration before failing: iter 0 exercises program create, iters 1+ the
+        # cached-runtime-args path — which iterations fail localizes the bug.
+        assert not failures, "; ".join(failures)
 
 
 def run_test_exp_ring_joint_sdpa(
@@ -376,6 +387,7 @@ def run_test_exp_ring_joint_sdpa(
         # does not fit L1 at P=2, so this is the one config that exercises the factory's streamed-Q
         # fallback (stream_q). 56 heads -> 14/device: rows 0-3 run 2 passes, rows 4-9 run 1.
         ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None),
+        ((4, 32), 2, 56, 109150, 1, 32, 0, 4, 352, 256, 118784),
         ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None),
         # Whole-chunk skip: the pad tail on the LAST ring device covers an entire K chunk, so the
         # "KV chunk beyond logical_n" skip fires and one ring iteration processes fewer chunks than
@@ -387,7 +399,7 @@ def run_test_exp_ring_joint_sdpa(
         ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192),
         ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None),
     ],
-    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x8", "4x8_chunkskip", "1x4"],
+    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x32_padshard_15s", "4x8", "4x8_chunkskip", "1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
@@ -414,6 +426,9 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     n_iters = 5
     trace_enabled = False
     skip_check = False
+    # Calibrated at d=128 with unit-scale bf16-rounded inputs (padshard measured 0.99943 / mse
+    # 7.0e-5). At d=64 healthy numerics drift past these gates (measured 0.99925 / 1.5e-4), so
+    # recalibrate if d changes.
     pcc_threshold = 0.9993
     max_mse = 8e-5
 
@@ -453,8 +468,10 @@ LOGICAL_TENSOR_TRACE_REGION_SIZE = 32 * 1024 * 1024
 # This op is not bit-reproducible: two identical host-scalar calls on identical inputs differ (verified
 # on the unmodified op, scalar API only). So the logical_n tensor path is scored against the torch
 # golden and required to match the scalar path's PCC, rather than asserted bit-equal to it.
-PCC_THRESHOLD = 0.99
-PCC_TOLERANCE = 0.01
+# Calibrated for unit-scale bf16-rounded inputs (healthy ~0.9992 at d=64/quad lengths); a leaked or
+# extra pad row shifts thousands of softmax rows and lands well below the threshold.
+PCC_THRESHOLD = 0.995
+PCC_TOLERANCE = 0.005
 
 
 @pytest.mark.parametrize(
@@ -481,14 +498,18 @@ PCC_TOLERANCE = 0.01
         # replay meaningful: the skipped count drives this op's credit caps, the injector's per-link gate
         # demand and the writer's forwarded-chunk count, so a length baked at capture time desynchronizes
         # them and hangs. ring_size=8 over padded 8192 gives 32 tiles per shard, and k_chunk=256 gives 8
-        # tiles per chunk, so the last shard holds 4 chunks starting at global tiles 224/232/240/248:
+        # tiles per chunk, so each shard holds 4 chunks. The first five values keep the boundary in the
+        # LAST (joint) shard -- boundary + joint interaction -- with a different skip count each:
         #   8192 -> nt 256, 0 skips, tile- and chunk-aligned (mask tile present but never applied)
         #   8191 -> nt 256, 0 skips, sub-tile tail (partial column 31 stamped)
         #   7936 -> nt 248, 1 skip,  tile-aligned tail (partial column 0, so unapplied)
         #   7650 -> nt 240, 2 skips, sub-tile tail (partial column 2)
-        #   7200 -> nt 225, 3 skips, tile-aligned tail, near the largest padding the op allows
-        # The op's (padded - logical) < per-device rule puts the boundary in the last shard, which is
-        # also the joint shard -- so joint+boundary interaction is always exercised.
+        #   7200 -> nt 225, 3 skips, tile-aligned tail
+        # The last three push the boundary into EARLIER shards (the fully-pad-shard cases):
+        #   7168 -> nt 224, shard 7 starts exactly on the boundary tile (aligned edge); spatial fully
+        #           pad, joint runs
+        #   6200 -> nt 194, shard 6 keeps exactly ONE chunk -> forced state-FIFO spare; shard 7 pad
+        #   5800 -> nt 182, shards 6 AND 7 spatial fully pad; shard 7 still runs its joint
         # joint_seq_len 1024 makes num_q_chunks = 4 local + 4 joint = 8, a multiple of the 4 SDPA grid
         # columns this geometry yields, which the op requires. k_chunk=256 (8 tiles) is also what keeps
         # the op's streaming-compute path enabled, which its compute kernel static_asserts on.
@@ -496,9 +517,22 @@ PCC_TOLERANCE = 0.01
         # the row count and backward/forward worker split of the op's own passing 4x8 config. Shallower
         # grids (4 rows / 2 workers per link) are not bit-reproducible on this op even on the host-scalar
         # path.
-        ((4, 8), 2, 1, 20, 1024, 64, 8192, 1, 8, 0, 4, 256, 256, [8191, 8192, 7936, 7650, 7200]),
+        ((4, 8), 2, 1, 20, 1024, 64, 8192, 1, 8, 0, 4, 256, 256, [8191, 8192, 7936, 7650, 7200, 7168, 6200, 5800]),
+        # Quad geometry: the real H3 15s failing shape (SP=32, TP=4, rung 118784, local_padded_N =
+        # 3712 = 116 tiles), like H3 with NO joint (L=0). q=352 -> 11 local Q chunks, the widest
+        # this harness's 12x10 grid takes; nh=40 -> 10 heads/device -> 10 rows. k=256 gives 8 tiles/
+        # chunk, 15 chunks/shard. (H3's real config is k=512; this runs k=256 to match the passing
+        # custom case's chunk size. k=512 at this geometry has not been re-scored since the input
+        # scaling was corrected -- worth a run to confirm the real config.) logical_ns:
+        #   109150 -> nt 3411, %32 == 30, shards 30/31 fully pad (real 15s length)
+        #   107840 -> nt 3370, shard 29 keeps exactly ONE chunk -> forced state-FIFO spare
+        #   111360 -> nt 3480, shard 30 starts exactly on the boundary tile (aligned edge)
+        #   100000 -> nt 3125, shards 27-31 fully pad (5 pad shards)
+        #   118784 -> fully packed, zero skips: control for the shape independent of bucketing
+        # Runs only under the quad runner (run_H3_unit_exp_sdpa_d23.sh); id must contain "4x32".
+        ((4, 32), 2, 1, 40, 0, 64, 118784, 1, 32, 0, 4, 352, 256, [109150, 107840, 111360, 100000, 118784]),
     ],
-    ids=["m4x8"],
+    ids=["m4x8", "m4x32"],
     indirect=["mesh_device"],
 )
 def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
@@ -534,10 +568,7 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
 
     local_padded_N = padded_seq_len // rp_factor
     for logical_n in logical_ns:
-        assert padded_seq_len - logical_n < local_padded_N, (
-            f"logical_n={logical_n} violates the op's own validation: (padded {padded_seq_len} - logical) "
-            f"must be < per-device {local_padded_N}"
-        )
+        assert 1 <= logical_n <= padded_seq_len, f"logical_n={logical_n} must be in [1, padded {padded_seq_len}]"
 
     full_compute_grid = submesh.compute_with_storage_grid_size()
     # Grid derived from the op's own two shape rules rather than the full device grid: it reserves the
@@ -574,14 +605,12 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
     joint_composer_dims = list(joint_shard_dims)
     joint_composer_dims[rp_axis] = 0  # concat the per-device replicas into batch so all are compared
 
-    # Garbage (not zero) past logical_n: those rows must be masked out, and leaked garbage collapses the
-    # comparison where a leaked zero would barely move it.
-    padded_Q = 8.0 * fa_rand(b, nh, padded_seq_len, d)
-    padded_K = 8.0 * fa_rand(b, nh, padded_seq_len, d)
-    padded_V = 8.0 * fa_rand(b, nh, padded_seq_len, d)
-    joint_Q = 8.0 * fa_rand(b, nh, joint_seq_len, d)
-    joint_K = 8.0 * fa_rand(b, nh, joint_seq_len, d)
-    joint_V = 8.0 * fa_rand(b, nh, joint_seq_len, d)
+    padded_Q = fa_rand(b, nh, padded_seq_len, d).bfloat16().float()
+    padded_K = fa_rand(b, nh, padded_seq_len, d).bfloat16().float()
+    padded_V = fa_rand(b, nh, padded_seq_len, d).bfloat16().float()
+    joint_Q = fa_rand(b, nh, joint_seq_len, d).bfloat16().float()
+    joint_K = fa_rand(b, nh, joint_seq_len, d).bfloat16().float()
+    joint_V = fa_rand(b, nh, joint_seq_len, d).bfloat16().float()
 
     def upload(host_tensor, dims):
         return ttnn.from_torch(
@@ -665,11 +694,32 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
         gt = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
         return gt[:, :, :logical_n, :], gt[:, :, logical_n:, :]
 
+    def pcc_value(pcc_str):
+        # comp_pcc returns a message like "... PCC: 0.9994" on pass and
+        # "... PCC: 0.8604..., PCC check failed" on fail; pull just the number.
+        return float(str(pcc_str).split("PCC:")[-1].split(",")[0].strip())
+
     def score(tt_out, tt_joint_out, logical_n):
         """PCC of the spatial and joint outputs against the torch golden."""
         got_spatial, got_joint = valid_rows(tt_out, tt_joint_out, logical_n)
         ref_spatial, ref_joint = golden(logical_n)
         _, spatial_pcc = comp_pcc(ref_spatial, got_spatial, PCC_THRESHOLD)
+        if pcc_value(spatial_pcc) < PCC_THRESHOLD:
+            # On failure, log which rows / ring shards / heads are wrong.
+            err = (got_spatial.float() - ref_spatial.float()).abs()
+            row_err = err.amax(dim=(0, 1, 3))
+            bad = (row_err > 1.0).nonzero().flatten()
+            bad_heads = (err.amax(dim=(0, 2, 3)) > 1.0).nonzero().flatten().tolist()
+            if bad.numel():
+                shards = torch.bincount(bad // local_padded_N, minlength=rp_factor)
+                per_shard = {i: int(c) for i, c in enumerate(shards.tolist()) if c}
+                logger.info(
+                    f"  damage @logical_n={logical_n}: {bad.numel()} rows with err>1.0 in "
+                    f"[{int(bad[0])}..{int(bad[-1])}], worst row {int(row_err.argmax())} "
+                    f"(err {row_err.max():.2f}); rows per ring shard {per_shard}; heads hit {bad_heads}"
+                )
+            else:
+                logger.info(f"  damage @logical_n={logical_n}: no row exceeds err 1.0 (diffuse error)")
         joint_pcc = None
         if joint_seq_len > 0:
             # A replicated joint output is one copy per ring device; score the first replica.
@@ -677,15 +727,13 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
             _, joint_pcc = comp_pcc(ref_joint, replica, PCC_THRESHOLD)
         return spatial_pcc, joint_pcc
 
-    def pcc_value(pcc_str):
-        # comp_pcc returns a message like "PCC: 0.9994..."; pull the number out.
-        return float(str(pcc_str).split(":")[-1].strip())
-
     trace_id = None
     try:
         # 1) Scalar mode (logical_n as a host int) -- the pre-existing path.
         scalar_pcc = {}
         for logical_n in logical_ns:
+            # Required: without it the first eager dispatch races the ring handshake and corrupts/hangs.
+            ttnn.synchronize_device(submesh)
             tt_out, tt_joint_out, tt_stats = call(logical_n)
             ttnn.synchronize_device(submesh)
             scalar_pcc[logical_n] = score(tt_out, tt_joint_out, logical_n)
@@ -729,7 +777,9 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
             ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(submesh)
             got = score(tt_out_traced, tt_joint_out_traced, logical_n)
-            replay_pcc.setdefault(logical_n, got)
+            prev = replay_pcc.get(logical_n)
+            if prev is None or pcc_value(got[0]) < pcc_value(prev[0]):
+                replay_pcc[logical_n] = got
             logger.info(f"replay {replay_idx} logical_n={logical_n}: spatial {got[0]}")
 
         # ---- Verdict -------------------------------------------------------------------------

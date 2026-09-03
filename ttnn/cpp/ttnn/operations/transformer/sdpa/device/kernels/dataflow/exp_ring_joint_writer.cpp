@@ -342,7 +342,7 @@ void kernel_main() {
     }
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -351,8 +351,7 @@ void kernel_main() {
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
             continue;
@@ -402,9 +401,12 @@ void kernel_main() {
 
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
-                        // Wait for reader to fill K, forward this writer's row slice over fabric
+                        // Wait for reader to fill K, forward this writer's row slice over fabric.
+                        // Positional gate, not last-active: a shard must complete all ring_size-1 hops even
+                        // when this device's last ACTIVE iteration is earlier (trailing pad shards);
+                        // gating on last-active starves downstream.
                         cb_k_w.wait_front(k_chunk_tiles);
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_k_read_ptr = cb_k_w.get_read_ptr();
                                 for (uint32_t col = 0; col < DHt; ++col) {
@@ -480,7 +482,7 @@ void kernel_main() {
 
                         // Wait for reader to fill V, forward this writer's row slice over fabric
                         cb_v_w.wait_front(v_chunk_tiles);
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_v_read_ptr = cb_v_w.get_read_ptr();
                                 for (uint32_t row = my_row_start; row < my_row_end; ++row) {
@@ -552,7 +554,7 @@ void kernel_main() {
                         unicast_since_flush = 0;
                         cb_v_w.pop_front(v_chunk_tiles);
 
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc.async_writes_flushed();
                         }
