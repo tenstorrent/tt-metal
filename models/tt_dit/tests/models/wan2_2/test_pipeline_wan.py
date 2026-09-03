@@ -209,6 +209,13 @@ def test_pipeline_inference(
     }
 
     def check_output_with_vbench(prompt, number):
+        # WAN_SKIP_VBENCH=1 drops the generative-quality gate for callers that only exercise the
+        # pipeline mechanically. It costs ~20% of the unit pipeline leg's wall time (447s of 2225s
+        # measured on bh_sc1), so unit legs opt out and the e2e legs, which own quality gating,
+        # leave it on. Default is on: unset means the gate runs, as it always has.
+        if os.environ.get("WAN_SKIP_VBENCH") == "1":
+            logger.warning("WAN_SKIP_VBENCH=1: skipping the vbench quality gate (e2e legs own it)")
+            return
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
             thresholds = vbench_thresholds_by_height[height]

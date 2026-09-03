@@ -1417,13 +1417,11 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
-    # vbench quality checks (test_pipeline_wan.py) need the pre-staged dataset. exabox stages
-    # datasets under /mnt/models; the wh_galaxy legs use /mnt/MLPerf. Take whichever exists so the
-    # leg never downloads it mid-run.
-    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
-      if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
-    done
-    [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
+    # No vbench here: the generative-quality gate belongs to the single-galaxy e2e leg, which runs
+    # test_pipeline_wan.py with it enabled. It cost 447s of this leg's 2225s pipeline step (20%),
+    # and needs a dataset that is not mounted on every sc1 runner. The pipeline is still exercised
+    # end to end and the CLIP score check still runs; only the vbench metrics are skipped.
+    export WAN_SKIP_VBENCH=1
     # Run every leg, accumulate failures, fail the job if any leg failed (LTX-2.3 bh_sc1 pattern).
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || rc=1; }
