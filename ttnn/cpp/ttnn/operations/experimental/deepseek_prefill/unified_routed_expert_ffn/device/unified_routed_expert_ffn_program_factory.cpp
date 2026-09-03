@@ -495,6 +495,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
     // COUNTS_BCAST: one core reads counts/idx and multicasts them; this gates the rest.
     const uint32_t counts_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // DOWN_SPLIT: share each down K-block's K-rows between the reader (NoC 0) and the
+    // writer (NoC 1). The down read was the only weight read left on the reader's
+    // critical path once UP_SPLIT hides gate/up.
+    //
+    // SPLIT, not a full handoff: these reads are issue-bound, not bandwidth-bound
+    // (~43 cycles of RISC command-buffer time per 576 B bfp4 tile against ~9 cycles of
+    // NoC port), so the limit is one RISC's issue rate. Two RISCs issuing half each
+    // roughly doubles it; handing the whole block to one RISC only moves the serial cost
+    // from the reader to the writer, and measured 1.03x against 1.13x for the split.
+    //
+    // A split needs >= 2 K-rows to divide; in0_block_w_d is per_core_N_gu.
+    const bool kEnableSplitDown = in0_block_w_d >= 2;
+    // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
+    const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
+    // DEDICATED sems, not up_go/up_done: the UP_SPLIT writer indexes its cb_in1_up slot
+    // off (up_seq - 1) % slots, which only holds while up_seq counts gate/up blocks
+    // alone. Adding down blocks to that counter shifts the up slot by num_blocks_d per
+    // chunk and silently corrupts the GATE/UP path from the second chunk on.
+    const uint32_t down_go_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t down_done_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
@@ -697,6 +717,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
         tt::datum_size(tt::DataFormat::Float16_b),
+        // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
+        // rest on NoC 1. Equals in0_block_w_d when the split is off.
+        down_split_k,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -765,6 +788,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 17
         K_gate_tiles,                         // 18
         static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
+        // DOWN_SPLIT down-weight read: the writer reads the UPPER K-rows of each down block
+        // on NoC 1 while the reader reads the lower rows on NoC 0.
+        CB_IN1_DOWN,            // 20
+        in0_block_w_d,          // 21
+        K_down_tiles,           // 22
+        d_num_blocks,           // 23
+        d_in1_block_num_tiles,  // 24
+        down_split_k,           // 25 rows the READER keeps
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -772,6 +803,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
+    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -988,8 +1021,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  26: act_ready_sem_id  27: act_valid_sem_id
         //  28: up_go_sem_id  29: up_done_sem_id
         //  30..36: COUNTS_BCAST (is_counts_reader, rect x0,y0,x1,y1, sem, receivers)
-        //  37..37+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  37+2*GRID_X: start_addr (expert_region_offsets)
+        //  37..38: DOWN_SPLIT go/done sem ids
+        //  39..39+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
+        //  39+2*GRID_X: start_addr (expert_region_offsets)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             counts_buffer->address(),
@@ -1039,6 +1073,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(counts_valid_sem_id);
             reader_args.push_back(GRID_X * GRID_Y - 1);
         }
+        // DOWN_SPLIT go/done sems (dedicated; see down_go_sem_id).
+        reader_args.push_back(down_go_sem_id);
+        reader_args.push_back(down_done_sem_id);
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
@@ -1099,6 +1136,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         for (uint32_t e = 0; e < experts_per_chip; ++e) {
             writer_args.push_back(t.up_projs[e].buffer()->address());
         }
+        // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
+        // then the two dedicated go/done sem ids.
+        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+            writer_args.push_back(t.down_projs[e].buffer()->address());
+        }
+        writer_args.push_back(down_go_sem_id);
+        writer_args.push_back(down_done_sem_id);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
 
         // Compute: how many of this core's N subblocks hold REAL output columns.

@@ -93,6 +93,17 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(17);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(19);
+    // DOWN_SPLIT: this RISC reads [down_split_k, in0_block_w_d) of each down K-block on
+    // NoC 1 while the reader reads [0, down_split_k) on NoC 0. Split rather than handed
+    // over wholesale because the reads are issue-bound: two RISCs issuing half each beat
+    // one issuing all (see the program factory).
+    constexpr uint32_t cb_in1_down = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(21);
+    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t num_blocks_d = get_compile_time_arg_val(23);
+    constexpr uint32_t d_in1_block_num_tiles = get_compile_time_arg_val(24);
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(25);
+    constexpr bool writer_split_down = down_split_k < in0_block_w_d;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
@@ -110,7 +121,7 @@ void kernel_main() {
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
     // unconditionally; up_acc is used only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 20;
+    constexpr uint32_t out_accessor_offset = 26;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -120,9 +131,16 @@ void kernel_main() {
 
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
+    // DOWN_SPLIT: down accessor follows up in the compile-arg stream.
+    constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
+    constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
     // Per-expert `up` base addresses live in a runtime-arg array after the fixed
     // writer args; UP_RT is its first index. up_addr(e) = arg[UP_RT + e].
     constexpr uint32_t UP_RT = 8;
+    // DOWN_SPLIT: per-expert down base addresses follow the up block.
+    constexpr uint32_t DOWN_RT = UP_RT + experts_per_chip;
+    // DOWN_SPLIT go/done sem ids follow the per-expert down addresses.
+    constexpr uint32_t DOWN_SEM_RT = DOWN_RT + experts_per_chip;
 
     const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
@@ -158,6 +176,14 @@ void kernel_main() {
     Semaphore<> up_done_sem(up_done_sem_id);
     // up_seq stays in lockstep with the reader ACROSS all experts.
     uint32_t up_seq = 0;
+    // DOWN_SPLIT: the down slot index advances once per down K-block and runs across
+    // chunks and experts, so kb % 2 is the wrong slot after the first chunk.
+    const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
+    uint32_t down_blk = 0;
+    // Separate counter and sems so up_seq stays a pure gate/up count.
+    uint32_t down_seq = 0;
+    Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
+    Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
 
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
@@ -225,6 +251,60 @@ void kernel_main() {
                         }
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
+                    }
+                }
+            }
+
+            // ---- DOWN_SPLIT: read the UPPER K-rows of each down block on NoC 1 ----
+            // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's reserve/push
+            // and multicast and reads rows [0, down_split_k) on NoC 0; this RISC reads
+            // [down_split_k, in0_block_w_d) into the upper part of the same slot,
+            // concurrently. Per K-block: wait for the reader's go, read, barrier, signal
+            // done.
+            //
+            // down_seq and the down_go/down_done sems are DEDICATED, not shared with
+            // UP_SPLIT: the up block indexes its cb_in1_up slot off (up_seq - 1) % slots,
+            // which only holds while up_seq counts gate/up blocks alone. Folding down
+            // blocks into that counter shifts the up slot by num_blocks_d per chunk and
+            // corrupts the gate/up path from the second chunk on.
+            if constexpr (writer_split_down) {
+                if (is_up_sender) {
+                    const auto down_acc =
+                        TensorAccessor(down_args, get_arg_val<uint32_t>(DOWN_RT + local_expert_id), down_tile_bytes);
+                    // cb_in1_down is double-buffered with one push per down K-block, and this
+                    // RISC never pushes, so its write pointer is static: index the live slot
+                    // off the block counter, exactly as the UP_SPLIT block does.
+                    constexpr uint32_t kDownNumSlots = 2;
+                    CircularBuffer cb_in1_down_buf(cb_in1_down);
+                    const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
+                    const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                    for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+                        ++down_seq;
+                        down_go_sem.wait_min(down_seq);
+                        uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
+                                        down_split_k * per_core_N_d * down_tile_bytes;
+                        ++down_blk;
+                        for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
+                            for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                                const uint32_t row = kb * in0_block_w_d + k;
+                                const uint32_t col = my_nt_d * per_core_N_d + n;
+                                // Both OOB directions left UNWRITTEN, matching the reader: the
+                                // compute bounds its down K-loop by real_k_tiles and the writer's
+                                // col guard drops phantom output columns.
+                                if (row < K_down_tiles && col < N_down_tiles_full) {
+                                    const uint32_t tile_idx = row * N_down_tiles_full + col;
+                                    noc_up.async_read(
+                                        down_acc,
+                                        CoreLocalMem<uint32_t>(l1_w),
+                                        down_tile_bytes,
+                                        {.page_id = tile_idx},
+                                        {});
+                                }
+                                l1_w += down_tile_bytes;
+                            }
+                        }
+                        noc_up.async_read_barrier();
+                        down_done_sem.set(down_seq);
                     }
                 }
             }

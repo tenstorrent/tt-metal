@@ -86,7 +86,9 @@ void kernel_main() {
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
     // COUNTS_BCAST occupies 7 args before the M-row NoC table.
     constexpr uint32_t COUNTS_BCAST_RT = 30;
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = COUNTS_BCAST_RT + 7;
+    // DOWN_SPLIT go/done sems sit between COUNTS_BCAST and the M-row NoC table.
+    constexpr uint32_t DOWN_SEM_RT = COUNTS_BCAST_RT + 7;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = DOWN_SEM_RT + 2;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -155,7 +157,11 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 30;
+    // DOWN_SPLIT: K-rows of each down block this RISC reads on NoC 0; the writer reads
+    // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the split is off.
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(30);
+    constexpr bool split_down = down_split_k < in0_block_w_d;
+    constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -364,6 +370,11 @@ void kernel_main() {
     // experts: both kernels loop experts in the same order with the same
     // per-expert effective_chunks, so the per-K-block increments stay matched.
     uint32_t up_seq = 0;
+    // Separate counter and sems so the gate/up slot indexing stays a pure gate/up count
+    // (DOWN_SEM_RT is defined with the other runtime-arg offsets above).
+    uint32_t down_seq = 0;
+    Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
+    Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
 
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
@@ -825,6 +836,14 @@ void kernel_main() {
             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
 
+            // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+            if constexpr (split_down) {
+                if (is_in1_sender) {
+                    ++down_seq;
+                    down_go_sem.set(down_seq);
+                }
+            }
+
             // Step 1: receivers ack BOTH senders (in1_down and act) at the
             // top of the K-block iter. The in1_down ack lets the in1_down
             // sender immediately start DRAM reads; the act ack lets the act
@@ -851,7 +870,9 @@ void kernel_main() {
                 in1_ready_sem.set(0);
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                 in1_block_start = l1_w;
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+                // NoC 1 into the upper part of the same slot.
+                for (uint32_t k = 0; k < down_split_k; ++k) {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
@@ -881,6 +902,11 @@ void kernel_main() {
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
+                // DOWN_SPLIT: the writer's block must have landed before it is multicast
+                // (or consumed locally at GRID_Y == 1).
+                if constexpr (split_down) {
+                    down_done_sem.wait_min(down_seq);
+                }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {
