@@ -361,14 +361,26 @@ def run_combine(
             tt_expert_offsets,
         )
 
-    # One capture, then _PERF_ITERATIONS replays. Timing and checking now share a single test case, so
-    # they must share a single execution path: what the PCC check validates is the very trace the numbers
-    # come from, not a separate eager launch that could differ from it.
+    # combine cannot be launched for the FIRST time inside a trace capture.
     #
-    # Capture does NOT execute -- the op first runs on the replays below, and `tt_output` ends up holding
-    # the LAST replay's result, which is what the check further down reads. Checking the last launch
-    # rather than the first is deliberate: it proves a launch leaves the op's counters fit for the next
-    # one, which a check placed between capture and replays would silently stop testing.
+    # A capture records commands instead of running them, and rejects host-to-device writes:
+    # fd_mesh_command_queue.cpp, "Writes are not supported during trace capture". combine writes on a
+    # program cache MISS and only then -- create_workload_descriptor allocates two cross-device
+    # GlobalSemaphores and zeroes them on device. So a cold op inside a capture is a guaranteed
+    # TT_FATAL, whatever the phase or the shapes.
+    #
+    # This launch exists to take that miss outside the capture. The launch inside the capture is then
+    # a cache hit, which builds nothing and writes nothing. It is not a warmup: the numbers still
+    # come only from the replays. Its output is thrown away -- nothing reads it, and at 8x4 it is
+    # 2.3 GB that the 55 phases after this one need back.
+    cache_miss_output = tt_combine(*combine_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(cache_miss_output)
+
+    # Capture does NOT execute -- the op runs again on the replays below, and `tt_output` ends up
+    # holding the LAST replay's result, which is what the check further down reads. Checking the last
+    # launch rather than the first is deliberate: it proves a launch leaves the op's counters fit for
+    # the next one, which a check placed between capture and replays would silently stop testing.
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     tt_output = tt_combine(*combine_inputs)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
