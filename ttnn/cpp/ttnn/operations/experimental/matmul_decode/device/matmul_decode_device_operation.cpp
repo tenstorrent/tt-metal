@@ -5,6 +5,8 @@
 #include "matmul_decode_device_operation.hpp"
 
 #include "tt-metalium/math.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/tile.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -13,9 +15,86 @@
 
 namespace ttnn::operations::experimental::matmul_decode {
 
-namespace {
 uint32_t gcb_num_receivers(const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
     return gcb.receiver_cores().num_cores();
+}
+
+namespace {
+CoreRangeSet weight_core_grid(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor_b) {
+    if (operation_attributes.global_cb.has_value()) {
+        return operation_attributes.global_cb->receiver_cores();
+    }
+    if (operation_attributes.packed_weight.has_value()) {
+        return operation_attributes.packed_weight->cores;
+    }
+    return input_tensor_b.memory_config().shard_spec().value().grid;
+}
+
+void validate_in0_row_major_height_sharded(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool batched,
+    bool partial) {
+    TT_FATAL(
+        !batched,
+        "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported on the full-width factory, not batched");
+    TT_FATAL(
+        !partial && !operation_attributes.partial_width_sharded,
+        "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported on the full-width factory, not "
+        "partial_width_sharded");
+    TT_FATAL(
+        !operation_attributes.ring_gather,
+        "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported with the two-hub (non-ring) gather path");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "matmul_decode replicated-A path requires input tensor A in ROW_MAJOR layout, but got {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "matmul_decode replicated-A path requires input tensor A HEIGHT_SHARDED, but got {}",
+        input_tensor_a.memory_config().memory_layout());
+    TT_FATAL(
+        input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+        "matmul_decode replicated-A path requires input tensor A to be L1-resident");
+    TT_FATAL(
+        input_tensor_a.memory_config().shard_spec().has_value(),
+        "matmul_decode replicated-A path requires input tensor A to carry a shard spec");
+    const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
+    TT_FATAL(
+        a_shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        "matmul_decode replicated-A path requires ROW_MAJOR shard orientation");
+    const auto b_grid = weight_core_grid(operation_attributes, input_tensor_b);
+    TT_FATAL(
+        a_shard.grid == b_grid,
+        "matmul_decode replicated-A path requires input tensor A's core grid {} to match input tensor B's core grid {}",
+        a_shard.grid.str(),
+        b_grid.str());
+    TT_FATAL(
+        a_shard.shape[1] == static_cast<uint32_t>(operation_attributes.K),
+        "matmul_decode replicated-A path requires A's shard width {} to equal K {} (the full K is replicated on every "
+        "core)",
+        a_shard.shape[1],
+        operation_attributes.K);
+    TT_FATAL(
+        a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
+        "matmul_decode replicated-A path requires A's shard width {} to be divisible by the 1x32 tile width {}",
+        a_shard.shape[1],
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        a_shard.shape[0] == static_cast<uint32_t>(operation_attributes.M),
+        "matmul_decode replicated-A path uses M = A's shard height, but shard height {} != M {}",
+        a_shard.shape[0],
+        operation_attributes.M);
+    TT_FATAL(
+        a_shard.shape[0] >= 1 && a_shard.shape[0] <= 8,
+        "matmul_decode replicated-A path treats each row as a tile of height 1, so shard height (M) must be in [1, 8] "
+        "to fit DST, but got {}",
+        a_shard.shape[0]);
+    TT_FATAL(
+        input_tensor_a.logical_shape()[-1] == operation_attributes.K,
+        "Input tensor A must have the same K dimension as the operation attributes");
 }
 }  // namespace
 
@@ -85,12 +164,35 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!batched, "matmul_decode ring_gather is not supported with the batched width-sharded factory");
     }
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
-    TT_FATAL(
-        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-        "Input tensor A must be in width sharded memory layout, but got {}",
-        input_tensor_a.memory_config().memory_layout());
+    if (operation_attributes.in0_row_major_height_sharded) {
+        validate_in0_row_major_height_sharded(operation_attributes, input_tensor_a, input_tensor_b, batched, partial);
+    } else {
+        TT_FATAL(
+            input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+            "Input tensor A must be TILE or ROW_MAJOR, but got {}",
+            input_tensor_a.layout());
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+            "Input tensor A must be in width sharded memory layout, but got {}",
+            input_tensor_a.memory_config().memory_layout());
+        if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+            TT_FATAL(
+                input_tensor_a.memory_config().shard_spec().has_value(),
+                "ROW_MAJOR width-sharded input A requires a shard spec");
+            const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
+            TT_FATAL(
+                a_shard.shape[0] == static_cast<uint32_t>(operation_attributes.M) && operation_attributes.M == 1,
+                "ROW_MAJOR width-sharded input A is only supported with M = shard height = 1 (1x32 faces), but got "
+                "M={} shard height {}",
+                operation_attributes.M,
+                a_shard.shape[0]);
+            TT_FATAL(
+                a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
+                "ROW_MAJOR width-sharded input A shard width {} must be divisible by 32",
+                a_shard.shape[1]);
+        }
+    }
     if (operation_attributes.packed_weight.has_value()) {
         // Fused-weight path: B is one big height-sharded L1 tensor carrying many weights, so
         // nothing about this weight can be read off B's shape or shard spec. Everything the
@@ -192,9 +294,11 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.logical_shape()[-1] == operation_attributes.K,
             "Input tensor A must have the same K dimension as the packed weight");
-        TT_FATAL(
-            input_tensor_a.logical_shape()[-2] == operation_attributes.M,
-            "Input tensor A must have the same M dimension as the operation attributes");
+        if (!operation_attributes.in0_row_major_height_sharded) {
+            TT_FATAL(
+                input_tensor_a.logical_shape()[-2] == operation_attributes.M,
+                "Input tensor A must have the same M dimension as the operation attributes");
+        }
         return;
     }
     if (operation_attributes.global_cb.has_value()) {
@@ -290,9 +394,11 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.logical_shape()[-1] == operation_attributes.K,
         "Input tensor A must have the same K dimension as the operation attributes");
-    TT_FATAL(
-        input_tensor_a.logical_shape()[-2] == operation_attributes.M,
-        "Input tensor A must have the same M dimension as the operation attributes");
+    if (!operation_attributes.in0_row_major_height_sharded) {
+        TT_FATAL(
+            input_tensor_a.logical_shape()[-2] == operation_attributes.M,
+            "Input tensor A must have the same M dimension as the operation attributes");
+    }
 
     if (batched) {
         const int batch = operation_attributes.batch;
@@ -326,7 +432,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         const int Bc = batch / b_blocks;
         const int Nc = operation_attributes.N / n_blocks;
 
-        const auto& a_tile = input_tensor_a.tensor_spec().tile();
+        const auto a_tile = in0_tile_for_compute(input_tensor_a);
         const uint32_t a_tile_height = a_tile.get_height();
         const int M_tiles = tt::div_up(operation_attributes.M, static_cast<int>(a_tile_height));
 
@@ -400,7 +506,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (partial) {
-        const auto& a_tile = input_tensor_a.tensor_spec().tile();
+        const auto a_tile = in0_tile_for_compute(input_tensor_a);
         const uint32_t a_tile_height = a_tile.get_height();
         const int M_tiles = tt::div_up(operation_attributes.M, static_cast<int>(a_tile_height));
         const int K_tiles = tt::div_up(operation_attributes.K, static_cast<int>(tt::constants::TILE_HEIGHT));
@@ -546,8 +652,12 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
                              : operation_attributes.N;
     ttnn::Shape output_shape(input_tensor_a.logical_shape());
     output_shape[-1] = output_N;
+    if (operation_attributes.in0_row_major_height_sharded) {
+        output_shape[-2] = operation_attributes.M;
+    }
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
+    const tt::tt_metal::Tile output_tile = in0_tile_for_compute(input_tensor_a);
 
     if (input_tensor_a.logical_shape().rank() == 4) {
         const auto memory_config = operation_attributes.output_mem_config.value_or(
@@ -555,9 +665,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
         return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                dtype,
-                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tensor_a.tensor_spec().tile()),
-                memory_config));
+                dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, output_tile), memory_config));
     }
 
     // Neither a prefetcher-fed weight (ND-sharded in DRAM) nor a packed weight (a region of the
@@ -579,22 +687,16 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
         const int Nc_tiles = Nc / tt::constants::TILE_WIDTH;
         const int N_blocks = N_tiles / Nc_tiles;
         output_num_cores = N_blocks;
-        if (operation_attributes.global_cb.has_value() || is_packed) {
-            // The factory reduces the K-partials onto the k_idx == 0 row of the weight grid --
-            // its first N_blocks cores in row-major order -- and requires every one of them to be
-            // in the output grid. A grid anchored at (0, 0) only satisfies that when the weight
-            // grid happens to be anchored there too.
-            const auto base_cores =
-                tt::tt_metal::corerange_to_cores(output_core_range_set, output_num_cores, /*row_wise=*/true);
-            output_core_range_set = CoreRangeSet(base_cores);
-        } else {
-            output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
-                output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
-        }
+        // The factory reduces K-partials onto the k_idx == 0 row of the weight grid -- the first
+        // N_blocks cores in row-major order -- and requires every one of them to be in the output
+        // grid. `num_cores_to_corerangeset` on the full device grid does not match that set when
+        // the device width does not divide N_blocks (e.g. 32 cores on a 12-wide Blackhole grid).
+        const auto base_cores =
+            tt::tt_metal::corerange_to_cores(output_core_range_set, output_num_cores, /*row_wise=*/true);
+        output_core_range_set = CoreRangeSet(base_cores);
     }
     int per_core_output_width = tt::div_up(output_N, output_num_cores);
-    const uint32_t shard_height =
-        tt::round_up(operation_attributes.M, input_tensor_a.tensor_spec().tile().get_height());
+    const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile.get_height());
     std::array<uint32_t, 2> shard_shape = {shard_height, per_core_output_width};
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -604,9 +706,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            dtype,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tensor_a.tensor_spec().tile()),
-            memory_config));
+            dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, output_tile), memory_config));
 }
 
 MatmulDecodeDeviceOperation::tensor_return_value_t MatmulDecodeDeviceOperation::create_output_tensors(
@@ -637,6 +737,9 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         attrs.all_gather = all_gather;
         attrs.ring_gather = ring_gather;
         attrs.mesh_coords = mesh_coords;
+        attrs.in0_row_major_height_sharded =
+            input_tensor_a.layout() == Layout::ROW_MAJOR &&
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
         if (all_gather) {
             attrs.ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor_a, std::nullopt);
             TT_FATAL(
@@ -646,6 +749,16 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         }
         return attrs;
     };
+
+    const bool in0_rm_hs = input_tensor_a.layout() == Layout::ROW_MAJOR &&
+                           input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    if (in0_rm_hs) {
+        TT_FATAL(
+            input_tensor_a.memory_config().shard_spec().has_value(),
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires a shard spec");
+    }
+    const int in0_M = in0_rm_hs ? static_cast<int>(input_tensor_a.memory_config().shard_spec().value().shape[0])
+                                : input_tensor_a.logical_shape()[-2];
 
     // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
     // weight's ND shard shape on the GCB path, so these preconditions have to sit ahead of both --
@@ -686,9 +799,12 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             pw.N,
             pw.num_cores());
 
-        const int M = input_tensor_a.logical_shape()[-2];
+        const int M = in0_M;
         const bool batched = pw.batch > 1;
         if (batched) {
+            TT_FATAL(
+                !in0_rm_hs,
+                "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with packed_weight batch > 1");
             TT_FATAL(
                 input_tensor_a.logical_shape().rank() == 4 &&
                     input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == static_cast<int>(pw.batch),
@@ -727,10 +843,14 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
 
     if (input_tensor_a.logical_shape().rank() == 4) {
         const int batch = input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1];
-        const int M = input_tensor_a.logical_shape()[-2];
+        const int M = in0_M;
         const int K = input_tensor_a.logical_shape()[-1];
         // A real batch (> 1) requires rank-4 weights carrying the same batch size.
         if (batch > 1) {
+            TT_FATAL(
+                !in0_rm_hs,
+                "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with the batched width-sharded "
+                "factory");
             TT_FATAL(
                 input_tensor_b.logical_shape().rank() == 4,
                 "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
@@ -799,8 +919,10 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
 
     int M, N, K;
     if (partial_width_sharded) {
+        TT_FATAL(
+            !in0_rm_hs, "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with partial_width_sharded");
         // Folded B logical width is K_blocks * N; recover true N from K_a / K_b.
-        M = input_tensor_a.logical_shape()[-2];
+        M = in0_M;
         int K_a = input_tensor_a.logical_shape()[-1];
         int K_b = input_tensor_b.logical_shape()[-2];
         N = input_tensor_b.logical_shape()[-1];
@@ -811,7 +933,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         }
         K = K_a;
     } else {
-        M = input_tensor_a.logical_shape()[-2];
+        M = in0_M;
         N = input_tensor_b.logical_shape()[-1];
         K = input_tensor_a.logical_shape()[-1];
     }

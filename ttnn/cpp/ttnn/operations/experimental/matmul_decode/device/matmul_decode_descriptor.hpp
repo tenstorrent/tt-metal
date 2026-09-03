@@ -40,6 +40,7 @@ struct MatmulDecodeParams {
     bool all_gather = false;
     uint32_t ring_size = 1;
     bool ring_gather = false;
+    bool in0_row_major_height_sharded = false;
 };
 
 struct MatmulDecodeInputs {
