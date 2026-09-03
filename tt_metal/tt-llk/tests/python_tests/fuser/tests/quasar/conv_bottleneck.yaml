@@ -51,8 +51,8 @@ operations:
   # 1x1 reduce conv
   - math:
       - type: "Fpu"
-        src_a: "input"
-        src_b: "w_reduce"
+        in0: "input"
+        in1: "w_reduce"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
@@ -64,8 +64,8 @@ operations:
   # Bias + ReLU for reduce conv
   - math:
       - type: "Fpu"
-        src_a: "reduce_out"
-        src_b: "b_reduce"
+        in0: "reduce_out"
+        in1: "b_reduce"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
@@ -82,8 +82,8 @@ operations:
   # 1x1 mid conv (stand-in for the bottleneck's 3x3 conv)
   - math:
       - type: "Fpu"
-        src_a: "reduce_bias"
-        src_b: "w_mid"
+        in0: "reduce_bias"
+        in1: "w_mid"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
@@ -95,8 +95,8 @@ operations:
   # Bias + ReLU for mid conv
   - math:
       - type: "Fpu"
-        src_a: "mid_out"
-        src_b: "b_mid"
+        in0: "mid_out"
+        in1: "b_mid"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
@@ -113,8 +113,8 @@ operations:
   # 1x1 expand conv
   - math:
       - type: "Fpu"
-        src_a: "mid_bias"
-        src_b: "w_expand"
+        in0: "mid_bias"
+        in1: "w_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
@@ -126,8 +126,8 @@ operations:
   # Residual add + ReLU
   - math:
       - type: "Fpu"
-        src_a: "expand_out"
-        src_b: "skip"
+        in0: "expand_out"
+        in1: "skip"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"

@@ -56,7 +56,9 @@ class UnaryBroadcastUnpacker(Unpacker):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
+        tensor_b = self.broadcast_golden(
+            tensor_a, config, operation, compute_unit, operand=compute_unit.src_a
+        )
         return tensor_a.flatten(), tensor_b.flatten()
 
     def init(
@@ -66,7 +68,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id = compute_unit.src_b.buf_desc_id
+        buf_desc_id = compute_unit.src_a.buf_desc_id
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         return (
             f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, false>"

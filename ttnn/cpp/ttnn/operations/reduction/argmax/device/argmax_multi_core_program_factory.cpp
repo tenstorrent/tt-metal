@@ -4,6 +4,7 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -25,7 +26,7 @@ using namespace tt::tt_metal::experimental;
  *
  * If a sub_core_grids is provided, it will be used to distribute the work evenly across the cores.
  * Otherwise, we distribute to maximum of two core groups, with each core group getting a minimum of
- * `min_red_dim_units_per_core` elements to process, except the last core.
+ * `min_red_dim_units_per_core` elements to process, except where the reduction dim runs out.
  * @param device Pointer to the device
  * @param red_dim_units Total units in the reduction dimension
  * @param min_red_dim_units_per_core Minimum units per core (for alignment)
@@ -34,8 +35,9 @@ using namespace tt::tt_metal::experimental;
  *         - all_cores: CoreRangeSet of all cores
  *         - cores0: First group of cores
  *         - cores1: Second group of cores (if any)
- *         - red_dim_units0: Units assigned to first group per core
- *         - red_dim_units1: Units assigned to second group per core
+ *         - red_dim_units0: Nominal per-core units for the first group: the offset stride and CB page size.
+ *           The units a core actually processes are clamped against what is left (see units_for_core).
+ *         - red_dim_units1: Same, for the second group
  */
 static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> distribute_work_to_cores(
     const tt::tt_metal::IDevice* device,
@@ -138,7 +140,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *    - Each group handles a different portion of the reduction dimension
  *    - cores0 handles red_dim_units0 elements
  *    - cores1 handles red_dim_units1 elements
- *    - Each core gets a minimum of `min_red_dim_units_per_core` elements to process, except the last core
+ *    - Each core gets a minimum of `min_red_dim_units_per_core` elements, except where the reduction dim runs out
  *
  * 2. Core Layout:
  *    - Cores are arranged in a grid pattern
@@ -304,29 +306,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     SemaphoreSpec start_sem{.unique_id = START, .target_nodes = all_cores};
     SemaphoreSpec done_sem{.unique_id = DONE, .target_nodes = all_cores};
 
-    // Byte size of the data to read from the input DFB for each core
-    const auto src_read_size0 = red_dim_units0 * input_unit_size;
-    const auto src_read_size1 = red_dim_units1 * input_unit_size;
-
-    // If red_dim_units is not a multiple of min_red_dim_units_per_core, then the last core will read a smaller amount
-    // of data We calculate that number here
-    const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
-
-    uint32_t red_dim_units_last0 = 0, red_dim_units_last1 = 0;
-    if (num_cores1 > 0) {
-        red_dim_units_last0 = red_dim_units0;
-        red_dim_units_last1 = ideal_red_dim_units == red_dim_units
-                                  ? red_dim_units1
-                                  : red_dim_units1 - (ideal_red_dim_units - red_dim_units);
-    } else {
-        red_dim_units_last0 = ideal_red_dim_units == red_dim_units
-                                  ? red_dim_units0
-                                  : red_dim_units0 - (ideal_red_dim_units - red_dim_units);
-        red_dim_units_last1 = 0;
-    }
-
-    const auto src_read_size_last0 = red_dim_units_last0 * input_unit_size;
-    const auto src_read_size_last1 = red_dim_units_last1 * input_unit_size;
+    // Clamp each slice to the units left
+    const auto units_for_core = [red_dim_units](const uint32_t red_dim_offset, const uint32_t units_per_core) {
+        return red_dim_offset >= red_dim_units ? 0u : std::min(units_per_core, red_dim_units - red_dim_offset);
+    };
 
     // Common compile time args for all cores.
     // Names are the reader kernel's own variable names; refer to the kernel code for what each means.
@@ -442,16 +425,20 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Set runtime args for cores0 and cores1, only offsets (src and red_dim_units) are different
     // Refer to the kernel code for explanation of the args
     KernelRunArgs reader_run_args0{.kernel = READER0};
+    uint32_t assigned_red_dim_units = 0;
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
+        const uint32_t red_dim_offset = i * red_dim_units0;
+        const uint32_t red_dim_units_this_core = units_for_core(red_dim_offset, red_dim_units0);
         AddRuntimeArgsForNode(
             reader_run_args0.runtime_arg_values,
             core,
             {{"core_id", i},
-             {"src_offset", static_cast<uint32_t>(i * src_read_size0)},
-             {"red_dim_offset", i * red_dim_units0},
-             {"src_read_size", static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0)},
-             {"red_dim_units_this_core", (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0}});
+             {"src_offset", static_cast<uint32_t>(std::min(red_dim_offset, red_dim_units) * input_unit_size)},
+             {"red_dim_offset", red_dim_offset},
+             {"src_read_size", static_cast<uint32_t>(red_dim_units_this_core * input_unit_size)},
+             {"red_dim_units_this_core", red_dim_units_this_core}});
+        assigned_red_dim_units += red_dim_units_this_core;
     }
     kernel_run_args.push_back(std::move(reader_run_args0));
 
@@ -459,23 +446,33 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         kernels.push_back(make_reader(READER1, SRC1));
         work_units.push_back(WorkUnitSpec{.name = "group1", .kernels = {READER1}, .target_nodes = cores1});
 
-        const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
         const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
 
         KernelRunArgs reader_run_args1{.kernel = READER1};
         for (uint32_t i = 0; i < num_cores1; ++i) {
             const CoreCoord& core = cores_coords1.at(i);
+            const uint32_t red_dim_offset = red_dim_offset1 + (i * red_dim_units1);
+            const uint32_t red_dim_units_this_core = units_for_core(red_dim_offset, red_dim_units1);
             AddRuntimeArgsForNode(
                 reader_run_args1.runtime_arg_values,
                 core,
                 {{"core_id", static_cast<uint32_t>(num_cores0 + i)},
-                 {"src_offset", static_cast<uint32_t>(src_offset1 + (i * src_read_size1))},
-                 {"red_dim_offset", red_dim_offset1 + (i * red_dim_units1)},
-                 {"src_read_size", static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1)},
-                 {"red_dim_units_this_core", (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1}});
+                 {"src_offset", static_cast<uint32_t>(std::min(red_dim_offset, red_dim_units) * input_unit_size)},
+                 {"red_dim_offset", red_dim_offset},
+                 {"src_read_size", static_cast<uint32_t>(red_dim_units_this_core * input_unit_size)},
+                 {"red_dim_units_this_core", red_dim_units_this_core}});
+            assigned_red_dim_units += red_dim_units_this_core;
         }
         kernel_run_args.push_back(std::move(reader_run_args1));
     }
+
+    // The per-core slices must tile the reduction dim exactly: no gaps (dropped elements) and no
+    // overlap (double-counted elements).
+    TT_FATAL(
+        assigned_red_dim_units == red_dim_units,
+        "Argmax work split covers {} of {} reduction units",
+        assigned_red_dim_units,
+        red_dim_units);
 
     ProgramSpec spec{
         .name = "argmax_multi_core",

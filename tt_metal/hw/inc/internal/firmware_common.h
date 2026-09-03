@@ -271,6 +271,9 @@ bool is_message_go() {
 #define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
+// NOTE: the tt-llk test harness keeps a synchronized copy of this function in
+// tt_metal/tt-llk/tests/helpers/include/boot.h, so its firmware boots in the same gathering
+// configuration this one does. test_gathering_config.py fails if the two drift apart; edit both.
 inline __attribute__((always_inline)) void configure_gathering() {
 #if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
     // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled

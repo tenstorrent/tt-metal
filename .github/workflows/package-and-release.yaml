@@ -27,6 +27,11 @@ on:
         required: false
         default: ""
         type: string
+      ops-test-categories:
+        description: "Categories from ops_pnr_tests.yaml to run (comma-separated)."
+        required: false
+        default: ""
+        type: string
 
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
@@ -53,6 +58,12 @@ env:
   #     SHA3
   DEFAULT_IGNORE_COMMITS: >-
     72e9419a1be562889e1f008cf3e2db495f9e0aa9
+  # Ops unit-test categories every release runs; the ops-test-categories dispatch UI input
+  # overrides this when set, and falls back here when left empty. Keep this value itself
+  # non-empty: the filter matches category names exactly, so an empty list would match
+  # nothing and skip the job. A new category also needs a timeout in ops_pnr_tests.yaml.
+  DEFAULT_OPS_TEST_CATEGORIES: >-
+    matmul,fused,reduction,moreh
 
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
@@ -67,6 +78,7 @@ jobs:
       is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
       tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
       default-ignore-commits: ${{ steps.set-defaults.outputs.ignore-commits }}
+      default-ops-test-categories: ${{ steps.set-defaults.outputs.ops-test-categories }}
     steps:
       - name: Set default values
         id: set-defaults
@@ -74,6 +86,7 @@ jobs:
         # (i.e., in `uses:` with `with:`), so we must expose env values via job outputs.
         run: |
           echo "ignore-commits=${{ env.DEFAULT_IGNORE_COMMITS }}" >> "$GITHUB_OUTPUT"
+          echo "ops-test-categories=${{ env.DEFAULT_OPS_TEST_CATEGORIES }}" >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -161,6 +174,7 @@ jobs:
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
@@ -654,7 +668,8 @@ jobs:
             {
               "release-type": "rc",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "ops-test-categories": "${{ inputs.ops-test-categories || '' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -682,5 +697,6 @@ jobs:
             {
               "release-type": "prod",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "ops-test-categories": "${{ inputs.ops-test-categories || '' }}"
             }
