@@ -11,10 +11,10 @@ shape of the run_id it mints.
 
 import pandas as pd
 import pyarrow.parquet as pq
-from helpers.perf.merge import (
+from helpers.perf.core import (
     attempt_of,
     group_by_arch,
-    main,
+    merge_main,
     merge_run,
     merged_run_id,
     workflow_run_id_of,
@@ -195,7 +195,7 @@ def test_attempt_and_workflow_id_come_from_the_shard_run_id():
 def test_cli_merges_and_reports(tmp_path, capsys):
     _night(tmp_path / "runs")
 
-    code = main(
+    code = merge_main(
         ["--in-dir", str(tmp_path / "runs"), "--out-dir", str(tmp_path / "out")]
     )
 
@@ -204,4 +204,6 @@ def test_cli_merges_and_reports(tmp_path, capsys):
 
 
 def test_cli_fails_on_an_empty_input_dir(tmp_path):
-    assert main(["--in-dir", str(tmp_path), "--out-dir", str(tmp_path / "out")]) == 1
+    assert (
+        merge_main(["--in-dir", str(tmp_path), "--out-dir", str(tmp_path / "out")]) == 1
+    )

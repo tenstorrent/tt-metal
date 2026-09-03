@@ -451,8 +451,6 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
-    # run_id identifies this file, not the workflow: GITHUB_RUN_ID is "testrun",
-    # but four other shards of that workflow publish their own files.
     assert set(df["run_id"]) == {"testrun-wormhole-0"}
 
 
@@ -603,10 +601,8 @@ def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):
 
 
 def test_run_id_identifies_the_file_not_the_workflow(monkeypatch):
-    # Every shard of one workflow shares GITHUB_RUN_ID, and each publishes its
-    # own Parquet. The warehouse replays by RUN_ID -- it deletes the rows already
-    # carrying the incoming file's RUN_ID -- so a run_id of "999" would make each
-    # of the ten files erase the one loaded before it. The tag is per shard.
+    # The warehouse replays by RUN_ID, so a run_id of "999" would make each of
+    # the workflow's ten files erase the one loaded before it.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
@@ -615,8 +611,6 @@ def test_run_id_identifies_the_file_not_the_workflow(monkeypatch):
 
 
 def test_shards_of_one_workflow_get_different_run_ids(monkeypatch):
-    # The failure this guards against is silent: same run_id, two good files,
-    # one surviving load.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
 
@@ -628,15 +622,12 @@ def test_shards_of_one_workflow_get_different_run_ids(monkeypatch):
     blackhole_3 = _ci_provenance()["run_id"]
 
     assert len({wormhole_3, wormhole_4, blackhole_3}) == 3
-    # ...and all three still name the workflow they came from.
     assert all(r.startswith("999-") for r in (wormhole_3, wormhole_4, blackhole_3))
 
 
 def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
-    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID *and* PERF_RUN_TAG (the
-    # workflow builds the tag without the attempt) and bumps GITHUB_RUN_ATTEMPT.
-    # Attempt 2 is a second, different measurement of the same shard, so it must
-    # not replay over attempt 1's rows.
+    # A re-run keeps GITHUB_RUN_ID and PERF_RUN_TAG and bumps the attempt, so
+    # attempt 2 must not replay over attempt 1's rows.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 

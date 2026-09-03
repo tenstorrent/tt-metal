@@ -422,10 +422,7 @@ class TestConfig:
     def perf_run_tag() -> str:
         """Name for this run's reports: the directory, the Parquet, and its run_id.
 
-        Unique per invocation, which is the one property all three need. The
-        published ``run_id`` is now this tag (see ``_run_id``), because the
-        warehouse loader replays by RUN_ID and publishes one file per shard, so
-        a run_id shared between shards would make each file erase the last.
+        Unique per invocation, which is the one property all three need.
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; the pytest plugin sets it before workers spawn.
