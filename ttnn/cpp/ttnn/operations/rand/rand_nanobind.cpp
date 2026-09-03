@@ -58,14 +58,10 @@ void bind_rand_operation(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32
-                 - TILE, ROW_MAJOR
-               * - BFLOAT8_B, BFLOAT4_B, INT8, INT32, UINT16, UINT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, INT8, INT32, UINT16, UINT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT16 and FLOAT32 are generated natively; the other dtypes are produced by typecasting a FLOAT32
-            draw, so output values are not guaranteed to remain in [`low`, `high`). UINT8 and FP8_E4M3 are not
-            supported.
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"rand">(

@@ -156,6 +156,8 @@ void bind_zeros(nb::module_& mod) {
                  - TILE, ROW_MAJOR
 
             BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"zeros">(
@@ -273,6 +275,8 @@ void bind_full_like(nb::module_& mod) {
                  - TILE, ROW_MAJOR
 
             BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"full_like">(
@@ -336,6 +340,8 @@ void bind_zeros_like(nb::module_& mod) {
                  - TILE, ROW_MAJOR
 
             BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"zeros_like">(
@@ -388,6 +394,8 @@ void bind_ones_like(nb::module_& mod) {
                  - TILE, ROW_MAJOR
 
             BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"ones_like">(
@@ -510,10 +518,10 @@ void bind_empty(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
-               * - BFLOAT8_B
-                 - TILE
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"empty">(
@@ -561,10 +569,10 @@ void bind_empty_like(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
-               * - BFLOAT8_B
-                 - TILE
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"empty_like">(
