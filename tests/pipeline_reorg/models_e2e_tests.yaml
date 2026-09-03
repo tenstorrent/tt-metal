@@ -957,10 +957,20 @@
 # chips hold the whole pipeline resident. They also run Ring topology, the path the
 # ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
 - name: TT-DiT Flux.2-dev multihost e2e tests
+  # BLOCKED as of run 33690418331: the FLUX.2-dev snapshot pre-staged on this SKU's
+  # /mnt/models/huggingface is incomplete -- it has transformer, text_encoder, tokenizer and vae
+  # (the unit leg passes on all of them) but no scheduler/. The pipeline needs the scheduler, HF
+  # tries to mkdir the subfolder to fetch it, and the mount is read-only for the job's user:
+  #   PermissionError: [Errno 13] Permission denied:
+  #   '/mnt/models/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/<sha>/scheduler'
+  # The unit leg survives the same read-only mount -- it only logs "Could not cache non-existence
+  # of file" warnings -- because everything it needs is already there. Fix is to complete the
+  # staged snapshot, then set HF_HUB_OFFLINE=1 here as the LTX-2.3 bh_sc1 legs do; that is a
+  # mount-owner task, not a code change.
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
-    # FLUX.2-dev is staged on the yyz4 mount, not this one; switch to HF_HUB_OFFLINE=1 once the
-    # checkpoint is present under /mnt/models/huggingface.
+    # scheduler/ is missing from the staged snapshot (see above), so the hub is still needed --
+    # and cannot help while the mount is read-only. Switch to HF_HUB_OFFLINE=1 once staged.
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface

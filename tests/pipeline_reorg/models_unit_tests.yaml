@@ -1145,20 +1145,27 @@
     # Cheapest first. The two transformer parametrizations get a process each: each loads the full
     # 32B torch reference checkpoint, and two in one process is an OOM kill on 4 chips
     # (run 33667518970). They share one TT cache key, so the second is cheap once the first ran.
-    run --timeout 1200 models/tt_dit/tests/models/flux2/test_vae_flux2.py
-    run --timeout 2400 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
-    # Unlike 2x2, the 4x8 row runs Ring topology, which is the path the ColParallelLinear
-    # addcmul bug does NOT affect -- so unlike the QuietBox leg these may well pass today.
-    run --timeout 3300 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
-    run --timeout 3300 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
+    run --timeout 600 models/tt_dit/tests/models/flux2/test_vae_flux2.py
+    run --timeout 1200 models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode
+    # Ring topology (4x8) is not affected by the ColParallelLinear addcmul drop, which is why
+    # run 33689082073 gets PCC 99.9820% on single_blocks here against 0.3185% at 2x2 Linear.
+    # all_blocks still fails, at 70.8769%: the second defect in 92919ba7f5d -- the double block
+    # built without per_head_norm -- is a constructor argument, so it is topology-independent.
+    # single_blocks keeps only one double block and barely accumulates the error; all_blocks
+    # runs every one of them. Both cases go green when that fix lands.
+    run --timeout 1500 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k all_blocks
+    run --timeout 900 models/tt_dit/tests/models/flux2/test_transformer_flux2.py::test_transformer -k single_blocks
     exit $rc
   model: flux.2-dev
   model_family: Flux
   skus:
     bh_sc1:
-      # First-run allowance: FLUX.2-dev is not staged on this mount, so expect a cold
-      # download plus weight conversion. Recalibrate with the bh_quietbox_2 leg.
-      timeout: 180
+      # Measured on run 33689082073: VAE 2m06s, prompt encoder 7m41s, transformer all_blocks
+      # 9m51s, single_blocks 58s -- 20m37s of pytest, 31m45s of job. Far cheaper than the
+      # QuietBox leg: 32 chips, and the HF weights were already staged on this mount (every
+      # "Fetching N files" was an instant cache hit). Above the sum of the pytest --timeouts
+      # (70 min) so a hang fails cleanly rather than being killed by the runner.
+      timeout: 75
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
