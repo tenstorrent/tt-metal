@@ -36,6 +36,20 @@ from typing import Callable
 from . import stage_seams as _seams
 
 
+class DecodeNotAdvancing(RuntimeError):
+    """The timed decode step ran, but nothing about it moved between iterations.
+
+    Distinct from NotTraceCapable, which is a pipeline that cannot be trace-replayed at all: this one
+    replays fine and produces a number, which is the problem. A decode whose position never advances
+    re-runs the same token forever -- plausibly FASTER than a correct one, since the cache never grows
+    -- so the per-token figure it yields is a number about work nobody asked for.
+
+    Nothing else catches this. The e2e PCC gate drives the model's own forward and advances the
+    position ITSELF, teacher-forcing reference tokens, so the loop timed here -- its token pick, its
+    position advance, its self-feeding -- is never on the correctness path.
+    """
+
+
 class NotTraceCapable(AttributeError):
     """A pipeline that GENUINELY cannot be trace-replayed (repeat-prefill / host-argmax decode, no
     decode_step and no PIPELINE_STAGES). Subclasses AttributeError so existing `except AttributeError`
@@ -44,6 +58,94 @@ class NotTraceCapable(AttributeError):
     with an incidental setup/attribute failure (a real bug) that the generation loop must keep
     correcting. Model- and hardware-agnostic: it is about the pipeline's decode contract, not any
     specific model or board."""
+
+
+# How far into a returned state to look. A decode state nests a level or two (a dict of tensors, a
+# tuple of them); deeper than this is structure rather than anything a step advances.
+_PROGRESS_MAX_DEPTH = 3
+
+
+def _walk(obj, depth: int, scalars: list, digest: list) -> None:
+    """Collect single numbers and a per-tensor digest from whatever one step handed back.
+
+    NAME-FREE BY CONSTRUCTION. It reads what the state holds instead of looking for a field called
+    `current_pos` or `iteration`: every model emit-e2e produces names its own state, so a check that
+    knew those names would pass vacuously on the next model and quietly stop checking anything.
+    """
+    if depth > _PROGRESS_MAX_DEPTH or obj is None:
+        return
+    if isinstance(obj, bool):
+        return  # a flag is not a counter, and it toggling is not progress
+    if isinstance(obj, (int, float)):
+        scalars.append(float(obj))
+        return
+    if isinstance(obj, dict):
+        for key in sorted(obj, key=str):
+            _walk(obj[key], depth + 1, scalars, digest)
+        return
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _walk(item, depth + 1, scalars, digest)
+        return
+    try:
+        numel = obj.numel() if callable(getattr(obj, "numel", None)) else None
+        if numel is None:
+            return
+        if int(numel) == 1:
+            scalars.append(float(obj.item()))
+        else:
+            digest.append((int(numel), round(float(obj.sum()), 6)))
+    except Exception:  # noqa: BLE001 -- a value that will not be read is simply not evidence
+        return
+
+
+def step_readings(sample) -> tuple:
+    """(single numbers, tensor digest) for one step's return value."""
+    scalars: list = []
+    digest: list = []
+    _walk(sample, 0, scalars, digest)
+    return tuple(scalars), tuple(digest)
+
+
+def _advances(scalars: list) -> bool:
+    """Does some number in the state climb on every step? A position, a counter -- whatever it is."""
+    first = scalars[0] if scalars else ()
+    if not first or any(len(s) != len(first) for s in scalars):
+        return False
+    return any(all(a[i] < b[i] for a, b in zip(scalars, scalars[1:])) for i in range(len(first)))
+
+
+def advance_verdict(samples) -> dict:
+    """Did the timed decode loop actually move between iterations? holds | stuck | unverified.
+
+    TWO SIGNALS, AND IT TAKES BOTH TO CONVICT. A counter that climbs is the direct evidence, but a
+    pipeline is entitled to keep its position in a device buffer this cannot read, and refusing one
+    of those would fail a correct model -- the same trap as judging weight provenance off a single
+    shard. So a changing OUTPUT counts as movement too: a decode genuinely stuck on one position with
+    one input token emits bit-identical logits, and a correct one essentially never does. `stuck` is
+    reported only when the numbers stand still AND the output does, which no advancing decode can do.
+
+    Absence of evidence stays out of it: a step that hands back nothing readable is `unverified`.
+    """
+    readings = [step_readings(s) for s in samples]
+    if len(readings) < 2:
+        return {"status": "unverified", "reason": "fewer than two steps to compare"}
+    scalars = [r[0] for r in readings]
+    digests = [r[1] for r in readings]
+    if not any(scalars) and not any(digests):
+        return {"status": "unverified", "reason": "the step returns nothing this can read"}
+    if _advances(scalars):
+        return {"status": "holds", "reason": "a number in the decode state climbs on every step"}
+    if len(set(digests)) > 1:
+        return {"status": "holds", "reason": "the step's output differs between iterations"}
+    return {
+        "status": "stuck",
+        "reason": (
+            "the decode step neither advanced a number in its state nor changed its output across "
+            "%d iterations -- it is re-running one position, so the per-token figure it produces "
+            "describes work the model is not doing" % len(readings)
+        ),
+    }
 
 
 def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[int, int]:

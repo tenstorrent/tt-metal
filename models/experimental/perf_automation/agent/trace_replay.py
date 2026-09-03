@@ -42,10 +42,37 @@ _NOTE_MAX_DEPTH = 3
 _REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
 
 
+def _warm(step, iters):
+    """Run the warmup steps, keeping what each one handed back.
+
+    THE ADVANCE CHECK RIDES HERE. This loop already happens, it sits outside the timed region, and it
+    is the one thing the capture path and the self-traced path have in common -- putting the check in
+    either alone would have missed every pipeline that takes the other, and gemma3 takes the other.
+    """
+    return [step() for _ in range(max(0, iters))]
+
+
+def _check_advance(samples):
+    """Refuse to time a decode that is not decoding.
+
+    The e2e PCC gate drives the model's forward while advancing the position ITSELF and teacher-forcing
+    reference tokens, so the loop measured here -- its token pick, its position advance, its feeding of
+    its own output back in -- is never on the correctness path. This is the only place that sees it,
+    and it sees it on exactly the code that gets timed.
+    """
+    try:
+        from .perf_adapter import DecodeNotAdvancing, advance_verdict
+    except Exception:  # noqa: BLE001 -- instrumentation must never be what breaks a measurement
+        return
+    verdict = advance_verdict(samples)
+    print("TRACE_DECODE_ADVANCE=%s" % verdict["status"], flush=True)
+    if verdict["status"] == "stuck":
+        raise DecodeNotAdvancing(verdict["reason"])
+
+
 def _capture_step_trace(device, step):
     """Warm up, then capture exactly one host-op-free, fixed-shape step as a trace on cq0."""
-    for _ in range(_WARMUP_ITERS):
-        step()
+    _check_advance(_warm(step, _WARMUP_ITERS))
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     step()
@@ -236,8 +263,7 @@ def _measure_native(device, stage):
 
     So the last warmup is counted rather than merely run. `stage.trace_path()` still wins when a
     pipeline reports its own path; the count is what decides when nothing does."""
-    for _ in range(max(0, _WARMUP_ITERS - 1)):
-        stage.step()
+    _check_advance(_warm(stage.step, _WARMUP_ITERS - 1))
     dispatched, _ws_bytes = _count_op_dispatches(stage.step)
     _report_read_set(stage.name, dispatched, _ws_bytes)
     ttnn.synchronize_device(device)
