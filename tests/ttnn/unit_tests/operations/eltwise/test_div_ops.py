@@ -634,3 +634,45 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 
     with expect_error(RuntimeError, "Incorrect output_dtype value for Integer Division"):
         ttnn.div(input_tensor_a, input_tensor_b, dtype=ttnn.int32)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
+@pytest.mark.parametrize("value", [0.0, 2.0], ids=["zero_divisor", "nonzero_divisor"])
+@pytest.mark.parametrize(
+    "requested_memcfg, expected_memcfg",
+    (
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (None, ttnn.L1_MEMORY_CONFIG),
+    ),
+    ids=["explicit_DRAM", "unset_follows_input"],
+)
+def test_div_no_nan_scalar_honours_memory_config(device, shape, value, requested_memcfg, expected_memcfg):
+    """The scalar div_no_nan overload must return in the requested memory config.
+
+    Both returns dropped it: `zeros_like(input_a)` on the zero-divisor branch and
+    `multiply(input_a, 1/value)` on the other, with `output_mem_config` commented out in
+    the signature. Both branches are covered because they are separate return statements.
+
+    The unset case is covered too, and separately per branch: the two reach their default
+    through different machinery — `zeros_like` via `fill`'s fast path, `multiply` via the
+    binary op's own `value_or(input_a.memory_config())` — so a divergence between them
+    would not show up in the explicit-request case alone.
+
+    The input is placed in L1 with DRAM requested; with matching configs the inherited
+    and requested values coincide and the defect is invisible.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16) + 1.0
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    output = (
+        ttnn.div_no_nan(input_tensor, value)
+        if requested_memcfg is None
+        else ttnn.div_no_nan(input_tensor, value, memory_config=requested_memcfg)
+    )
+
+    assert (
+        output.memory_config() == expected_memcfg
+    ), f"divisor {value}, requested {requested_memcfg}: expected {expected_memcfg} but landed in {output.memory_config()}"
