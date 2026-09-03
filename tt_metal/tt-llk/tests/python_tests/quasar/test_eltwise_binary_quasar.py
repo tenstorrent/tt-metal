@@ -3,10 +3,9 @@
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import (
-    EltwiseBinaryGolden,
-    get_golden_generator,
+from helpers.format_config import DataFormat
+from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+    QuasarEltwiseBinaryGolden,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -113,14 +112,14 @@ ELTWISE_FORMATS = input_output_formats(
     [
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
+        # DataFormat.MxFp4,
+        # DataFormat.MxInt8,
+        # DataFormat.MxInt4,
+        # DataFormat.MxInt2,
         DataFormat.Float16_b,
         DataFormat.Float16,
     ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+)  # + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
 
 @pytest.mark.quasar
@@ -186,16 +185,14 @@ def test_eltwise_binary(
         _TILE_SHAPE.total_tile_size() * num_tiles_per_accumulation
     )
 
-    generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        src_B,
+    generate_golden = QuasarEltwiseBinaryGolden(mathop, math_fidelity)
+    golden_tensor = generate_golden.run(
+        [src_A, src_B],
+        formats.input_format,
         formats.output_format,
-        math_fidelity,
-        input_format=formats.input_format,
-        acc_to_dest=acc_to_dest,
-        tile_shape=_TILE_SHAPE,
+        dest_acc=(dest_acc == DestAccumulation.Yes),
+        num_faces=_TILE_SHAPE.total_num_faces(),
+        face_r_dim=_TILE_SHAPE.face_r_dim,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
     )
 

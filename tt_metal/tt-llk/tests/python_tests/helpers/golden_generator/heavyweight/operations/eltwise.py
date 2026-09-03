@@ -67,26 +67,41 @@ class EltwiseBinaryGolden(Golden):
         )
 
     def build_chain(self, cfg: OpConfig) -> Chain:
-        chain = Chain(
-            [
-                self.l1_to_srcA(cfg, source="in0"),
-                self.l1_to_srcB(cfg, source="in1"),
-            ]
-        )
+        chain = Chain()
+        for tile in range(cfg.tiles_per_accumulation):
+            chain.then(
+                self.l1_to_srcA(cfg, source=self.source(0, tile)),
+                self.l1_to_srcB(cfg, source=self.source(1, tile)),
+            )
+            self._math_steps(chain, cfg, accumulate=tile > 0)
+        return chain.then(self.dest_to_l1(cfg, into="out"))
+
+    def _math_steps(self, chain: Chain, cfg: OpConfig, *, accumulate: bool) -> Chain:
+        """The maths for one input tile, appended to `chain`.
+
+        Accumulates into Dest when this tile is not the first of its block, or
+        when a fidelity phase has already written Dest.
+        """
         if self.models_fidelity:
             # One accumulate per phase, each reading the *original* srcA/srcB.
             # Feeding a phase the previous phase's masked operands zeroes every
             # phase after the first, which silently turns fidelity into a no-op.
             for phase in range(FIDELITY_PHASES[self.math_fidelity]):
                 chain.then(
-                    self.accumulate_into_dest(
+                    self.src_to_dest(
+                        cfg,
                         partial(self.partial_product, phase=phase),
                         reads=("srcA", "srcB"),
+                        accumulate=accumulate or phase > 0,
                     )
                 )
         else:
-            chain.then(self.src_to_dest(self.apply, reads=("srcA", "srcB")))
-        return chain.then(self.dest_to_l1(cfg, into="out"))
+            chain.then(
+                self.src_to_dest(
+                    cfg, self.apply, reads=("srcA", "srcB"), accumulate=accumulate
+                )
+            )
+        return chain
 
     # ------------------------------------------------------------------
 
