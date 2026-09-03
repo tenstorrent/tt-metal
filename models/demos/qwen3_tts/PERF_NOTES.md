@@ -561,6 +561,55 @@ Use the **full** test name — `-k talker_layer_prefill` matches all three bucke
 three windows in one capture — and one `-k` per Tracy run, since the CSV is picked by
 newest timestamp.
 
+### The prefill / decode perf report
+
+`tests/test_qwen3_tts_perf_report.py` + `tests/qwen3_tts_perf_report.sh` are the report to
+use when the target is "prefill ms down, decode throughput up" in the demo. Everything else
+in this section profiles a *block*; this profiles the two windows the demo actually spends
+its time in, and it profiles them the way the demo runs them — as **Metal-trace replays**.
+
+```bash
+source python_env/bin/activate
+./models/demos/qwen3_tts/tests/qwen3_tts_perf_report.sh                       # all windows
+./models/demos/qwen3_tts/tests/qwen3_tts_perf_report.sh -w prefill_demo,decode_frame
+./models/demos/qwen3_tts/tests/qwen3_tts_perf_report.sh -m N150
+```
+
+Per window it writes `ops_list/perf_report/<window>/`: `ops.csv` (raw), `tt-perf-report.txt`,
+`ops_list.md` (the full per-op list plus rollups by class / op code / block, and the ranked
+adjacent data-movement pairs), and `totals.json`; plus a `summary.md` tying them together.
+
+Windows: `prefill_demo`, `prefill_32`, `prefill_64`, `prefill_128`, `decode_talker`,
+`decode_cp`, `decode_frame`. `decode_frame` is the throughput unit — one CP frame plus one
+Talker decode — and carries inner signposts so both halves come out of that one capture.
+
+Three things this gets right that the older `test_qwen3_tts_profile_*` tests do not:
+
+**It replays the trace instead of running the body eagerly.** Those tests profile untraced
+passes: the same kernel graph, but every op waits on the host. On the AR-step-0 capture that
+showed **80 s of op-to-op gap against 46 ms of device time** — the gap column was measuring
+python, not anything on the chip. Traced, prefill comes out 16.13 ms device + 0.58 ms gap
+against 17.00 ms of wall clock. The profiler handles ops inside a replay (`METAL TRACE ID` /
+`METAL TRACE REPLAY SESSION ID` in the CSV); `-r` on `python -m tracy` turns that on. Do not
+reach for `--device-trace-profiler`: that collapses the whole replay into one `TRACE-KERNEL`
+marker, which is a total, not a breakdown.
+
+**It keeps the window inside the profiler's buffer.** The profiler's DRAM buffer holds
+**1000 programs** by default; the AR frame is ~4,200 device ops. Past the budget the device
+drops markers, logs `Profiler DRAM buffers were full`, and the CSV comes back partial *with
+no error* — which is what a report full of `TilizeDeviceOperation` and `No signposts found`
+means. The driver passes `--op-support-count 20000` and fails the run if that warning
+appears; the test itself fails early if the budget is below the window's op count.
+
+**It measures wall clock in a separate unprofiled pass.** Under the device profiler each
+replay writes markers for every op on every core on every RISC; ten timing replays of the AR
+frame push `profile_log_device.csv` past a gigabyte and post-processing past 9 GB of RSS. The
+profiled pass replays exactly once; a second, plain pytest pass takes the median of ten.
+
+Under TP the CSV holds one row per chip per op. `ops_list.md` merges them positionally and
+keeps the max per op — an op is done when the slowest chip is done — so its op count is the
+per-chip count, which is why it is lower than `tt-perf-report`'s.
+
 ### Profiling the CP layer the *demo* actually runs
 
 `test_qwen3_tts_profile_single_layer.py -k cp_layer_*` is a faithful shape/config replica of
@@ -745,6 +794,9 @@ Prefill runs once per utterance, so this matters for time-to-first-audio, not st
 | `tests/test_qwen3_tts_cp_n300_opt.py` | CP fast path A/B + Metal-trace replay guard |
 | `tests/test_qwen3_tts_speaker_encoder_host_fuse.py` | ECAPA op-count spy + cascade equality vs reference |
 | `qwen3_tts_block_report.sh` (repo root) | regenerates the block report |
+| `tests/test_qwen3_tts_perf_report.py` | traced prefill / decode windows — the report for this optimisation |
+| `tests/qwen3_tts_perf_report.sh` | runs every window, one Tracy capture each, and assembles `summary.md` |
+| `tests/qwen3_tts_perf_report_opslist.py` | one CSV window -> full per-op list + rollups |
 
 ### Validation run before merging
 
